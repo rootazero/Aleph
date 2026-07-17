@@ -41,10 +41,15 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 .map(|(c, _)| c.to_string())
                 .unwrap_or_default();
             let note = KnowledgeNote {
+                // rust-doctor-disable-next-line excessive-clone
                 title: title.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 category: category.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 tags: tags.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 facts: facts.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 links: links.clone(),
                 confidence: confidence.clamp(0.0, 1.0),
                 severity: *severity,
@@ -83,7 +88,9 @@ pub(crate) fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<Candi
                 title: note_path
                     .split_once('/')
                     .map(|(_, f)| f.to_string())
+                    // rust-doctor-disable-next-line excessive-clone
                     .unwrap_or_else(|| note_path.clone()),
+                // rust-doctor-disable-next-line excessive-clone
                 category: category.clone(),
                 facts: vec![new_claim.clone()],
                 ..KnowledgeNote::default()

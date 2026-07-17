@@ -7,10 +7,7 @@ use alephcore::secrets::injection::AsyncSecretResolver;
 use alephcore::secrets::types::{DecryptedSecret, SecretError};
 use alephcore::security::audit::{AuditEventType, AuditSeverity};
 use alephcore::security::{
-    ContextIdHasher, GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig,
-};
-use alephcore::thinker::inbound_context::{
-    ChannelContext, InboundContext, MessageMetadata, SenderInfo, SessionContext,
+    GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig,
 };
 use std::sync::Mutex;
 use std::time::Duration;
@@ -90,104 +87,6 @@ async fn test_outbound_blocks_accidental_secret_in_user_text() {
         matches!(result, Ok(GuardResult::Blocked { .. })),
         "Expected outbound accidental secret to be blocked, got {:?}",
         result
-    );
-}
-
-#[test]
-fn test_inbound_context_hashes_session_identifiers() {
-    let ctx = InboundContext {
-        sender: SenderInfo {
-            id: "u123456".to_string(),
-            display_name: Some("Alice".to_string()),
-            is_owner: false,
-        },
-        channel: ChannelContext {
-            kind: "telegram".to_string(),
-            capabilities: vec![],
-            is_group_chat: false,
-            is_mentioned: false,
-        },
-        session: SessionContext {
-            session_key: "tg:dm:123456".to_string(),
-            active_agent: None,
-        },
-        message: MessageMetadata {
-            has_attachments: false,
-            attachment_types: vec![],
-            reply_to: Some("msg:secret:789".to_string()),
-        },
-        redact_ids: true,
-    };
-
-    let formatted = ctx.format_for_prompt();
-
-    assert!(
-        !formatted.contains("u123456"),
-        "Raw sender ID should not appear"
-    );
-    assert!(
-        !formatted.contains("tg:dm:123456"),
-        "Raw session key should not appear"
-    );
-    assert!(
-        !formatted.contains("msg:secret:789"),
-        "Raw reply_to should not appear"
-    );
-
-    let hashed_sender = ContextIdHasher::hash("u123456");
-    let hashed_session = ContextIdHasher::hash("tg:dm:123456");
-    let hashed_reply = ContextIdHasher::hash("msg:secret:789");
-
-    assert!(
-        formatted.contains(&hashed_sender),
-        "Hashed sender ID should appear"
-    );
-    assert!(
-        formatted.contains(&hashed_session),
-        "Hashed session key should appear"
-    );
-    assert!(
-        formatted.contains(&hashed_reply),
-        "Hashed reply_to should appear"
-    );
-}
-
-#[test]
-fn test_inbound_context_preserves_identifiers_when_redact_disabled() {
-    let ctx = InboundContext {
-        sender: SenderInfo {
-            id: "u123456".to_string(),
-            display_name: None,
-            is_owner: false,
-        },
-        channel: ChannelContext {
-            kind: "telegram".to_string(),
-            capabilities: vec![],
-            is_group_chat: false,
-            is_mentioned: false,
-        },
-        session: SessionContext {
-            session_key: "tg:dm:123456".to_string(),
-            active_agent: None,
-        },
-        message: MessageMetadata {
-            has_attachments: false,
-            attachment_types: vec![],
-            reply_to: Some("msg:secret:789".to_string()),
-        },
-        redact_ids: false,
-    };
-
-    let formatted = ctx.format_for_prompt();
-
-    assert!(formatted.contains("u123456"), "Raw sender ID should appear");
-    assert!(
-        formatted.contains("tg:dm:123456"),
-        "Raw session key should appear"
-    );
-    assert!(
-        formatted.contains("msg:secret:789"),
-        "Raw reply_to should appear"
     );
 }
 

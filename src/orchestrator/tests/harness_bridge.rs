@@ -69,11 +69,12 @@ async fn compute_runtime_state_blocks_surfaces_unhealthy_probes() {
     assert!(names.contains(&"alpha"));
     assert!(names.contains(&"beta"));
     for block in &blocks {
-        match &block.status {
-            ToolStatus::Unavailable { reason } => {
-                assert!(reason.contains("offline"));
-            }
-            ToolStatus::Available => panic!("expected Unavailable"),
+        assert!(
+            matches!(&block.status, ToolStatus::Unavailable { .. }),
+            "expected Unavailable"
+        );
+        if let ToolStatus::Unavailable { reason } = &block.status {
+            assert!(reason.contains("offline"));
         }
     }
 }
@@ -97,8 +98,11 @@ async fn compute_runtime_state_blocks_coalesces_shared_reason() {
     // Lexicographically smallest name leads; the rest are summarised.
     assert!(block.tool_name.starts_with("browser_click"));
     assert!(block.tool_name.contains("+2 more"));
-    match &block.status {
-        ToolStatus::Unavailable { reason } => assert_eq!(reason, "no browser runtime"),
-        ToolStatus::Available => panic!("expected Unavailable"),
+    assert!(
+        matches!(&block.status, ToolStatus::Unavailable { .. }),
+        "expected Unavailable"
+    );
+    if let ToolStatus::Unavailable { reason } = &block.status {
+        assert_eq!(reason, "no browser runtime");
     }
 }

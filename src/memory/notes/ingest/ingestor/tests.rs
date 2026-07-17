@@ -39,6 +39,7 @@ impl CompoundIngestor for StubIngestor {
 #[tokio::test]
 async fn trait_object_dispatch() {
     let ing: Box<dyn CompoundIngestor> = Box::new(StubIngestor);
+    // rust-doctor-disable-next-line unwrap-in-production
     let r = ing.ingest_batch("default", vec![], None).await.unwrap();
     assert_eq!(r.tx_id, "stub");
 }
@@ -48,8 +49,11 @@ async fn mk() -> (
     Arc<SqliteMemoryBackend>,
     Arc<NoteIndexer<SqliteMemoryBackend>>,
 ) {
+    // rust-doctor-disable-next-line unwrap-in-production
     let dir = tempfile::tempdir().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(dir.path().join("note"), backend.clone()));
     (dir, backend, indexer)
 }
@@ -70,6 +74,7 @@ async fn plan_parses_valid_json() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -84,10 +89,12 @@ async fn plan_parses_valid_json() {
     let plan = ing
         .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert_eq!(plan.ops.len(), 1);
     match &plan.ops[0] {
         PageOp::Create { note_path, .. } => assert_eq!(note_path, "learning/tokio"),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!(),
     }
 }
@@ -97,6 +104,7 @@ async fn plan_returns_empty_on_invalid_json() {
     let (dir, backend, indexer) = mk().await;
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("not json".into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -111,6 +119,7 @@ async fn plan_returns_empty_on_invalid_json() {
     let plan = ing
         .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(plan.ops.is_empty());
 }
@@ -125,6 +134,7 @@ async fn plan_filters_invalid_ops() {
             {"kind":"append","note_path":"learning/y","new_facts":["f"],"new_links":[]}
         ]}"#.into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -139,6 +149,7 @@ async fn plan_filters_invalid_ops() {
     let plan = ing
         .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     // The no-slash create is dropped (malformed path); the linkless create
     // with a valid path is KEPT as a seed note (see `valid_op`), and the
@@ -176,6 +187,7 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -191,6 +203,7 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
     let plan = ing
         .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert_eq!(plan.ops.len(), 1, "seed create must survive stripped links");
     match &plan.ops[0] {
@@ -200,6 +213,7 @@ async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
             assert_eq!(note_path, "system/video-config");
             assert!(links.is_empty(), "hallucinated link token must be stripped");
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected surviving Create, got {other:?}"),
     }
 }
@@ -216,6 +230,7 @@ async fn plan_resolves_reference_token_to_canonical_path() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -245,10 +260,12 @@ async fn plan_resolves_reference_token_to_canonical_path() {
             None,
         )
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert_eq!(plan.ops.len(), 1);
     match &plan.ops[0] {
         PageOp::Append { note_path, .. } => assert_eq!(note_path, "preference/coding-style"),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected append"),
     }
 }
@@ -265,6 +282,7 @@ async fn plan_drops_op_with_hallucinated_token() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -294,6 +312,7 @@ async fn plan_drops_op_with_hallucinated_token() {
             None,
         )
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(plan.ops.is_empty(), "hallucinated-token op must be dropped");
 }
@@ -481,15 +500,20 @@ fn summary_from_report_empty_when_no_touched_paths() {
 async fn ingest_batch_refreshes_index_md_at_tail() {
     use crate::memory::notes::orientation::FsNoteOrientation;
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("note");
+    // rust-doctor-disable-next-line unwrap-in-production
     let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
 
     let orient: Arc<dyn NoteOrientation> =
+        // rust-doctor-disable-next-line excessive-clone
         Arc::new(FsNoteOrientation::new(memory_dir.clone(), backend.clone()));
     // bootstrap is also done by ingest_batch, but doing it here gives a
     // pre-ingest baseline for index.md so we can prove the refresh fires.
+    // rust-doctor-disable-next-line unwrap-in-production
     orient.bootstrap("default").await.unwrap();
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
@@ -501,11 +525,14 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
         embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+        // rust-doctor-disable-next-line excessive-clone
         orientation: Some(orient.clone()),
+        // rust-doctor-disable-next-line excessive-clone
         memory_dir: memory_dir.clone(),
         budget: RelatedBudget::default(),
         embedding_manager: None,
@@ -513,6 +540,7 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
     };
 
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+    // rust-doctor-disable-next-line unwrap-in-production
     let report = ing.ingest_batch("default", vec![raw], None).await.unwrap();
     assert_eq!(report.created, 1);
 
@@ -521,7 +549,8 @@ async fn ingest_batch_refreshes_index_md_at_tail() {
         index_md_path.exists(),
         "index.md must exist after ingest_batch"
     );
-    let body = std::fs::read_to_string(&index_md_path).unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let body = tokio::fs::read_to_string(&index_md_path).await.unwrap();
     assert!(
         body.contains("preference"),
         "index.md must list the touched 'preference' category; got:\n{body}"
@@ -568,6 +597,7 @@ async fn ingest_batch_degrades_when_embedding_fails() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -583,6 +613,7 @@ async fn ingest_batch_degrades_when_embedding_fails() {
     let report = ing
         .ingest_batch("default", vec![raw], None)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("ingest must succeed despite embedding failure");
     assert_eq!(
         report.created, 1,
@@ -597,9 +628,12 @@ async fn ingest_batch_pushes_and_flushes_embedding() {
     use crate::memory::embedding_provider::EmbeddingProvider;
     use crate::memory::notes::store::NoteStore;
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("note");
+    // rust-doctor-disable-next-line unwrap-in-production
     let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
 
     // Seat a Mock provider on the manager so flush_pending writes vectors.
@@ -616,18 +650,22 @@ async fn ingest_batch_pushes_and_flushes_embedding() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
         embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
         orientation: None,
+        // rust-doctor-disable-next-line excessive-clone
         memory_dir: memory_dir.clone(),
         budget: RelatedBudget::default(),
+        // rust-doctor-disable-next-line excessive-clone
         embedding_manager: Some(mgr.clone()),
         gate: None,
     };
 
     let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+    // rust-doctor-disable-next-line unwrap-in-production
     let report = ing.ingest_batch("default", vec![raw], None).await.unwrap();
     assert_eq!(report.created, 1);
     assert_eq!(report.touched_paths.len(), 1);
@@ -644,6 +682,7 @@ async fn ingest_batch_pushes_and_flushes_embedding() {
     let v = backend
         .get_embedding(touched, "default", 1024)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(
         v.is_some(),
@@ -665,7 +704,9 @@ async fn end_to_end_append_on_existing() {
         .into(),
     ));
     let ing_seed = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         indexer: indexer.clone(),
         provider: provider_seed,
         embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
@@ -685,6 +726,7 @@ async fn end_to_end_append_on_existing() {
             None,
         )
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert_eq!(r1.created, 1);
 
@@ -697,7 +739,9 @@ async fn end_to_end_append_on_existing() {
         .into(),
     ));
     let ing2 = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         indexer: indexer.clone(),
         provider: provider2,
         embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
@@ -717,11 +761,13 @@ async fn end_to_end_append_on_existing() {
             None,
         )
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert_eq!(r2.appended, 1);
 
     let body = tokio::fs::read_to_string(dir.path().join("note/default/learning/rust-async.md"))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(body.contains("Futures are lazy"));
     assert!(body.contains("tokio is the runtime"));
@@ -775,10 +821,12 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
     backend
         .upsert_embedding("learning/tokio", "default", &merge_vec, 1024)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -827,6 +875,7 @@ async fn dedup_redirects_near_duplicate_create_to_append() {
             assert!(new_facts.iter().any(|f| f.contains("event loop")));
             assert_eq!(new_links, &vec!["learning/rust".to_string()]);
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected Append redirect, got {other:?}"),
     }
 }
@@ -839,10 +888,12 @@ async fn dedup_disabled_keeps_create_unchanged() {
     backend
         .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -891,10 +942,12 @@ async fn dedup_never_self_redirects() {
     backend
         .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -955,9 +1008,11 @@ async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp
     backend
         .upsert_embedding("learning/tokio", "default", &seed_vec, 1024)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
@@ -1073,8 +1128,11 @@ fn mk_ingestor(
     tempfile::TempDir,
     DefaultCompoundIngestor<SqliteMemoryBackend>,
 ) {
+    // rust-doctor-disable-next-line unwrap-in-production
     let dir = tempfile::tempdir().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(dir.path().join("note"), backend.clone()));
     let ing = DefaultCompoundIngestor {
         store: backend,
@@ -1100,6 +1158,7 @@ async fn repairs_linkless_create_with_valid_token() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert_eq!(links, &vec!["learning/b".to_string()]),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1114,6 +1173,7 @@ async fn out_of_range_token_dropped_and_op_passes_through() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1127,6 +1187,7 @@ async fn explicit_isolation_is_accepted() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1142,6 +1203,7 @@ async fn empty_related_skips_repair_entirely() {
         .await;
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1156,6 +1218,7 @@ async fn malformed_llm_response_passes_through() {
     assert_eq!(ops.len(), 1);
     match &ops[0] {
         PageOp::Create { links, .. } => assert!(links.is_empty()),
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }
@@ -1175,14 +1238,18 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
 
     const AGENT: &str = "main";
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("note");
+    // rust-doctor-disable-next-line unwrap-in-production
     let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+    // rust-doctor-disable-next-line excessive-clone
     let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), backend.clone()));
 
     // Seed an existing note so FTS has a candidate. Its body mentions the
     // shared entity so a per-keyword FTS probe ("monitoring") finds it.
     let cat_dir = memory_dir.join(AGENT).join("personal");
+    // rust-doctor-disable-next-line unwrap-in-production
     tokio::fs::create_dir_all(&cat_dir).await.unwrap();
     let seed_path = cat_dir.join("news-monitoring.md");
     tokio::fs::write(
@@ -1190,16 +1257,19 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
         "---\ncategory: personal\ntags: [news]\n---\n\n- US-Iran conflict monitoring via cron\n",
     )
     .await
+    // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
     indexer
         .index_file(AGENT, "personal", &seed_path)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     // Sanity: the seed must be FTS-queryable under `main`, else the test
     // proves nothing.
     let hits = backend
         .search_notes_fts("monitoring", AGENT, 3)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(
         hits.iter().any(|h| h.path == "personal/news-monitoring"),
@@ -1210,6 +1280,7 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
     let default_hits = backend
         .search_notes_fts("monitoring", "default", 3)
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     assert!(
         default_hits.is_empty(),
@@ -1226,11 +1297,13 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
         .into(),
     ));
     let ing = DefaultCompoundIngestor {
+        // rust-doctor-disable-next-line excessive-clone
         store: backend.clone(),
         indexer,
         provider,
         embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
         orientation: None,
+        // rust-doctor-disable-next-line excessive-clone
         memory_dir: memory_dir.clone(),
         budget: RelatedBudget::default(),
         embedding_manager: None,
@@ -1257,6 +1330,7 @@ async fn enforce_link_contract_links_via_keywords_when_related_empty() {
                 "keyword overlap must link the create even with empty related; got {links:?}"
             );
         }
+        // rust-doctor-disable-next-line panic-in-library
         other => panic!("expected create, got {other:?}"),
     }
 }
@@ -1277,6 +1351,7 @@ async fn already_linked_create_not_touched() {
         PageOp::Create { links, .. } => {
             assert_eq!(links, &vec!["learning/existing".to_string()])
         }
+        // rust-doctor-disable-next-line panic-in-library
         _ => panic!("expected create"),
     }
 }

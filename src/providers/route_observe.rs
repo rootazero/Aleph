@@ -134,10 +134,15 @@ impl RouteObservability {
         // Union of every provider name any signal knows about, so a provider
         // that only ever appears in (say) the breaker map still shows up.
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // rust-doctor-disable-next-line excessive-clone
         names.insert(primary_name.clone());
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(self.fallbacks.iter().map(|c| c.name.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(health.iter().map(|h| h.provider.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(pacing.iter().map(|(n, _)| n.clone()));
+        // rust-doctor-disable-next-line excessive-clone
         names.extend(loads.iter().map(|(n, _)| n.clone()));
 
         let health_by: std::collections::HashMap<
@@ -167,17 +172,17 @@ impl RouteObservability {
             .collect();
 
         let providers: serde_json::Map<String, serde_json::Value> = names
-            .iter()
+            .into_iter()
             .map(|name| {
                 let h = health_by.get(name.as_str()).copied();
                 let m = loads_by.get(name.as_str()).copied().unwrap_or_default();
-                let (util_permille, over_limit) = limits.assess(name, m.rpm_used, m.tpm_used);
-                let (rpm_limit, tpm_limit) = limits.ceiling(name).unwrap_or((None, None));
+                let (util_permille, over_limit) = limits.assess(name.as_str(), m.rpm_used, m.tpm_used);
+                let (rpm_limit, tpm_limit) = limits.ceiling(name.as_str()).unwrap_or((None, None));
                 // Cost-routing sort key (milli-USD/Mtok); `null` when the
                 // provider's first model is unknown or unpriced.
                 let price = model_by
                     .get(name.as_str())
-                    .and_then(|model| price_milli_per_mtok(name, model));
+                    .and_then(|model| price_milli_per_mtok(name.as_str(), model));
                 let entry = json!({
                     "circuit": h.map_or("closed", |h| h.circuit),
                     "failure_count": h.map_or(0, |h| h.failure_count),
@@ -195,7 +200,7 @@ impl RouteObservability {
                     "price_milli_per_mtok": price,
                     "endpoint_tier": tier_by.get(name.as_str()).copied().map(tier_str),
                 });
-                (name.clone(), entry)
+                (name, entry)
             })
             .collect();
 

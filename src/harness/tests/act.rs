@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::Result as AlephResult;
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
@@ -2294,9 +2295,9 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for SlowOperator {
     async fn request_approval(
         &self,
         _action: &crate::sandbox::exec_approval::ApprovalAction,
-    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+    ) -> crate::sandbox::exec_approval::gate::ApprovalResponse {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved
+        crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved.into()
     }
 }
 

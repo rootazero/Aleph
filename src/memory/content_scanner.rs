@@ -29,21 +29,25 @@ static PROMPT_INJECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)(?:ignore\s+previous\s+(?:instructions|prompt)|you\s+are\s+now\s+|(?:override|overwrite|replace)\s+(?:the\s+)?system\s+prompt|new\s+instructions\s*:)",
     )
+    // rust-doctor-disable-next-line unwrap-in-production
     .expect("prompt injection regex must compile")
 });
 
 static DECEPTION_HIDE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bdo\s+not\s+tell\s+(?:the\s+user|anyone)")
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("deception hide regex must compile")
 });
 
 static SYS_PROMPT_OVERRIDE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bsystem\s+prompt\s+(?:override|bypass|hijack)")
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("sys prompt override regex must compile")
 });
 
 static DISREGARD_RULES_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bdisregard\s+(?:your|all|any|the)\s+(?:instructions|rules|guidelines)")
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("disregard rules regex must compile")
 });
 
@@ -51,20 +55,26 @@ static BYPASS_RESTRICTIONS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)\bact\s+as\s+(?:if|though)\s+you\s+(?:have\s+no|don'?t\s+have)\s+(?:restrictions|limits|limitations|rules)",
     )
+    // rust-doctor-disable-next-line unwrap-in-production
     .expect("bypass restrictions regex must compile")
 });
 
 static DATA_EXFILTRATION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:curl\s+.*api[_\-]?key|curl\s+.*token|wget\s+.*token|cat\s+.*/\.env)")
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("data exfiltration regex must compile")
 });
 
 static SSH_BACKDOOR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\bauthorized_keys\b").expect("ssh backdoor regex must compile")
+    Regex::new(r"(?i)\bauthorized_keys\b")
+        // rust-doctor-disable-next-line unwrap-in-production
+        .expect("ssh backdoor regex must compile")
 });
 
 static SSH_ACCESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\$HOME|~)/\.ssh\b").expect("ssh access regex must compile")
+    Regex::new(r"(?i)(?:\$HOME|~)/\.ssh\b")
+        // rust-doctor-disable-next-line unwrap-in-production
+        .expect("ssh access regex must compile")
 });
 
 /// Scan content for malicious patterns before persisting to memory.

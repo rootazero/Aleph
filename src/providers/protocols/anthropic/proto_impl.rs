@@ -54,12 +54,14 @@ impl AnthropicProtocol {
     }
 
     /// Convert `UnifiedMessages` to Anthropic Messages
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(super) fn convert_messages(messages: &[UnifiedMessage]) -> Vec<Message> {
         let mut result = Vec::new();
         let mut i = 0;
         while i < messages.len() {
             match &messages[i] {
                 UnifiedMessage::User { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
@@ -68,16 +70,22 @@ impl AnthropicProtocol {
                                 cache_control,
                             } => {
                                 blocks.push(ContentBlock::Text {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     text: text.clone(),
-                                    cache_control: cache_control
-                                        .map(|_| crate::thinker::cache::CacheControl::ephemeral()),
+                                    // Pass the marker through verbatim — the unified
+                                    // and wire types are the same struct now, so a
+                                    // pre-placed 1h TTL is no longer silently
+                                    // downgraded to the 5m default.
+                                    cache_control: *cache_control,
                                 });
                             }
                             crate::providers::message::ContentBlock::Image { data, mime_type } => {
                                 blocks.push(ContentBlock::Image {
                                     source: ImageSource {
                                         source_type: "base64".to_string(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         media_type: mime_type.clone(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         data: data.clone(),
                                     },
                                 });
@@ -114,6 +122,7 @@ impl AnthropicProtocol {
                             result.push(Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     content: text.clone(),
                                 },
                             });
@@ -128,6 +137,7 @@ impl AnthropicProtocol {
                     i += 1;
                 }
                 UnifiedMessage::Assistant { content } => {
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut blocks = Vec::new();
                     // Track the most recent signed thinking block so we can inject
                     // reasoning_content into the next ToolUse when thinking is enabled.
@@ -140,10 +150,11 @@ impl AnthropicProtocol {
                             } => {
                                 if !text.trim().is_empty() {
                                     blocks.push(ContentBlock::Text {
+                                        // rust-doctor-disable-next-line excessive-clone
                                         text: text.clone(),
-                                        cache_control: cache_control.map(|_| {
-                                            crate::thinker::cache::CacheControl::ephemeral()
-                                        }),
+                                        // Verbatim passthrough — TTL preserved (see the
+                                        // user-branch comment above).
+                                        cache_control: *cache_control,
                                     });
                                 }
                             }
@@ -159,10 +170,13 @@ impl AnthropicProtocol {
                                 // OpenAI) never produce it for an Anthropic-bound turn.
                                 if !thinking.is_empty() {
                                     blocks.push(ContentBlock::Thinking {
+                                        // rust-doctor-disable-next-line excessive-clone
                                         thinking: thinking.clone(),
+                                        // rust-doctor-disable-next-line excessive-clone
                                         signature: sig.clone(),
                                     });
                                     // Remember this thinking for the next ToolCall
+                                    // rust-doctor-disable-next-line excessive-clone
                                     pending_thinking = Some(thinking.clone());
                                 }
                             }
@@ -191,6 +205,7 @@ impl AnthropicProtocol {
                                 //   "thinking is enabled but reasoning_content is missing
                                 //    in assistant tool call message".
                                 let mut input = if arguments.is_object() {
+                                    // rust-doctor-disable-next-line excessive-clone
                                     arguments.clone()
                                 } else {
                                     serde_json::json!({})
@@ -199,6 +214,7 @@ impl AnthropicProtocol {
                                     if let Some(obj) = input.as_object_mut() {
                                         obj.insert(
                                             "reasoning_content".to_string(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             serde_json::Value::String(reasoning.clone()),
                                         );
                                     }
@@ -239,7 +255,9 @@ impl AnthropicProtocol {
                     // blocks in the same user turn — Anthropic accepts trailing
                     // images in a tool-result turn, and this is what finally lets
                     // a vision model see the screen it acted on.
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut tool_blocks = Vec::new();
+                    // rust-doctor-disable-next-line unnecessary-allocation
                     let mut image_blocks = Vec::new();
                     while i < messages.len() {
                         if let UnifiedMessage::ToolResult {
@@ -249,11 +267,13 @@ impl AnthropicProtocol {
                             ..
                         } = &messages[i]
                         {
+                            // rust-doctor-disable-next-line unnecessary-allocation
                             let mut parts = Vec::new();
                             for b in content {
                                 match b {
                                     crate::providers::message::ContentBlock::Text {
                                         text, ..
+                                    // rust-doctor-disable-next-line excessive-clone
                                     } => parts.push(text.clone()),
                                     crate::providers::message::ContentBlock::Json { value } => {
                                         parts
@@ -265,7 +285,9 @@ impl AnthropicProtocol {
                                     } => image_blocks.push(ContentBlock::Image {
                                         source: ImageSource {
                                             source_type: "base64".to_string(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             media_type: mime_type.clone(),
+                                            // rust-doctor-disable-next-line excessive-clone
                                             data: data.clone(),
                                         },
                                     }),
@@ -446,6 +468,26 @@ impl AnthropicProtocol {
     /// generations (4.8, fable-5) without per-launch edits.
     pub(super) fn supports_adaptive_thinking(model: &str) -> bool {
         Self::claude_version(model).is_some_and(|v| v >= (4, 6))
+    }
+
+    /// True for Claude models that have *any* extended-thinking mode (3.7+).
+    ///
+    /// Claude 3.7 introduced extended thinking; every later generation keeps it
+    /// (legacy `budget_tokens` on 3.7–4.5, adaptive on 4.6+). Below 3.7 —
+    /// Claude 3.5 and 3.0 — there is **no** thinking mode, and an `{type:
+    /// "enabled", budget_tokens}` block returns a 400. The old code emitted that
+    /// block for any non-adaptive model whenever a think level was set, so a
+    /// cheap non-reasoning model (Haiku 3/3.5) carrying a configured think level
+    /// hard-failed the request. This gates the legacy arm so the think level is
+    /// simply ignored there instead.
+    ///
+    /// A non-Claude model proxied through this protocol (version unknown) is
+    /// treated as thinking-capable — **fail-open**, to avoid regressing custom
+    /// reasoning endpoints; the OpenAI-compat `supports_reasoning_effort` strip
+    /// is the gate for those wires. Version compare keeps this future-proof: a
+    /// newer generation needs no edit here (same rationale as [`claude_version`]).
+    pub(super) fn supports_extended_thinking(model: &str) -> bool {
+        Self::claude_version(model).map_or(true, |v| v >= (3, 7))
     }
 
     /// True for models that 400 on non-default `temperature/top_p/top_k` even

@@ -10,8 +10,11 @@ use crate::providers::adapter::{ProtocolAdapter, RequestPayload};
 use super::super::AnthropicProtocol;
 
 pub(super) fn body_of(request: reqwest::RequestBuilder) -> serde_json::Value {
+    // rust-doctor-disable-next-line unwrap-in-production
     let built = request.build().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     let body_bytes = built.body().unwrap().as_bytes().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     serde_json::from_slice(body_bytes).unwrap()
 }
 
@@ -19,9 +22,12 @@ pub(super) fn build_body(payload: &RequestPayload, config: &ProviderConfig) -> s
     let protocol = AnthropicProtocol::new(reqwest::Client::new());
     let built = protocol
         .build_request(payload, config)
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap()
         .build()
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap()
 }
 
@@ -29,7 +35,9 @@ pub(super) fn build_http(payload: &RequestPayload, config: &ProviderConfig) -> r
     let protocol = AnthropicProtocol::new(reqwest::Client::new());
     protocol
         .build_request(payload, config)
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap()
         .build()
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap()
 }

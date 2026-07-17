@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use crate::agents::swarm::tasks::retry::{
-    count_failed_attempts, jittered_backoff_secs, read_max_retries, read_retry_attempts_base,
+    budget_failures_since, jittered_backoff_secs, read_max_retries, read_retry_budget_reset_at,
     retry_decision, with_retry_not_before, RetryDecision,
 };
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskUpdate};
@@ -20,6 +20,10 @@ impl TeamDispatcher {
     /// just-failed attempt is recorded (`finish_task_run`) *before* this runs —
     /// against the task's retry ceiling (`max_retries` in metadata, else the
     /// dispatcher's [`default_max_retries`](super::DispatcherConfig::default_max_retries)).
+    /// A manual hard-retry stamps `retry_budget_reset_at` into the metadata;
+    /// failures before that anchor are excluded, so a deliberate operator
+    /// re-queue re-arms the full automatic ladder instead of dying on its
+    /// first new failure (see [`budget_failures_since`]).
     ///
     /// - **Under the ceiling** → reset to `Pending`; the next tick re-claims it
     ///   and [`build_handoff_context`](super::handoff::build_handoff_context)
@@ -32,47 +36,57 @@ impl TeamDispatcher {
     ///
     /// Orphan reclaims leave a `Running` row that never finished (later closed
     /// as `Abandoned` by the run-row janitor), so they do not consume the retry
-    /// budget — only clean `Failed`/`Timeout` attempts do. An operator hard
-    /// retry additionally re-arms the budget by stamping
-    /// `retry_attempts_base`; the count here is rebased against that baseline.
+    /// budget — only clean `Failed`/`Timeout` attempts do.
     /// Zombies bypass this entirely and go straight to `fail_task` (they have
     /// already exhausted their runtime budget; retrying would just re-zombify).
     ///
-    /// Cancelled stays sticky on both paths — a cancel issued mid-flight is
-    /// neither retried nor overwritten with a failure.
+    /// Terminal states stay sticky on both paths — a task that reached ANY
+    /// terminal state mid-flight (cancel, skip, manual complete) is neither
+    /// retried nor overwritten with a failure.
     pub(super) async fn fail_or_retry(&self, task: &CoordTask, error: &str) {
-        // One fresh fetch serves two guards. (1) Terminal-sticky: a task an
-        // operator moved to ANY terminal state mid-flight (cancel, skip,
-        // manual complete — not just Cancelled) is neither retried nor
-        // overwritten with a failure. (2) Fresh-basis stamp: the retry
-        // metadata below is based on the CURRENT row, not the claim-time
-        // snapshot, so mid-run edits (max_retries / timeout_secs raised via
-        // task_update while the attempt ran) survive the failure write-back
-        // instead of being reverted to the dispatch-time values.
-        let fresh = self.coord_store.get_task(&task.id).await.ok().flatten();
+        // One fresh fetch serves two purposes. (1) Terminal-sticky guard: a
+        // task an operator moved to ANY terminal state mid-flight (cancel,
+        // skip, manual complete — fail_task re-checks for the give-up path)
+        // is neither retried nor overwritten with a failure. (2) The metadata
+        // BASE for the backoff stamp below: stamping onto the claim-time
+        // snapshot would silently clobber any metadata written while the run
+        // was in flight (a lost-update race); the fresh row is the current
+        // truth. A fetch failure degrades to the snapshot (P7 — same read
+        // the guard already tolerated).
+        let fresh = match self.coord_store.get_task(&task.id).await {
+            Ok(Some(t)) => Some(t),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: fail_or_retry re-fetch failed; using claim-time snapshot");
+                None
+            }
+        };
         if let Some(t) = &fresh {
             if t.status.is_terminal() {
                 tracing::info!(task_id = %task.id, status = %t.status, "dispatcher: task already terminal; neither retrying nor failing");
                 return;
             }
         }
-        let base_metadata = fresh
+        let metadata_base = fresh
             .map(|t| t.metadata)
             .unwrap_or_else(|| task.metadata.clone());
 
         let max_retries =
-            read_max_retries(&base_metadata).unwrap_or(self.config.default_max_retries);
-        let lifetime_failed = self
-            .coord_store
-            .list_task_runs(&task.id)
-            .await
-            .map(|runs| count_failed_attempts(&runs))
-            .unwrap_or(0);
-        // Rebase against the operator hard-retry baseline (if any): each hard
-        // retry re-arms the full per-step budget for that fresh intervention.
-        // Absent key → base 0 → lifetime count, the legacy behaviour.
-        let failed_attempts =
-            lifetime_failed.saturating_sub(read_retry_attempts_base(&base_metadata).unwrap_or(0));
+            read_max_retries(&metadata_base).unwrap_or(self.config.default_max_retries);
+        // Count only the failures that consume the CURRENT budget: a manual
+        // retry (operator/leader hard-reset) stamps `retry_budget_reset_at`,
+        // re-arming the ladder — failures before the anchor are history, not
+        // budget. An unreadable run log gives up conservatively: guessing `0`
+        // here would grant infinite zero-backoff retries against a broken
+        // store — an unbounded hot loop of member runs (P7 fail-safe).
+        let failed_attempts = match self.coord_store.list_task_runs(&task.id).await {
+            Ok(runs) => budget_failures_since(&runs, read_retry_budget_reset_at(&metadata_base)),
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: run history unreadable; cannot count retry budget — failing terminally");
+                self.fail_task(task, error).await;
+                return;
+            }
+        };
 
         match retry_decision(failed_attempts, max_retries) {
             RetryDecision::Retry => {
@@ -97,7 +111,7 @@ impl TeamDispatcher {
                     seed,
                 );
                 let not_before = Self::now_epoch().saturating_add(backoff);
-                let metadata = with_retry_not_before(base_metadata, not_before);
+                let metadata = with_retry_not_before(metadata_base, not_before);
                 tracing::info!(
                     task_id = %task.id,
                     attempt = failed_attempts,

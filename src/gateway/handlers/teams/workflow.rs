@@ -384,30 +384,18 @@ pub async fn handle_workflow_retry_step(
         Err(resp) => return resp,
     };
     // Pre-fetch once: metadata basis for the budget re-arm stamp + the
-    // leftover lock holder for the release below.
+    // leftover lock holder for the release below. A missing/unreadable task
+    // skips the stamp and lets update_task surface the real error below.
     let snapshot = coord_store.get_task(&params.task_id).await.ok().flatten();
-    // Re-arm the retry budget for this fresh intervention (see
-    // team_task_control Retry): baseline = failed attempts so far, stamped in
-    // the same write as the status reset.
-    let metadata = match &snapshot {
-        Some(t) => {
-            let failed_so_far = coord_store
-                .list_task_runs(&params.task_id)
-                .await
-                .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
-                .unwrap_or(0);
-            Some(crate::agents::swarm::tasks::merge_metadata_patch(
-                &t.metadata,
-                json!({
-                    crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY:
-                        failed_so_far,
-                    // Clear a stale pause-origin stamp (see team_task_control Retry).
-                    crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
-                }),
-            ))
-        }
-        None => None,
-    };
+    // A deliberate re-queue re-arms the automatic retry budget: stamp the
+    // anchor onto the task's current metadata so only failures from here on
+    // count against max_retries (mirrors `workflow_step_review.retry`).
+    let metadata = snapshot.as_ref().map(|t| {
+        crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+            t.metadata.clone(),
+            chrono::Utc::now().timestamp().max(0) as u64,
+        )
+    });
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
@@ -458,9 +446,11 @@ pub async fn handle_workflow_retry_step(
 // list_task_comments / list_task_events). We reuse it.
 
 /// teams.task.pause — manually suspend a task so the dispatcher will not
-/// claim it. Valid from Pending or `WaitingReview`. `InProgress` is rejected
-/// because the in-flight run is unsafe to silently abandon — use
-/// `teams.task.skip` or wait for the run to finish.
+/// claim it. Valid from Pending / Blocked / Unsatisfiable. `InProgress` is
+/// rejected because the in-flight run is unsafe to silently abandon (use
+/// `teams.task.skip` or wait for the run to finish); `WaitingReview` is
+/// rejected because resume returns a task to Pending, which would re-run a
+/// review-gated task and discard its completed work + pending verdict.
 pub async fn handle_task_pause(
     request: JsonRpcRequest,
     coord_store: Arc<dyn CoordTaskStore>,
@@ -488,10 +478,14 @@ pub async fn handle_task_pause(
         }
     };
     match current.status {
+        // WaitingReview is deliberately NOT pausable: resume always returns a
+        // task to Pending, which would re-schedule a review-gated task for a
+        // FRESH run — discarding both the already-completed work product and the
+        // pending lead verdict. A review-gated task is already idle (awaiting
+        // approve/reject); its lifecycle verbs are review, not pause.
         CoordTaskStatus::Pending
         | CoordTaskStatus::Blocked
-        | CoordTaskStatus::Unsatisfiable
-        | CoordTaskStatus::WaitingReview => {}
+        | CoordTaskStatus::Unsatisfiable => {}
         CoordTaskStatus::Paused => {
             return JsonRpcResponse::success(request.id, json!({ "status": "paused" }));
         }
@@ -500,7 +494,7 @@ pub async fn handle_task_pause(
                 request.id,
                 INVALID_PARAMS,
                 format!(
-                    "Cannot pause task in status '{}' — only pending/blocked/waiting_review may be paused",
+                    "Cannot pause task in status '{}' — only pending/blocked/unsatisfiable may be paused",
                     current.status
                 ),
             )
@@ -645,21 +639,11 @@ pub async fn handle_task_retry(
             "Cannot retry an in-progress task — cancel it first".to_string(),
         );
     }
-    // Re-arm the retry budget for this fresh intervention (see
-    // team_task_control Retry): baseline = failed attempts so far, stamped in
-    // the same write as the status reset.
-    let failed_so_far = coord_store
-        .list_task_runs(&params.task_id)
-        .await
-        .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
-        .unwrap_or(0);
-    let metadata = crate::agents::swarm::tasks::merge_metadata_patch(
-        &current.metadata,
-        json!({
-            crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY: failed_so_far,
-            // Clear a stale pause-origin stamp (see team_task_control Retry).
-            crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
-        }),
+    // Deliberate hard-retry → re-arm the automatic retry budget (see
+    // `team_task_control.retry` — same anchor, same rationale).
+    let metadata = crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+        current.metadata,
+        chrono::Utc::now().timestamp().max(0) as u64,
     );
     if let Err(e) = coord_store
         .update_task(

@@ -65,6 +65,46 @@ pub fn with_lead_review_required(metadata: Value, required: bool) -> Value {
     value
 }
 
+/// Metadata key recording when the dispatcher last surfaced this task as
+/// stalled in `WaitingReview` (epoch seconds). Stamped by
+/// `warn_stale_reviews`; doubles as the **durable** once-per-park dedup — a
+/// marker at or after the current run's `started_at` means this park was
+/// already warned (a later re-run re-stamps `started_at`, naturally re-arming
+/// the warning without any clearing pass). Living in the metadata row (the
+/// same channel as `lead_review_required`) it survives restarts, unlike the
+/// in-memory set it replaced, and the stamping write itself re-emits
+/// `TeamTaskUpdated{waiting_review}` so the existing `TeamNotifier` turns the
+/// stall into a leader-inbox reminder (R5) instead of a log line nobody reads.
+pub const STALE_REVIEW_WARNED_AT_METADATA_KEY: &str = "stale_review_warned_at";
+
+/// Read the stale-review warning stamp (epoch seconds), if any. Tolerant:
+/// missing key / wrong shape read as `None` (never warned).
+#[must_use]
+pub fn read_stale_review_warned_at(metadata: &Value) -> Option<u64> {
+    metadata
+        .get(STALE_REVIEW_WARNED_AT_METADATA_KEY)
+        .and_then(Value::as_u64)
+}
+
+/// Return a new metadata value with [`STALE_REVIEW_WARNED_AT_METADATA_KEY`]
+/// set to `warned_at`, preserving every other key. Mirrors
+/// [`with_lead_review_required`]: non-object input promoted, original
+/// untouched (immutability).
+#[must_use]
+pub fn with_stale_review_warned_at(metadata: Value, warned_at: u64) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            STALE_REVIEW_WARNED_AT_METADATA_KEY.to_string(),
+            Value::Number(warned_at.into()),
+        );
+    }
+    value
+}
+
 /// Read the acceptance-criteria list from a task's `metadata` value.
 ///
 /// Tolerant by construction (metadata is free-form, possibly authored by an
@@ -223,6 +263,21 @@ mod tests {
         let merged = with_lead_review_required(json!("scalar"), true);
         assert!(merged.is_object());
         assert!(lead_review_required(&merged));
+    }
+
+    #[test]
+    fn stale_review_stamp_round_trips_and_preserves_keys() {
+        let original = json!({ LEAD_REVIEW_METADATA_KEY: true });
+        let stamped = with_stale_review_warned_at(original.clone(), 1_700_000_000);
+        assert!(original.get(STALE_REVIEW_WARNED_AT_METADATA_KEY).is_none()); // immutable
+        assert_eq!(read_stale_review_warned_at(&stamped), Some(1_700_000_000));
+        assert!(lead_review_required(&stamped)); // sibling preserved
+                                                 // Wrong shape reads as None; non-object promoted.
+        assert_eq!(
+            read_stale_review_warned_at(&json!({ STALE_REVIEW_WARNED_AT_METADATA_KEY: "now" })),
+            None
+        );
+        assert!(with_stale_review_warned_at(json!(42), 1).is_object());
     }
 
     #[test]

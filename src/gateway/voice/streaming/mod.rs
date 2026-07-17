@@ -26,6 +26,23 @@ pub struct TranscriptDelta {
     /// authoritative for turn segmentation, this is advisory only).
     #[serde(default)]
     pub utterance_end: bool,
+    /// Backend reported a fatal condition (busy queue, server error, forced
+    /// disconnect). The adapter's bridge task shuts down after emitting this,
+    /// so the relay's terminal `closed` event follows; clients should treat the
+    /// stream as dead and fall back to the batch path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Append `next` to an accumulating committed transcript, inserting a space
+/// only across an ASCII boundary (see [`aleph_protocol::voice_text`]). Shared
+/// by both decoders so EN finals join as words while CJK text never gains
+/// stray spaces.
+pub(crate) fn push_joined(committed: &mut String, next: &str) {
+    if aleph_protocol::voice_text::join_needs_space(committed, next) {
+        committed.push(' ');
+    }
+    committed.push_str(next);
 }
 
 /// Per-session open parameters handed to an adapter.
@@ -70,6 +87,9 @@ pub struct StreamingTarget {
     pub base_url: String,
     pub api_key: String,
     pub language: Option<String>,
+    /// ASR model requested from the backend. Empty = adapter default
+    /// (WhisperLive: `"small"`; Deepgram dialect: server default).
+    pub model: String,
 }
 
 /// Which vendor wire protocol an adapter speaks.
@@ -79,13 +99,21 @@ pub enum StreamingProvider {
 }
 
 /// Map a provider string to its wire protocol. Unknown values fall back to the
-/// Deepgram `/v1/listen` protocol (the lingua franca; WhisperLiveKit speaks it).
+/// Deepgram `/v1/listen` protocol (the lingua franca; WhisperLiveKit speaks it)
+/// — but loudly, so a typo'd `provider = "whisperliv"` doesn't silently speak
+/// the wrong dialect at a WhisperLive server.
 #[must_use]
 pub fn classify_provider(provider: &str) -> StreamingProvider {
     match provider.trim().to_ascii_lowercase().as_str() {
         "whisperlive" => StreamingProvider::WhisperLive,
-        // "deepgram", "whisperlivekit", unknown → Deepgram /v1/listen lingua franca
-        _ => StreamingProvider::Deepgram,
+        "deepgram" | "whisperlivekit" | "" => StreamingProvider::Deepgram,
+        other => {
+            tracing::warn!(
+                provider = %other,
+                "unknown [voice.streaming] provider — falling back to the Deepgram /v1/listen dialect"
+            );
+            StreamingProvider::Deepgram
+        }
     }
 }
 
@@ -107,13 +135,26 @@ mod tests {
     fn transcript_delta_committed_only_serializes_snake_case() {
         let d = TranscriptDelta {
             committed: "你好".into(),
-            interim: String::new(),
-            utterance_end: false,
+            ..TranscriptDelta::default()
         };
         let j = serde_json::to_value(&d).unwrap();
         assert_eq!(j["committed"], "你好");
         assert_eq!(j["interim"], "");
         assert_eq!(j["utterance_end"], false);
+        // The error field is elided from the wire unless set.
+        assert!(j.get("error").is_none());
+    }
+
+    #[test]
+    fn push_joined_spaces_ascii_but_not_cjk() {
+        let mut s = String::new();
+        push_joined(&mut s, "Hello there.");
+        push_joined(&mut s, "How are you");
+        assert_eq!(s, "Hello there. How are you");
+        let mut z = String::new();
+        push_joined(&mut z, "你好");
+        push_joined(&mut z, "世界");
+        assert_eq!(z, "你好世界");
     }
 
     #[test]
@@ -130,6 +171,7 @@ mod tests {
             base_url: "ws://127.0.0.1:9090".into(),
             api_key: String::new(),
             language: None,
+            model: String::new(),
         };
         assert!(matches!(
             classify_provider(&cfg.provider),
@@ -140,6 +182,7 @@ mod tests {
             base_url: "wss://api.deepgram.com".into(),
             api_key: "k".into(),
             language: None,
+            model: String::new(),
         };
         assert!(matches!(
             classify_provider(&cfg2.provider),
@@ -161,6 +204,7 @@ mod tests {
             base_url: url,
             api_key: String::new(),
             language: Some("zh".into()),
+            model: String::new(),
         };
         let tr = build_transcriber(t);
         let mut h = tr.open(StreamConfig::new(Some("zh".into()))).await.unwrap();

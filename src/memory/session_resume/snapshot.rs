@@ -21,94 +21,9 @@ pub struct SessionSnapshot {
     pub pending_tasks: Vec<String>,
 }
 
-impl SessionSnapshot {
-    /// Render this snapshot as prompt text for LLM consumption.
-    ///
-    /// Empty sections are omitted to avoid noise.
-    #[must_use]
-    pub fn to_prompt_text(&self) -> String {
-        let mut out = String::with_capacity(512);
-        out.push_str("# Previous Session Context\n\n");
-        out.push_str("**Summary:** ");
-        out.push_str(&self.summary);
-        out.push('\n');
-
-        if !self.key_decisions.is_empty() {
-            out.push_str("\n**Key decisions:**\n");
-            for d in &self.key_decisions {
-                out.push_str("- ");
-                out.push_str(d);
-                out.push('\n');
-            }
-        }
-
-        if !self.active_files.is_empty() {
-            out.push_str("\n**Active files:**\n");
-            for f in &self.active_files {
-                out.push_str("- ");
-                out.push_str(f);
-                out.push('\n');
-            }
-        }
-
-        if !self.pending_tasks.is_empty() {
-            out.push_str("\n**Pending tasks:**\n");
-            for t in &self.pending_tasks {
-                out.push_str("- ");
-                out.push_str(t);
-                out.push('\n');
-            }
-        }
-
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn to_prompt_text_renders_all_sections() {
-        let snapshot = SessionSnapshot {
-            session_id: "s1".into(),
-            agent_id: "main".into(),
-            created_at: Utc::now(),
-            summary: "Implemented feature X.".into(),
-            key_decisions: vec!["Use trait objects".into()],
-            active_files: vec!["src/lib.rs".into()],
-            tool_state: None,
-            pending_tasks: vec!["Write tests".into()],
-        };
-        let text = snapshot.to_prompt_text();
-        assert!(text.contains("# Previous Session Context"));
-        assert!(text.contains("**Summary:** Implemented feature X."));
-        assert!(text.contains("**Key decisions:**"));
-        assert!(text.contains("- Use trait objects"));
-        assert!(text.contains("**Active files:**"));
-        assert!(text.contains("- src/lib.rs"));
-        assert!(text.contains("**Pending tasks:**"));
-        assert!(text.contains("- Write tests"));
-    }
-
-    #[test]
-    fn to_prompt_text_skips_empty_sections() {
-        let snapshot = SessionSnapshot {
-            session_id: "s2".into(),
-            agent_id: "main".into(),
-            created_at: Utc::now(),
-            summary: "Quick fix.".into(),
-            key_decisions: vec![],
-            active_files: vec![],
-            tool_state: None,
-            pending_tasks: vec![],
-        };
-        let text = snapshot.to_prompt_text();
-        assert!(text.contains("**Summary:**"));
-        assert!(!text.contains("**Key decisions:**"));
-        assert!(!text.contains("**Active files:**"));
-        assert!(!text.contains("**Pending tasks:**"));
-    }
 
     #[test]
     fn serialization_roundtrip() {

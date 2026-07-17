@@ -132,13 +132,6 @@ pub struct TeamDispatcher {
     /// the keys alone preserve the original "don't re-claim a running task"
     /// semantics for reclamation.
     pub(crate) running: Arc<Mutex<HashMap<CoordTaskId, String>>>,
-    /// Ids already surfaced by [`Self::warn_stale_reviews`] as stalled in
-    /// `WaitingReview` past the TTL. In-memory dedup so the janitor warns once
-    /// per stuck task instead of every tick; pruned back to the live
-    /// `WaitingReview` set each pass so a task that returns to review later can
-    /// warn again. Never drives a status transition — the approve/reject verdict
-    /// is the lead LLM's call (R7); this only makes a silent stall visible.
-    pub(crate) warned_stale_reviews: Arc<Mutex<HashSet<CoordTaskId>>>,
     /// Workflow run ids whose terminal origin-channel notification has been
     /// attempted this process (see `schedule::settle`). In-memory claim for
     /// the send window; the durable `workflow_notified` metadata marker makes
@@ -184,7 +177,6 @@ impl TeamDispatcher {
             signal,
             semaphore,
             running: Arc::new(Mutex::new(HashMap::new())),
-            warned_stale_reviews: Arc::new(Mutex::new(HashSet::new())),
             notified_workflow_runs: Arc::new(Mutex::new(HashSet::new())),
             channels: None,
             shutdown_token: tokio_util::sync::CancellationToken::new(),

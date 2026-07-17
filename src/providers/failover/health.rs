@@ -94,9 +94,11 @@ impl FailoverHealth {
                         .map_or(0, |at| st.cooldown.saturating_sub(at.elapsed()).as_secs())
                 });
                 ProviderHealthView {
+                    // rust-doctor-disable-next-line excessive-clone
                     provider: name.clone(),
                     circuit,
                     failure_count: st.failure_count,
+                    // rust-doctor-disable-next-line excessive-clone
                     last_error: st.last_error.clone(),
                     cooldown_remaining_secs,
                 }
@@ -160,6 +162,7 @@ impl ModelCooldown {
             .await
             .iter()
             .filter(|&((_, _), &until)| until > now)
+            // rust-doctor-disable-next-line excessive-clone
             .map(|((p, m), &until)| (p.clone(), m.clone(), (until - now).as_secs()))
             .collect();
         out.sort();
@@ -222,6 +225,7 @@ impl ProviderCooldown {
             .await
             .iter()
             .filter(|&(_, &until)| until > now)
+            // rust-doctor-disable-next-line excessive-clone
             .map(|(p, &until)| (p.clone(), (until - now).as_secs()))
             .collect();
         out.sort();

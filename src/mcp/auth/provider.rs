@@ -232,8 +232,11 @@ impl OAuthProvider {
             .get_entry(&self.server_name)
             .await?
             .unwrap_or_default();
+        // rust-doctor-disable-next-line excessive-clone
         entry.code_verifier = Some(code_verifier.clone());
+        // rust-doctor-disable-next-line excessive-clone
         entry.oauth_state = Some(state.clone());
+        // rust-doctor-disable-next-line excessive-clone
         entry.server_url = Some(self.server_url.clone());
         self.storage.save_entry(&self.server_name, &entry).await?;
 

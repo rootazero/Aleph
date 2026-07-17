@@ -672,7 +672,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
             "task_update" => Box::pin(async move {
-                let tool = self.task_update_tool.as_ref().ok_or_else(|| AlephError::tool("task_update not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                let tool = self.task_update_tool.as_ref().ok_or_else(|| AlephError::tool("task_update not available: no CoordTaskStore configured"))?;
                 tool.call_json(arguments).await
             }),
             "task_list" => Box::pin(async move {
@@ -683,7 +683,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "task_wait" => {
                 Box::pin(async move {
-                    let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                    let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore configured"))?;
                     tool.call_json(arguments).await
                 })
             }
@@ -1382,6 +1382,7 @@ mod recall_context_identity_tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         }
     }
 

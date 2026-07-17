@@ -14,10 +14,10 @@
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
-/// Priority sits between `InboundContextLayer` (1700) and
-/// `AgentCatalogLayer` (1704). Late enough that identity/profile have
-/// already established who the agent is, early enough that any later
-/// guidance can reference "as noted in your delegation chain above".
+/// Priority 1702 sits early in the per-request Dynamic zone, just before
+/// `AgentCatalogLayer` (1704). Late enough that identity/profile have already
+/// established who the agent is, early enough that any later guidance can
+/// reference "as noted in your delegation chain above".
 const CHAIN_CONTEXT_PRIORITY: u32 = 1702;
 
 pub struct ChainContextLayer;

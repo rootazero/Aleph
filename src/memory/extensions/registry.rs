@@ -45,15 +45,19 @@ pub struct MemoryExtensionRegistry {
 
 impl Clone for MemoryExtensionRegistry {
     fn clone(&self) -> Self {
+        // rust-doctor-disable-next-line excessive-clone
         let snapshot = self
             .extensions
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .clone();
+        // rust-doctor-disable-next-line excessive-clone
         let mcp = self
             .mcp_bindings
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .clone();
         Self {
             extensions: RwLock::new(snapshot),
@@ -90,6 +94,7 @@ impl MemoryExtensionRegistry {
         self.extensions
             .write()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .push(ext.clone() as Arc<dyn MemoryExtension>);
         self.mcp_bindings
             .write()
@@ -105,6 +110,7 @@ impl MemoryExtensionRegistry {
         self.mcp_bindings
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .clone()
     }
 
@@ -128,6 +134,7 @@ impl MemoryExtensionRegistry {
         self.extensions
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .clone()
     }
 

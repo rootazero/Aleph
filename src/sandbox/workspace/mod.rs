@@ -125,7 +125,12 @@ impl WorkspaceSandbox {
             baseline: SandboxCapabilities::strict(),
             granted_elevations: RwLock::new(HashSet::new()),
         });
-        sessions.insert(sid.clone(), ws.clone());
+        sessions.insert(
+            // rust-doctor-disable-next-line excessive-clone
+            sid.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            ws.clone(),
+        );
         Ok(ws)
     }
 }
@@ -151,6 +156,7 @@ impl Sandbox for WorkspaceSandbox {
         })
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
         // Hook context is created on-demand at each call site rather than
         // once at the top: it borrows `&cmd`, which would block the SP-4
@@ -168,6 +174,7 @@ impl Sandbox for WorkspaceSandbox {
         let ws = self.for_session(&cmd.session_id).await?;
 
         let cwd = match &cmd.cwd {
+            // rust-doctor-disable-next-line excessive-clone
             None => ws.cwd.clone(),
             Some(p) => {
                 let normalized = normalize_path(p, &ws.cwd);
@@ -253,7 +260,11 @@ impl Sandbox for WorkspaceSandbox {
                     cmd.cwd.as_deref(),
                     &reason,
                 );
-                let outcome = self.approval_gate.request_approval_for_action(&action).await;
+                let response = self
+                    .approval_gate
+                    .request_approval_for_action(&action)
+                    .await;
+                let outcome = response.outcome;
                 match outcome {
                     // Either grant flavour elevates; this path already caches the
                     // grant per-session in `granted_elevations`, so a one-shot
@@ -305,9 +316,16 @@ impl Sandbox for WorkspaceSandbox {
                                 );
                             }
                         }
+                        // Relay the human's stated reason (if any) so the model
+                        // re-plans on it instead of a bare "denied".
+                        let user_reason = response
+                            .deny_reason
+                            .as_deref()
+                            .map(|r| format!(" The user said: \"{r}\"."))
+                            .unwrap_or_default();
                         return Err(SandboxError::CapabilityDenied {
                             reason: format!(
-                                "user denied elevated capability request. {}",
+                                "user denied elevated capability request.{user_reason} {}",
                                 reason_kind.agent_hint()
                             ),
                         });
@@ -691,9 +709,9 @@ mod tests {
         async fn request_approval(
             &self,
             _action: &crate::sandbox::exec_approval::ApprovalAction,
-        ) -> ApprovalOutcome {
+        ) -> crate::sandbox::exec_approval::ApprovalResponse {
             *self.calls.write().await += 1;
-            self.outcome
+            self.outcome.into()
         }
     }
 
@@ -1057,8 +1075,7 @@ mod tests {
             &format_capability_summary("totally-new-program", &elevated.normalized()),
         );
         assert_eq!(
-            denial_ledger::global()
-                .is_blocked(&denial_ledger::ledger_key(&session), &fresh),
+            denial_ledger::global().is_blocked(&denial_ledger::ledger_key(&session), &fresh),
             Some(denial_ledger::DenialReason::ThresholdExceeded),
             "3 distinct elevation denials must pause the session — the breaker is \
              reachable at the elevation gate, so the trip-edge purge can fire here"

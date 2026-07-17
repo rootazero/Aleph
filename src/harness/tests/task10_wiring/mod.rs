@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::Result as AlephResult;
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;

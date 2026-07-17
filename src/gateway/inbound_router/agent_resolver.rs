@@ -1,6 +1,6 @@
 //! Agent ID resolution and context building
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::gateway::channel::InboundMessage;
 use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
@@ -16,6 +16,35 @@ use crate::gateway::interfaces::imessage::normalize_phone;
 use super::normalize_phone;
 
 impl InboundMessageRouter {
+    /// Read the channel's explicit agent binding, validated against the
+    /// runtime registry.
+    ///
+    /// A stale binding — the bound agent's TOML definition removed while the
+    /// binding row survived a restart, or a crash between delete steps —
+    /// would otherwise brick the channel: every inbound message resolves to
+    /// a ghost and fails `AgentNotFound`, and the user can no longer reach
+    /// the LLM to run `agent_switch` and fix it. Fail-soft on the hot path
+    /// (control-plane surfaces stay fail-loud): warn and fall back to
+    /// default routing. The binding row is deliberately NOT cleared — if the
+    /// agent is re-registered (config restored, next boot) the user's
+    /// explicit switch comes back to life instead of being destroyed.
+    async fn validated_channel_override(&self, channel: &str) -> Option<String> {
+        let manager = self.workspace_manager.as_ref()?;
+        let agent_id = manager.get_active_agent(channel).ok().flatten()?;
+        if let Some(ref registry) = self.agent_registry {
+            if !registry.contains(&agent_id).await {
+                warn!(
+                    channel = %channel,
+                    agent_id = %agent_id,
+                    "Channel is bound to an agent missing from the runtime registry; \
+                     falling back to default routing (binding kept for recovery)"
+                );
+                return None;
+            }
+        }
+        Some(agent_id)
+    }
+
     /// Whether a *bound* agent id actually exists in the runtime registry.
     /// `true` when no registry is wired (nothing to check against — legacy /
     /// test contexts keep their old behaviour). A binding row can outlive its
@@ -25,24 +54,8 @@ impl InboundMessageRouter {
     /// with no reply, forever.
     async fn bound_agent_exists(&self, agent_id: &str) -> bool {
         match &self.agent_registry {
-            Some(reg) => reg.get(agent_id).await.is_some(),
+            Some(reg) => reg.contains(agent_id).await,
             None => true,
-        }
-    }
-
-    /// A workspace binding points at a vanished agent: warn, best-effort drop
-    /// the stale row so the next message doesn't re-trip, and let the caller
-    /// fall through to the default agent.
-    fn clear_stale_binding(&self, channel: &str, agent_id: &str) {
-        tracing::warn!(
-            channel = %channel,
-            agent_id = %agent_id,
-            "channel is bound to an agent that no longer exists — clearing the stale binding and falling back to the default agent"
-        );
-        if let Some(ref manager) = self.workspace_manager {
-            if let Err(e) = manager.clear_active_agent(channel) {
-                tracing::warn!(channel = %channel, error = %e, "failed to clear stale agent binding");
-            }
         }
     }
 
@@ -109,25 +122,16 @@ impl InboundMessageRouter {
             // still win, preserving carefully-scoped routing config.
             if resolved.matched_by == crate::routing::resolve::MatchedBy::Default {
                 let channel = msg.channel_id.as_str();
-                if let Some(ref manager) = self.workspace_manager {
-                    if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
-                        if agent_id != resolved.agent_id {
-                            // Existence gate: a stale binding to a deleted
-                            // agent must not override the (existing) default
-                            // route — that would brick the channel.
-                            if !self.bound_agent_exists(&agent_id).await {
-                                self.clear_stale_binding(channel, &agent_id);
-                            } else {
-                                debug!(
-                                    "Channel '{}' override → agent '{}' (explicit switch beats default route)",
-                                    channel, agent_id
-                                );
-                                // Return None for the route so the context builder
-                                // rebuilds the session key for the override agent
-                                // (the route's key was computed for the default agent).
-                                return Some((agent_id, None));
-                            }
-                        }
+                if let Some(agent_id) = self.validated_channel_override(channel).await {
+                    if agent_id != resolved.agent_id {
+                        debug!(
+                            "Channel '{}' override → agent '{}' (explicit switch beats default route)",
+                            channel, agent_id
+                        );
+                        // Return None for the route so the context builder
+                        // rebuilds the session key for the override agent
+                        // (the route's key was computed for the default agent).
+                        return Some((agent_id, None));
                     }
                 }
             }
@@ -139,9 +143,9 @@ impl InboundMessageRouter {
             // deleted agent would brick every conversation it governs: each
             // message resolves to the ghost → AgentNotFound → error notice,
             // forever, with no restart cure. Fall through to the already-gated
-            // Tier 2 / Tier 3 instead. Deliberately NOT clear_stale_binding —
-            // that clears the *workspace* store, a different (possibly valid)
-            // binding. Recreating an agent with the same id instantly restores
+            // Tier 2 / Tier 3 instead. Deliberately does NOT touch the
+            // *workspace* store — a different (possibly valid) binding lives
+            // there. Recreating an agent with the same id instantly restores
             // the route (the gate is per-message).
             if resolved.matched_by != crate::routing::resolve::MatchedBy::Default
                 && !self.bound_agent_exists(&resolved.agent_id).await
@@ -166,19 +170,12 @@ impl InboundMessageRouter {
 
         // Tier 2: Fallback to workspace_manager (backward compat for zero-config)
         let channel = msg.channel_id.as_str();
-        if let Some(ref manager) = self.workspace_manager {
-            if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
-                // Existence gate: fall through to the default agent instead of
-                // routing every message on this channel into AgentNotFound.
-                if self.bound_agent_exists(&agent_id).await {
-                    debug!(
-                        "Channel '{}' bound to agent '{}' via workspace",
-                        channel, agent_id
-                    );
-                    return Some((agent_id, None));
-                }
-                self.clear_stale_binding(channel, &agent_id);
-            }
+        if let Some(agent_id) = self.validated_channel_override(channel).await {
+            debug!(
+                "Channel '{}' bound to agent '{}' via workspace",
+                channel, agent_id
+            );
+            return Some((agent_id, None));
         }
 
         // Tier 3: Default agent

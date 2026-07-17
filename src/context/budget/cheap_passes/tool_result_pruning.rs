@@ -9,7 +9,7 @@
 use crate::context::budget::cheap_passes::structured;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use async_trait::async_trait;
 
 /// Max characters kept from a tool result's first line in the pruned hint.
@@ -126,7 +126,26 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             if new_tokens >= original_tokens {
                 continue;
             }
-            msg.replace_tool_result_content(replacement);
+            // Rebuild the content as [reduced text, …original image blocks in
+            // order]. Image lifecycle policy belongs solely to
+            // `HistoricalImageStrippingStage` (which runs later and keeps the
+            // newest image) — silently dropping images here would also free
+            // the sensor's per-image token charge without counting it. Since
+            // the images stay, `total_freed` correctly reflects only the text
+            // shrink (`tool_result_info` never counted image blocks).
+            if let UnifiedMessage::ToolResult { content, .. } = msg {
+                let mut new_content = vec![ContentBlock::Text {
+                    text: replacement,
+                    cache_control: None,
+                }];
+                new_content.extend(
+                    content
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                        .cloned(),
+                );
+                *content = new_content;
+            }
             total_freed += original_tokens - new_tokens;
         }
         total_freed
@@ -238,6 +257,53 @@ mod tests {
         assert!(
             text.starts_with("[pruned tool_result: Read"),
             "unstructured content falls back to first-line placeholder; got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_image_blocks_when_pruning() {
+        // A tool result carrying text + an image (e.g. a screenshot tool):
+        // pruning must shrink the text but leave the image for
+        // HistoricalImageStrippingStage to police, and `freed` must reflect
+        // the text shrink only (the image's sensor charge is not freed).
+        let text = "x".repeat(2000);
+        let mut messages = vec![
+            UnifiedMessage::ToolResult {
+                tool_call_id: "call-1".to_string(),
+                tool_name: "screenshot".to_string(),
+                content: vec![
+                    ContentBlock::Text {
+                        text: text.clone(),
+                        cache_control: None,
+                    },
+                    ContentBlock::Image {
+                        data: "iVBORw0KGgo=".repeat(50),
+                        mime_type: "image/png".to_string(),
+                    },
+                ],
+                is_error: false,
+            },
+            UnifiedMessage::user("recent"),
+        ];
+        let stage = ToolResultPruningStage::default();
+        let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
+        assert!(freed > 0, "the large text must still be pruned");
+        assert!(
+            freed <= estimate_tokens_smart(&text),
+            "freed must reflect the text shrink only, got {freed}"
+        );
+        let UnifiedMessage::ToolResult { content, .. } = &messages[0] else {
+            panic!("still a ToolResult");
+        };
+        assert!(
+            matches!(&content[0], ContentBlock::Text { text, .. } if text.starts_with("[pruned tool_result")),
+            "first block must be the reduced text"
+        );
+        assert!(
+            content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Image { .. })),
+            "the image block must survive pruning"
         );
     }
 

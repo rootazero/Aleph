@@ -318,9 +318,9 @@ mod tests {
     async fn test_scan_link_configs() {
         let tmp = TempDir::new().unwrap();
         let links_dir = tmp.path().join("links");
-        std::fs::create_dir_all(&links_dir).unwrap();
+        tokio::fs::create_dir_all(&links_dir).await.unwrap();
 
-        std::fs::write(
+        tokio::fs::write(
             links_dir.join("test-telegram.yaml"),
             r#"
 spec_version: "1.0"
@@ -334,6 +334,7 @@ routing:
   agent: "main"
 "#,
         )
+        .await
         .unwrap();
 
         let configs = scan_link_configs(&links_dir).await.unwrap();
@@ -346,7 +347,7 @@ routing:
     async fn test_scan_link_configs_empty_dir() {
         let tmp = TempDir::new().unwrap();
         let links_dir = tmp.path().join("links");
-        std::fs::create_dir_all(&links_dir).unwrap();
+        tokio::fs::create_dir_all(&links_dir).await.unwrap();
 
         let configs = scan_link_configs(&links_dir).await.unwrap();
         assert!(configs.is_empty());

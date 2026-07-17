@@ -91,7 +91,7 @@ impl Default for GatewayConfig {
 /// Native in-process TLS for the gateway listener. Default off → plaintext,
 /// unchanged. When `enabled` with empty paths, a self-signed cert is
 /// auto-generated and persisted (see [`crate::gateway::tls`]).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GatewayTlsConfig {
     /// Terminate TLS in-process. Default false.
@@ -100,12 +100,6 @@ pub struct GatewayTlsConfig {
     pub cert_path: String,
     /// PEM private-key path. Empty + `enabled` ⇒ auto self-signed.
     pub key_path: String,
-}
-
-impl Default for GatewayTlsConfig {
-    fn default() -> Self {
-        Self { enabled: false, cert_path: String::new(), key_path: String::new() }
-    }
 }
 
 /// Trusted reverse-proxy forwarding. When `enabled`, `X-Forwarded-For` /

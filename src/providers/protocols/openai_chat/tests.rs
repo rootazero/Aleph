@@ -579,7 +579,95 @@ fn test_build_request_sets_prompt_cache_key_from_session_metadata() {
         .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    // No system prompt / tools on this payload → the content-addressed key
+    // has nothing static to hash and falls back to the session id.
     assert_eq!(body["prompt_cache_key"], "sess-abc");
+}
+
+#[test]
+fn test_build_request_content_addresses_prompt_cache_key_from_static_prefix() {
+    // With a static prefix present, the key is content-addressed — two
+    // requests with different session ids but the same system prompt share
+    // one warm routing bucket (daemon/cron cache-cold fix).
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.openai.com/v1".to_string());
+
+    let key_for_session = |session: &str| {
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("session_id".to_string(), session.to_string());
+        let payload = RequestPayload::new(&msgs)
+            .with_system(Some("You are Aleph."))
+            .with_metadata(Some(meta));
+        let built = protocol
+            .build_request(&payload, &config)
+            .unwrap()
+            .build()
+            .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+        body["prompt_cache_key"].as_str().unwrap().to_string()
+    };
+
+    let a = key_for_session("cron_1_170001");
+    let b = key_for_session("cron_1_170099");
+    assert!(a.starts_with("pck_"), "content-addressed key, got {a}");
+    assert_eq!(a, b, "same static prefix must share one routing bucket");
+}
+
+#[test]
+fn test_build_request_emits_prompt_cache_retention_on_long_official() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.openai.com/v1".to_string());
+    config.cache_retention = Some(crate::config::types::provider::CacheRetention::Long);
+
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(body["prompt_cache_retention"], "24h");
+}
+
+#[test]
+fn test_build_request_no_retention_when_short_or_custom() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+
+    // Short (default) retention on the official endpoint → no field.
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.openai.com/v1".to_string());
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert!(body.get("prompt_cache_retention").is_none());
+
+    // Long retention on a custom endpoint → stripped with the cache key.
+    let payload = RequestPayload::new(&msgs).with_system(Some("sys"));
+    config.base_url = Some("https://my-proxy.example.com/v1".to_string());
+    config.cache_retention = Some(crate::config::types::provider::CacheRetention::Long);
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert!(body.get("prompt_cache_retention").is_none());
 }
 
 #[test]
@@ -1063,10 +1151,13 @@ fn assert_chat_stop_field(stop_sequences: Option<&str>, assertion: impl Fn(serde
     let payload = RequestPayload::new(&msgs);
     let req = proto
         .build_request(&payload, &cfg)
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap()
         .build()
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
     let body: serde_json::Value =
+        // rust-doctor-disable-next-line unwrap-in-production
         serde_json::from_slice(req.body().unwrap().as_bytes().unwrap()).unwrap();
     assertion(body);
 }
@@ -1116,8 +1207,11 @@ fn chat_stop_sequences_trims_whitespace() {
 
 /// Extract the JSON body from a built request for inspection.
 fn extract_chat_body(req: reqwest::RequestBuilder) -> serde_json::Value {
+    // rust-doctor-disable-next-line unwrap-in-production
     let built = req.build().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     let bytes = built.body().unwrap().as_bytes().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     serde_json::from_slice(bytes).unwrap()
 }
 
@@ -1132,6 +1226,7 @@ fn build_chat_body_for_max_tokens(model: &str, max_tokens: Option<u32>) -> serde
 
     let req = protocol
         .build_request(&payload, &config)
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("build_request should succeed");
     extract_chat_body(req)
 }

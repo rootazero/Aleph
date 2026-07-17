@@ -326,12 +326,18 @@ impl SessionsSendTool {
         // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
         // its channel `tool_permissions` deny layer are captured before any spawn.
         let turn = crate::tools::turn_context::current_turn_context();
+        // A wait-mode child of a HEADLESS parent (goal / loop continuation,
+        // cron, heartbeat) is just as unattended as the parent: nobody can
+        // answer its approval cards either. Without inheriting the flag it
+        // would park on the 120 s approval timeout per gated tool instead of
+        // failing closed instantly. Fire-and-forget stays stamped regardless.
+        let parent_unattended = turn.as_ref().is_some_and(|t| t.unattended);
         let sub_metadata = build_sub_metadata(
             inherited_workspace.as_deref(),
             turn.as_ref().and_then(|t| t.caller_role.clone()),
             turn.as_ref()
                 .and_then(|t| t.channel_tool_permissions.clone()),
-            args.timeout_seconds == 0,
+            args.timeout_seconds == 0 || parent_unattended,
         );
 
         // Tree budget (goal × session_send): when the CALLING session carries an
@@ -596,10 +602,14 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
 ///    `role_is_operator(None) = true` promote a guest channel to operator +
 ///    unclamped tier; dropping the channel layer would let a guest bypass its own
 ///    `deny` override (e.g. `web_fetch = deny`) simply by delegating.
-/// 2. A fire-and-forget run (no human attached, no routable approval channel) is
-///    stamped [`UNATTENDED_KEY`](crate::gateway::execution_engine::UNATTENDED_KEY)
+/// 2. An unattended run is stamped
+///    [`UNATTENDED_KEY`](crate::gateway::execution_engine::UNATTENDED_KEY)
 ///    so confirm-gated tools fail closed immediately instead of parking on an
-///    approval card nobody can answer.
+///    approval card nobody can answer. `unattended` here means fire-and-forget
+///    (no human attached to the child) OR a headless PARENT
+///    (`TurnContext::unattended`) — a wait-mode child of a goal/loop/cron run
+///    has nobody to answer its cards either, and used to hang the full 120 s
+///    approval timeout per gated tool instead of failing closed.
 ///
 /// `channel_id` / `conversation_id` are deliberately NOT forwarded — they are
 /// what make an approval look deliverable, and a delegated run must keep failing
@@ -608,7 +618,7 @@ fn build_sub_metadata(
     inherited_workspace: Option<&std::path::Path>,
     caller_role: Option<String>,
     channel_tool_permissions: Option<String>,
-    is_fire_and_forget: bool,
+    unattended: bool,
 ) -> HashMap<String, String> {
     let mut m = HashMap::new();
     if let Some(p) = inherited_workspace {
@@ -623,7 +633,7 @@ fn build_sub_metadata(
             perms,
         );
     }
-    if is_fire_and_forget {
+    if unattended {
         m.insert(
             crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
             "true".to_string(),
@@ -839,8 +849,10 @@ mod tests {
         // run passes the operator gate (role_is_operator(None) = true).
         let m = build_sub_metadata(None, Some("guest".to_string()), None, false);
         assert_eq!(m.get("caller_role").map(String::as_str), Some("guest"));
-        // Wait-mode (not fire-and-forget) must NOT be stamped unattended: a human
-        // is attached to the awaiting parent turn.
+        // Wait-mode under an ATTENDED parent must NOT be stamped unattended: a
+        // human is attached to the awaiting parent turn. (The call site passes
+        // `fire_and_forget || parent.unattended`, so a headless parent's
+        // wait-mode child IS stamped — see the test below.)
         assert!(!m.contains_key(crate::gateway::execution_engine::UNATTENDED_KEY));
     }
 
@@ -877,5 +889,21 @@ mod tests {
         );
         // caller_role still rides along even for fire-and-forget.
         assert_eq!(m.get("caller_role").map(String::as_str), Some("operator"));
+    }
+
+    /// A wait-mode child of a headless parent inherits `unattended` through the
+    /// call-site OR (`fire_and_forget || turn.unattended`): the flag reaching
+    /// the child's metadata is what makes its confirm-gated tools fail closed
+    /// instantly instead of hanging the 120 s approval timeout — and, being
+    /// read back by `continuation_metadata`, it stays transitive to N+1.
+    #[test]
+    fn sub_metadata_stamps_unattended_for_headless_parent_wait_mode() {
+        // fire_and_forget = false, parent_unattended = true → OR = true.
+        let m = build_sub_metadata(None, None, None, true);
+        assert_eq!(
+            m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
+                .map(String::as_str),
+            Some("true")
+        );
     }
 }

@@ -9,6 +9,36 @@ use super::path_utils::{check_and_resolve_path, reject_unsafe_glob_pattern};
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 
+/// A non-colliding destination path inside `dir` for `file_name`. Returns
+/// `dir/file_name` when free, else inserts an incrementing ` (N)` suffix before
+/// the extension (`report.txt` → `report (1).txt`) until an unused path is
+/// found. Prevents `batch_move` from silently clobbering same-basename files
+/// gathered from different subdirectories.
+fn unique_dest(dir: &std::path::Path, file_name: &str) -> std::path::PathBuf {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let p = std::path::Path::new(file_name);
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned());
+    let ext = p.extension().map(|e| e.to_string_lossy().into_owned());
+    // Bounded loop: filesystems cannot hold usize::MAX same-named files, and a
+    // pathological directory falls back to the original (clobber) only after
+    // exhausting the range — effectively never.
+    for n in 1..usize::MAX {
+        let name = match (&stem, &ext) {
+            (Some(s), Some(e)) => format!("{s} ({n}).{e}"),
+            (Some(s), None) => format!("{s} ({n})"),
+            _ => format!("{file_name} ({n})"),
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(file_name)
+}
+
 /// Execute a batch move operation
 ///
 /// Moves all files matching the pattern to the destination directory
@@ -68,7 +98,11 @@ pub async fn execute_batch_move(
                     let file_name = path.file_name().unwrap_or_default();
                     // Sanitize filename to prevent path traversal via "../" in names
                     let safe_name = file_name.to_string_lossy().replace(['/', '\\'], "_");
-                    let dest_path = dest_canonical.join(&safe_name);
+                    // A `**/*` pattern can match same-basename files in different
+                    // subdirectories; a plain `join` would make later matches
+                    // clobber earlier ones (silent data loss). De-duplicate the
+                    // destination so every source file survives.
+                    let dest_path = unique_dest(&dest_canonical, &safe_name);
 
                     // Cross-agent serialization per item (sorted pair — same
                     // guard `execute_move` takes; released each iteration).
@@ -216,6 +250,14 @@ pub async fn execute_organize(
             continue;
         }
 
+        // Per-entry deny re-check (defense in depth, matching `search` /
+        // `batch_move` / `stats`): a symlink whose target is a protected
+        // credential path — or any entry resolving under the denylist — must not
+        // be relocated out from under the blacklist. Silently skip denied entries.
+        if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
+            continue;
+        }
+
         // Get file extension
         let ext = path
             .extension()
@@ -350,6 +392,27 @@ mod tests {
         let files = out.files.unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].size, 9, "size must be the real byte count");
+    }
+
+    #[tokio::test]
+    async fn batch_move_dedups_same_basename_collisions() {
+        // Two files with the SAME basename in different subdirectories must both
+        // survive the move — historically the second silently clobbered the first.
+        let src = tempdir().unwrap();
+        let dst = tempdir().unwrap();
+        fs::create_dir(src.path().join("a")).unwrap();
+        fs::create_dir(src.path().join("b")).unwrap();
+        fs::write(src.path().join("a/report.log"), b"AAAA").unwrap();
+        fs::write(src.path().join("b/report.log"), b"BBBBBB").unwrap();
+
+        let out = execute_batch_move(src.path(), "**/report.log", dst.path(), false, &[], None)
+            .await
+            .unwrap();
+        assert!(out.success, "message: {}", out.message);
+        assert_eq!(out.items_affected, Some(2), "both files must move");
+        // Original name + one de-duplicated name, both present, no data lost.
+        assert!(dst.path().join("report.log").exists());
+        assert!(dst.path().join("report (1).log").exists());
     }
 
     #[tokio::test]

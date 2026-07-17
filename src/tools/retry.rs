@@ -233,4 +233,19 @@ mod tests {
         assert!(!is_idempotent_builtin_name("session_send"));
         assert!(!is_idempotent_builtin_name("nonexistent_tool"));
     }
+
+    /// The allowlist must key on the tools' REGISTERED names, not module names
+    /// or never-registered ghosts — otherwise the entry classifies nothing.
+    #[test]
+    fn idempotent_allowlist_uses_live_tool_names() {
+        // Live read-only meta-tools are recognized.
+        assert!(is_idempotent_builtin_name("skill_read"));
+        assert!(is_idempotent_builtin_name("skill_list"));
+        assert!(is_idempotent_builtin_name("tool_search"));
+        assert!(is_idempotent_builtin_name("get_tool_schema"));
+        // Ghost names that match no registered tool are gone.
+        assert!(!is_idempotent_builtin_name("skill_reader"));
+        assert!(!is_idempotent_builtin_name("list_tools"));
+        assert!(!is_idempotent_builtin_name("search_tools"));
+    }
 }

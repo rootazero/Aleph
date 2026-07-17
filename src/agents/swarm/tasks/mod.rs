@@ -145,6 +145,22 @@ impl CoordTaskStatus {
         }
     }
 
+    /// Parse a user/RPC-facing status FILTER string: the full 10-variant
+    /// vocabulary, including the derived `blocked`/`unsatisfiable` (which
+    /// `from_stored` deliberately rejects — a filter may match against derived
+    /// statuses, a write may not). Single source for every status-filter
+    /// surface (`teams.list_tasks`, `teams.workflow.export_canvas`, the
+    /// `team_workflow_canvas` tool); callers reject `None` explicitly instead
+    /// of silently dropping the filter.
+    #[must_use]
+    pub fn from_filter_str(s: &str) -> Option<Self> {
+        match s {
+            "blocked" => Some(Self::Blocked),
+            "unsatisfiable" => Some(Self::Unsatisfiable),
+            other => Self::from_stored(other),
+        }
+    }
+
     /// Whether this status satisfies a downstream dependency — i.e. a
     /// task whose `blocked_by` set contains a task with this status no
     /// longer waits on it. Completed and Skipped both satisfy; all
@@ -799,5 +815,35 @@ mod tests {
             .map(|s| s.as_str())
             .collect();
         assert_eq!(dead, ["failed", "cancelled"]);
+    }
+
+    /// Drift-guard for the RPC/tool status-FILTER vocabulary: every variant's
+    /// `as_str()` must round-trip through `from_filter_str` (the hand-rolled
+    /// RPC matches used to silently drop `waiting_review`/`paused`/`skipped`
+    /// and return the ENTIRE board as if filtered). Wildcard-free `all` list
+    /// above compile-fails on a new variant, forcing it into the vocabulary.
+    #[test]
+    fn status_filter_vocabulary_covers_every_variant() {
+        use CoordTaskStatus::*;
+        let all = [
+            Pending,
+            Blocked,
+            InProgress,
+            WaitingReview,
+            Completed,
+            Failed,
+            Cancelled,
+            Skipped,
+            Paused,
+            Unsatisfiable,
+        ];
+        for s in all {
+            assert_eq!(
+                CoordTaskStatus::from_filter_str(s.as_str()),
+                Some(s),
+                "filter vocabulary must accept {s}"
+            );
+        }
+        assert_eq!(CoordTaskStatus::from_filter_str("bogus"), None);
     }
 }

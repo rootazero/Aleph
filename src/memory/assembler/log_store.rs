@@ -35,11 +35,15 @@ impl AssemblyLogWriter {
 
         let row = AssemblyLogRow {
             id: Uuid::new_v4().to_string(),
+            // rust-doctor-disable-next-line excessive-clone
             agent_id: env.agent_id.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             session_id: env.session_id.clone(),
             query_hash,
+            // rust-doctor-disable-next-line excessive-clone
             strategy: env.meta.strategy.clone(),
             used_fallback: env.meta.used_fallback,
+            // rust-doctor-disable-next-line excessive-clone
             fallback_reason: env.meta.fallback_reason.clone(),
             candidates_count: env.meta.candidates_considered as i64,
             selected_item_ids: selected_json,

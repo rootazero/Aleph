@@ -300,6 +300,21 @@ pub fn awaiting_gate(goal: &Goal, gate_configured: bool) -> bool {
         && goal.gate_outcome == GateOutcome::Unchecked
 }
 
+/// Active 续跑的 `Complete` 且**没有任何闸门可仲裁**：权威终态——续跑钩子
+/// 据此清理焊入的 strategy weld。工具侧刻意不清这个 case
+/// （`builtin_tools/goal.rs`：gate veto 要能带着计划复活 goal），而
+/// `try_claim_continuation` 对它返回 `Idle`（`awaiting_gate` 要求
+/// `gate_configured`），所以钩子的 Idle 臂是唯一能看见它的位置。
+/// 2026-07-12 重构曾把这条清理分支丢失（weld 泄漏回归，round-4 修复）；
+/// 单独成谓词让不变量可测试。gate-Passed 的 `Complete` 只在
+/// `gate_configured` 下产生并经 `commit_gate_pass` 清理，不会命中此谓词。
+#[must_use]
+pub fn gateless_terminal_complete(goal: &Goal, gate_configured: bool) -> bool {
+    !gate_configured
+        && matches!(goal.pursuit, PursuitMode::Active { .. })
+        && goal.status == GoalStatus::Complete
+}
+
 /// 闸门通过：完成被确认（`gate_outcome = Passed`），循环终止。
 #[must_use]
 pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
@@ -498,6 +513,26 @@ mod tests {
         let mut passive = Goal::new("s", "o", 0, 0);
         passive = passive.with_status(GoalStatus::Complete, 1);
         assert!(!awaiting_gate(&passive, true));
+    }
+
+    #[test]
+    fn gateless_terminal_complete_is_the_hook_owned_weld_clear_case() {
+        let done = active_goal(5).with_status(GoalStatus::Complete, 1);
+        // Active pursuit + Complete + NO gate → the hook must clear the weld
+        // (the 2026-07-12 refactor regression this predicate guards against).
+        assert!(gateless_terminal_complete(&done, false));
+        // A configured gate owns arbitration — never both paths at once.
+        assert!(!gateless_terminal_complete(&done, true));
+        assert!(
+            !(awaiting_gate(&done, true) && gateless_terminal_complete(&done, true)),
+            "gate arbitration and gate-less clear are mutually exclusive"
+        );
+        // Still-active / passive / blocked goals are not terminal completes.
+        assert!(!gateless_terminal_complete(&active_goal(5), false));
+        let passive = Goal::new("s", "o", 0, 0).with_status(GoalStatus::Complete, 1);
+        assert!(!gateless_terminal_complete(&passive, false));
+        let blocked = active_goal(5).with_status(GoalStatus::Blocked, 1);
+        assert!(!gateless_terminal_complete(&blocked, false));
     }
 
     #[test]

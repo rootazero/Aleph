@@ -60,7 +60,6 @@ impl CompactorE2eHarness {
     ///
     /// Key settings:
     /// - `fresh_tail_count = 5` — keep only 5 recent messages uncompressed
-    /// - `context_threshold = 0.5` — trigger compaction at 50% context fill
     /// - `leaf_chunk_tokens = 300` — small chunks for fast d0 creation
     /// - `d1_min_fanout = 3` — condense after just 3 d0 summaries
     /// - `d2_min_fanout = 3` — condense after just 3 d1 summaries
@@ -85,7 +84,6 @@ enabled = true
 [memory.session_compactor]
 enabled = true
 fresh_tail_count = 5
-context_threshold = 0.5
 leaf_chunk_tokens = 300
 d1_min_fanout = 3
 d2_min_fanout = 3

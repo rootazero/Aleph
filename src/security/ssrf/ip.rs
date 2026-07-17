@@ -17,16 +17,18 @@ use super::policy::SsrfPolicy;
 pub(crate) const fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
 
+    is_private_or_special_ipv4(octets)
+        || is_cgnat_or_test_ipv4(octets)
+        || is_multicast_or_reserved_ipv4(octets)
+}
+
+const fn is_private_or_special_ipv4(octets: [u8; 4]) -> bool {
     // 0.0.0.0/8 — "this" network
     if octets[0] == 0 {
         return true;
     }
     // 10.0.0.0/8 — private
     if octets[0] == 10 {
-        return true;
-    }
-    // 100.64.0.0/10 — CGNAT (Carrier-Grade NAT)
-    if octets[0] == 100 && (octets[1] & 0xC0) == 64 {
         return true;
     }
     // 127.0.0.0/8 — loopback
@@ -41,12 +43,21 @@ pub(crate) const fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
     if octets[0] == 172 && (octets[1] & 0xF0) == 16 {
         return true;
     }
-    // 192.0.2.0/24 — TEST-NET-1 (documentation)
-    if octets[0] == 192 && octets[1] == 0 && octets[2] == 2 {
-        return true;
-    }
     // 192.168.0.0/16 — private
     if octets[0] == 192 && octets[1] == 168 {
+        return true;
+    }
+
+    false
+}
+
+const fn is_cgnat_or_test_ipv4(octets: [u8; 4]) -> bool {
+    // 100.64.0.0/10 — CGNAT (Carrier-Grade NAT)
+    if octets[0] == 100 && (octets[1] & 0xC0) == 64 {
+        return true;
+    }
+    // 192.0.2.0/24 — TEST-NET-1 (documentation)
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 2 {
         return true;
     }
     // 198.18.0.0/15 — benchmark testing
@@ -61,6 +72,11 @@ pub(crate) const fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
     if octets[0] == 203 && octets[1] == 0 && octets[2] == 113 {
         return true;
     }
+
+    false
+}
+
+const fn is_multicast_or_reserved_ipv4(octets: [u8; 4]) -> bool {
     // 224.0.0.0/4 — multicast
     if (octets[0] & 0xF0) == 224 {
         return true;

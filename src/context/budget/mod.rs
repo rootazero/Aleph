@@ -2,7 +2,8 @@
 //!
 //! This module replaces the old `ToolCompactorConfig` with a richer abstraction
 //! that tracks context window pressure across turns and issues directives to the
-//! agent loop (compact, force final reply, or stop on diminishing returns).
+//! agent loop (compact, split the session, compact to fit, or stop on
+//! diminishing returns).
 
 pub mod cheap_passes;
 pub mod preflight;
@@ -173,8 +174,6 @@ pub enum LoopDirective {
 pub struct TurnMetrics {
     /// Number of output tokens the LLM produced this turn.
     pub output_tokens: usize,
-    /// Number of tool calls the LLM requested this turn.
-    pub tool_calls: usize,
     /// Whether the turn was considered productive (tools ran without errors).
     pub productive: bool,
 }
@@ -203,7 +202,7 @@ pub struct ContextBudgetConfig {
     /// Minimum total output tokens in the window to be considered productive.
     pub diminishing_threshold: usize,
     /// Max session-splits allowed in one run before a circuit-breaker trip
-    /// falls back to `FinalReply`. Default 3.
+    /// falls back to `CompactToFit`. Default 3.
     pub max_splits: usize,
 }
 
@@ -227,7 +226,8 @@ impl ContextBudgetConfig {
 // =============================================================================
 
 /// Tracks consecutive compaction attempts. If compaction keeps firing without
-/// the pressure dropping, we escalate to `FinalReply` instead of looping forever.
+/// the pressure dropping, we escalate (`SplitSession`, then `CompactToFit` once
+/// splits are exhausted) instead of looping forever.
 #[derive(Debug)]
 struct CompactionCircuitBreaker {
     max_consecutive: usize,
@@ -323,7 +323,7 @@ pub struct ContextBudget {
     last_pressure: Option<ContextPressure>,
     /// Number of session splits that have already occurred in this run.
     split_count: usize,
-    /// Maximum session splits allowed before the circuit-breaker trip falls back to `FinalReply`.
+    /// Maximum session splits allowed before the circuit-breaker trip falls back to `CompactToFit`.
     max_splits: usize,
     /// Self-learning multiplier applied to the heuristic token estimate,
     /// calibrated against the provider's reported prompt size after each turn.
@@ -512,8 +512,9 @@ impl ContextBudget {
     /// to the snapshot saved by [`ContextBudget::before_turn`]. If pressure
     /// dropped by at least [`COMPACTION_EFFECTIVE_DROP`] of the budget the
     /// compaction worked — reset the circuit breaker so it re-arms. Otherwise
-    /// the breaker keeps its count, so three consecutive ineffective
-    /// compactions still escalate to `FinalReply`.
+    /// the breaker keeps its count, so a run of ineffective compactions still
+    /// escalates to a session split (and, once splits are exhausted,
+    /// `CompactToFit`).
     ///
     /// Without this call the breaker only ever increments: it would trip after
     /// `circuit_breaker_max` compaction turns even when compaction is healthy,
@@ -583,9 +584,28 @@ impl ContextBudget {
         self.calibration
     }
 
+    /// Seed the calibration multiplier before the first turn of a run.
+    ///
+    /// A fresh per-run budget starts uncalibrated, so the FIRST `before_turn`
+    /// — the one carrying the full accumulated history, where heuristic drift
+    /// is largest — always ran on the raw estimate. Callers that retain the
+    /// factor a previous run converged to (keyed by model id: a factor learned
+    /// under one tokenizer must never apply to another) inject it here right
+    /// after [`ContextBudget::new`]. The seed is clamped to the same band as
+    /// live observations, non-finite values are ignored, and
+    /// [`ContextBudget::observe_actual_usage`] keeps refining it exactly as a
+    /// mid-run factor. Breaker / diminishing / split state is untouched — only
+    /// estimator accuracy carries over.
+    pub fn seed_calibration(&mut self, factor: f64) {
+        if !factor.is_finite() {
+            return;
+        }
+        self.calibration = Some(factor.clamp(CALIBRATION_MIN, CALIBRATION_MAX));
+    }
+
     /// Record that a session-split completed. Increments the per-run split
     /// counter; once it reaches `max_splits`, further breaker trips fall back
-    /// to `FinalReply`.
+    /// to `CompactToFit`.
     pub const fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
         self.circuit_breaker.reset();
@@ -769,12 +789,10 @@ mod tests {
         // Only 2 unproductive turns — not enough for window of 4
         assert!(!dr.record(TurnMetrics {
             output_tokens: 10,
-            tool_calls: 1,
             productive: false
         }));
         assert!(!dr.record(TurnMetrics {
             output_tokens: 10,
-            tool_calls: 1,
             productive: false
         }));
     }
@@ -785,7 +803,6 @@ mod tests {
         for _ in 0..4 {
             dr.record(TurnMetrics {
                 output_tokens: 50,
-                tool_calls: 1,
                 productive: false,
             });
         }
@@ -793,7 +810,6 @@ mod tests {
         // The 4th call already returned the result, let's check with a 5th
         let triggered = dr.record(TurnMetrics {
             output_tokens: 50,
-            tool_calls: 1,
             productive: false,
         });
         assert!(triggered);
@@ -805,14 +821,12 @@ mod tests {
         for _ in 0..3 {
             dr.record(TurnMetrics {
                 output_tokens: 10,
-                tool_calls: 1,
                 productive: false,
             });
         }
         // One productive turn in window prevents triggering
         let triggered = dr.record(TurnMetrics {
             output_tokens: 10,
-            tool_calls: 1,
             productive: true,
         });
         assert!(!triggered);
@@ -828,12 +842,10 @@ mod tests {
         let mut budget = ContextBudget::new(&config);
         budget.after_turn(TurnMetrics {
             output_tokens: 10,
-            tool_calls: 1,
             productive: false,
         });
         let directive = budget.after_turn(TurnMetrics {
             output_tokens: 10,
-            tool_calls: 1,
             productive: false,
         });
         assert_eq!(directive, LoopDirective::StopDiminishing);
@@ -915,7 +927,7 @@ mod tests {
         let small = vec![UnifiedMessage::user("x".repeat(100))];
         budget.note_compaction_effect(&small, "", 0);
         // Turn 2: still big → warning. The breaker was reset, so even with
-        // max=2 it does NOT escalate to FinalReply — long tasks survive.
+        // max=2 it does NOT escalate to SplitSession — long tasks survive.
         assert_eq!(
             budget.before_turn(&big, "", 0),
             LoopDirective::CompactAndContinue

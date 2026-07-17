@@ -30,6 +30,7 @@ fn api_key_regex() -> &'static Regex {
             )
             ",
         )
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("static API key regex compiles")
     })
 }

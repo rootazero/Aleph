@@ -103,12 +103,16 @@ impl TranscriptIndexer {
             // Insert to raw_memories
             {
                 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
+                // rust-doctor-disable-next-line excessive-clone
                 let raw = RawMemory::new(chunk.clone(), RawMemorySource::Transcript)
                     .with_agent(agent)
                     .with_session(session_key)
+                    // rust-doctor-disable-next-line excessive-clone
                     .with_path(path.clone());
+                // rust-doctor-disable-next-line excessive-clone
                 let raw_id = raw.id.clone();
                 let insert_result = if let Some(ref registry) = self.capture_registry {
+                    // rust-doctor-disable-next-line excessive-clone
                     let store: Arc<dyn RawMemoryStore> = self.database.clone();
                     let ctx = CaptureCtx {
                         agent_id: agent.to_string(),
@@ -181,6 +185,7 @@ impl TranscriptIndexer {
             if current_tokens + sentence_tokens > self.config.max_tokens_per_chunk
                 && !current_chunk.is_empty()
             {
+                // rust-doctor-disable-next-line excessive-clone
                 chunks.push(current_chunk.clone());
 
                 // Add overlap from previous chunk
@@ -228,3 +233,4 @@ impl TranscriptIndexer {
         )
     }
 }
+

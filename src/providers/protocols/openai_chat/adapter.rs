@@ -26,6 +26,7 @@ use crate::providers::protocols::openai_common::usage_limit::is_usage_limit_body
 
 #[async_trait]
 impl ProtocolAdapter for OpenAiProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -113,18 +114,26 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let policy = build_payload_policy(config.base_url.as_deref(), "openai-chat", None);
 
-        // prompt_cache_key: route by session id for prompt-cache affinity when
-        // the endpoint honors it. `policy.apply` strips it on unsupported
-        // endpoints, but gate here too so it is never set needlessly.
+        // prompt_cache_key: content-addressed routing affinity (static prefix
+        // hash, session-id fallback) when the endpoint honors it. `policy.apply`
+        // strips it on unsupported endpoints, but gate here too so it is never
+        // set needlessly.
         if policy.capabilities.supports_prompt_cache {
-            if let Some(key) = payload
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("session_id"))
-                .filter(|s| !s.is_empty())
+            if let Some(key) =
+                super::super::openai_common::prompt_cache::derive_prompt_cache_key(payload)
             {
-                let key = super::super::openai_common::prompt_cache::clamp_prompt_cache_key(key);
-                body["prompt_cache_key"] = json!(key.as_ref());
+                body["prompt_cache_key"] = json!(key);
+            }
+            // Extended cache retention (24h) — official OpenAI only; the
+            // user's `cache_retention = long` knob maps to it (the Anthropic
+            // side maps the same knob to the 1h ephemeral TTL).
+            if matches!(
+                config.cache_retention,
+                Some(crate::config::types::provider::CacheRetention::Long)
+            ) && policy.endpoint_class
+                == super::super::openai_common::provider_policy::EndpointClass::OpenAiPublic
+            {
+                body["prompt_cache_retention"] = json!("24h");
             }
         }
 
@@ -162,6 +171,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             let tools: Vec<OpenAiTool> = tool_defs
                 .iter()
                 .map(|td| {
+                    // rust-doctor-disable-next-line excessive-clone
                     let mut params = td.parameters.clone();
                     // Honor the strict-normalization verdict: an `Incompatible`
                     // schema (e.g. a multi-type field) cannot be shipped with
@@ -177,6 +187,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                                     reason = %reason,
                                     "OpenAI strict mode incompatible — downgrading this tool to non-strict",
                                 );
+                                // rust-doctor-disable-next-line excessive-clone
                                 params = td.parameters.clone();
                                 lenient_multi_type_rewrite(&mut params);
                                 None
@@ -200,6 +211,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
                             name: sanitize_tool_name(&td.name),
+                            // rust-doctor-disable-next-line excessive-clone
                             description: td.description.clone(),
                             parameters: params,
                             strict,

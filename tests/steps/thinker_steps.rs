@@ -112,7 +112,10 @@ async fn when_build_second_cached_with_tools(w: &mut AlephWorld, step: &Step) {
 
     // Build second cached prompt with new tools
     if let Some(builder) = &ctx.builder {
-        let second_parts = builder.build_system_prompt_cached(&second_tools);
+        let second_parts = builder.build_system_prompt_cached_with_mode(
+            &second_tools,
+            alephcore::thinker::prompt_mode::PromptMode::Full,
+        );
         // Swap: move current to second_cached, put new in cached_parts
         ctx.second_cached_parts = ctx.cached_parts.take();
         ctx.cached_parts = Some(second_parts);

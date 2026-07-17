@@ -1,9 +1,7 @@
 //! Token budget management for system prompt assembly.
 //!
-//! Prevents system prompt bloat by enforcing character limits
-//! and providing truncation statistics.
-
-use super::prompt_mode::PromptMode;
+//! Prevents system prompt bloat by enforcing character limits and
+//! head/tail-truncating the dynamic suffix to fit the model's window.
 
 /// Rough characters-per-token ratio for English-ish text. **Legacy
 /// reporting-only approximation**: new code that has the source text in hand
@@ -40,8 +38,9 @@ pub const PROMPT_WINDOW_FRACTION: f64 = 0.10;
 /// allowed (so small/unknown-window models behave exactly as before).
 pub const DEFAULT_PROMPT_CHARS: usize = 80_000;
 
-/// Hard ceiling (~120k tokens) for the model-aware system-prompt budget, so a
-/// mis-declared or enormous window can never let the prompt grow unbounded.
+/// Hard ceiling (~137k tokens at the 3.5 prose ratio) for the model-aware
+/// system-prompt budget, so a mis-declared or enormous window can never let the
+/// prompt grow unbounded.
 pub const MAX_PROMPT_CHARS: usize = 480_000;
 
 /// Scale a character budget to a model context window: take `fraction` of the
@@ -119,30 +118,6 @@ pub enum TruncationWarning {
     Always,
 }
 
-/// Result of prompt assembly with truncation metadata.
-#[derive(Debug, Clone)]
-pub struct PromptResult {
-    /// The assembled system prompt string.
-    pub prompt: String,
-    /// Truncation statistics (empty if nothing was truncated).
-    pub truncation_stats: Vec<TruncationStat>,
-    /// Which mode was used.
-    pub mode: PromptMode,
-}
-
-/// Per-section truncation statistics.
-#[derive(Debug, Clone)]
-pub struct TruncationStat {
-    /// Layer name that was truncated or removed.
-    pub layer_name: String,
-    /// Original character count before truncation.
-    pub original_chars: usize,
-    /// Final character count (0 if fully removed).
-    pub final_chars: usize,
-    /// Whether the section was fully removed.
-    pub fully_removed: bool,
-}
-
 /// Byte offset where the `n`-th character begins (i.e. the end of the first
 /// `n` characters). Returns the full byte length when `n` is at or past the
 /// end. UTF-8 safe by construction — offsets always land on char boundaries.
@@ -217,67 +192,6 @@ pub fn truncate_with_head_tail(
     }
 
     result
-}
-
-/// Enforce total budget by removing sections from lowest priority.
-///
-/// Returns (trimmed prompt, truncation stats).
-/// Sections with priority in `protected_priorities` are never removed.
-#[must_use]
-pub fn enforce_budget(
-    sections: &[(u32, &str, &str)], // (priority, layer_name, content)
-    max_total: usize,
-    protected_priorities: &[u32],
-) -> (String, Vec<TruncationStat>) {
-    // Budget (`max_total`) is in *characters*; measure characters so a 3-byte
-    // CJK glyph counts as one unit (ASCII is byte==char, so identical there).
-    let total: usize = sections.iter().map(|(_, _, c)| c.chars().count()).sum();
-    if total <= max_total {
-        let prompt = sections
-            .iter()
-            .map(|(_, _, c)| *c)
-            .collect::<Vec<_>>()
-            .join("");
-        return (prompt, vec![]);
-    }
-
-    let mut stats = Vec::new();
-    let mut excess = total - max_total;
-
-    // Sort by priority descending (lowest priority = highest number = removed first)
-    let mut removal_order: Vec<usize> = (0..sections.len()).collect();
-    removal_order.sort_by(|a, b| sections[*b].0.cmp(&sections[*a].0));
-
-    let mut included = vec![true; sections.len()];
-
-    for idx in removal_order {
-        if excess == 0 {
-            break;
-        }
-        let (priority, name, content) = &sections[idx];
-        if protected_priorities.contains(priority) {
-            continue;
-        }
-        let saved = content.chars().count();
-        included[idx] = false;
-        stats.push(TruncationStat {
-            layer_name: name.to_string(),
-            original_chars: saved,
-            final_chars: 0,
-            fully_removed: true,
-        });
-        excess = excess.saturating_sub(saved);
-    }
-
-    let prompt = sections
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| included[*i])
-        .map(|(_, (_, _, c))| *c)
-        .collect::<Vec<_>>()
-        .join("");
-
-    (prompt, stats)
 }
 
 /// Render a model-visible truncation notice for the assembled system prompt.
@@ -463,51 +377,6 @@ mod tests {
         // The tail is preserved (byte-vs-char guard no longer discards it).
         assert!(out.ends_with('丙'), "tail glyphs must survive: {out}");
         assert!(out.contains("truncated"));
-    }
-
-    #[test]
-    fn enforce_budget_under_limit_no_stats() {
-        let sections = vec![
-            (100u32, "role", "You are an AI."),
-            (500, "tools", "Available tools: none"),
-        ];
-        let (prompt, stats) = enforce_budget(&sections, 1000, &[]);
-        assert!(stats.is_empty());
-        assert!(prompt.contains("You are an AI."));
-        assert!(prompt.contains("Available tools"));
-    }
-
-    #[test]
-    fn enforce_budget_removes_lowest_priority_first() {
-        let long_a = "A".repeat(30);
-        let long_b = "B".repeat(30);
-        let long_c = "C".repeat(30);
-        let long_d = "D".repeat(30);
-        let sections = vec![
-            (100u32, "role", long_a.as_str()),
-            (500, "tools", long_b.as_str()),
-            (1600, "language", long_c.as_str()),
-            (1500, "custom", long_d.as_str()),
-        ];
-        // Total = 120 chars, limit to 70 — must remove ~50
-        let (prompt, stats) = enforce_budget(&sections, 70, &[100, 500]);
-        assert!(!stats.is_empty());
-        assert!(prompt.contains(&long_a));
-        assert!(prompt.contains(&long_b));
-        let removed: Vec<_> = stats.iter().map(|s| s.layer_name.as_str()).collect();
-        assert!(removed.contains(&"language"));
-    }
-
-    #[test]
-    fn enforce_budget_protects_layers() {
-        let long = "A".repeat(100);
-        let sections = vec![
-            (100u32, "role", long.as_str()),
-            (500, "tools", long.as_str()),
-        ];
-        // Both protected — nothing can be removed
-        let (_, stats) = enforce_budget(&sections, 50, &[100, 500]);
-        assert!(stats.is_empty());
     }
 
     #[test]

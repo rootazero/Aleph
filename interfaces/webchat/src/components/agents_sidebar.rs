@@ -28,8 +28,8 @@ pub fn AgentsSidebar() -> impl IntoView {
 
     // Filter state: "all" | "channel" | "standalone"
     let filter = RwSignal::new("all".to_string());
-    // agent_id → channel_name bindings map
-    let bindings = RwSignal::new(HashMap::<String, String>::new());
+    // agent_id → bound channels (many-to-one: an agent may serve several)
+    let bindings = RwSignal::new(HashMap::<String, Vec<String>>::new());
 
     // Reload agents list
     let reload = move || {
@@ -188,8 +188,12 @@ pub fn AgentsSidebar() -> impl IntoView {
                                     let is_default = agent.is_default;
                                     let emoji = agent.emoji.clone().unwrap_or_default();
                                     let display_name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
-                                    // Channel badge for bound agents (shown in "all" and "channel" views)
-                                    let channel_badge = current_bindings.get(&agent.id).cloned();
+                                    // Channel badge for bound agents (shown in "all" and "channel"
+                                    // views). Joined list — an agent may serve several channels.
+                                    let channel_badge = current_bindings
+                                        .get(&agent.id)
+                                        .filter(|chs| !chs.is_empty())
+                                        .map(|chs| chs.join(", "));
 
                                     view! {
                                         <a

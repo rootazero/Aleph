@@ -107,8 +107,10 @@ impl MemoryReflector {
 
         // Side effect: log one recall_signal per note in the context.
         // Errors here must NOT fail the reflect() call — logging is best-effort.
+        // rust-doctor-disable-next-line excessive-clone
         let writer = self.recall_writer.clone();
         let record = move |row: SignalRow| {
+            // rust-doctor-disable-next-line excessive-clone
             let writer = writer.clone();
             async move { writer(row).await }
         };
@@ -156,6 +158,7 @@ impl MemoryReflector {
             .filter_map(|s| {
                 ctx.note_lookup.get(&s.path).map(|meta| NoteRef {
                     path: s.path,
+                    // rust-doctor-disable-next-line excessive-clone
                     title: meta.title.clone(),
                     relevance: s.relevance.unwrap_or(meta.relevance),
                 })

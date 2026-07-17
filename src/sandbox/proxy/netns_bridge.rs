@@ -182,8 +182,8 @@ fn is_pid_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
-    // SAFETY: `kill(pid, 0)` performs no signal delivery; it only probes
-    // existence/permission of `pid` and has no memory effects.
+    // SAFETY: `kill(pid, 0)` probes process existence without signal delivery.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
         return true;

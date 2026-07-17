@@ -43,6 +43,7 @@ mod factory;
 pub mod fal;
 pub mod google_imagen;
 pub mod google_veo;
+pub(crate) mod http;
 pub mod midjourney;
 pub mod minimax_tts;
 pub mod openai_compat;

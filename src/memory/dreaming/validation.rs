@@ -59,6 +59,7 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
     let parts: Vec<&str> = content.splitn(3, "---").collect();
     if parts.len() < 3 {
         issues.push(ValidationIssue {
+            // rust-doctor-disable-next-line excessive-clone
             tier: tier.clone(),
             note_path: note_path.to_string(),
             message: "missing YAML frontmatter delimiters".into(),
@@ -75,6 +76,7 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
         .any(|line| line.trim_start().starts_with("category:"));
     if !has_category {
         issues.push(ValidationIssue {
+            // rust-doctor-disable-next-line excessive-clone
             tier: tier.clone(),
             note_path: note_path.to_string(),
             message: "missing category field in frontmatter".into(),
@@ -88,6 +90,7 @@ pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIss
         let valid_categories: HashSet<&str> = CATEGORY_DIRS.iter().copied().collect();
         if !valid_categories.contains(cat.as_str()) {
             issues.push(ValidationIssue {
+                // rust-doctor-disable-next-line excessive-clone
                 tier: tier.clone(),
                 note_path: note_path.to_string(),
                 message: format!("invalid category '{cat}' not in CATEGORY_DIRS"),

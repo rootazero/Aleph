@@ -389,8 +389,9 @@ mod tests {
             .await
             .unwrap();
 
-        let index_md =
-            std::fs::read_to_string(dir.path().join("note/default").join("index.md")).unwrap();
+        let index_md = tokio::fs::read_to_string(dir.path().join("note/default").join("index.md"))
+            .await
+            .unwrap();
         assert!(
             index_md.contains("preference"),
             "preference category must appear in index.md after refresh; got:\n{index_md}"
@@ -409,7 +410,7 @@ mod tests {
         // Capture the post-bootstrap index.md content; an empty-touched refresh
         // must not modify it (no second rebuild).
         let index_path = dir.path().join("note/default").join("index.md");
-        let before = std::fs::read_to_string(&index_path).unwrap();
+        let before = tokio::fs::read_to_string(&index_path).await.unwrap();
 
         let summary = IngestBatchSummary {
             agent_id: "default".into(),
@@ -420,7 +421,7 @@ mod tests {
             .await
             .unwrap();
 
-        let after = std::fs::read_to_string(&index_path).unwrap();
+        let after = tokio::fs::read_to_string(&index_path).await.unwrap();
         assert_eq!(before, after, "empty-touched refresh must be a no-op");
     }
 }

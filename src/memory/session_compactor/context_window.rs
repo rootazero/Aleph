@@ -1,9 +1,7 @@
-//! Context window measurement and threshold detection.
+//! Context window measurement helpers for the session compactor.
 //!
-//! Estimates current token usage and determines when compaction should be
-//! triggered based on the configured `context_threshold`.
-
-use crate::providers::message::UnifiedMessage;
+//! Token estimation (forwarding to the single-source estimator) and
+//! fresh-tail partitioning used by `prepare_history` / `post_turn_compress`.
 
 /// Estimate token count for `content`, treating `ratio` as the prose
 /// (chars-per-token) anchor. Thin forwarding shell over
@@ -15,29 +13,10 @@ pub fn estimate_tokens(content: &str, ratio: f64) -> usize {
     crate::context::budget::pressure::estimate_tokens_aware(content, ratio)
 }
 
-/// Estimate total tokens across all messages.
-#[must_use]
-pub fn estimate_total_tokens(messages: &[UnifiedMessage], ratio: f64) -> usize {
-    messages
-        .iter()
-        .map(|m| estimate_tokens(&m.text_content(), ratio))
-        .sum()
-}
-
-/// Partition messages into (compressible, `fresh_tail`).
+/// Partition `(role, content)` string pairs into (compressible, `fresh_tail`).
 ///
-/// Returns the index where `fresh_tail` begins. Messages in `[0..idx]` are
-/// candidates for compression; messages in `[idx..]` are kept verbatim.
-#[must_use]
-pub const fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize) -> usize {
-    if messages.len() <= fresh_tail_count {
-        0
-    } else {
-        messages.len() - fresh_tail_count
-    }
-}
-
-/// Same as [`partition_fresh_tail`] but for `(role, content)` string pairs.
+/// Returns the index where `fresh_tail` begins. Pairs in `[0..idx]` are
+/// candidates for compression; pairs in `[idx..]` are kept verbatim.
 #[must_use]
 pub const fn partition_fresh_tail_pairs(
     messages: &[(String, String)],
@@ -48,16 +27,6 @@ pub const fn partition_fresh_tail_pairs(
     } else {
         messages.len() - fresh_tail_count
     }
-}
-
-/// Check if a tool result at position `idx` has been "consumed" —
-/// i.e. an assistant message exists after it in the list.
-///
-/// An unconsumed tool result means the LLM has not yet seen the result, so it
-/// must not be compacted away.
-#[must_use]
-pub fn is_tool_result_consumed(messages: &[UnifiedMessage], idx: usize) -> bool {
-    messages[(idx + 1)..].iter().any(|m| m.is_assistant())
 }
 
 // === Tests ===
@@ -112,71 +81,6 @@ mod tests {
         assert!(tokens >= 30, "expected dense CJK charge, got {tokens}");
     }
 
-    // --- estimate_total_tokens ---
-
-    #[test]
-    fn test_estimate_total_tokens_empty_slice() {
-        assert_eq!(estimate_total_tokens(&[], 3.5), 0);
-    }
-
-    #[test]
-    fn test_estimate_total_tokens_sums_messages() {
-        let messages = vec![
-            UnifiedMessage::user("hello world"),
-            UnifiedMessage::assistant("goodbye world"),
-        ];
-        let expected = estimate_tokens("hello world", 4.0) + estimate_tokens("goodbye world", 4.0);
-        assert_eq!(estimate_total_tokens(&messages, 4.0), expected);
-    }
-
-    // --- partition_fresh_tail ---
-
-    #[test]
-    fn test_partition_fresh_tail_normal() {
-        let messages: Vec<UnifiedMessage> = (0..50)
-            .map(|i| UnifiedMessage::user(format!("msg {i}")))
-            .collect();
-        let split = partition_fresh_tail(&messages, 20);
-        assert_eq!(split, 30);
-    }
-
-    #[test]
-    fn test_partition_fresh_tail_short_history() {
-        let messages: Vec<UnifiedMessage> = (0..5)
-            .map(|i| UnifiedMessage::user(format!("msg {i}")))
-            .collect();
-        let split = partition_fresh_tail(&messages, 20);
-        assert_eq!(split, 0);
-    }
-
-    #[test]
-    fn test_partition_fresh_tail_exact_boundary() {
-        let messages: Vec<UnifiedMessage> = (0..20)
-            .map(|i| UnifiedMessage::user(format!("msg {i}")))
-            .collect();
-        // exactly fresh_tail_count messages → all are fresh
-        let split = partition_fresh_tail(&messages, 20);
-        assert_eq!(split, 0);
-    }
-
-    #[test]
-    fn test_partition_fresh_tail_one_more() {
-        let messages: Vec<UnifiedMessage> = (0..21)
-            .map(|i| UnifiedMessage::user(format!("msg {i}")))
-            .collect();
-        let split = partition_fresh_tail(&messages, 20);
-        assert_eq!(split, 1);
-    }
-
-    #[test]
-    fn test_partition_fresh_tail_zero_fresh() {
-        let messages: Vec<UnifiedMessage> = (0..10)
-            .map(|i| UnifiedMessage::user(format!("msg {i}")))
-            .collect();
-        let split = partition_fresh_tail(&messages, 0);
-        assert_eq!(split, 10);
-    }
-
     // --- partition_fresh_tail_pairs ---
 
     #[test]
@@ -195,58 +99,5 @@ mod tests {
             .collect();
         let split = partition_fresh_tail_pairs(&pairs, 10);
         assert_eq!(split, 0);
-    }
-
-    // --- is_tool_result_consumed ---
-
-    #[test]
-    fn test_tool_result_consumed_when_assistant_follows() {
-        let messages = vec![
-            UnifiedMessage::user("search something"),
-            UnifiedMessage::tool_result("c1", "search", "results here", false),
-            UnifiedMessage::assistant("I found the results."),
-        ];
-        // tool result is at index 1, assistant follows at index 2
-        assert!(is_tool_result_consumed(&messages, 1));
-    }
-
-    #[test]
-    fn test_tool_result_not_consumed_when_no_assistant_follows() {
-        let messages = vec![
-            UnifiedMessage::user("search something"),
-            UnifiedMessage::tool_result("c1", "search", "results here", false),
-        ];
-        // no assistant message after index 1
-        assert!(!is_tool_result_consumed(&messages, 1));
-    }
-
-    #[test]
-    fn test_tool_result_not_consumed_at_last_position() {
-        let messages = vec![
-            UnifiedMessage::user("hi"),
-            UnifiedMessage::assistant("response"),
-            UnifiedMessage::tool_result("c2", "tool", "output", false),
-        ];
-        assert!(!is_tool_result_consumed(&messages, 2));
-    }
-
-    #[test]
-    fn test_tool_result_consumed_skips_non_assistant_in_between() {
-        let messages = vec![
-            UnifiedMessage::tool_result("c1", "search", "out", false),
-            UnifiedMessage::tool_result("c2", "other", "out2", false),
-            UnifiedMessage::assistant("done"),
-        ];
-        // idx=0: assistant at 2 → consumed
-        assert!(is_tool_result_consumed(&messages, 0));
-        // idx=1: assistant at 2 → consumed
-        assert!(is_tool_result_consumed(&messages, 1));
-    }
-
-    #[test]
-    fn test_tool_result_consumed_empty_tail() {
-        let messages: Vec<UnifiedMessage> =
-            vec![UnifiedMessage::tool_result("c1", "t", "o", false)];
-        assert!(!is_tool_result_consumed(&messages, 0));
     }
 }

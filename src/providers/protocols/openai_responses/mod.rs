@@ -188,11 +188,13 @@ impl OpenAiResponsesProtocol {
             tool_choice,
             parallel_tool_calls: config.parallel_tool_calls,
             text: merge_text_format(
+                // rust-doctor-disable-next-line excessive-clone
                 variant.text.clone(),
                 config.response_format.as_ref(),
                 policy.capabilities.supports_strict_schema,
             ),
             max_output_tokens: payload.max_tokens,
+            // rust-doctor-disable-next-line excessive-clone
             include: variant.include.clone().or_else(|| {
                 if policy.endpoint_class
                     == crate::providers::protocols::openai_common::provider_policy::EndpointClass::OpenAiPublic
@@ -220,22 +222,34 @@ impl OpenAiResponsesProtocol {
             },
             service_tier: config
                 .service_tier
+                // rust-doctor-disable-next-line excessive-clone
                 .clone()
                 .filter(|_| policy.capabilities.supports_service_tier),
-            // Route by session id for prompt-cache affinity on endpoints that
-            // honor it; omitted elsewhere (and stripped defensively by policy).
-            prompt_cache_key: payload
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("session_id"))
-                .filter(|s| !s.is_empty())
-                .filter(|_| policy.capabilities.supports_prompt_cache)
-                .map(|s| {
-                    crate::providers::protocols::openai_common::prompt_cache::clamp_prompt_cache_key(
-                        s,
-                    )
-                    .into_owned()
-                }),
+            // Content-addressed routing affinity (static prefix hash, session
+            // id fallback) on endpoints that honor it; omitted elsewhere (and
+            // stripped defensively by policy).
+            prompt_cache_key: if policy.capabilities.supports_prompt_cache {
+                crate::providers::protocols::openai_common::prompt_cache::derive_prompt_cache_key(
+                    payload,
+                )
+            } else {
+                None
+            },
+            // Extended cache retention (24h) — official OpenAI only; the
+            // user's `cache_retention = long` knob maps to it (the Anthropic
+            // side maps the same knob to the 1h ephemeral TTL).
+            prompt_cache_retention: if policy.capabilities.supports_prompt_cache
+                && matches!(
+                    config.cache_retention,
+                    Some(crate::config::types::provider::CacheRetention::Long)
+                )
+                && policy.endpoint_class
+                    == crate::providers::protocols::openai_common::provider_policy::EndpointClass::OpenAiPublic
+            {
+                Some("24h".to_string())
+            } else {
+                None
+            },
         }
     }
 }
@@ -536,6 +550,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
 /// Uses a `VecDeque` to handle the `Completed` event which produces two deltas
 /// (Usage + Done). The `item_to_call` map is updated in-place for tool call
 /// correlation (`OutputItemAdded` records `item_id` → `call_id`).
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn parse_sse_event_multi(
     data: &str,
     item_to_call: &mut HashMap<String, String>,
@@ -567,6 +582,7 @@ fn parse_sse_event_multi(
             ..
         } => {
             // Register item_id → call_id for subsequent arg delta correlation
+            // rust-doctor-disable-next-line excessive-clone
             item_to_call.insert(id, call_id.clone());
             out.push_back(Ok(ProviderDelta::ToolCallStart {
                 signature: None,
@@ -590,6 +606,7 @@ fn parse_sse_event_multi(
             // this copy before ending the call.
             if let Some(call_id) = item_to_call.get(&item_id).cloned() {
                 out.push_back(Ok(ProviderDelta::ToolCallArgsComplete {
+                    // rust-doctor-disable-next-line excessive-clone
                     id: call_id.clone(),
                     arguments,
                 }));
@@ -607,6 +624,7 @@ fn parse_sse_event_multi(
             // final output item also carries the complete arguments. Adopt them
             // (no-op when empty) so a truncated delta stream is repaired.
             out.push_back(Ok(ProviderDelta::ToolCallArgsComplete {
+                // rust-doctor-disable-next-line excessive-clone
                 id: call_id.clone(),
                 arguments,
             }));

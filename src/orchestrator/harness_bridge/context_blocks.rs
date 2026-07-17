@@ -114,7 +114,12 @@ pub async fn active_timer_loop(session_key: &str) -> Option<String> {
 /// error. Mirrors `active_standing_goal`.
 pub async fn active_strategy(session_key: &str) -> Option<crate::strategy::Strategy> {
     let store = crate::strategy::global()?;
-    resolve_active_strategy(&store, session_key, goal_tier_live(session_key))
+    resolve_active_strategy(
+        &store,
+        session_key,
+        goal_tier_live(session_key),
+        loop_tier_live(session_key),
+    )
 }
 
 /// Is the goal-keyed Strategy tier live for this session?
@@ -139,6 +144,26 @@ fn goal_tier_live(session_key: &str) -> bool {
     }
 }
 
+/// Is the loop-keyed Strategy tier live for this session? The loop sibling of
+/// [`goal_tier_live`] (goal hardening ⑦, never mirrored until round 4).
+///
+/// The loop-welded plan is persistent SQLite, but the loop registry is process
+/// memory — a daemon restart clears every loop *by design* while the weld row
+/// survives with no owner and no remaining lifecycle site that could ever
+/// delete it (every clear is gated on live registry state or a tool verb that
+/// finds one). Without this gate the orphan plan silently steers every later
+/// turn of the resumed session. Gating on registry *presence* (any status —
+/// the tool `stop` and both gateway stop paths already delete the weld, so a
+/// present-but-stopped loop briefly keeping the tier live is harmless) keeps
+/// the row on disk while it stops steering. Registry uninitialized (host
+/// tests, early boot) → fail open, matching `goal_tier_live`.
+fn loop_tier_live(session_key: &str) -> bool {
+    match crate::looping::global() {
+        Some(reg) => reg.get(session_key).is_some(),
+        None => true,
+    }
+}
+
 /// Resolve the welded Strategy for a session key against an explicit store
 /// (sync; the global accessor lives in `active_strategy`, keeping this
 /// unit-testable). Precedence: goal → loop → **team** → session. The team tier
@@ -150,6 +175,7 @@ fn resolve_active_strategy(
     store: &crate::strategy::StrategyStore,
     session_key: &str,
     goal_tier_live: bool,
+    loop_tier_live: bool,
 ) -> Option<crate::strategy::Strategy> {
     if goal_tier_live {
         if let Some(s) = store
@@ -160,12 +186,14 @@ fn resolve_active_strategy(
             return Some(s);
         }
     }
-    if let Some(s) = store
-        .get(&crate::strategy::loop_key(session_key))
-        .ok()
-        .flatten()
-    {
-        return Some(s);
+    if loop_tier_live {
+        if let Some(s) = store
+            .get(&crate::strategy::loop_key(session_key))
+            .ok()
+            .flatten()
+        {
+            return Some(s);
+        }
     }
     if let Some(crate::routing::session_key::SessionKey::Task {
         task_type, task_id, ..
@@ -251,6 +279,33 @@ pub(crate) fn render_deadline(deadline_ms: u64, now_ms: u64) -> String {
     }
 }
 
+/// Fraction of the in-loop compaction point (`token_budget * warning_threshold`)
+/// at which the context-pressure reminder starts firing. 0.85 gives the model
+/// lead time to checkpoint before the sensor summarizes older turns away.
+pub(crate) const CONTEXT_PRESSURE_REMINDER_LEAD: f64 = 0.85;
+
+/// Render the context-window pressure line for the transient trailing message:
+/// how full the model's context is, as a heads-up to wrap up or checkpoint
+/// before the in-loop sensor compacts older turns away. Pure and clock-free —
+/// like [`render_deadline`] it belongs on the far side of the prompt-cache
+/// breakpoint (see [`live_deadline_status`] for why), so it never re-keys the
+/// conversation prefix. R9: the model self-paces on the number; the harness
+/// still owns the actual compaction. The producer
+/// (`AgentHarnessRunner::context_pressure_reminder`) computes the token figures
+/// and only calls this once the reminder threshold is crossed.
+pub(crate) fn render_context_pressure(used_tokens: u64, window_tokens: u64) -> String {
+    let pct = if window_tokens == 0 {
+        0
+    } else {
+        (used_tokens.saturating_mul(100) / window_tokens).min(100)
+    };
+    format!(
+        "context window: ~{used_tokens} of ~{window_tokens} tokens in use (~{pct}%). \
+         Approaching this model's context limit — older turns will be summarized \
+         away soon. Finish, or checkpoint anything important now, so it is not lost."
+    )
+}
+
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
 /// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
 /// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
@@ -333,7 +388,7 @@ mod active_strategy_tests {
             )
             .unwrap();
         assert_eq!(
-            resolve_active_strategy(&store, &sk, true).map(|s| s.objective),
+            resolve_active_strategy(&store, &sk, true, true).map(|s| s.objective),
             Some("team-obj".to_string())
         );
 
@@ -342,7 +397,7 @@ mod active_strategy_tests {
             .put(&crate::strategy::goal_key(&sk), &mk_strategy("goal-obj"))
             .unwrap();
         assert_eq!(
-            resolve_active_strategy(&store, &sk, true).map(|s| s.objective),
+            resolve_active_strategy(&store, &sk, true, true).map(|s| s.objective),
             Some("goal-obj".to_string())
         );
 
@@ -350,11 +405,64 @@ mod active_strategy_tests {
         // disk (a resume gets it back) yet stops steering unrelated turns. The
         // team frame below it wins instead.
         assert_eq!(
-            resolve_active_strategy(&store, &sk, false).map(|s| s.objective),
+            resolve_active_strategy(&store, &sk, false, true).map(|s| s.objective),
             Some("team-obj".to_string())
         );
 
         // a non-team session never hits the team tier
-        assert!(resolve_active_strategy(&store, "agent:bob:main", true).is_none());
+        assert!(resolve_active_strategy(&store, "agent:bob:main", true, true).is_none());
+    }
+
+    #[test]
+    fn dead_loop_tier_stops_steering_but_keeps_the_row() {
+        // LOOP-01: the loop weld is persistent SQLite while the loop registry is
+        // process memory — after a daemon restart the weld has no owner. A dead
+        // loop tier must fall through (here to the session tier), exactly like
+        // the paused-goal gate above, without deleting the row.
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::strategy::StrategyStore::open(&dir.path().join("s.db")).unwrap();
+        let sk = "agent:alice:main";
+        store
+            .put(&crate::strategy::loop_key(sk), &mk_strategy("loop-obj"))
+            .unwrap();
+        store
+            .put(&crate::strategy::session_key(sk), &mk_strategy("sess-obj"))
+            .unwrap();
+
+        // Live loop → loop tier wins.
+        assert_eq!(
+            resolve_active_strategy(&store, sk, true, true).map(|s| s.objective),
+            Some("loop-obj".to_string())
+        );
+        // Dead loop (registry empty after restart) → tier skipped, row intact.
+        assert_eq!(
+            resolve_active_strategy(&store, sk, true, false).map(|s| s.objective),
+            Some("sess-obj".to_string())
+        );
+        assert!(
+            store.get(&crate::strategy::loop_key(sk)).unwrap().is_some(),
+            "gating must not delete the welded row"
+        );
+    }
+}
+
+#[cfg(test)]
+mod context_pressure_tests {
+    use super::render_context_pressure;
+
+    #[test]
+    fn reports_used_window_and_percentage() {
+        let s = render_context_pressure(85_000, 100_000);
+        assert!(s.contains("~85000 of ~100000"), "{s}");
+        assert!(s.contains("~85%"), "{s}");
+        assert!(s.contains("checkpoint"), "{s}");
+    }
+
+    #[test]
+    fn clamps_over_full_to_100_and_guards_zero_window() {
+        // Usage past the window never reads over 100%.
+        assert!(render_context_pressure(120, 100).contains("~100%"));
+        // A zero window (the caller guards against it) must not divide by zero.
+        assert!(render_context_pressure(50, 0).contains("~0%"));
     }
 }

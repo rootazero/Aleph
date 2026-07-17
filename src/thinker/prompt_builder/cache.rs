@@ -21,24 +21,14 @@ impl PromptBuilder {
     /// [`stability()`](crate::thinker::prompt_layer::PromptLayer::stability)
     /// declaration, so adding new layers automatically classifies them.
     ///
-    /// Equivalent to [`build_system_prompt_cached_with_mode`] with
-    /// [`PromptMode::Full`] — kept as the back-compatible default entry point.
-    ///
-    /// [`build_system_prompt_cached_with_mode`]: Self::build_system_prompt_cached_with_mode
-    pub fn build_system_prompt_cached(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
-        self.build_system_prompt_cached_with_mode(tools, PromptMode::Full)
-    }
-
-    /// Mode-aware variant of [`build_system_prompt_cached`].
-    ///
     /// Threads `mode` through the layer pipeline so token-constrained
     /// deployments can opt into a leaner system prompt — `Compact` / `Minimal`
     /// shed the heavy guidance layers that declare `supports_mode(mode) ==
     /// false`, while `Full` reproduces the legacy assembly byte-for-byte. The
     /// stable/dynamic split (and thus the prompt-cache breakpoint) is
-    /// preserved across all modes.
-    ///
-    /// [`build_system_prompt_cached`]: Self::build_system_prompt_cached
+    /// preserved across all modes. (A no-mode `build_system_prompt_cached`
+    /// wrapper used to alias `Full`; every caller migrated to this entry and
+    /// the wrapper was removed per YAGNI.)
     pub fn build_system_prompt_cached_with_mode(
         &self,
         tools: &[ToolInfo],
@@ -117,19 +107,6 @@ mod tests {
 
     fn total_len(parts: &[SystemPromptPart]) -> usize {
         parts.iter().map(|p| p.content.len()).sum()
-    }
-
-    #[test]
-    fn full_is_the_back_compat_default() {
-        let builder = PromptBuilder::new(PromptConfig::default());
-        let legacy = builder.build_system_prompt_cached(&[]);
-        let full = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
-        // The no-mode entry point must reproduce Full byte-for-byte.
-        assert_eq!(legacy.len(), full.len());
-        for (a, b) in legacy.iter().zip(full.iter()) {
-            assert_eq!(a.content, b.content);
-            assert_eq!(a.cache, b.cache);
-        }
     }
 
     #[test]
@@ -302,6 +279,35 @@ mod tests {
         assert!(
             parts[0].content.contains("Rust and tokio"),
             "cached Full prompt must carry AGENTS.md content"
+        );
+    }
+
+    #[test]
+    fn cached_full_prompt_carries_subagent_role_and_protocol() {
+        // Regression guard (wiring fix): AgentRoleLayer @55 injects a registered
+        // sub-agent's role header + protocol constraints. The harness-bridge
+        // runner resolves `agent_def` from the registry, threads it via
+        // `with_agent`, then walks the Cached path — so a registered SubAgent
+        // (verify / explore / coder / …) running as the loop agent (agent-switch
+        // or team dispatch) needs this layer on `AssemblyPath::Cached` or its
+        // role + protocol blocks silently vanish. AgentRoleLayer previously
+        // omitted `Cached`; this locks it into the cacheable stable prefix
+        // (same class of fix the Soul / Profile / Role / Citation layers carry).
+        use crate::agents::{AgentDef, AgentMode};
+
+        let def = AgentDef::new("verify", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["verify_protocol".to_string()]);
+        let builder = PromptBuilder::new(PromptConfig::default()).with_agent(def);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        // AgentRoleLayer is Stable → it rides part 0 (the cacheable prefix).
+        assert!(
+            parts[0].content.contains("# Sub-Agent Role"),
+            "cached Full prompt must carry the sub-agent role header"
+        );
+        assert!(
+            parts[0].content.contains("adversarial verifier"),
+            "cached Full prompt must carry the sub-agent's verify protocol block"
         );
     }
 }

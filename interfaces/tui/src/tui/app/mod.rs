@@ -78,8 +78,9 @@ pub enum Action {
     DialogSelect(usize),
 
     // -- Dialog response --
-    /// Respond to an `AskUser` dialog
-    RespondToDialog { run_id: String, choice: String },
+    /// Answer an `AskUser` dialog. Routed to `clarification.resolve` keyed by
+    /// `session_key` (the reply routes by session, not by run).
+    RespondToDialog { session_key: String, reply: String },
 
     // -- Tool approval (Ask exec tier) --
     /// Resolve the pending tool-approval overlay by option index into
@@ -163,7 +164,10 @@ pub enum ChatMessage {
 /// State for the `AskUser` confirmation dialog.
 #[derive(Debug, Clone)]
 pub struct DialogState {
-    pub run_id: String,
+    /// Clarification registry key — the answer is posted back to
+    /// `clarification.resolve` against this, NOT the run id (replies route by
+    /// session). Carried on the `AskUser` frame.
+    pub session_key: String,
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
@@ -181,7 +185,8 @@ pub const APPROVAL_DECISIONS: [(&str, &str); 3] = [
 /// State for the tool-execution approval overlay (Ask exec tier). A parked
 /// server run is waiting on `exec.approval.resolve` for this `id`. Kept
 /// deliberately separate from [`DialogState`] (AskUser) so a security decision
-/// can never be routed to `agent.respondToInput` by mistake.
+/// can never be routed to `clarification.resolve` (the AskUser answer path) by
+/// mistake — approvals resolve through `exec.approval.resolve` alone.
 #[derive(Debug, Clone)]
 pub struct ApprovalState {
     /// Approval id — the resolve key. Never shown to the user.
@@ -251,6 +256,13 @@ pub struct AppState {
     /// `Option` keeps the half-known state unrepresentable; the denominator is
     /// server-authoritative per model.
     pub context_gauge: Option<(u32, u32)>,
+    /// Last-call prompt-cache efficiency `(cache_read, denominator)` from the
+    /// latest `ProviderUsage` trace event that reported cache activity, where
+    /// `denominator = input + cache_creation + cache_read`. `None` until a
+    /// call reports cache tokens — providers without prompt caching never
+    /// surface a misleading 0%. Last-call (not cumulative) on purpose: a
+    /// sudden drop is what tells you a prefix bust just happened.
+    pub cache_stat: Option<(u64, u64)>,
     pub is_connected: bool,
 
     // -- Run tracking --
@@ -303,6 +315,7 @@ impl AppState {
             model_name,
             total_tokens: 0,
             context_gauge: None,
+            cache_stat: None,
             is_connected: true,
 
             current_run: None,
@@ -581,10 +594,11 @@ impl AppState {
         picker.entries.get(idx).map(|e| e.key.clone())
     }
 
-    /// Show an `AskUser` dialog.
-    pub fn show_dialog(&mut self, run_id: String, question: String, options: Vec<String>) {
+    /// Show an `AskUser` dialog. `session_key` is the clarification key the
+    /// answer resolves against (`clarification.resolve`).
+    pub fn show_dialog(&mut self, session_key: String, question: String, options: Vec<String>) {
         self.dialog = Some(DialogState {
-            run_id,
+            session_key,
             question,
             options,
             selected: 0,
@@ -636,6 +650,10 @@ impl AppState {
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;
+        // Same for the cache stat: the old session's hit% is meaningless for
+        // a different prefix, and a cache-less provider would otherwise show
+        // it indefinitely (the stat only updates on real cache activity).
+        self.cache_stat = None;
         self.dialog = None;
         self.palette = None;
         // Any approval prompt belonged to the old session's run; drop it.

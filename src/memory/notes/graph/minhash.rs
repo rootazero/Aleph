@@ -147,7 +147,9 @@ pub fn similarity_edges(
     let mut keys: Vec<usize> = per_node.keys().copied().collect();
     keys.sort_unstable();
     for k in keys {
-        let mut peers = per_node.remove(&k).unwrap();
+        let Some(mut peers) = per_node.remove(&k) else {
+            continue;
+        };
         peers.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)

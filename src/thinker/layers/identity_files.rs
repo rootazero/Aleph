@@ -37,24 +37,19 @@ const INJECTION_PATTERNS: &[&str] = &[
     "exfiltrate",
 ];
 
-/// Zero-width / bidi / BOM characters that are commonly used to hide
-/// payloads from human reviewers but stay visible to the model. Stripped
-/// (not blocked) so legitimate content survives the scan.
-const INVISIBLE_CHARS: &[char] = &[
-    '\u{200B}', // ZWSP
-    '\u{200C}', // ZWNJ
-    '\u{200D}', // ZWJ
-    '\u{200E}', // LRM
-    '\u{200F}', // RLM
-    '\u{2060}', // WORD JOINER
-    '\u{FEFF}', // ZWNBSP / BOM
-];
-
 /// Scan `content` for prompt-injection patterns and zero-width payloads.
 ///
 /// - Returns a `[BLOCKED: ...]` marker if any threat pattern matches.
-/// - Strips zero-width chars otherwise and returns the cleaned content.
+/// - Strips invisible / bidi / tag Unicode otherwise, normalizes line endings
+///   to `\n`, and returns the cleaned content.
 /// - Returns the original (borrowed) when clean.
+///
+/// The invisible-character class defers to `crate::security::unicode_guard`,
+/// the single source of truth (Trojan Source bidi overrides, the U+E0000 tag
+/// block, Hangul fillers, variation selectors, zero-width evasion). A local
+/// 7-char subset previously drifted from it and missed those vectors —
+/// identity / project-instruction files cross the same untrusted-input
+/// boundary that the other five scanners already defer to the SSOT for.
 pub(crate) fn sanitize_identity_content<'a>(name: &str, content: &'a str) -> Cow<'a, str> {
     let lc = content.to_lowercase();
     if let Some(hit) = INJECTION_PATTERNS.iter().find(|p| lc.contains(*p)) {
@@ -63,12 +58,25 @@ pub(crate) fn sanitize_identity_content<'a>(name: &str, content: &'a str) -> Cow
              Content was not injected. Edit the file or remove the offending text to restore it.]"
         ));
     }
-    if content.chars().any(|c| INVISIBLE_CHARS.contains(&c)) {
-        let cleaned: String = content
-            .chars()
-            .filter(|c| !INVISIBLE_CHARS.contains(c))
-            .collect();
-        return Cow::Owned(cleaned);
+    let has_invisible = content
+        .chars()
+        .any(crate::security::unicode_guard::is_invisible_char);
+    // CRLF (or a lone CR from a Windows editor / the documented Mac→Win copy)
+    // yields a different cacheable stable prefix than the same file with LF;
+    // normalize so identity content rides a byte-stable prefix cross-platform.
+    let has_cr = content.contains('\r');
+    if has_invisible || has_cr {
+        let stripped = if has_invisible {
+            crate::security::unicode_guard::strip_invisible_chars(content).0
+        } else {
+            content.to_string()
+        };
+        let normalized = if has_cr {
+            stripped.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            stripped
+        };
+        return Cow::Owned(normalized);
     }
     Cow::Borrowed(content)
 }

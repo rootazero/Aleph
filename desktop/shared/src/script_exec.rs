@@ -29,6 +29,21 @@ use crate::error::{DesktopError, Result};
 /// (`npm install`, a build, a test run).
 pub const RUN_SCRIPT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Prefix of the error [`output_capped`] returns when the binary itself could
+/// not be launched (as opposed to a timeout or a non-zero script exit). Kept as
+/// a shared const so its producer ([`output_capped`]) and its classifier
+/// ([`is_spawn_failure`]) can never drift apart.
+const SPAWN_FAILURE_PREFIX: &str = "failed to spawn process";
+
+/// True when `e` is the spawn-failure error [`output_capped`] produces — the
+/// interpreter/binary could not be launched. Callers that try a sequence of
+/// candidate binaries (e.g. `pwsh` → `powershell`) use this to fall through
+/// *only* on a missing binary, never on a timeout of one that does exist.
+#[must_use]
+pub fn is_spawn_failure(e: &DesktopError) -> bool {
+    matches!(e, DesktopError::InputFailed(m) if m.starts_with(SPAWN_FAILURE_PREFIX))
+}
+
 /// Run `cmd` to completion, but never longer than `timeout`. On elapse the
 /// child is killed (`kill_on_drop`) so we never leak a hung process, and the
 /// caller gets a clear error that points at the background path.
@@ -39,7 +54,7 @@ pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output
     match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => Err(DesktopError::InputFailed(format!(
-            "failed to spawn process: {e}"
+            "{SPAWN_FAILURE_PREFIX}: {e}"
         ))),
         Err(_elapsed) => Err(DesktopError::InputFailed(format!(
             "script exceeded {}s and was terminated. For a long-running process \

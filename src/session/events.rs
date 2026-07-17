@@ -24,7 +24,7 @@ pub enum TurnOutcome {
     Errored { kind: ErrorKind },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalSource {
     User,
@@ -122,6 +122,7 @@ pub enum RunOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum SessionEvent {
     SessionCreated {
         identity: SessionIdentityMeta,

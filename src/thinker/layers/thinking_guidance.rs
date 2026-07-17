@@ -16,10 +16,19 @@ impl PromptLayer for ThinkingGuidanceLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
+        // `Cached` is the live main-loop path
+        // (`build_system_prompt_cached_with_mode`). Without it this guidance
+        // would silently never reach a production prompt even if
+        // `thinking_transparency` were wired on — the same latent-vanish trap
+        // the Soul / Role / Citation layers were fixed for. The layer is
+        // Stable + Full-only and self-gates on the config flag, so riding the
+        // cacheable prefix costs nothing when the flag is false (the current
+        // default).
         &[
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
+            AssemblyPath::Cached,
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {

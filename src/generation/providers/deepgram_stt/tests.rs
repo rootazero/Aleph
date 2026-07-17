@@ -37,25 +37,27 @@ fn supports_transcription_only() {
 }
 
 #[tokio::test]
-async fn rejects_wrong_generation_type() {
-    let provider = DeepgramSttProvider::new("k", None, None).unwrap();
+async fn rejects_wrong_generation_type() -> Result<(), GenerationError> {
+    let provider = DeepgramSttProvider::new("k", None, None)?;
     let request = GenerationRequest::speech("hello");
     let err = provider.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::UnsupportedGenerationTypeError { .. }
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn rejects_missing_audio_source() {
-    let provider = DeepgramSttProvider::new("k", None, None).unwrap();
+async fn rejects_missing_audio_source() -> Result<(), GenerationError> {
+    let provider = DeepgramSttProvider::new("k", None, None)?;
     let request = GenerationRequest::new(GenerationType::Transcription, "");
     let err = provider.generate(request).await.unwrap_err();
     assert!(matches!(
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }
 
 #[test]
@@ -76,14 +78,14 @@ fn data_url_base64_round_trip() {
 }
 
 #[tokio::test]
-async fn rejects_oversized_inline_audio() {
+async fn rejects_oversized_inline_audio() -> Result<(), GenerationError> {
     // 251 MB synthetic file via data URL; we never make a network call.
     let big = vec![0u8; (MAX_AUDIO_BYTES + 1) as usize];
     let url = format!(
         "data:audio/mpeg;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(&big)
     );
-    let provider = DeepgramSttProvider::new("k", None, None).unwrap();
+    let provider = DeepgramSttProvider::new("k", None, None)?;
     let params = GenerationParams::builder().reference_audio(url).build();
     let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = provider.generate(request).await.unwrap_err();
@@ -91,4 +93,5 @@ async fn rejects_oversized_inline_audio() {
         err,
         GenerationError::InvalidParametersError { .. }
     ));
+    Ok(())
 }

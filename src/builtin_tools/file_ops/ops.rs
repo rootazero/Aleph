@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use super::path_utils::check_and_resolve_path;
+use super::path_utils::{check_and_resolve_path, path_is_denied, resolve_for_removal};
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
+use crate::tools::path_locks::{lock_path, lock_path_pair};
 
 /// Execute a list operation
 pub async fn execute_list(
@@ -173,7 +174,11 @@ pub async fn execute_move(
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
+    // A symlink source must be renamed as the LINK, not its target (which
+    // `check_and_resolve_path` would canonicalize to and move out from under
+    // the link). `fs::rename` never follows a final symlink, so operating on
+    // the link path is correct.
+    let from_canonical = resolve_for_removal(from, denied_paths, output_dir_override)?;
     let to_canonical = check_and_resolve_path(to, denied_paths, output_dir_override)?;
 
     // Cross-agent write serialization (defense in depth alongside the batch
@@ -182,10 +187,11 @@ pub async fn execute_move(
     // exists-check → rename critical section — the same guard `file_write` /
     // `file_edit` / `apply_patch` already take; `file_ops` mutations were the
     // one family that skipped it.
-    let _path_guards =
-        crate::tools::path_locks::lock_path_pair(&from_canonical, &to_canonical).await;
+    let _path_guards = lock_path_pair(&from_canonical, &to_canonical).await;
 
-    if !from_canonical.exists() {
+    // lstat, not `exists()`: a dangling symlink source must still be movable
+    // (`exists()` follows the link and would wrongly report it missing).
+    if from_canonical.symlink_metadata().is_err() {
         return Err(ToolError::Execution(format!(
             "Source not found: {}",
             from.display()
@@ -237,8 +243,7 @@ pub async fn execute_copy(
     // Cross-agent serialization: the destination is written and the source is
     // read mid-copy (a concurrent writer to either tears the copy). Sorted
     // pair — see `execute_move`.
-    let _path_guards =
-        crate::tools::path_locks::lock_path_pair(&from_canonical, &to_canonical).await;
+    let _path_guards = lock_path_pair(&from_canonical, &to_canonical).await;
 
     if !from_canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -262,9 +267,16 @@ pub async fn execute_copy(
         fs::copy(&from_canonical, &to_canonical)
             .map_err(|e| ToolError::Execution(format!("Failed to copy: {e}")))?
     } else {
-        // Directory copy - recursive
+        // Directory copy - recursive. `denied_paths` are threaded through so a
+        // symlink whose canonical target is a protected credential store is
+        // skipped rather than followed and copied out.
         let mut visited = std::collections::HashSet::new();
-        copy_dir_recursive(&from_canonical, &to_canonical, &mut visited)?
+        copy_dir_recursive(
+            &from_canonical,
+            &to_canonical,
+            denied_paths,
+            &mut visited,
+        )?
     };
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
@@ -285,10 +297,11 @@ pub async fn execute_copy(
     })
 }
 
-/// Recursively copy a directory with symlink-cycle guard.
+/// Recursively copy a directory with symlink-cycle + deny guards.
 fn copy_dir_recursive(
     from: &Path,
     to: &Path,
+    denied_paths: &[String],
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<u64, ToolError> {
     fs::create_dir_all(to)
@@ -309,6 +322,19 @@ fn copy_dir_recursive(
             let canonical = fs::canonicalize(&from_path).map_err(|e| {
                 ToolError::Execution(format!("Failed to canonicalize symlink: {e}"))
             })?;
+            // Deny guard: a symlink whose target resolves under a protected path
+            // would otherwise exfiltrate blacklisted content into the copy. Skip
+            // it (recursive copy follows symlinks by design; the escape is the
+            // hole). Checked before the cycle guard so a denied target does not
+            // consume a `visited` slot.
+            if path_is_denied(&canonical, denied_paths) {
+                info!(
+                    symlink = %from_path.display(),
+                    target = %canonical.display(),
+                    "copy: skipping symlink to protected target"
+                );
+                continue;
+            }
             if !visited.insert(canonical.clone()) {
                 return Err(ToolError::Execution(format!(
                     "Symlink cycle detected at {}",
@@ -318,7 +344,7 @@ fn copy_dir_recursive(
         }
 
         if from_path.is_dir() {
-            total_bytes += copy_dir_recursive(&from_path, &to_path, visited)?;
+            total_bytes += copy_dir_recursive(&from_path, &to_path, denied_paths, visited)?;
         } else {
             total_bytes += fs::copy(&from_path, &to_path)
                 .map_err(|e| ToolError::Execution(format!("Failed to copy file: {e}")))?;
@@ -351,22 +377,32 @@ pub async fn execute_delete(
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
+    // Deleting a symlink must unlink the LINK, not descend into its target
+    // (`check_and_resolve_path` would canonicalize the link to its target and
+    // `remove_dir_all` would then destroy the pointed-at tree). `resolve_for_removal`
+    // returns the un-followed link path when the final component is a symlink.
+    let canonical = resolve_for_removal(path, denied_paths, output_dir_override)?;
 
-    // Cross-agent serialization for the exists-check → remove critical
-    // section (a concurrent `file_edit` read-modify-write on this path must
-    // not interleave with its deletion). Same guard the writers take.
-    let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
+    // Cross-agent write guard: serialize the exists-check → remove critical
+    // section against any other harness mutating the same path (a concurrent
+    // `file_edit` read-modify-write on this path must not interleave with its
+    // deletion). Same guard the writers take.
+    let _guard = lock_path(&canonical).await;
 
-    if !canonical.exists() {
-        return Err(ToolError::Execution(format!(
-            "Path not found: {}",
-            path.display()
-        )));
-    }
-
-    let is_dir = canonical.is_dir();
-    let items_deleted = if is_dir {
+    // `symlink_metadata` (lstat) never follows the final component, so a
+    // dangling or dir-pointing symlink is still detected as present and as a
+    // symlink.
+    let lmeta = canonical.symlink_metadata().map_err(|_| {
+        ToolError::Execution(format!("Path not found: {}", path.display()))
+    })?;
+    let is_symlink = lmeta.file_type().is_symlink();
+    let is_dir = !is_symlink && lmeta.is_dir();
+    let items_deleted = if is_symlink {
+        // Unlink the symlink itself — never touch its target.
+        fs::remove_file(&canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to delete symlink: {e}")))?;
+        1
+    } else if is_dir {
         // Count the whole tree before removal so the reported figure is the
         // true total, not just the directory's top-level entries.
         let count = count_path_entries(&canonical);
@@ -379,7 +415,7 @@ pub async fn execute_delete(
         1
     };
 
-    info!(path = %canonical.display(), is_dir, items_deleted, "Deleted");
+    info!(path = %canonical.display(), is_dir, is_symlink, items_deleted, "Deleted");
 
     Ok(FileOpsOutput {
         success: true,
@@ -401,10 +437,10 @@ pub async fn execute_mkdir(
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
-    // Cross-agent serialization for the exists-check → create critical
-    // section (mirror of `execute_delete`; mkdir vs delete on one path must
-    // not interleave).
-    let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
+    // Cross-agent write guard: serialize the exists-check → create critical
+    // section against a concurrent create/delete of the same path (mirror of
+    // `execute_delete`).
+    let _guard = lock_path(&canonical).await;
 
     if canonical.exists() {
         if canonical.is_dir() {
@@ -472,6 +508,73 @@ mod tests {
             "must count nested entries, not only the top level"
         );
         assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_symlink_unlinks_link_not_target_tree() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        // A precious directory tree the symlink points at.
+        let target = root.path().join("precious");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), b"important").unwrap();
+        // A symlink to it.
+        let link = root.path().join("link");
+        symlink(&target, &link).unwrap();
+
+        let out = execute_delete(&link, &[], None).await.unwrap();
+        assert!(out.success);
+        assert_eq!(out.items_affected, Some(1), "only the link is removed");
+        // The link is gone; the target tree survives intact.
+        assert!(!link.exists());
+        assert!(target.exists());
+        assert!(target.join("keep.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_symlink_renames_link_not_target() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let target = root.path().join("precious");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), b"important").unwrap();
+        let link = root.path().join("link");
+        symlink(&target, &link).unwrap();
+        let dest = root.path().join("renamed-link");
+
+        let out = execute_move(&link, &dest, false, &[], None).await.unwrap();
+        assert!(out.success);
+        // The link moved; the target tree is untouched at its original location.
+        assert!(!link.exists());
+        assert!(dest.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(target.join("keep.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_skips_symlink_to_denied_target() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        // A "credential" store we mark denied.
+        let secret_dir = root.path().join("secret");
+        fs::create_dir(&secret_dir).unwrap();
+        fs::write(secret_dir.join("id_rsa"), b"PRIVATE KEY").unwrap();
+        let denied = vec![secret_dir.to_string_lossy().to_string()];
+
+        // A source dir containing a symlink INTO the denied store.
+        let src = root.path().join("src");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("ok.txt"), b"fine").unwrap();
+        symlink(&secret_dir, src.join("leak")).unwrap();
+
+        let dst = root.path().join("dst");
+        let out = execute_copy(&src, &dst, true, &denied, None).await.unwrap();
+        assert!(out.success);
+        // The benign file copied; the symlinked credential store did NOT.
+        assert!(dst.join("ok.txt").exists());
+        assert!(!dst.join("leak").exists(), "denied symlink must be skipped");
     }
 
     #[tokio::test]

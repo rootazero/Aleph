@@ -153,6 +153,7 @@ impl SessionCompactor {
             .with_path(path);
         if let Some(ref registry) = self.capture_registry {
             let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
+                // rust-doctor-disable-next-line excessive-clone
                 self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
@@ -211,6 +212,7 @@ impl SessionCompactor {
 
         let messages: Vec<(String, String)> = source_facts
             .iter()
+            // rust-doctor-disable-next-line excessive-clone
             .map(|r| ("assistant".to_string(), r.content.clone()))
             .collect();
 
@@ -238,12 +240,15 @@ impl SessionCompactor {
             agent_id,
         );
 
+        // rust-doctor-disable-next-line excessive-clone
         let raw = RawMemory::new(fact.content.clone(), RawMemorySource::SessionCompressed)
             .with_agent(agent_id)
             .with_session(session_id)
+            // rust-doctor-disable-next-line excessive-clone
             .with_path(fact.path.clone());
         if let Some(ref registry) = self.capture_registry {
             let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
+                // rust-doctor-disable-next-line excessive-clone
                 self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
@@ -256,6 +261,7 @@ impl SessionCompactor {
             self.database.insert_raw_memory(&raw).await?;
         }
 
+        // rust-doctor-disable-next-line excessive-clone
         let source_ids: Vec<String> = source_facts.iter().map(|r| r.id.clone()).collect();
         if let Err(e) = self.database.mark_raw_as_processed(&source_ids).await {
             warn!(

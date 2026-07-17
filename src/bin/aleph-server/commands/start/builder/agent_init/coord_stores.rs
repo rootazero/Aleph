@@ -262,17 +262,25 @@ pub(super) fn build_team_components(
     event_store: &Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
     team_session_store: &Option<Arc<dyn alephcore::teams::sessions::SessionStore>>,
     artifact_store: &Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
+    team_store: &Option<Arc<dyn alephcore::teams::TeamStore>>,
+    escalation_rules: alephcore::teams::messages::EscalationRule,
 ) -> TeamComponents {
     let message_router: Option<Arc<alephcore::teams::messages::MessageRouter>> =
         match (message_store.as_ref(), event_store.as_ref()) {
             (Some(ms), Some(es)) => {
-                use alephcore::teams::messages::{EscalationRule, MessageRouter};
-                Some(Arc::new(MessageRouter::new(
-                    ms.clone(),
-                    es.clone(),
-                    EscalationRule::default(),
-                    None,
-                )))
+                use alephcore::teams::messages::MessageRouter;
+                // The router is a global singleton while leaders are per-team:
+                // escalation resolves each message's leader through the team
+                // store at send time (a construction-time leader id can never
+                // be right here). The escalation thresholds are mapped from the
+                // optional [team_messages] TOML at the boot site (parallel to
+                // the [team_dispatcher] / [team_broadcast] mappings).
+                let mut router =
+                    MessageRouter::new(ms.clone(), es.clone(), escalation_rules, None);
+                if let Some(ts) = team_store.as_ref() {
+                    router = router.with_team_store(ts.clone());
+                }
+                Some(Arc::new(router))
             }
             _ => None,
         };

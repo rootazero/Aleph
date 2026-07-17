@@ -23,6 +23,15 @@
 //! 5. **Deterministic path extraction.** Only `path` / `file_path` from
 //!    `ToolCall.arguments`. No output-string heuristics (claw-code's
 //!    `path: ` line scan is brittle on mixed JSON / text outputs).
+//! 6. **Failed mutations never supersede.** A write / edit only invalidates
+//!    earlier ops when its own `ToolResult` exists with `is_error == false` —
+//!    a failed write left the file untouched, so the earlier read is still
+//!    the model's only accurate view of it.
+//! 7. **No-win and persisted-marker guards.** Mirroring
+//!    [`ToolResultPruningStage`]: a body already smaller than the stub is
+//!    left verbatim (stubbing it would inflate context), and
+//!    `[Full output persisted: …]` markers are never stubbed — they carry
+//!    the disk-recovery path the LLM needs.
 //!
 //! R7 alignment: the rule is *structural and deterministic* (path equality
 //!   + op ordering). No similarity heuristic, no relevance scoring, no
@@ -39,6 +48,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::context::budget::preflight::PreflightStage;
+use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 
@@ -120,6 +130,9 @@ struct FileOpRef {
     msg_index: usize,
     call_id: String,
     kind: FileOpKind,
+    /// Tool name from the `ToolCall` block — a superseder's name is quoted
+    /// in the stub written over the results it invalidates.
+    tool_name: String,
 }
 
 impl FileOpSupersedeStage {
@@ -198,52 +211,76 @@ impl FileOpSupersedeStage {
                     msg_index: idx,
                     call_id: id.clone(),
                     kind,
+                    tool_name: name.clone(),
                 });
             }
         }
         by_path
     }
 
-    /// Given the path → ops index, return the set of `call_id`s whose
-    /// `ToolResult` body is safe to replace with a stub. The rule:
+    /// Given the path → ops index, return a `call_id → superseding tool name`
+    /// map for every op whose `ToolResult` body is safe to replace with a
+    /// stub. The rule:
     ///
-    /// 1. For each path with ≥ `min_ops_per_path` ops, find the index of
-    ///    the LAST mutating op (Write or Edit). If no mutating op exists,
-    ///    no op is obsolete — the model is still reading without committing.
-    /// 2. Every op whose `msg_index < last_mutating_index` becomes obsolete.
-    /// 3. The last mutating op is preserved — that is the canonical state.
+    /// 1. For each path with ≥ `min_ops_per_path` ops, find the LAST
+    ///    *successful* mutating op (Write or Edit whose paired `ToolResult`
+    ///    is in `successful`). If none exists, no op is obsolete — either
+    ///    the model is still reading without committing, or every mutation
+    ///    failed and the earlier reads are still the accurate view.
+    /// 2. Every op whose `msg_index < last_mutating_index` becomes obsolete,
+    ///    recorded against the superseder's tool name (quoted in the stub).
+    /// 3. The last successful mutating op is preserved — that is the
+    ///    canonical state.
     /// 4. Obsolete entries inside `fresh_tail_start..` are dropped — the
     ///    fresh tail is sacred.
     fn obsolete_call_ids(
         &self,
         by_path: &BTreeMap<String, Vec<FileOpRef>>,
+        successful: &BTreeSet<String>,
         fresh_tail_start: usize,
-    ) -> BTreeSet<String> {
-        let mut obsolete: BTreeSet<String> = BTreeSet::new();
+    ) -> BTreeMap<String, String> {
+        let mut obsolete: BTreeMap<String, String> = BTreeMap::new();
         for ops in by_path.values() {
             if ops.len() < self.min_ops_per_path {
                 continue;
             }
-            let Some(last_mut_idx) = ops
+            let Some(last_mut) = ops
                 .iter()
                 .rev()
-                .find(|op| op.kind.is_mutating())
-                .map(|op| op.msg_index)
+                .find(|op| op.kind.is_mutating() && successful.contains(&op.call_id))
             else {
                 continue;
             };
             for op in ops {
-                if op.msg_index >= last_mut_idx {
+                if op.msg_index >= last_mut.msg_index {
                     continue;
                 }
                 if op.msg_index >= fresh_tail_start {
                     continue;
                 }
-                obsolete.insert(op.call_id.clone());
+                obsolete.insert(op.call_id.clone(), last_mut.tool_name.clone());
             }
         }
         obsolete
     }
+}
+
+/// Collect the `tool_call_id`s whose `ToolResult` arrived with
+/// `is_error == false`. A mutating call whose result is missing or failed
+/// never changed the file, so only ids in this set may supersede prior ops.
+fn successful_result_ids(messages: &[UnifiedMessage]) -> BTreeSet<String> {
+    let mut ok: BTreeSet<String> = BTreeSet::new();
+    for msg in messages {
+        if let UnifiedMessage::ToolResult {
+            tool_call_id,
+            is_error: false,
+            ..
+        } = msg
+        {
+            ok.insert(tool_call_id.clone());
+        }
+    }
+    ok
 }
 
 #[async_trait]
@@ -263,19 +300,13 @@ impl PreflightStage for FileOpSupersedeStage {
         }
         let by_path = self.index_file_ops(messages);
         let fresh_tail_start = messages.len().saturating_sub(fresh_tail_count);
-        let obsolete = self.obsolete_call_ids(&by_path, fresh_tail_start);
+        let successful = successful_result_ids(messages);
+        let obsolete = self.obsolete_call_ids(&by_path, &successful, fresh_tail_start);
         if obsolete.is_empty() {
             return 0;
         }
 
-        // Chars-to-tokens ratio used by the rest of the budget subsystem.
-        // We avoid `estimate_tokens_smart` here because the savings figure
-        // is reported to the caller for logging; staying with a fixed
-        // ratio matches what `ToolResultPruningStage` does and keeps the
-        // numbers comparable across stages.
-        const CHARS_PER_TOKEN: f64 = 4.0;
-
-        let mut freed_chars: usize = 0;
+        let mut freed_tokens: usize = 0;
         let mut stubbed: usize = 0;
         // Bound the rewrite to messages before the fresh tail: a ToolResult
         // sits one index after its ToolCall, so a call just below the boundary
@@ -285,28 +316,46 @@ impl PreflightStage for FileOpSupersedeStage {
         for msg in messages.iter_mut().take(fresh_tail_start) {
             let UnifiedMessage::ToolResult {
                 tool_call_id,
-                tool_name,
                 content,
                 is_error,
+                ..
             } = msg
             else {
                 continue;
             };
-            if !obsolete.contains(tool_call_id) {
+            let Some(superseder_tool) = obsolete.get(tool_call_id.as_str()) else {
                 continue;
-            }
+            };
             if *is_error {
                 // Safety contract: error results carry diagnostic text the
                 // LLM may rely on to plan its next move.
                 continue;
             }
-            let before = content_chars(content);
+            let original_text = joined_text(content);
+            // Already-persisted markers (Layer 2 of the tool-result budget)
+            // are compact and carry the disk path the LLM needs to recover
+            // the full output — mirror `ToolResultPruningStage`'s guard.
+            if original_text.starts_with("[Full output persisted: ") {
+                continue;
+            }
+            let replacement = stub_message(superseder_tool);
+            // Freed tokens use `estimate_tokens_smart` like the sibling
+            // `ToolResultPruningStage`, so the per-stage savings reported to
+            // the caller are comparable across stages.
+            let original_tokens = estimate_tokens_smart(&original_text);
+            let new_tokens = estimate_tokens_smart(&replacement);
+            // No-win guard: a body already at or below the stub's size must
+            // stay verbatim — stubbing it would inflate the context. This
+            // also makes repeated passes byte-stable: an already-stubbed
+            // result is never rewritten again.
+            if new_tokens >= original_tokens {
+                continue;
+            }
             *content = vec![ContentBlock::Text {
-                text: stub_message(tool_name),
+                text: replacement,
                 cache_control: None,
             }];
-            let after = content_chars(content);
-            freed_chars = freed_chars.saturating_add(before.saturating_sub(after));
+            freed_tokens = freed_tokens.saturating_add(original_tokens - new_tokens);
             stubbed = stubbed.saturating_add(1);
         }
 
@@ -319,26 +368,26 @@ impl PreflightStage for FileOpSupersedeStage {
             );
         }
 
-        ((freed_chars as f64) / CHARS_PER_TOKEN).ceil() as usize
+        freed_tokens
     }
 }
 
-/// Total `char` count across all text / json / thinking / `tool_call`
-/// content blocks. Mirrors the estimator used by other compactors (Aleph
-/// treats `chars / ratio` as the canonical token proxy).
-fn content_chars(blocks: &[ContentBlock]) -> usize {
+/// Join the text-bearing blocks of a tool-result body (Text + serialized
+/// Json) exactly like `UnifiedMessage::tool_result_info`, so the
+/// persisted-marker and token-accounting guards see the same bytes as the
+/// sibling `ToolResultPruningStage`. Image blocks contribute nothing — an
+/// image-only result therefore never clears the no-win guard and is left
+/// intact for `HistoricalImageStrippingStage` to police.
+fn joined_text(blocks: &[ContentBlock]) -> String {
     blocks
         .iter()
         .map(|b| match b {
-            ContentBlock::Text { text, .. } => text.chars().count(),
-            ContentBlock::Json { value } => value.to_string().chars().count(),
-            ContentBlock::Thinking { thinking, .. } => thinking.chars().count(),
-            ContentBlock::ToolCall {
-                name, arguments, ..
-            } => name.chars().count() + arguments.to_string().chars().count(),
-            ContentBlock::Image { .. } => 0,
+            ContentBlock::Text { text, .. } => text.clone(),
+            ContentBlock::Json { value } => value.to_string(),
+            _ => String::new(),
         })
-        .sum()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Extract the canonical file path from a `ToolCall.arguments` value.
@@ -367,12 +416,14 @@ fn canonicalize_path_string(raw: &str) -> String {
 }
 
 /// Stub text written into superseded `ToolResult` bodies. The message
-/// names the originating tool so the LLM, on rare replays, can see *why*
-/// the bytes are gone instead of treating the empty block as a tool
-/// failure.
-fn stub_message(tool_name: &str) -> String {
+/// names the SUPERSEDING tool so the LLM, on rare replays, can see *which
+/// later operation* made these bytes stale instead of treating the empty
+/// block as a tool failure. The text is a pure function of the superseder's
+/// tool name, so repeated passes over the same history are byte-identical
+/// (prompt-cache friendly).
+fn stub_message(superseder_tool: &str) -> String {
     format!(
-        "[content superseded by a later {tool_name}/file write on the same path; \
+        "[content superseded by a later {superseder_tool} on the same path; \
          original output dropped during preflight compaction]"
     )
 }
@@ -582,6 +633,118 @@ mod tests {
             panic!()
         };
         assert_eq!(text, "ENOENT: a does not exist");
+    }
+
+    #[tokio::test]
+    async fn failed_write_does_not_supersede_prior_read() {
+        // The write's ToolResult came back is_error = true: the file on disk
+        // still matches the earlier read, which must stay verbatim — stubbing
+        // it would falsely claim "superseded by a later operation".
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &"x".repeat(800), false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "EACCES: permission denied", true),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(freed, 0, "a failed mutation must not supersede anything");
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
+        assert_eq!(text.chars().count(), 800, "read body must stay verbatim");
+    }
+
+    #[tokio::test]
+    async fn persisted_marker_results_are_never_stubbed() {
+        // A persisted marker longer than the stub (so only the marker guard —
+        // not the no-win guard — protects it) must keep its disk-recovery path.
+        let marker = format!(
+            "[Full output persisted: /tmp/aleph/{}.txt (12000 tokens, file_read)]",
+            "a".repeat(300)
+        );
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &marker, false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(freed, 0, "persisted markers must never be stubbed");
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
+        assert_eq!(text, &marker, "marker text must remain verbatim");
+    }
+
+    #[tokio::test]
+    async fn stub_names_the_superseding_tool() {
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &"x".repeat(800), false),
+            edit_call("e1", "/tmp/a.txt"),
+            tool_result("e1", "file_edit", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let _ = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
+        assert!(
+            text.contains("file_edit"),
+            "stub must name the superseding op, not the stubbed one; got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stub_never_replaces_a_smaller_body() {
+        // No-win guard: the read body is already smaller than the stub text,
+        // so rewriting it would inflate the context.
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", "tiny", false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(freed, 0);
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let ContentBlock::Text { text, .. } = &content[0] else {
+            panic!()
+        };
+        assert_eq!(text, "tiny", "a body smaller than the stub stays verbatim");
+    }
+
+    #[tokio::test]
+    async fn freed_accounting_uses_smart_estimator() {
+        let body = "x".repeat(800);
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &body, false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "wrote 12 bytes", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        let expected = estimate_tokens_smart(&body)
+            - estimate_tokens_smart(&stub_message("file_write"));
+        assert_eq!(
+            freed, expected,
+            "freed must use the same estimator as ToolResultPruningStage"
+        );
     }
 
     #[tokio::test]

@@ -27,12 +27,14 @@ pub async fn resolve_secret_env(
     let mut out = HashMap::with_capacity(env.len());
     for (key, value) in env {
         if !value.contains("{{secret:") {
+            // rust-doctor-disable-next-line excessive-clone
             out.insert(key.clone(), value.clone());
             continue;
         }
         match resolver {
             Some(r) => match render_with_secrets(value, r).await {
                 Ok((rendered, _injected)) => {
+                    // rust-doctor-disable-next-line excessive-clone
                     out.insert(key.clone(), rendered);
                 }
                 Err(e) => tracing::warn!(

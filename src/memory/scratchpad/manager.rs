@@ -796,11 +796,19 @@ mod tests {
         manager.write("# Objective\nhello\n").await.unwrap();
         assert_eq!(manager.read().await.unwrap(), "# Objective\nhello\n");
         // No `.aleph_atomic_*` staging files survive a successful write.
-        let leftovers: Vec<_> = std::fs::read_dir(manager.scratchpad_path().parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().contains(".aleph_atomic_"))
-            .collect();
+        let mut read_dir = tokio::fs::read_dir(manager.scratchpad_path().parent().unwrap())
+            .await
+            .unwrap();
+        let mut leftovers = Vec::new();
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".aleph_atomic_")
+            {
+                leftovers.push(entry);
+            }
+        }
         assert!(leftovers.is_empty(), "no atomic temp files should remain");
     }
 

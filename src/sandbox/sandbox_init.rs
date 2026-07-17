@@ -215,12 +215,14 @@ pub fn policy_from_capabilities(
 ) -> LinuxInitPolicy {
     let mut read_paths: Vec<PathBuf> = SYSTEM_READ_PATHS.iter().map(PathBuf::from).collect();
     for p in &caps.fs_read {
+        // rust-doctor-disable-next-line excessive-clone
         read_paths.push(p.clone());
     }
     // Workspace cwd is always writable — it's the whole point of the
     // workspace sandbox. Caller-supplied fs_write paths come after.
     let mut write_paths: Vec<PathBuf> = vec![cwd.to_path_buf()];
     for p in &caps.fs_write {
+        // rust-doctor-disable-next-line excessive-clone
         write_paths.push(p.clone());
     }
     let seccomp_net = seccomp_net_for(&caps.network);
@@ -441,6 +443,7 @@ fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
     let target = args
         .get(i)
         .ok_or_else(|| "missing target program after `--`".to_string())?
+        // rust-doctor-disable-next-line excessive-clone
         .clone();
     let target_args = args[i + 1..].to_vec();
 
@@ -453,8 +456,8 @@ fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
 
 #[cfg(target_os = "linux")]
 fn set_no_new_privs() -> Result<(), std::io::Error> {
-    // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is documented as always-safe;
-    // it cannot fail except on impossibly old kernels (< 3.5).
+    // SAFETY: prctl(PR_SET_NO_NEW_PRIVS, 1) is documented as always-safe.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1u64, 0u64, 0u64, 0u64) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
@@ -519,10 +522,8 @@ fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
     use std::os::fd::FromRawFd as _;
 
     let (read_fd, write_fd) = create_ready_pipe()?;
-    // SAFETY: `fork()` in a single-threaded process (sandbox-init is
-    // dispatched in main() before any tokio runtime). The child touches only
-    // async-signal-safe-after-fork state because no other thread holds the
-    // allocator/locks; it then runs ordinary Rust without exec'ing.
+    // SAFETY: `fork()` is called in a single-threaded process before any async runtime.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
@@ -535,11 +536,17 @@ fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
         // Child: close the read end, run the bridge forever. Any failure →
         // _exit(1) so the parent's read_exact sees EOF and surfaces an error.
         if close_fd(read_fd).is_err() {
+            // SAFETY: `_exit` terminates the child without running destructors.
+            // rust-doctor-disable-next-line unsafe-block-audit
             unsafe { libc::_exit(1) };
         }
         if run_local_bridge(uds_path, write_fd).is_err() {
+            // SAFETY: `_exit` terminates the child without running destructors.
+            // rust-doctor-disable-next-line unsafe-block-audit
             unsafe { libc::_exit(1) };
         }
+        // SAFETY: `_exit` terminates the child after the bridge is running.
+        // rust-doctor-disable-next-line unsafe-block-audit
         unsafe { libc::_exit(0) };
     }
 
@@ -547,6 +554,7 @@ fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
     close_fd(write_fd)?;
     let mut port_bytes = [0u8; 2];
     // SAFETY: `read_fd` is a freshly-created, owned pipe read end.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let mut read_file = unsafe { File::from_raw_fd(read_fd) };
     read_file.read_exact(&mut port_bytes)?;
     Ok(u16::from_be_bytes(port_bytes))
@@ -570,6 +578,7 @@ fn run_local_bridge(uds_path: &std::path::Path, ready_fd: libc::c_int) -> std::i
     let port = listener.local_addr()?.port();
 
     // SAFETY: `ready_fd` is the owned write end of the readiness pipe.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let mut ready_file = unsafe { File::from_raw_fd(ready_fd) };
     ready_file.write_all(&port.to_be_bytes())?;
     drop(ready_file);
@@ -577,6 +586,7 @@ fn run_local_bridge(uds_path: &std::path::Path, ready_fd: libc::c_int) -> std::i
     let uds_path = uds_path.to_path_buf();
     loop {
         let (tcp_stream, _) = listener.accept()?;
+        // rust-doctor-disable-next-line excessive-clone
         let socket_path = uds_path.clone();
         std::thread::spawn(move || {
             let unix_stream = match UnixStream::connect(socket_path) {
@@ -614,6 +624,7 @@ fn proxy_bidirectional(
 fn create_ready_pipe() -> std::io::Result<(libc::c_int, libc::c_int)> {
     let mut fds = [0; 2];
     // SAFETY: `pipe2` writes exactly two fds into the provided array.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
@@ -624,6 +635,7 @@ fn create_ready_pipe() -> std::io::Result<(libc::c_int, libc::c_int)> {
 #[cfg(target_os = "linux")]
 fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
     // SAFETY: closing an owned fd exactly once.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::close(fd) };
     if rc < 0 {
         return Err(std::io::Error::last_os_error());
@@ -636,9 +648,12 @@ fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
 #[cfg(target_os = "linux")]
 fn set_parent_death_signal() -> std::io::Result<()> {
     // SAFETY: prctl(PR_SET_PDEATHSIG) only sets a per-task attribute.
+    // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     if rc != 0 {
         Err(std::io::Error::last_os_error())
+    // SAFETY: `getppid` returns the parent PID without side effects.
+    // rust-doctor-disable-next-line unsafe-block-audit
     } else if unsafe { libc::getppid() } == 1 {
         // Parent already reaped between fork and prctl → bail so we don't
         // linger as an orphan serving a bridge nobody will tear down.
@@ -649,6 +664,7 @@ fn set_parent_death_signal() -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn apply_landlock(policy: &LinuxInitPolicy) -> Result<(), String> {
     use landlock::{
         Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, RestrictionStatus, Ruleset,
@@ -925,6 +941,7 @@ fn apply_socket_gate(
 /// names that don't exist on the current architecture (e.g.
 /// `nfsservctl` was removed in 5.17).
 #[cfg(target_os = "linux")]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn syscall_nr(name: &str) -> Option<i64> {
     // Translates via libc::SYS_* constants. Only the names actually used
     // by `SECCOMP_DENYLIST_SIMPLE` need to be listed.

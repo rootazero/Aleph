@@ -93,17 +93,41 @@ fn glob_to_regex_str(pattern: &str) -> String {
     regex_str
 }
 
+/// Upper bound on the compiled-glob cache. Patterns come from operator config
+/// (low cardinality by construction), but cap the map anyway so a pathological
+/// caller cannot grow it without bound: at capacity, misses compile fresh
+/// without inserting.
+const GLOB_CACHE_MAX: usize = 512;
+
+/// Compiled form of `pattern`, from a process-wide cache. `None` = the pattern
+/// does not compile (cached too, so a bad pattern is not re-compiled on every
+/// resolve). `regex::Regex` clones are cheap (`Arc`-backed).
+fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = guard.get(pattern) {
+        return hit.clone();
+    }
+    let compiled = regex::Regex::new(&glob_to_regex_str(pattern)).ok();
+    if guard.len() < GLOB_CACHE_MAX {
+        guard.insert(pattern.to_string(), compiled.clone());
+    }
+    compiled
+}
+
 /// Match a value against a glob pattern.
 ///
-/// **Performance note:** This function compiles a fresh `regex::Regex` on every
-/// call. For hot paths or repeated matching, use [`ConfigApprovalPolicy`] which
-/// pre-compiles rules once at construction time.
-///
-/// Public for use in tests. The hot path in [`ConfigApprovalPolicy::check`]
-/// uses pre-compiled regexes instead.
+/// Compiled patterns are cached process-wide: this sits on the tool-permission
+/// hot path (`ToolPermissionsConfig::resolve_explicit` runs it per glob
+/// override per tool on every `list()` / `describe()` / `execute()`), where a
+/// fresh compile per call multiplied out to hundreds of compiles per turn.
+/// [`ConfigApprovalPolicy::check`] still uses its own per-instance
+/// pre-compiled rules.
 #[must_use]
 pub fn matches_glob(value: &str, pattern: &str) -> bool {
-    regex::Regex::new(&glob_to_regex_str(pattern)).is_ok_and(|re| re.is_match(value))
+    cached_glob_regex(pattern).is_some_and(|re| re.is_match(value))
 }
 
 /// A compiled policy rule, pairing the original glob pattern with its regex.
@@ -275,6 +299,7 @@ impl ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
+        defaults.insert(ActionType::MediaCapture, DefaultDecision::Allow);
 
         Self::new(PolicyConfig {
             version: 1,
@@ -303,6 +328,7 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
         defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::MediaCapture, DefaultDecision::Ask);
 
         Self::new(PolicyConfig {
             version: 1,

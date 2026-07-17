@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::preserve::{preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET};
+use super::preserve::{is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET};
 use super::summary_utils::{
     build_summary_update_prompt, build_window_summary_prompt, latest_user_task,
     strip_analysis_block,
@@ -96,12 +96,6 @@ struct CompactionCache {
 const CACHE_EXTEND_MIN_MESSAGES: usize = 8;
 const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
 
-/// Prefix marking a message as a compaction summary (vs raw conversation). A
-/// window that begins with this is a *prior* summary being folded into a wider
-/// one, which routes summarization to the incremental "update" prompt instead
-/// of re-summarizing the already-condensed text from scratch.
-const CONTEXT_SUMMARY_PREFIX: &str = "[Context Summary]";
-
 /// Summarizer-input token budget for a single compaction call. The window is
 /// anchored at the oldest compressible message and extended forward until the
 /// serialized (per-message-capped) transcript reaches this many estimated
@@ -112,6 +106,61 @@ const CONTEXT_SUMMARY_PREFIX: &str = "[Context Summary]";
 /// the running summary incrementally across turns via the cache extend-merge in
 /// [`ContextCompactor::reapply_cached`].
 const SUMMARIZER_INPUT_TOKEN_BUDGET: usize = 48_000;
+
+/// Bound on cross-run carry-over slots. Sessions beyond the cap evict the
+/// least-recently-WRITTEN entry (every `carryover_put` moves its key to the
+/// back) — a long-lived interactive session that keeps compacting stays hot
+/// even while daemon/cron fires churn one-shot session keys through the
+/// front. A linear-scan `Vec` is fine at this size.
+const CARRYOVER_MAX_SESSIONS: usize = 16;
+
+/// Cross-run fingerprint-cache carry-over, keyed by session key.
+///
+/// The compactor is constructed fresh per run (`runner_impl`), so without
+/// this slot the fingerprint cache dies at every run boundary and a long
+/// high-pressure conversation re-pays the side-channel summarization call —
+/// with freshly-worded summary text that re-keys the provider prompt cache —
+/// at the start of every run. Same shape as the runner's
+/// `CALIBRATION_CARRYOVER`: process-wide because the bridge is a boot-time
+/// singleton; never persisted to disk; safe because every read is
+/// hash-validated against the rebuilt history before reuse (a stale entry
+/// misses and is purged).
+static COMPACTION_CARRYOVER: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+
+/// Read the carried-over cache entry for `key`, if present. Slot-parametric
+/// so tests can exercise eviction/purge without touching the process-global.
+fn carryover_get(
+    slot: &Mutex<Vec<(String, CompactionCache)>>,
+    key: &str,
+) -> Option<CompactionCache> {
+    let guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, entry)| entry.clone())
+}
+
+/// Store `entry` under `key`. Re-writing an existing key moves it to the
+/// back (LRU-on-write); when the slot is full the least-recently-written
+/// entry at the front is evicted. FIFO-by-first-insertion would evict the
+/// feature's primary beneficiary first: the long-lived session inserted
+/// earliest and updated most often.
+fn carryover_put(slot: &Mutex<Vec<(String, CompactionCache)>>, key: &str, entry: CompactionCache) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(pos) = guard.iter().position(|(k, _)| k == key) {
+        guard.remove(pos);
+    } else if guard.len() >= CARRYOVER_MAX_SESSIONS {
+        guard.remove(0);
+    }
+    guard.push((key.to_string(), entry));
+}
+
+/// Drop the entry for `key` (no-op when absent) — called when a hash
+/// validation fails so the next run does not re-seed a dead entry.
+fn carryover_remove(slot: &Mutex<Vec<(String, CompactionCache)>>, key: &str) {
+    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|(k, _)| k != key);
+}
 
 /// LLM-based context compactor.
 ///
@@ -142,6 +191,22 @@ pub struct ContextCompactor {
     /// preflight passes pruning differently) is a miss that falls through to
     /// a full recompaction.
     cache: Mutex<Option<CompactionCache>>,
+    /// Agent id for scoping cache-watchdog resets (`CacheMonitor` keys its
+    /// consecutive-miss counters per agent; a compaction here must reset only
+    /// THIS agent's streak, not mute every other agent's watchdog). `None`
+    /// (bare `new()`) falls back to the monitor's global reset.
+    monitor_agent: Option<String>,
+    /// Cross-run carry-over key (the session key). The compactor itself is
+    /// constructed fresh per run, which used to discard the fingerprint cache
+    /// at every run boundary — a long high-pressure conversation then paid a
+    /// fresh summarization call at the start of every run, and the re-worded
+    /// summary re-keyed the provider's message-prefix cache (the exact thrash
+    /// the cache exists to prevent). When set, the cache seeds from and
+    /// writes through to a process-wide per-session slot (same shape as the
+    /// runner's `CALIBRATION_CARRYOVER`). Safe by construction: the entry is
+    /// hash-validated against the rebuilt history each turn, so a stale
+    /// carry-over simply misses and falls through to a full recompaction.
+    carryover_key: Option<String>,
 }
 
 impl ContextCompactor {
@@ -153,7 +218,34 @@ impl ContextCompactor {
             summary_reuse: None,
             cheap_provider: None,
             cache: Mutex::new(None),
+            monitor_agent: None,
+            carryover_key: None,
         }
+    }
+
+    /// Scope cache-watchdog compaction resets to `agent_id` (see
+    /// [`CacheMonitor::notify_compaction`]).
+    ///
+    /// [`CacheMonitor::notify_compaction`]: crate::thinker::prompt_builder::cache_monitor::CacheMonitor::notify_compaction
+    pub fn with_monitor_agent(mut self, agent_id: impl Into<String>) -> Self {
+        self.monitor_agent = Some(agent_id.into());
+        self
+    }
+
+    /// Enable cross-run fingerprint-cache carry-over keyed by `session_key`.
+    ///
+    /// Seeds the fingerprint cache from the process-wide per-session slot
+    /// (populated by the previous run's compactions) and write-through-updates
+    /// the slot on every `store_cache`. See the `carryover_key` field docs for
+    /// why this is safe (hash-validated) and what it saves (one summarization
+    /// call + one provider prefix re-key per run boundary).
+    pub fn with_cache_carryover(mut self, session_key: impl Into<String>) -> Self {
+        let key = session_key.into();
+        if let Some(entry) = carryover_get(&COMPACTION_CARRYOVER, &key) {
+            *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
+        }
+        self.carryover_key = Some(key);
+        self
     }
 
     /// Enable the zero-API-cost session-summary reuse path. `backend` holds the
@@ -209,11 +301,19 @@ impl ContextCompactor {
         // A compaction that actually rewrote the message list legitimately
         // breaks the provider prompt cache. Tell the process-wide monitor so
         // its consecutive-miss warning doesn't fire spuriously on the next
-        // few (expectedly cold) calls. Skipped outcomes leave messages
-        // untouched, so the cache expectation stands.
-        if !matches!(result.strategy_used, CompactStrategy::Skipped { .. }) {
+        // few (expectedly cold) calls. Two outcomes leave the provider-visible
+        // prefix byte-identical to the previous turn and must NOT reset the
+        // watchdog: `Skipped` (messages untouched) and `CacheReuse` (the SAME
+        // summary text re-spliced at the same coordinates — the steady state
+        // of a long high-pressure run, where a provider cache miss is exactly
+        // the stable-prefix bug the watchdog exists to catch; resetting on it
+        // would mute the warning for the entire steady state).
+        if !matches!(
+            result.strategy_used,
+            CompactStrategy::Skipped { .. } | CompactStrategy::CacheReuse
+        ) {
             crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                .notify_compaction();
+                .notify_compaction(self.monitor_agent.as_deref());
         }
         Ok(result)
     }
@@ -256,9 +356,11 @@ impl ContextCompactor {
             });
         }
 
-        // Step 2: idempotency check — skip if already compacted and window is small
+        // Step 2: idempotency check — skip if already compacted and window is
+        // small. `is_summary_text` recognises both marker flavours — plain
+        // `[Context Summary]` and the reuse path's `(from session memory)`.
         if let Some(first_text) = first_message_text(&messages[0]) {
-            if first_text.starts_with(CONTEXT_SUMMARY_PREFIX) && cut_end <= 2 {
+            if is_summary_text(first_text) && cut_end <= 2 {
                 return Ok(CompactResult {
                     tokens_before: 0,
                     tokens_after: 0,
@@ -322,8 +424,12 @@ impl ContextCompactor {
             }
             // Stale fingerprint (prefix changed under a preflight pass, or the
             // window shrank): drop the entry and fall through to a full
-            // recompaction, which refreshes the cache.
+            // recompaction, which refreshes the cache. Purge the carry-over
+            // slot too so the next run does not re-seed the same dead entry.
             *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if let Some(key) = self.carryover_key.as_deref() {
+                carryover_remove(&COMPACTION_CARRYOVER, key);
+            }
         }
 
         // Fingerprint of the window in rebuilt coordinates, captured before
@@ -347,7 +453,13 @@ impl ContextCompactor {
             );
             if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
                 if let Some(text) = first_message_text(&messages[window_start]) {
-                    self.store_cache(window_start, cut_end, window_hash, text.to_string());
+                    // The cache cover must be the hashed+drained range
+                    // [window_start, window_end) — `cut_end` can exceed
+                    // `window_end` when `select_window_end` clipped (the
+                    // long-history case), and mismatched coordinates would
+                    // make next turn's validation hash a different range and
+                    // miss on every rebuild.
+                    self.store_cache(window_start, window_end, window_hash, text.to_string());
                 }
                 // Re-attach ABOVE the summary `try_reuse` just inserted — after
                 // `store_cache` has read it, since that read addresses the
@@ -445,9 +557,23 @@ impl ContextCompactor {
                 })
             }
             None => {
-                // LLM failed or produced no usable summary — try fallback
+                // LLM failed or produced no usable summary — try fallback.
+                // A prior running summary in the window must ride forward
+                // verbatim: first-line truncation would collapse it to its
+                // bare marker line, gutting the running summary (and the
+                // cache entry stored below would replay the loss on every
+                // rebuild). Only the raw turns after it are truncated —
+                // everything before it is a verbatim copy of turns the
+                // summary already covers.
                 if self.config.fallback_to_truncation {
-                    let truncated = deterministic_truncation(window);
+                    let truncated = match prior_summary {
+                        Some((idx, prior)) if idx + 1 < window_end => format!(
+                            "{prior}\n{}",
+                            deterministic_truncation(&messages[idx + 1..window_end])
+                        ),
+                        Some((_, prior)) => prior.to_string(),
+                        None => deterministic_truncation(window),
+                    };
                     let tokens_after = estimate_tokens(&truncated);
                     let summary_text = format!("[Context Summary]\n{truncated}");
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
@@ -476,12 +602,18 @@ impl ContextCompactor {
     /// Store a fresh cache entry covering `[start, end)` of the rebuilt
     /// message list. `summary` is the full `[Context Summary]…` text.
     fn store_cache(&self, start: usize, end: usize, hash: u64, summary: String) {
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(CompactionCache {
+        let entry = CompactionCache {
             start,
             end,
             hash,
             summary,
-        });
+        };
+        // Write through to the cross-run carry-over slot so the next run on
+        // this session seeds from it instead of recompacting from scratch.
+        if let Some(key) = self.carryover_key.as_deref() {
+            carryover_put(&COMPACTION_CARRYOVER, key, entry.clone());
+        }
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry);
     }
 
     /// Reapply a validated cache entry to the rebuilt message list, extending
@@ -592,10 +724,21 @@ impl ContextCompactor {
         };
         let (body, strategy) = match merged {
             Some(s) => (s, CompactStrategy::LlmSummary),
-            None if self.config.fallback_to_truncation => (
-                deterministic_truncation(merge_window),
-                CompactStrategy::DeterministicTruncation,
-            ),
+            None if self.config.fallback_to_truncation => {
+                // Carry the running summary forward verbatim — first-line
+                // truncating the merge window (which INCLUDES the reapplied
+                // summary message) would collapse it to its bare marker line
+                // and cache the gutted result under `extended_hash`, replaying
+                // the loss on every future rebuild. Only the raw gap behind
+                // the summary is truncated; the preserved user turns ahead of
+                // it are re-attached below anyway.
+                let prior = strip_context_summary_prefix(&c.summary).unwrap_or(&c.summary);
+                let gap = deterministic_truncation(&messages[summary_idx + 1..cut_end_m]);
+                (
+                    format!("{prior}\n{gap}"),
+                    CompactStrategy::DeterministicTruncation,
+                )
+            }
             None => {
                 // Merge failed and truncation is disabled: keep the reapplied
                 // summary + raw gap. The cache stays on its old (still valid)
@@ -785,13 +928,23 @@ fn first_message_text(msg: &UnifiedMessage) -> Option<&str> {
     msg.content_blocks().first().and_then(|b| b.as_text())
 }
 
-/// If `text` is a prior `[Context Summary]…`, return its body (the summary
-/// without the marker prefix and any leading newline); `None` for raw turns.
-/// `CONTEXT_SUMMARY_PREFIX` is ASCII, so the byte slice lands on a UTF-8
-/// boundary.
+/// If `text` opens with a compaction-summary marker line — `[Context Summary]`
+/// (LLM / truncation paths) or `[Context Summary (from session memory)]` (the
+/// reuse path) — return the body after that line; `None` for raw turns. A
+/// window carrying one holds a *prior* summary being folded into a wider one,
+/// which routes summarization to the incremental "update" prompt instead of
+/// re-summarizing the already-condensed text from scratch. Both markers share
+/// the `[Context Summary` head recognised by [`is_summary_text`]; requiring
+/// the marker line to close with `]` keeps a raw turn that merely opens with
+/// those words from matching. `'\n'` is ASCII, so the byte split lands on a
+/// UTF-8 boundary.
 fn strip_context_summary_prefix(text: &str) -> Option<&str> {
-    text.strip_prefix(CONTEXT_SUMMARY_PREFIX)
-        .map(|rest| rest.trim_start_matches('\n'))
+    let line_end = text.find('\n').unwrap_or(text.len());
+    let marker = &text[..line_end];
+    if !is_summary_text(marker) || !marker.trim_end().ends_with(']') {
+        return None;
+    }
+    Some(text[line_end..].trim_start_matches('\n'))
 }
 
 /// Per-message character cap applied to the summarizer transcript.
@@ -1004,6 +1157,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn carryover_seeds_fresh_compactor_across_runs() {
+        // The compactor is constructed fresh per run; the carry-over slot must
+        // hand the fingerprint cache across that boundary so run 2 reuses the
+        // summary with zero LLM calls (and byte-identical summary text — the
+        // provider prompt cache survives the run boundary).
+        let key = "carryover-test-run-boundary";
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let base = make_messages(12);
+
+        // Run 1: full LLM compaction, write-through to the slot.
+        let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn1 = base.clone();
+        c1.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(provider.call_count(), 1);
+
+        // Run 2: NEW compactor instance (run boundary) — seeds from the slot.
+        let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn2 = base.clone();
+        turn2.push(UnifiedMessage::assistant("new assistant turn"));
+        turn2.push(UnifiedMessage::user("new user turn"));
+        let r2 = c2.compact(&mut turn2, 6, None).await.unwrap();
+        assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "run-2 reuse must not pay a second summarization call"
+        );
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[tokio::test]
+    async fn carryover_stale_entry_misses_and_recompacts() {
+        // A history rewritten between runs (post-turn compression, splits)
+        // must hash-miss the carried entry and fall through to a full
+        // recompaction — the carry-over can never replay a summary over
+        // history it does not cover.
+        let key = "carryover-test-stale-purge";
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut turn1 = make_messages(12);
+        c1.compact(&mut turn1, 6, None).await.unwrap();
+        assert!(carryover_get(&COMPACTION_CARRYOVER, key).is_some());
+
+        let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
+            .with_cache_carryover(key);
+        let mut rewritten = make_messages(12);
+        rewritten[2] = UnifiedMessage::assistant("history rewritten between runs");
+        let r2 = c2.compact(&mut rewritten, 6, None).await.unwrap();
+        assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "stale carry-over must recompact, not replay"
+        );
+        carryover_remove(&COMPACTION_CARRYOVER, key);
+    }
+
+    #[test]
+    fn carryover_slot_bounded_updatable_and_removable() {
+        let slot: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+        let entry = |h: u64| CompactionCache {
+            start: 0,
+            end: 2,
+            hash: h,
+            summary: "s".into(),
+        };
+        for i in 0..(CARRYOVER_MAX_SESSIONS + 3) {
+            carryover_put(&slot, &format!("k{i}"), entry(i as u64));
+        }
+        assert!(slot.lock().unwrap().len() <= CARRYOVER_MAX_SESSIONS);
+        assert!(
+            carryover_get(&slot, "k0").is_none(),
+            "least-recently-written entry evicted at cap"
+        );
+        carryover_put(&slot, "k5", entry(999));
+        assert_eq!(carryover_get(&slot, "k5").expect("updated entry").hash, 999);
+        carryover_remove(&slot, "k5");
+        assert!(carryover_get(&slot, "k5").is_none());
+    }
+
+    #[test]
+    fn carryover_rewrite_refreshes_recency_against_eviction() {
+        // LRU-on-write: a hot session that keeps compacting must survive a
+        // churn of one-shot daemon/cron session keys — FIFO-by-first-insert
+        // would evict the feature's primary beneficiary first.
+        let slot: Mutex<Vec<(String, CompactionCache)>> = Mutex::new(Vec::new());
+        let entry = |h: u64| CompactionCache {
+            start: 0,
+            end: 2,
+            hash: h,
+            summary: "s".into(),
+        };
+        carryover_put(&slot, "hot-session", entry(1));
+        // Fill the slot with cold one-shots, re-writing the hot key mid-churn.
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-{i}"), entry(10 + i as u64));
+        }
+        carryover_put(&slot, "hot-session", entry(2)); // refreshes recency
+        for i in 0..(CARRYOVER_MAX_SESSIONS - 1) {
+            carryover_put(&slot, &format!("cron-late-{i}"), entry(100 + i as u64));
+        }
+        assert_eq!(
+            carryover_get(&slot, "hot-session")
+                .expect("hot key survives")
+                .hash,
+            2,
+            "re-written key must outlive older one-shot entries"
+        );
+    }
+
+    #[tokio::test]
     async fn head_anchored_window_compresses_oldest_first() {
         // A long conversation: the compaction window must anchor at the OLDEST
         // message (shed the prefix that bloats every turn), not a fixed slice
@@ -1082,6 +1353,100 @@ mod tests {
         assert_eq!(messages.len(), 10);
 
         assert!(summary_text(&messages).starts_with("[Context Summary]"));
+    }
+
+    #[tokio::test]
+    async fn truncation_fallback_carries_a_prior_summary_body_forward() {
+        // CTX-02 regression: when the LLM call fails over a window that
+        // carries a prior running summary (e.g. a persisted child-session
+        // seed), deterministic truncation used to keep only the FIRST LINE of
+        // each message — collapsing the summary to its bare marker line and
+        // gutting the running state. The prior body must ride forward
+        // verbatim; only the raw turns after it are truncated.
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let mut messages = vec![UnifiedMessage::user(
+            "[Context Summary]\n## Primary Request\nORIGINAL_GOAL_MARKER\n## Pending\nstep two",
+        )];
+        for i in 0..13 {
+            messages.push(UnifiedMessage::assistant(format!("turn {i}")));
+        }
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation
+        );
+
+        let summary = summary_text(&messages);
+        assert!(
+            summary.contains("ORIGINAL_GOAL_MARKER") && summary.contains("step two"),
+            "prior summary body must survive the truncation fallback verbatim; got:\n{summary}"
+        );
+        // The stored cache entry is what every future rebuild reapplies — it
+        // must carry the full body too, not the gutted marker line.
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("fallback compaction stores a cache entry");
+        assert!(
+            cached.summary.contains("ORIGINAL_GOAL_MARKER"),
+            "cache must not retain a gutted summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_extend_merge_failure_keeps_the_running_summary_body() {
+        // CTX-02 regression (reapply path): when the extension merge fails,
+        // the truncation fallback used to first-line the merge window — which
+        // INCLUDES the reapplied summary message — collapsing the running
+        // summary to "[Context Summary]" and caching the gutted result under
+        // the extended hash, so every future rebuild reapplied the loss.
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        // Hand-craft a valid cache entry over the first 8 messages, carrying a
+        // distinctive multi-line running summary body. The 16-message gap up
+        // to the fresh tail exceeds CACHE_EXTEND_MIN_MESSAGES, forcing the
+        // extension merge (which the provider then fails).
+        let mut messages = make_messages(30);
+        let hash = hash_window(&messages[0..8]);
+        compactor.store_cache(
+            0,
+            8,
+            hash,
+            "[Context Summary]\n## Primary Request\nRUNNING_BODY_MARKER\n## Pending\nstep two"
+                .to_string(),
+        );
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation
+        );
+
+        // The full body survives in the message list…
+        let summary = summary_text(&messages);
+        assert!(
+            summary.contains("RUNNING_BODY_MARKER") && summary.contains("step two"),
+            "merge-failure fallback must not gut the running summary; got:\n{summary}"
+        );
+        // …and in the refreshed cache entry (reapplied on every rebuild).
+        let cached = compactor
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("extension fallback refreshes the cache");
+        assert!(
+            cached.summary.contains("RUNNING_BODY_MARKER"),
+            "extended cache must not retain a gutted summary"
+        );
     }
 
     #[tokio::test]
@@ -1455,6 +1820,116 @@ mod tests {
 
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 2, "stale fingerprint must recompact");
+    }
+
+    #[tokio::test]
+    async fn reuse_path_cache_survives_a_clipped_window() {
+        // CTX-06 regression: the reuse path stored its cache entry as
+        // [window_start, cut_end) while the fingerprint was hashed over
+        // [window_start, window_end). Whenever `select_window_end` clipped the
+        // window (window_end < cut_end — the long-history case), the next
+        // turn's validation hashed a different range, missed every time, and
+        // recompacted via session memory on every single turn.
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let backend: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new(
+            "Earlier turns: set up the project and ran the tests.".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-x")
+        .with_session("sess-1")
+        .with_path("aleph://session/sess-1/d0/0");
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        let provider = Arc::new(CapturingProvider::new("unused"));
+        let config = CompactorConfig {
+            // Force window_end (8) < cut_end (10): the clipped case.
+            max_window: 8,
+            ..CompactorConfig::default()
+        };
+        let compactor =
+            ContextCompactor::new(provider.clone(), config).with_summary_reuse(backend, "agent-x");
+
+        let base = make_messages(16);
+        let mut turn1 = base.clone();
+        let r1 = compactor
+            .compact(&mut turn1, 6, Some("sess-1"))
+            .await
+            .unwrap();
+        assert_eq!(r1.strategy_used, CompactStrategy::SessionMemoryReuse);
+
+        // Turn 2: the harness rebuilds the same history — the cached summary
+        // must reapply via the zero-cost fast path, not recompact.
+        let mut turn2 = base.clone();
+        let r2 = compactor
+            .compact(&mut turn2, 6, Some("sess-1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            r2.strategy_used,
+            CompactStrategy::CacheReuse,
+            "clipped-window reuse cache must hit on the rebuilt prompt"
+        );
+        assert_eq!(provider.call_count(), 0, "neither turn may call the LLM");
+    }
+
+    #[tokio::test]
+    async fn session_memory_summary_routes_to_the_update_prompt() {
+        // CTX-06 regression: the reuse path's marker is
+        // "[Context Summary (from session memory)]", which the exact-prefix
+        // strip used to miss — the already-condensed reuse summary was then
+        // re-summarized from scratch (paraphrase decay) instead of folded via
+        // the incremental update prompt.
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nrevised\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        let mut messages = vec![UnifiedMessage::user(
+            "[Context Summary (from session memory)]\nearlier condensed work",
+        )];
+        for i in 0..13 {
+            messages.push(UnifiedMessage::assistant(format!("turn {i}")));
+        }
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
+
+        let prompt = provider.prompt();
+        assert!(
+            prompt.contains("UPDATING an existing running summary"),
+            "session-memory summary must route to the update prompt; got:\n{prompt}"
+        );
+        // Marker line stripped; body fenced as the authoritative prior state.
+        assert!(prompt.contains("<current_summary>\nearlier condensed work\n</current_summary>"));
+    }
+
+    #[tokio::test]
+    async fn idempotency_recognizes_the_session_memory_marker() {
+        // CTX-06 regression: the Step-2 idempotency check matched only the
+        // exact "[Context Summary]" prefix, so a small window opening with the
+        // session-memory flavour was needlessly re-compacted.
+        let provider = Arc::new(MockProvider::new("ignored"));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        let mut messages = vec![
+            UnifiedMessage::user("[Context Summary (from session memory)]\nPrevious work."),
+            UnifiedMessage::assistant("Continuing from summary."),
+        ];
+        for i in 0..6 {
+            messages.push(UnifiedMessage::user(format!("Fresh message {}", i)));
+        }
+        let original_len = messages.len();
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+
+        assert!(matches!(
+            result.strategy_used,
+            CompactStrategy::Skipped { reason } if reason.contains("already compacted")
+        ));
+        assert_eq!(messages.len(), original_len);
     }
 
     #[test]

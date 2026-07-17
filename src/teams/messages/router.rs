@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::store::MessageStore;
 use super::types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
 use crate::error::Result;
-use crate::event::{AlephEvent, EventBus, TeamMessageEvent};
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
+use crate::teams::TeamStore;
 
 // ---------------------------------------------------------------------------
 // EscalationRule
@@ -64,10 +64,17 @@ pub struct MessageRouter {
     msg_store: Arc<dyn MessageStore>,
     event_store: Arc<dyn EventLogStore>,
     escalation_rules: EscalationRule,
-    /// Team leader agent ID for escalation notifications.
+    /// Construction-time leader override for escalation notifications. The
+    /// production router is a GLOBAL singleton while leaders are per-team, so
+    /// production passes `None` and resolves the leader per message via
+    /// [`Self::with_team_store`]; a fixed id is only meaningful for
+    /// single-team callers (tests).
     leader_id: Option<String>,
-    /// Optional event bus for publishing team events.
-    bus: Option<EventBus>,
+    /// Per-message leader resolution: `get_team(team_id).leader_id`. Without
+    /// this (and with `leader_id: None`) escalation never fires — which is
+    /// exactly what shipped for a while: the whole thread-escalation feature
+    /// was dead because the one production construction had neither.
+    team_store: Option<Arc<dyn TeamStore>>,
 }
 
 impl MessageRouter {
@@ -82,15 +89,34 @@ impl MessageRouter {
             event_store,
             escalation_rules,
             leader_id,
-            bus: None,
+            team_store: None,
         }
     }
 
-    /// Attach an event bus for publishing team events.
+    /// Attach a team store so escalation can resolve each message's team
+    /// leader at send time (the router is team-agnostic; leaders are not).
     #[must_use]
-    pub fn with_bus(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
+    pub fn with_team_store(mut self, team_store: Arc<dyn TeamStore>) -> Self {
+        self.team_store = Some(team_store);
         self
+    }
+
+    /// The escalation recipient for `team_id`: the construction-time override
+    /// if set, else the live team's leader. `None` (no override, no store, or
+    /// unknown team) disables escalation for this message.
+    async fn resolve_leader(&self, team_id: &str) -> Option<String> {
+        if let Some(leader) = &self.leader_id {
+            return Some(leader.clone());
+        }
+        let store = self.team_store.as_ref()?;
+        match store.get_team(team_id).await {
+            Ok(team) => team.map(|t| t.leader_id),
+            Err(e) => {
+                tracing::debug!(team_id = %team_id, error = %e,
+                    "team router: leader lookup failed; skipping escalation check");
+                None
+            }
+        }
     }
 
     /// Send a message, log the event, and check escalation rules.
@@ -128,42 +154,34 @@ impl MessageRouter {
 
         let msg = self.msg_store.send_message(new_msg).await?;
 
-        // 3. Publish event via EventBus if available, else fall back to direct logging
-        let to_agents: Vec<String> = msg.recipients.iter().map(|r| r.agent_id.clone()).collect();
-
-        if let Some(ref bus) = self.bus {
-            bus.publish(AlephEvent::TeamMessageSent(TeamMessageEvent {
+        // 3. Log the send into the team event log. (An `EventBus` publish
+        // branch used to sit here behind a `with_bus` builder nobody ever
+        // called — the direct log below was always the live path; the dead
+        // half and its `TeamMessageSent` global-event chain were removed.)
+        if let Err(e) = self
+            .event_store
+            .log_event(NewTeamEvent {
                 team_id: team_id.clone(),
-                message_id: msg.id.clone(),
-                from_agent: from_agent.clone(),
-                to_agents,
-                subject: msg.subject.clone(),
-                timestamp: msg.created_at.timestamp_millis(),
-            }))
-            .await;
-        } else {
-            let _ = self
-                .event_store
-                .log_event(NewTeamEvent {
-                    team_id: team_id.clone(),
-                    event_type: TeamEventType::MessageSent,
-                    agent_id: from_agent.clone(),
-                    payload: serde_json::json!({
-                        "message_id": msg.id,
-                        "subject": msg.subject,
-                    }),
-                })
-                .await;
+                event_type: TeamEventType::MessageSent,
+                agent_id: from_agent.clone(),
+                payload: serde_json::json!({
+                    "message_id": msg.id,
+                    "subject": msg.subject,
+                }),
+            })
+            .await
+        {
+            tracing::warn!(team_id = %team_id, error = %e,
+                "team router: failed to log message-sent event");
         }
 
-        // 4. Check escalation rules
-        if self.escalation_rules.enabled {
-            if let Some(ref leader) = self.leader_id {
-                if reply_to.is_some() {
-                    if let Some(ref thread_id) = msg.thread_id {
-                        self.maybe_escalate(&team_id, thread_id, leader, &from_agent)
-                            .await;
-                    }
+        // 4. Check escalation rules (leader resolved per message — the router
+        // is a global singleton, leaders are per-team).
+        if self.escalation_rules.enabled && reply_to.is_some() {
+            if let Some(ref thread_id) = msg.thread_id {
+                if let Some(leader) = self.resolve_leader(&team_id).await {
+                    self.maybe_escalate(&team_id, thread_id, &leader, &from_agent)
+                        .await;
                 }
             }
         }
@@ -397,6 +415,55 @@ mod tests {
             .unwrap();
         // Still just 1 notification (the first one, if unread)
         assert_eq!(inbox2.len(), 1);
+    }
+
+    /// The production wiring: no construction-time leader (the router is a
+    /// global singleton), leader resolved per message from the team store.
+    #[tokio::test]
+    async fn escalation_resolves_leader_from_team_store() {
+        let (msg_store, event_store) = make_stores().await;
+        let teams_conn = rusqlite::Connection::open_in_memory().expect("open teams");
+        let team_store = Arc::new(crate::teams::SqliteTeamStore::new(teams_conn));
+        team_store.migrate().await.expect("teams migrate");
+        let team = team_store
+            .create_team(crate::teams::types::NewTeam {
+                name: "Alpha".into(),
+                description: "".into(),
+                leader_id: "store-leader".into(),
+            })
+            .await
+            .unwrap();
+
+        let rules = EscalationRule {
+            thread_message_threshold: 2,
+            enabled: true,
+        };
+        let router = MessageRouter::new(msg_store.clone(), event_store.clone(), rules, None)
+            .with_team_store(team_store.clone() as Arc<dyn TeamStore>);
+
+        let msg1 = router
+            .send(simple_request(&team.id, "agent-a", vec!["agent-b"]))
+            .await
+            .unwrap();
+        let req2 = SendRequest {
+            reply_to: Some(msg1.id.clone()),
+            ..simple_request(&team.id, "agent-b", vec!["agent-a"])
+        };
+        router.send(req2).await.unwrap();
+
+        let inbox = msg_store
+            .read_inbox(
+                "store-leader",
+                &team.id,
+                Some(&MessageType::SystemNotification),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox.len(),
+            1,
+            "escalation must reach the store-resolved leader"
+        );
     }
 
     #[tokio::test]

@@ -74,6 +74,10 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "config_audit",
     "get_tool_schema",
     "list_models",
+    // Progressive-disclosure meta-tool (reads the catalog, promotes a deferred
+    // tool). NB: `list_tools` / `search_tools` were ghost names matching no
+    // registered tool; the live one is `tool_search`.
+    "tool_search",
     "read_config_guide",
     "node_list",
     // Search / retrieval (no mutation).
@@ -620,6 +624,8 @@ mod tests {
             // `concurrency_claim` and must never sit on the static read-only
             // list (their write arm would ride the `Shared` claim AND the
             // idempotency consolidation would exempt them from the Ask tier).
+            // `doctor` with `fix=true` rebuilds the data dir / clears stale
+            // locks — a filesystem mutation, never a freely-parallel read.
             "doctor",
             "note_schema",
             "session_send",
@@ -652,6 +658,9 @@ mod tests {
             "note_graph_query",
             "mcp_read_resource",
             "mcp_get_prompt",
+            // The live progressive-disclosure meta-tool (formerly the ghost
+            // names `list_tools` / `search_tools`).
+            "tool_search",
         ];
         for tool in read_tools {
             assert!(

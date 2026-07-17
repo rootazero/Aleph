@@ -9,6 +9,8 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     // Runtime registry used to reject a bind to a non-existent agent, matching
     // the `agent_switch` tool. `None` on a minimal server → bind stays unchecked.
     agent_registry: Option<&Arc<AgentRegistry>>,
+    // Event bus for Bound/Unbound lifecycle events (Panel cross-surface sync).
+    event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
@@ -47,14 +49,21 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     {
         let workspace_manager = Arc::clone(workspace_manager);
         let agent_registry = agent_registry.cloned();
+        let event_bus = Arc::clone(event_bus);
         server
             .handlers_mut()
             .register("channels.set_agent", move |req| {
                 let workspace_manager = Arc::clone(&workspace_manager);
                 let agent_registry = agent_registry.clone();
+                let event_bus = Arc::clone(&event_bus);
                 async move {
-                    workspace_handlers::handle_set_agent(req, workspace_manager, agent_registry)
-                        .await
+                    workspace_handlers::handle_set_agent(
+                        req,
+                        workspace_manager,
+                        agent_registry,
+                        Some(event_bus),
+                    )
+                    .await
                 }
             });
     }

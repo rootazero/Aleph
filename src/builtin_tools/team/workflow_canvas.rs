@@ -86,31 +86,20 @@ impl TeamWorkflowCanvasTool {
     /// Parse the optional status filter. `None` input means "no filter".
     /// An unrecognised string is an error — silently returning `None` would
     /// drop the filter and export the entire DAG, the opposite of what the
-    /// caller asked for.
+    /// caller asked for. Vocabulary lives in the single-source
+    /// [`CoordTaskStatus::from_filter_str`].
     fn parse_status(s: Option<&str>) -> Result<Option<CoordTaskStatus>> {
         let Some(raw) = s else {
             return Ok(None);
         };
-        let status = match raw {
-            "pending" => CoordTaskStatus::Pending,
-            "blocked" => CoordTaskStatus::Blocked,
-            "in_progress" => CoordTaskStatus::InProgress,
-            "waiting_review" => CoordTaskStatus::WaitingReview,
-            "completed" => CoordTaskStatus::Completed,
-            "failed" => CoordTaskStatus::Failed,
-            "cancelled" => CoordTaskStatus::Cancelled,
-            "skipped" => CoordTaskStatus::Skipped,
-            "paused" => CoordTaskStatus::Paused,
-            "unsatisfiable" => CoordTaskStatus::Unsatisfiable,
-            other => {
-                return Err(AlephError::other(format!(
-                    "Invalid status filter '{other}'. Expected one of: pending, blocked, \
-                     in_progress, waiting_review, completed, failed, cancelled, skipped, \
-                     paused, unsatisfiable."
-                )));
-            }
-        };
-        Ok(Some(status))
+        match CoordTaskStatus::from_filter_str(raw) {
+            Some(status) => Ok(Some(status)),
+            None => Err(AlephError::other(format!(
+                "Invalid status filter '{raw}'. Expected one of: pending, blocked, \
+                 in_progress, waiting_review, completed, failed, cancelled, skipped, \
+                 paused, unsatisfiable."
+            ))),
+        }
     }
 }
 

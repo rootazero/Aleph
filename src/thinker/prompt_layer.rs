@@ -2,7 +2,6 @@
 
 use super::context::ResolvedContext;
 use super::identity_files::IdentityFiles;
-use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use crate::agents::AgentDef;
@@ -75,12 +74,8 @@ pub struct LayerInput<'a> {
     pub config: &'a PromptConfig,
     pub tools: Option<&'a [ToolInfo]>,
     pub context: Option<&'a ResolvedContext>,
-    /// Active workspace profile (`system_prompt` overlay, tool whitelist, etc.)
-    pub profile: Option<&'a crate::config::ProfileConfig>,
     /// Prompt mode for this assembly (default: Full)
     pub mode: PromptMode,
-    /// Per-request inbound context (sender, channel, session metadata)
-    pub inbound: Option<&'a InboundContext>,
     /// Loaded agent identity files (SOUL.md, IDENTITY.md, AGENTS.md,
     /// TOOLS.md, HEARTBEAT.md) from `~/.aleph/agents/{agent_id}/`.
     /// MEMORY.md is owned by the curated memory module and flows in via
@@ -146,9 +141,7 @@ impl<'a> LayerInput<'a> {
             config,
             tools: Some(tools),
             context: None,
-            profile: None,
             mode: PromptMode::Full,
-            inbound: None,
             identity_files: None,
             has_session_summaries: false,
             agent_def: None,
@@ -169,9 +162,7 @@ impl<'a> LayerInput<'a> {
             config,
             tools: None,
             context: Some(ctx),
-            profile: None,
             mode: PromptMode::Full,
-            inbound: None,
             identity_files: None,
             has_session_summaries: false,
             agent_def: None,
@@ -185,13 +176,6 @@ impl<'a> LayerInput<'a> {
         }
     }
 
-    /// Attach workspace profile to this input.
-    #[must_use]
-    pub const fn with_profile(mut self, profile: Option<&'a crate::config::ProfileConfig>) -> Self {
-        self.profile = profile;
-        self
-    }
-
     /// Set the prompt mode for this assembly.
     #[must_use]
     pub const fn with_mode(mut self, mode: PromptMode) -> Self {
@@ -199,24 +183,10 @@ impl<'a> LayerInput<'a> {
         self
     }
 
-    /// Attach inbound context to this input.
-    #[must_use]
-    pub const fn with_inbound(mut self, inbound: &'a InboundContext) -> Self {
-        self.inbound = Some(inbound);
-        self
-    }
-
     /// Attach agent identity files to this input.
     #[must_use]
     pub const fn with_identity_files(mut self, files: &'a IdentityFiles) -> Self {
         self.identity_files = Some(files);
-        self
-    }
-
-    /// Attach optional inbound context to this input.
-    #[must_use]
-    pub const fn with_inbound_opt(mut self, inbound: Option<&'a InboundContext>) -> Self {
-        self.inbound = inbound;
         self
     }
 
@@ -382,10 +352,9 @@ pub trait PromptLayer: Send + Sync {
 }
 
 #[cfg(test)]
-mod identity_inbound_tests {
+mod layer_input_tests {
     use super::*;
     use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
-    use crate::thinker::inbound_context::{InboundContext, SenderInfo};
     use crate::thinker::prompt_builder::PromptConfig;
 
     fn make_config() -> PromptConfig {
@@ -411,45 +380,19 @@ mod identity_inbound_tests {
     }
 
     #[test]
-    fn layer_input_inbound_access() {
-        let config = make_config();
-        let inbound = InboundContext {
-            sender: SenderInfo {
-                id: "u42".to_string(),
-                display_name: Some("Alice".to_string()),
-                is_owner: true,
-            },
-            ..Default::default()
-        };
-
-        let input = LayerInput::basic(&config, &[]).with_inbound(&inbound);
-        assert!(input.inbound.is_some());
-        let ctx = input.inbound.unwrap();
-        assert_eq!(ctx.sender.id, "u42");
-        assert!(ctx.sender.is_owner);
-    }
-
-    #[test]
-    fn with_opt_methods_work() {
+    fn with_identity_files_opt_works() {
         let config = make_config();
         let files = IdentityFiles {
             identity_dir: std::path::PathBuf::from("/tmp"),
             files: vec![],
         };
-        let inbound = InboundContext::default();
 
         // None variant
-        let input = LayerInput::basic(&config, &[])
-            .with_identity_files_opt(None)
-            .with_inbound_opt(None);
+        let input = LayerInput::basic(&config, &[]).with_identity_files_opt(None);
         assert!(input.identity_files.is_none());
-        assert!(input.inbound.is_none());
 
         // Some variant
-        let input = LayerInput::basic(&config, &[])
-            .with_identity_files_opt(Some(&files))
-            .with_inbound_opt(Some(&inbound));
+        let input = LayerInput::basic(&config, &[]).with_identity_files_opt(Some(&files));
         assert!(input.identity_files.is_some());
-        assert!(input.inbound.is_some());
     }
 }

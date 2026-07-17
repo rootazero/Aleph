@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::{AlephError, Result as AlephResult};
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;

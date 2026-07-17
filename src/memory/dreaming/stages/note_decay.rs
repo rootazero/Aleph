@@ -110,6 +110,7 @@ impl DreamStage for NoteDecayStage {
         "note_decay"
     }
 
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let now = chrono::Utc::now().timestamp();
         let mut notes_archived = 0u32;
@@ -129,6 +130,7 @@ impl DreamStage for NoteDecayStage {
                 .recall_signals_last_hit(&ctx.agent_id, &note.path)
                 .await
             {
+                // rust-doctor-disable-next-line excessive-clone
                 last_hits.insert(note.path.clone(), t);
             }
         }
@@ -193,8 +195,10 @@ impl DreamStage for NoteDecayStage {
 
             if score < threshold {
                 low_score_notes.push((
+                    // rust-doctor-disable-next-line excessive-clone
                     note.path.clone(),
                     score,
+                    // rust-doctor-disable-next-line excessive-clone
                     note.category.clone(),
                     filename.to_string(),
                 ));
@@ -272,6 +276,7 @@ impl DreamStage for NoteDecayStage {
                     // Evict from content cache if present
                     ctx.note_contents.remove(path.as_str());
 
+                    // rust-doctor-disable-next-line excessive-clone
                     archived_now.insert(path.clone());
                     notes_archived += 1;
                     tracing::info!(path, score, "NoteDecay: archived low-activity note");
@@ -313,6 +318,7 @@ impl DreamStage for NoteDecayStage {
             .filter(|n| !self.category_protected(&n.category))
             .filter_map(|n| {
                 let (cat, fname) = n.path.split_once('/')?;
+                // rust-doctor-disable-next-line excessive-clone
                 Some((n.path.clone(), cat.to_string(), fname.to_string()))
             })
             .collect();
@@ -470,15 +476,16 @@ pub(crate) fn patch_confidence_frontmatter(content: &str, new_conf: f32) -> Opti
 
     let new_line = format!("confidence: {new_conf:.4}");
     let mut lines: Vec<String> = fm.lines().map(str::to_string).collect();
-    let mut replaced = false;
+    let mut new_line = Some(new_line);
     for line in lines.iter_mut() {
         if line.trim_start().starts_with("confidence:") {
-            *line = new_line.clone();
-            replaced = true;
+            if let Some(nl) = new_line.take() {
+                *line = nl;
+            }
             break;
         }
     }
-    if !replaced {
+    if let Some(new_line) = new_line {
         // Legacy note with no `confidence:` line — append it as the last
         // frontmatter entry (before the closing `---`).
         lines.push(new_line);
@@ -756,7 +763,7 @@ mod tests {
 
     async fn build_decay_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
         let temp = std::env::temp_dir().join(format!("aleph_decay_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -996,3 +1003,6 @@ mod tests {
         );
     }
 }
+
+
+

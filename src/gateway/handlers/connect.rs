@@ -49,8 +49,12 @@ pub struct ConnectContext {
 /// exchanged for a new device token, or the legacy shared Gateway token.
 #[derive(Debug, Clone)]
 pub enum ConnectAuthOutcome {
-    /// Authorized as operator.
-    Authorized,
+    /// Authorized as operator. `device_id` carries the paired device's id when
+    /// authorization came from a valid device token, so the session can be
+    /// attributed in presence and the device's `last_seen_at` refreshed. It is
+    /// `None` for loopback and the legacy shared-token path, which are not bound
+    /// to a specific paired device.
+    Authorized { device_id: Option<String> },
     /// Unauthorized — login wall.
     Unauthorized,
     /// Bootstrap ticket accepted and a new device token was issued.
@@ -81,14 +85,18 @@ pub fn resolve_connect_auth(
     device_token_mgr: &DeviceTokenManager,
 ) -> ConnectAuthOutcome {
     if is_loopback {
-        return ConnectAuthOutcome::Authorized;
+        return ConnectAuthOutcome::Authorized { device_id: None };
     }
 
     // 1. Device token.
     if let Some(token) = device_token {
         if !token.is_empty() {
             match device_token_mgr.validate_device_token(token) {
-                Ok(Some(_row)) => return ConnectAuthOutcome::Authorized,
+                Ok(Some(row)) => {
+                    return ConnectAuthOutcome::Authorized {
+                        device_id: Some(row.device_id),
+                    }
+                }
                 Ok(None) => {}
                 Err(e) => {
                     tracing::debug!("device token validation failed: {}", e);
@@ -125,7 +133,7 @@ pub fn resolve_connect_auth(
     // 3. Legacy shared token.
     if let Some(token) = shared_token {
         if !token.is_empty() && validate_shared_token(token) {
-            return ConnectAuthOutcome::Authorized;
+            return ConnectAuthOutcome::Authorized { device_id: None };
         }
     }
 
@@ -201,13 +209,14 @@ mod tests {
     #[test]
     fn loopback_is_always_authorized() {
         let mgr = mgr();
+        // Loopback is authorized but not device-bound: device_id stays None.
         assert!(matches!(
             resolve_connect_auth(true, None, None, None, None, None, |_| false, &mgr),
-            ConnectAuthOutcome::Authorized
+            ConnectAuthOutcome::Authorized { device_id: None }
         ));
         assert!(matches!(
             resolve_connect_auth(true, Some(""), None, None, None, None, |_| false, &mgr),
-            ConnectAuthOutcome::Authorized
+            ConnectAuthOutcome::Authorized { device_id: None }
         ));
     }
 
@@ -226,7 +235,7 @@ mod tests {
                 valid,
                 &mgr
             ),
-            ConnectAuthOutcome::Authorized
+            ConnectAuthOutcome::Authorized { device_id: None }
         ));
         assert!(matches!(
             resolve_connect_auth(
@@ -340,6 +349,11 @@ mod tests {
             |_| false,
             &mgr,
         );
-        assert!(matches!(outcome, ConnectAuthOutcome::Authorized));
+        // C5: the validated device's id is threaded through, not discarded, so
+        // presence/roster can attribute the reconnect.
+        assert!(
+            matches!(outcome, ConnectAuthOutcome::Authorized { device_id: Some(ref d) } if d == "dev-1"),
+            "expected Authorized with device_id dev-1, got {outcome:?}"
+        );
     }
 }

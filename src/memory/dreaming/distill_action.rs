@@ -155,6 +155,7 @@ impl DistillActionRecord {
                 stage: stage.to_string(),
                 action_kind: "new".to_string(),
                 target_path: None,
+                // rust-doctor-disable-next-line excessive-clone
                 title: Some(title.clone()),
                 confidence: Some(*confidence),
                 severity: Some(severity_str(*severity)),
@@ -166,6 +167,7 @@ impl DistillActionRecord {
             } => Self {
                 stage: stage.to_string(),
                 action_kind: "strengthen".to_string(),
+                // rust-doctor-disable-next-line excessive-clone
                 target_path: Some(existing_note_path.clone()),
                 title: None,
                 confidence: None,
@@ -182,7 +184,9 @@ impl DistillActionRecord {
             } => Self {
                 stage: stage.to_string(),
                 action_kind: "supersede".to_string(),
+                // rust-doctor-disable-next-line excessive-clone
                 target_path: Some(old_note_path.clone()),
+                // rust-doctor-disable-next-line excessive-clone
                 title: Some(title.clone()),
                 confidence: Some(*confidence),
                 severity: Some(severity_str(*severity)),
@@ -199,6 +203,7 @@ impl DistillActionRecord {
                 outcome,
                 // Carry the LLM-emitted skip reason in the error slot so the
                 // on-disk row preserves *why* the LLM rejected the signal.
+                // rust-doctor-disable-next-line excessive-clone
                 error: error.or_else(|| Some(reason.clone())),
             },
         }

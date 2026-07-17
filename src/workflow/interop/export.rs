@@ -207,6 +207,10 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
     // safety gate and the per-step execution budgets — the wrong side to
     // fail on. `read_agent_opts` parses the bare literals back.
     if step.review {
+        // The lead-review gate is an oversight attribute — silently dropping
+        // it on a header-stripped re-import would auto-complete steps that
+        // were meant to park in WaitingReview. Omitted when false (serde
+        // `skip_serializing_if` parity keeps ungated steps byte-identical).
         opts.push("review: true".to_string());
     }
     if let Some(t) = step.timeout_secs {

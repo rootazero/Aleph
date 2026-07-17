@@ -22,6 +22,7 @@ impl RecordingMockProvider {
     }
 
     pub fn recorded_system_prompt(&self) -> Arc<Mutex<Option<String>>> {
+        // rust-doctor-disable-next-line excessive-clone
         self.last_system.clone()
     }
 }
@@ -31,8 +32,10 @@ impl AiProvider for RecordingMockProvider {
         &'a self,
         req: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // rust-doctor-disable-next-line excessive-clone
         let recorded = self.last_system.clone();
         let system = req.system_prompt.map(|s| s.to_string());
+        // rust-doctor-disable-next-line excessive-clone
         let canned = self.canned.clone();
         Box::pin(async move {
             if let Some(sys) = system {

@@ -4,18 +4,29 @@ pub(in crate::commands::start) fn register_agents_handlers(
     server: &mut GatewayServer,
     manager: &Arc<alephcore::AgentManager>,
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    // Runtime-sync context: keeps the runtime AgentRegistry + channel bindings
+    // in lock-step with TOML writes (create → hot-register, delete → evict +
+    // unbind). `None` on a minimal server → TOML-only, prior behavior.
+    runtime: Option<Arc<alephcore::gateway::handlers::agents::AgentsRuntimeCtx>>,
 ) {
     use alephcore::gateway::handlers::agents;
 
     register_handler!(server, "agents.list", agents::handle_list, manager);
     register_handler!(server, "agents.get", agents::handle_get, manager);
-    register_handler!(
-        server,
-        "agents.create",
-        agents::handle_create,
-        manager,
-        event_bus
-    );
+    // agents.create / agents.delete are hand-wired (not `register_handler!`)
+    // because they take an `Option<Arc<AgentsRuntimeCtx>>` — the macro only
+    // threads required `Arc`s.
+    {
+        let manager = Arc::clone(manager);
+        let event_bus = Arc::clone(event_bus);
+        let runtime = runtime.clone();
+        server.handlers_mut().register("agents.create", move |req| {
+            let manager = Arc::clone(&manager);
+            let event_bus = Arc::clone(&event_bus);
+            let runtime = runtime.clone();
+            async move { agents::handle_create(req, manager, event_bus, runtime).await }
+        });
+    }
     register_handler!(
         server,
         "agents.update",
@@ -23,13 +34,17 @@ pub(in crate::commands::start) fn register_agents_handlers(
         manager,
         event_bus
     );
-    register_handler!(
-        server,
-        "agents.delete",
-        agents::handle_delete,
-        manager,
-        event_bus
-    );
+    {
+        let manager = Arc::clone(manager);
+        let event_bus = Arc::clone(event_bus);
+        let runtime = runtime.clone();
+        server.handlers_mut().register("agents.delete", move |req| {
+            let manager = Arc::clone(&manager);
+            let event_bus = Arc::clone(&event_bus);
+            let runtime = runtime.clone();
+            async move { agents::handle_delete(req, manager, event_bus, runtime).await }
+        });
+    }
     register_handler!(
         server,
         "agents.set_default",

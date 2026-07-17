@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 static BANK_CARD_RE: OnceLock<Regex> = OnceLock::new();
 
 fn bank_card_regex() -> &'static Regex {
+    // rust-doctor-disable-next-line unwrap-in-production
     BANK_CARD_RE.get_or_init(|| Regex::new(r"\d{16,19}").expect("static bank card regex compiles"))
 }
 

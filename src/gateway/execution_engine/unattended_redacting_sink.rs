@@ -14,9 +14,12 @@ use crate::exec::masker::SecretMasker;
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 
-/// Wraps an inner `TraceSink`, redacting model-authored text on the two
-/// text-bearing `LoopTraceEvent` variants. All other variants forward by
-/// reference, unchanged (`#[non_exhaustive]`-safe wildcard).
+/// Wraps an inner `TraceSink`, redacting the text-bearing `LoopTraceEvent`
+/// variants: `TextEmitted`, `SessionCompleted.final_text`, and
+/// `ToolCallCompleted` (tool input + result — the payload the scratchpad
+/// channel push and the WS `agent_trace` stream actually deliver; leaving it
+/// unmasked contradicted this module's own coverage claim). All other variants
+/// forward by reference, unchanged (`#[non_exhaustive]`-safe wildcard).
 pub struct UnattendedRedactingSink {
     inner: Arc<dyn TraceSink>,
     masker: SecretMasker,
@@ -29,6 +32,41 @@ impl UnattendedRedactingSink {
             inner,
             masker: SecretMasker::new(),
         }
+    }
+}
+
+/// Mask every string leaf of a JSON value in place; `true` when anything
+/// changed. Depth-first over arrays/objects — tool inputs and outputs are
+/// small structured payloads, and this runs only inside unattended runs.
+fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => {
+            let masked = masker.mask(s);
+            if masked == *s {
+                false
+            } else {
+                *s = masked;
+                true
+            }
+        }
+        // Plain loops on purpose: `.any(..)` (clippy's suggestion for the
+        // former fold) short-circuits on the first masked item and would
+        // leave every later secret unmasked. Masking must visit ALL items.
+        serde_json::Value::Array(items) => {
+            let mut changed = false;
+            for item in items.iter_mut() {
+                changed |= mask_json_strings(masker, item);
+            }
+            changed
+        }
+        serde_json::Value::Object(map) => {
+            let mut changed = false;
+            for item in map.values_mut() {
+                changed |= mask_json_strings(masker, item);
+            }
+            changed
+        }
+        _ => false,
     }
 }
 
@@ -67,6 +105,37 @@ impl TraceSink for UnattendedRedactingSink {
                         *final_text = Some(redacted);
                     }
                     self.inner.on_trace(&ev);
+                }
+            }
+            LoopTraceEvent::ToolCallCompleted { .. } => {
+                // Tool results are the highest-bandwidth secret channel in an
+                // unattended run: a tool that read a credential echoes it in
+                // `result` (which the scratchpad progress push sends to the
+                // bound channel and `AgentTraceEmitSink` puts on the WS), and
+                // the model can echo one into `call.input` (a scratchpad
+                // objective/plan). Mask every string leaf of both; forward the
+                // original event untouched when nothing matched.
+                let mut ev = event.clone();
+                let LoopTraceEvent::ToolCallCompleted { call, result, .. } = &mut ev else {
+                    unreachable!("matched ToolCallCompleted above");
+                };
+                let mut changed = mask_json_strings(&self.masker, &mut call.input);
+                match result {
+                    crate::tools::runtime::ToolResult::Success { output } => {
+                        changed |= mask_json_strings(&self.masker, output);
+                    }
+                    crate::tools::runtime::ToolResult::Error { error, .. } => {
+                        let masked = self.masker.mask(error);
+                        if masked != *error {
+                            *error = masked;
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    self.inner.on_trace(&ev);
+                } else {
+                    self.inner.on_trace(event);
                 }
             }
             other => self.inner.on_trace(other),
@@ -128,6 +197,72 @@ mod tests {
         let events = cap.events.lock().unwrap();
         match &events[0] {
             LoopTraceEvent::TextEmitted { text, .. } => assert_eq!(text, "just a normal sentence"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redacts_secret_in_tool_call_completed_result_and_input() {
+        let cap = Arc::new(CaptureSink::default());
+        let sink = UnattendedRedactingSink::new(cap.clone());
+        sink.on_trace(&LoopTraceEvent::ToolCallCompleted {
+            iteration: 1,
+            call: crate::harness::trace::ToolCallEndEvent {
+                tool_id: "t1".into(),
+                tool_name: "scratchpad".into(),
+                input: serde_json::json!({
+                    "action": "set_objective",
+                    "objective": "rotate key sk-ant-api03-AAAABBBBCCCCDDDD"
+                }),
+                duration_ms: 5,
+            },
+            result: crate::tools::runtime::ToolResult::Success {
+                output: serde_json::json!({
+                    "content": "- [ ] use AKIAIOSFODNN7EXAMPLE to sign"
+                }),
+            },
+        });
+        let events = cap.events.lock().unwrap();
+        match &events[0] {
+            LoopTraceEvent::ToolCallCompleted { call, result, .. } => {
+                let input = call.input.to_string();
+                assert!(
+                    !input.contains("sk-ant-api03-AAAABBBBCCCCDDDD"),
+                    "input leaked"
+                );
+                let crate::tools::runtime::ToolResult::Success { output } = result else {
+                    panic!("expected success result");
+                };
+                assert!(
+                    !output.to_string().contains("AKIAIOSFODNN7EXAMPLE"),
+                    "result leaked: {output}"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clean_tool_call_completed_forwards_unchanged() {
+        let cap = Arc::new(CaptureSink::default());
+        let sink = UnattendedRedactingSink::new(cap.clone());
+        sink.on_trace(&LoopTraceEvent::ToolCallCompleted {
+            iteration: 2,
+            call: crate::harness::trace::ToolCallEndEvent {
+                tool_id: "t2".into(),
+                tool_name: "read_file".into(),
+                input: serde_json::json!({"path": "README.md"}),
+                duration_ms: 3,
+            },
+            result: crate::tools::runtime::ToolResult::Success {
+                output: serde_json::json!({"content": "plain text"}),
+            },
+        });
+        let events = cap.events.lock().unwrap();
+        match &events[0] {
+            LoopTraceEvent::ToolCallCompleted { call, .. } => {
+                assert_eq!(call.input["path"], "README.md");
+            }
             other => panic!("unexpected event: {other:?}"),
         }
     }

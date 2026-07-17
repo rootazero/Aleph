@@ -193,10 +193,24 @@ impl PromptLayer for AgentRoleLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
+        // `Cached` is the live main-loop path
+        // (`build_system_prompt_cached_with_mode`). The harness-bridge runner
+        // resolves `agent_def` from the registry and threads it via
+        // `with_agent(def)` before walking the Cached path (see
+        // `harness_bridge/prompt_build.rs`), so a registered SubAgent
+        // (explore / coder / researcher / plan / verify) running as the loop
+        // agent — via agent-switch or team dispatch — needs this layer on the
+        // Cached path or its role header + protocol constraints silently vanish
+        // (same class of bug the Soul / Profile / Role / Citation layers were
+        // fixed for). For a primary agent the layer no-ops (mode != SubAgent,
+        // no `prompt_sections`), so this is a no-op on the main path and stays
+        // cache-safe (Stable, byte-stable per agent). `Basic` is kept for the
+        // inline `subagent_spawner` prompt build.
         &[
             AssemblyPath::Basic,
             AssemblyPath::Soul,
             AssemblyPath::Context,
+            AssemblyPath::Cached,
         ]
     }
 
@@ -329,6 +343,9 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
-        assert_eq!(paths.len(), 3);
+        // Cached is the live main-loop path: a registered sub-agent running via
+        // the harness-bridge runner must get its role header + protocol blocks.
+        assert!(paths.contains(&AssemblyPath::Cached));
+        assert_eq!(paths.len(), 4);
     }
 }

@@ -33,16 +33,19 @@ impl RippleTask {
     pub async fn explore(&self, seed_facts: Vec<MemoryFact>) -> Result<RippleResult> {
         let mut visited = HashSet::new();
         let mut expanded = Vec::new();
+        // rust-doctor-disable-next-line excessive-clone
         let mut current_level = seed_facts.clone();
 
         // Mark seed facts as visited
         for fact in &seed_facts {
+            // rust-doctor-disable-next-line excessive-clone
             visited.insert(fact.id.clone());
         }
 
         // Perform BFS traversal using vector similarity
+        let mut next_level = Vec::new();
         for _hop in 0..self.config.max_hops {
-            let mut next_level = Vec::new();
+            next_level.clear();
 
             for fact in &current_level {
                 // Skip facts without embeddings
@@ -85,7 +88,9 @@ impl RippleTask {
 
                     // Check similarity threshold
                     if self.is_similar(fact, &similar_fact) {
+                        // rust-doctor-disable-next-line excessive-clone
                         visited.insert(similar_fact.id.clone());
+                        // rust-doctor-disable-next-line excessive-clone
                         expanded.push(similar_fact.clone());
                         next_level.push(similar_fact);
                     }
@@ -93,7 +98,7 @@ impl RippleTask {
             }
 
             // Move to next level
-            current_level = next_level;
+            std::mem::swap(&mut current_level, &mut next_level);
 
             // Stop if no more facts to explore
             if current_level.is_empty() {

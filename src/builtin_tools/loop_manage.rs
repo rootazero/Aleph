@@ -257,12 +257,7 @@ impl LoopTool {
         // maybe_plan_strategy plans for THIS objective instead of silently
         // welding the old one. Best-effort, same as the stop-side cleanup.
         let replaced_active = self.registry.get(session).is_some_and(|p| p.is_active());
-        if let Some(strat) = crate::strategy::global() {
-            if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
-                info!(session = %session, error = %e,
-                    "loop start: failed to clear leftover welded strategy (ignored)");
-            }
-        }
+        Self::clear_welded_strategy(session, "start fresh-plan claim");
         let cadence_desc = state.cadence.describe();
         self.registry.put(state);
         // Honest confirmation: say what was actually registered — the parsed
@@ -289,6 +284,21 @@ impl LoopTool {
         })
     }
 
+    /// Clear the loop-welded Strategy for a session (best-effort). Tool-side
+    /// single source for `stop` and `start`'s fresh-plan-slot claim; the
+    /// gateway endings (cap / cap-trip / failure stops) clear the same key via
+    /// `execution_engine::execute::clear_loop_welded_strategy`. The goal-keyed
+    /// Strategy (if any) is never touched. Mirrors `GoalTool`'s tool-side
+    /// clear (the continuation siblings keep parity).
+    fn clear_welded_strategy(session: &str, context: &str) {
+        if let Some(strat) = crate::strategy::global() {
+            if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
+                info!(session = %session, error = %e, context,
+                    "loop: failed to delete welded strategy (ignored)");
+            }
+        }
+    }
+
     fn stop(&self, session: &str) -> std::result::Result<LoopOutput, String> {
         match self.registry.get(session) {
             // Already stopped → report honestly rather than claiming a fresh
@@ -309,21 +319,23 @@ impl LoopTool {
                 // Clear the loop-welded Strategy in lockstep with the
                 // authoritative loop stop (spec §6 lifecycle). Best-effort; the
                 // goal-keyed Strategy (if any) is untouched.
-                if let Some(strat) = crate::strategy::global() {
-                    if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
-                        info!(session = %session, error = %e,
-                            "loop stop: failed to delete welded strategy (ignored)");
-                    }
-                }
+                Self::clear_welded_strategy(session, "tool stop");
                 Ok(LoopOutput {
                     success: true,
                     message: "Loop stopped.".to_string(),
                 })
             }
-            None => Ok(LoopOutput {
-                success: false,
-                message: "No loop in this session.".to_string(),
-            }),
+            None => {
+                // No live loop — but a welded plan may have outlived one (the
+                // registry is process memory, the weld is persistent SQLite; a
+                // daemon restart orphans it). An explicit stop is the user's
+                // escape hatch: tidy the orphan row while reporting honestly.
+                Self::clear_welded_strategy(session, "tool stop (no live loop)");
+                Ok(LoopOutput {
+                    success: false,
+                    message: "No loop in this session.".to_string(),
+                })
+            }
         }
     }
 
@@ -1151,6 +1163,7 @@ mod tests {
             conversation_id: String::new(),
             caller_role: None,
             channel_tool_permissions: None,
+            unattended: false,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());

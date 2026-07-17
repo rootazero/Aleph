@@ -39,16 +39,27 @@ pub async fn handle_list_tasks(
     };
 
     use crate::agents::swarm::tasks::CoordTaskStatus;
-    let status_filter = params.status.as_deref().and_then(|s| match s {
-        "pending" => Some(CoordTaskStatus::Pending),
-        "blocked" => Some(CoordTaskStatus::Blocked),
-        "in_progress" => Some(CoordTaskStatus::InProgress),
-        "completed" => Some(CoordTaskStatus::Completed),
-        "failed" => Some(CoordTaskStatus::Failed),
-        "cancelled" => Some(CoordTaskStatus::Cancelled),
-        "unsatisfiable" => Some(CoordTaskStatus::Unsatisfiable),
-        _ => None,
-    });
+    // Full 10-variant vocabulary via the single-source parser; an unknown
+    // string is an explicit error, NOT a silently dropped filter (the old
+    // hand-rolled match omitted waiting_review/paused/skipped and returned
+    // the entire board as if filtered).
+    let status_filter = match params.status.as_deref() {
+        None => None,
+        Some(s) => match CoordTaskStatus::from_filter_str(s) {
+            Some(status) => Some(status),
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "Unknown status filter '{s}'. Expected one of: pending, blocked, \
+                         in_progress, waiting_review, completed, failed, cancelled, skipped, \
+                         paused, unsatisfiable."
+                    ),
+                );
+            }
+        },
+    };
 
     let filter = CoordTaskFilter {
         team_id: Some(params.team_id.clone()),

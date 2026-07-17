@@ -71,6 +71,7 @@ impl DreamStage for NoteDriftStage {
             .notes
             .iter()
             .filter(|n| n.updated_at > week_ago)
+            // rust-doctor-disable-next-line excessive-clone
             .map(|n| n.path.clone())
             .collect();
 
@@ -230,6 +231,7 @@ impl DreamStage for NoteDriftStage {
 fn resolve_link_path(ctx: &DreamContext, target: &str) -> Option<String> {
     // First try an exact path match in case the target already contains '/'.
     if let Some(entry) = ctx.notes.iter().find(|n| n.path == target) {
+        // rust-doctor-disable-next-line excessive-clone
         return Some(entry.path.clone());
     }
     // Otherwise look for a note whose path ends with `/<target>`.
@@ -241,6 +243,7 @@ fn resolve_link_path(ctx: &DreamContext, target: &str) -> Option<String> {
                 .nth(1)
                 .is_some_and(|filename| filename == target)
         })
+        // rust-doctor-disable-next-line excessive-clone
         .map(|n| n.path.clone())
 }
 

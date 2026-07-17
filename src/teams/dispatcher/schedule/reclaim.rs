@@ -3,6 +3,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::agents::swarm::tasks::acceptance::{
+    read_stale_review_warned_at, with_stale_review_warned_at,
+};
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
 use crate::sync_primitives::Arc;
 
@@ -108,6 +111,11 @@ impl TeamDispatcher {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during orphan reclaim");
                 }
             }
+            // Surface a failed reset: a silent drop would loop this orphan
+            // invisibly (it stays InProgress and is retried every tick with
+            // zero log), contradicting the warn-on-error discipline every
+            // sibling path in this file already follows (release_lock above,
+            // list_tasks above, reclaim_zombies) — P7.
             if let Err(e) = self
                 .coord_store
                 .update_task(
@@ -119,10 +127,8 @@ impl TeamDispatcher {
                 )
                 .await
             {
-                // A persistent write failure would otherwise loop this orphan
-                // silently every tick until the zombie TTL force-fails it
-                // hours later, with no trace of why reclaim did nothing.
-                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: orphan reset to Pending failed");
+                tracing::warn!(task_id = %task.id, error = %e,
+                    "dispatcher: reclaim_orphaned reset-to-pending failed");
             }
         }
     }
@@ -134,15 +140,24 @@ impl TeamDispatcher {
     /// lead to call `workflow_step_review` / `task_review`. Nothing reaps it —
     /// both reclaim passes only touch `InProgress` — so a review that never
     /// arrives stalls the task and its whole downstream DAG branch **silently**.
-    /// This pass makes that visible: it warns once per task whose wait exceeds
-    /// `zombie_ttl_secs` (reused as the review-stall threshold — no new knob).
+    /// This pass makes that visible: once per park, for each task whose wait
+    /// exceeds `zombie_ttl_secs` (reused as the review-stall threshold — no new
+    /// knob), it logs a warning AND stamps `stale_review_warned_at` into the
+    /// task metadata. The stamp is doing double duty:
+    ///
+    /// * **Durable dedup** — a stamp at/after the current run's `started_at`
+    ///   means this park was already warned; it survives restarts (the
+    ///   in-memory set it replaced re-warned after every restart) and needs no
+    ///   pruning pass (a later re-run re-stamps `started_at`, re-arming the
+    ///   warning naturally).
+    /// * **Leader delivery (R5)** — the metadata write goes through
+    ///   `update_task`, which re-emits `TeamTaskUpdated{waiting_review}`; the
+    ///   existing `TeamNotifier` turns that into a leader-inbox reminder. The
+    ///   stall signal finally reaches an actor who can act on it, instead of a
+    ///   server log nobody reads.
     ///
     /// It deliberately takes **no** corrective action: the approve/reject verdict
-    /// is the lead LLM's call (R7), so the dispatcher only emits an observable
-    /// warning and never auto-completes the review. Dedup via
-    /// [`TeamDispatcher::warned_stale_reviews`] keeps it to one warning per stuck
-    /// task; the set is pruned back to the live `WaitingReview` ids each pass so a
-    /// task that later returns to review can warn again.
+    /// is the lead LLM's call (R7); this only makes the wait visible.
     pub(super) async fn warn_stale_reviews(self: &Arc<Self>) {
         let ttl = self.config.zombie_ttl_secs;
         if ttl == 0 {
@@ -165,19 +180,18 @@ impl TeamDispatcher {
         };
 
         let now = Self::now_epoch();
-        let mut warned = self.warned_stale_reviews.lock().await;
-        let mut live: HashSet<String> = HashSet::new();
-
         for task in &waiting {
             if !is_dispatcher_managed(task) {
                 continue; // team_delegate-owned reviews are the caller's problem
             }
-            live.insert(task.id.clone());
             if !is_stale_review(task, now, ttl) {
                 continue;
             }
-            // Warn exactly once per stuck task until it leaves WaitingReview.
-            if !warned.insert(task.id.clone()) {
+            // Once per park: a stamp at/after this run's start means the
+            // current wait was already surfaced (started_at is re-stamped on
+            // every re-claim, so a task that returns to review re-arms).
+            let started = task.started_at.unwrap_or(0);
+            if read_stale_review_warned_at(&task.metadata).is_some_and(|w| w >= started) {
                 continue;
             }
             let waited = now.saturating_sub(task.started_at.unwrap_or(now));
@@ -187,11 +201,23 @@ impl TeamDispatcher {
                 zombie_ttl_secs = ttl,
                 "dispatcher: task stalled in waiting_review past TTL — lead review never arrived (verdict is the lead's call; not auto-resolving)"
             );
+            // Stamp + re-emit (the fresh row from list_tasks is the metadata
+            // base — this pass runs before any claim could race it).
+            if let Err(e) = self
+                .coord_store
+                .update_task(
+                    &task.id,
+                    CoordTaskUpdate {
+                        metadata: Some(with_stale_review_warned_at(task.metadata.clone(), now)),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                // Not stamped → next tick warns again; noisy but never silent.
+                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: failed to stamp stale-review warning");
+            }
         }
-
-        // Prune ids that have since left WaitingReview so the dedup set stays
-        // bounded and a task that returns to review later can warn again.
-        warned.retain(|id| live.contains(id));
     }
 
     /// Close `running` run rows whose worker is gone as `Abandoned`.

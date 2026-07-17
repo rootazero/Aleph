@@ -67,6 +67,7 @@ fn retry_after_from_suggestion(err: &AlephError) -> Option<Duration> {
 /// provider-level failover when the *typed* error is transient — covering
 /// errors whose `Display` carried no HTTP code (e.g. `Timeout` →
 /// "Request timed out").
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
     let msg = err.to_string();
     let lower = msg.to_lowercase();

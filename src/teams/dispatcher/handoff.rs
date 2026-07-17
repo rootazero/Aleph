@@ -253,8 +253,8 @@ pub async fn build_handoff_context(
     let mut dep_section = String::new();
     for dep_id in &task.dependencies {
         match coord_store.get_task(dep_id).await {
-            Ok(Some(dep)) => {
-                if dep.status == CoordTaskStatus::Completed {
+            Ok(Some(dep)) => match dep.status {
+                CoordTaskStatus::Completed => {
                     if let Some(result) = &dep.result {
                         dep_section.push_str(&format!(
                             "### {}\n{}\n",
@@ -263,7 +263,19 @@ pub async fn build_handoff_context(
                         ));
                     }
                 }
-            }
+                // A skipped upstream also satisfies the dependency but has no
+                // output — say so explicitly, or the member reads the silence
+                // as a missing input and wastes a run hunting for it.
+                CoordTaskStatus::Skipped => {
+                    dep_section.push_str(&format!(
+                        "### {}\n*(skipped — deliberately not run; no output to consume)*\n",
+                        dep.subject
+                    ));
+                }
+                // Any other status shouldn't occur for a task that unblocked
+                // us; contribute nothing (matches the legacy envelope).
+                _ => {}
+            },
             Ok(None) => {
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, "Handoff: dependency task not found");
                 dep_section.push_str(&format!(
@@ -475,6 +487,46 @@ mod tests {
         assert!(ctx.contains("## Dependency Results"));
         assert!(ctx.contains("Gather data"));
         assert!(ctx.contains("found 42 records"));
+    }
+
+    #[tokio::test]
+    async fn handoff_notes_skipped_dependency_explicitly() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+
+        let dep = cs
+            .create_task(plain_task("Optional research"))
+            .await
+            .unwrap();
+        cs.update_task(
+            &dep.id,
+            CoordTaskUpdate {
+                status: Some(CoordTaskStatus::Skipped),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let task = cs
+            .create_task(NewCoordTask {
+                team_id: None,
+                subject: "Write summary".into(),
+                description: String::new(),
+                owner: Some("writer".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![dep.id.clone()],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        // The skipped upstream is named with an explicit no-output note, so
+        // the member doesn't read the silence as a missing input.
+        assert!(ctx.contains("## Dependency Results"));
+        assert!(ctx.contains("Optional research"));
+        assert!(ctx.contains("skipped — deliberately not run"));
     }
 
     #[tokio::test]

@@ -58,12 +58,18 @@ pub struct ResponsesRequest {
     /// is true (official `OpenAI`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    /// Stable cache-routing key (usually the session id). `OpenAI` routes
-    /// requests sharing a `prompt_cache_key` to the same backend to maximize
-    /// prompt-cache hit rate. Capability-gated (`supports_prompt_cache`) and
-    /// sourced from `RequestPayload.metadata["session_id"]`.
+    /// Stable cache-routing key. `OpenAI` routes requests sharing a
+    /// `prompt_cache_key` to the same backend to maximize prompt-cache hit
+    /// rate. Capability-gated (`supports_prompt_cache`) and derived
+    /// content-addressed from the request's static prefix (system prompt +
+    /// tool schemas), with the session id as fallback — see
+    /// `openai_common::prompt_cache::derive_prompt_cache_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    /// Extended prompt-cache retention (`"24h"`). Official `OpenAI` only;
+    /// emitted when the provider's `cache_retention` config is `long`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_retention: Option<String>,
 }
 
 /// Function tool definition for the Responses API
@@ -464,6 +470,7 @@ mod cycle3_struct_tests {
             top_logprobs: None,
             service_tier: None,
             prompt_cache_key: None,
+            prompt_cache_retention: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("seed").is_none());
@@ -494,6 +501,7 @@ mod cycle3_struct_tests {
             top_logprobs: Some(3),
             service_tier: Some("flex".into()),
             prompt_cache_key: Some("sess-123".into()),
+            prompt_cache_retention: Some("24h".into()),
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v.get("seed"), Some(&serde_json::json!(42)));
@@ -502,6 +510,10 @@ mod cycle3_struct_tests {
         assert_eq!(
             v.get("prompt_cache_key"),
             Some(&serde_json::json!("sess-123"))
+        );
+        assert_eq!(
+            v.get("prompt_cache_retention"),
+            Some(&serde_json::json!("24h"))
         );
     }
 }

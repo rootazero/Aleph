@@ -8,17 +8,32 @@ use crate::providers::{session_moa_handle, session_model_handle};
 
 /// Resolve a preset name against the live `[moa]` config, or an error string
 /// naming the missing preset. Shared by the arm helpers below.
+///
+/// Also validates the RESOLVED preset (scratch-config, the same pipeline
+/// `try_build_for_run` and `MoaPresetStore::save_preset` run) so arming a
+/// hand-edited broken preset fails HERE with the specific errors — instead of
+/// the tool reporting "MoA active" while every later run silently falls back
+/// to the normal provider chain.
 fn resolve_or_err(preset: Option<&str>) -> Result<String, String> {
-    super::get_moa_config()
-        .as_ref()
-        .and_then(|cfg| cfg.resolve_preset(preset))
-        .map(|(name, _)| name)
-        .ok_or_else(|| {
-            format!(
-                "MoA preset '{}' not found — use the moa tool (action='list') to see presets.",
-                preset.unwrap_or("<default>")
-            )
-        })
+    let cfg = super::get_moa_config().ok_or("no [moa] section configured")?;
+    let (name, resolved) = cfg.resolve_preset(preset).ok_or_else(|| {
+        format!(
+            "MoA preset '{}' not found — use the moa tool (action='list') to see presets.",
+            preset.unwrap_or("<default>")
+        )
+    })?;
+    let errs = {
+        let mut scratch = crate::config::types::moa::MoaToml::default();
+        scratch.presets.insert(name.clone(), resolved.clone());
+        scratch.validation_errors()
+    };
+    if !errs.is_empty() {
+        return Err(format!(
+            "MoA preset '{name}' is invalid and cannot be armed: {}",
+            errs.join("; ")
+        ));
+    }
+    Ok(name)
 }
 
 /// Arm sticky MoA: resolve+validate, write the sticky pref, and clear any

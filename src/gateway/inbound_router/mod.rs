@@ -998,16 +998,19 @@ impl InboundMessageRouter {
         let raw = strip_bot_mention(ctx.message.text.trim());
         let lower = raw.trim().to_lowercase();
 
-        // Approval reply: `/approve [n] [once|session|always]` or `/deny [n]`.
-        // A bare `/approve` (or any unrecognized suffix) stays the
-        // least-privilege `AllowOnce`; `session` widens the grant to the rest
-        // of the session. `always` is accepted for backwards compatibility but
-        // the manager clamps it to a session grant — nothing persists. The
-        // optional 1-based index picks a specific card when several pend
-        // concurrently (approval-gated calls may share a parallel batch); a
-        // bare reply then resolves NOTHING and the manager hands back the
-        // numbered listing instead of FIFO-guessing which command the user
-        // actually read.
+        // Approval reply: `/approve [n] [once|session|always]` or
+        // `/deny [n] [reason…]`. A bare `/approve` (or any unrecognized
+        // suffix) stays the least-privilege `AllowOnce`; `session` widens the
+        // grant to the rest of the session. `always` is accepted for
+        // backwards compatibility but the manager clamps it to a session
+        // grant — nothing persists. The optional 1-based index picks a
+        // specific card when several pend concurrently (approval-gated calls
+        // may share a parallel batch); a bare reply then resolves NOTHING and
+        // the manager hands back the numbered listing instead of
+        // FIFO-guessing which command the user actually read. Free text after
+        // `/deny` is the human's reason, relayed verbatim to the model so it
+        // re-plans on the actual objection instead of a bare "denied"
+        // (hermes parity).
         let is_approve = lower == "/approve" || lower.starts_with("/approve ");
         let is_deny = lower == "/deny" || lower.starts_with("/deny ");
         if is_approve || is_deny {
@@ -1043,6 +1046,19 @@ impl InboundMessageRouter {
                 } else {
                     ApprovalDecisionType::Deny
                 };
+                // Reason from the ORIGINAL (un-lowercased) text — the model
+                // should read the user's words, not a case-folded copy. The
+                // `/deny` prefix region is ASCII (the `starts_with` above
+                // matched its lowercase form), so slicing 5 bytes is safe.
+                let deny_reason = if is_deny {
+                    raw.trim()
+                        .get("/deny".len()..)
+                        .map(str::trim)
+                        .filter(|r| !r.is_empty())
+                        .map(String::from)
+                } else {
+                    None
+                };
                 // Reply with the EFFECTIVE decision (the manager clamps an
                 // `always` to a session grant, so never promise permanence)
                 // and echo WHAT was resolved, closing the read-what-you-
@@ -1052,6 +1068,7 @@ impl InboundMessageRouter {
                     index,
                     decision,
                     ctx.message.sender_name.clone(),
+                    deny_reason,
                 ) {
                     SessionResolveOutcome::Resolved {
                         decision: ApprovalDecisionType::AllowOnce,
@@ -1116,29 +1133,33 @@ impl InboundMessageRouter {
             return true;
         }
 
-        // Control/built-in commands must always reach their dedicated handlers
-        // below (/stop, /new, /voice, /btw, /groupchat …). A pending `ask_user`
-        // clarification or workflow-clarify step must never swallow them —
-        // otherwise the documented "always stoppable" escape hatch breaks.
-        let is_control_command = lower == "/stop"
-            || lower == "/abort"
-            || lower == "/new"
-            || lower == "/session new"
-            || lower == "/btw"
-            || lower.starts_with("/voice")
-            || lower.starts_with("/btw ")
-            || lower.starts_with("/btw\n")
-            || lower.starts_with("/groupchat");
-        if is_control_command {
+        // Any slash command must reach its dedicated handler below, never be
+        // swallowed as a clarification answer — otherwise a pending `ask_user`
+        // breaks the documented "always stoppable" escape hatch and eats
+        // `/help`, `/model`, `/sessions`, and every command the old fixed
+        // whitelist (`/stop /new /voice …`) forgot to list. A message is a
+        // command when its first whitespace-delimited token is `/<name>` with
+        // no embedded slash, so `/model claude` and `/stop` bypass while a
+        // path-like free-text answer (`/etc/hosts`, `/usr/local/bin`) is still
+        // taken as the answer. Mirrors hermes / openclaw, which treat
+        // slash-prefixed input as commands; the no-inner-slash rule is what
+        // keeps a genuine path answer from being misread as a command.
+        let is_slash_command = raw
+            .split_whitespace()
+            .next()
+            .and_then(|first| first.strip_prefix('/'))
+            .is_some_and(|name| !name.is_empty() && !name.contains('/'));
+        if is_slash_command {
             return false;
         }
 
         // Clarification reply: any message while an `ask_user` is pending for
-        // this session is taken as the answer.
+        // this session is taken as the answer. Resolve against `raw` — the same
+        // normalized text (`.trim()` + `/cmd@bot` collapsed) the sibling
+        // `clarify:` button and `/approve` branches above already use — so all
+        // three HITL paths interpret one text source and never drift.
         if let Some(ref mgr) = self.clarification_manager {
-            if mgr.has_pending(&session_key).await
-                && mgr.resolve(&session_key, &ctx.message.text).await
-            {
+            if mgr.has_pending(&session_key).await && mgr.resolve(&session_key, &raw).await {
                 info!("[Router] Routed reply to pending clarification for {session_key}");
                 return true;
             }
@@ -1433,6 +1454,78 @@ mod tests {
         assert!(
             router.try_intercept_hitl(&ctx).await,
             "a clarify callback is always consumed, even when nothing is pending"
+        );
+    }
+
+    /// F3 — a slash command typed while an `ask_user` is pending must reach its
+    /// handler, not be swallowed as the answer. The old fixed whitelist only
+    /// covered `/stop /new /voice …`; `/help`, `/model`, `/sessions` fell
+    /// through and became free-text replies. A path-like answer (`/etc/hosts`)
+    /// must still resolve the clarification.
+    #[tokio::test]
+    async fn slash_command_is_not_swallowed_by_pending_clarification() {
+        use crate::clarification::{ClarificationManager, ClarificationRequest};
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+        use std::time::Duration;
+
+        let session_key = SessionKey::ephemeral("slash-vs-clarify");
+        let clarification = Arc::new(ClarificationManager::new());
+        let _rx = clarification
+            .register(
+                session_key.to_string(),
+                ClarificationRequest::text("ask-slash", "Which file?", None),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification.clone());
+
+        let make_ctx = |text: &str| {
+            let msg = InboundMessage {
+                id: MessageId::new("m-slash"),
+                channel_id: ChannelId::new("telegram"),
+                conversation_id: ConversationId::new("u1"),
+                sender_id: UserId::new("u1"),
+                sender_name: None,
+                text: text.to_string(),
+                attachments: vec![],
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: vec![],
+            };
+            let reply_route =
+                ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+            InboundContext::new(msg, reply_route, session_key.clone())
+        };
+
+        // `/help` bypasses HITL (not consumed here) and the clarification stays
+        // pending for a genuine answer.
+        assert!(
+            !router.try_intercept_hitl(&make_ctx("/help")).await,
+            "a slash command must not be consumed as a clarification answer"
+        );
+        assert!(
+            clarification.has_pending(&session_key.to_string()).await,
+            "the clarification must remain pending after a bypassed slash command"
+        );
+
+        // A path-like free-text answer (inner slash → not a command) resolves it.
+        assert!(
+            router.try_intercept_hitl(&make_ctx("/etc/hosts")).await,
+            "a path-like answer must be taken as the clarification reply"
+        );
+        assert!(
+            !clarification.has_pending(&session_key.to_string()).await,
+            "the clarification must be resolved by the path answer"
         );
     }
 
@@ -1748,6 +1841,91 @@ mod tests {
             .unwrap();
         assert_eq!(agent, "work", "live route binding must be honoured");
         assert!(route.is_some(), "specific match carries its resolved route");
+    }
+
+    // ── stale-binding self-heal (fail-soft on the hot path) ───────────────
+
+    async fn runtime_registry_with(ids: &[&str]) -> Arc<crate::gateway::AgentRegistry> {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+        let registry = Arc::new(crate::gateway::AgentRegistry::new());
+        for id in ids {
+            let root = tempfile::tempdir().unwrap().keep();
+            let sm: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
+                SessionManager::new(SessionManagerConfig {
+                    db_path: root.join("sessions.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            registry
+                .register_config(
+                    AgentInstanceConfig {
+                        agent_id: (*id).to_string(),
+                        workspace: root.join("workspace"),
+                        agent_dir: root.join("state"),
+                        ..Default::default()
+                    },
+                    sm,
+                )
+                .await;
+        }
+        registry
+    }
+
+    /// A binding pointing at an agent missing from the runtime registry (its
+    /// TOML definition removed before a restart, or a crash between delete
+    /// steps) must fall back to default routing instead of bricking the
+    /// channel — a ghost resolution fails every message with AgentNotFound
+    /// and the user loses the very LLM they'd need to run `agent_switch`.
+    #[tokio::test]
+    async fn stale_binding_falls_back_to_default() {
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_workspace_manager(env_store_with_binding(&[("telegram", "deleted-agent")]));
+        router.agent_registry = Some(runtime_registry_with(&["main"]).await);
+
+        let (agent, _route) = router
+            .resolve_agent_id_async(&dm_on("telegram"))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent, "main",
+            "ghost binding must fail soft to the default agent"
+        );
+        // The binding row is kept: re-registering the agent revives the
+        // user's explicit switch instead of silently destroying it.
+        assert_eq!(
+            router
+                .workspace_manager
+                .as_ref()
+                .unwrap()
+                .get_active_agent("telegram")
+                .unwrap()
+                .as_deref(),
+            Some("deleted-agent")
+        );
+    }
+
+    /// The registry validation must not break healthy bindings.
+    #[tokio::test]
+    async fn valid_binding_passes_registry_validation() {
+        let mut router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
+        router.agent_registry = Some(runtime_registry_with(&["main", "trader"]).await);
+
+        let (agent, _route) = router
+            .resolve_agent_id_async(&dm_on("telegram"))
+            .await
+            .unwrap();
+        assert_eq!(agent, "trader");
     }
 
     fn bot_authored_msg(id: &str) -> InboundMessage {

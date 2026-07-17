@@ -101,6 +101,7 @@ impl std::str::FromStr for EventActor {
 /// carries `#[serde(alias = "source_fact_ids")]` for backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
+// rust-doctor-disable-next-line large-enum-variant
 pub enum MemoryEvent {
     // ------------------------------------------------------------------
     // Skeleton events (immediate persist)

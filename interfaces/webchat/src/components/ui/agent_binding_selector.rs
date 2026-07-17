@@ -22,8 +22,9 @@ pub fn AgentBindingSelector(
 
     // Agent list: (id, display_name)
     let agents = RwSignal::new(Vec::<(String, String)>::new());
-    // All bindings: agent_id -> channel_id
-    let bindings = RwSignal::new(HashMap::<String, String>::new());
+    // All bindings: agent_id -> bound channels (many-to-one: an agent may
+    // serve several channels at once).
+    let bindings = RwSignal::new(HashMap::<String, Vec<String>>::new());
     // Currently selected agent for THIS channel
     let selected = RwSignal::new(String::new()); // empty = unbound
     let is_loading = RwSignal::new(true);
@@ -55,7 +56,7 @@ pub fn AgentBindingSelector(
                 // Find which agent is bound to this channel
                 let current = map
                     .iter()
-                    .find(|(_, ch)| ch.as_str() == ch_id)
+                    .find(|(_, chs)| chs.iter().any(|ch| ch == &ch_id))
                     .map(|(aid, _)| aid.clone())
                     .unwrap_or_default();
                 selected.set(current);
@@ -80,13 +81,17 @@ pub fn AgentBindingSelector(
             match WorkspaceApi::set_channel_agent(&dash, &ch_id, agent_id_opt.as_deref()).await {
                 Ok(_) => {
                     selected.set(value.clone());
-                    // Update local bindings cache
+                    // Update local bindings cache: this channel moves from its
+                    // old agent (if any) to the newly selected one.
                     let mut b = bindings.get_untracked();
-                    // Remove old binding for this channel
-                    b.retain(|_, ch| ch != &ch_id);
-                    // Add new binding if not unbinding
+                    for chs in b.values_mut() {
+                        chs.retain(|ch| ch != &ch_id);
+                    }
+                    b.retain(|_, chs| !chs.is_empty());
                     if !value.is_empty() {
-                        b.insert(value, ch_id.clone());
+                        let chs = b.entry(value).or_default();
+                        chs.push(ch_id.clone());
+                        chs.sort();
                     }
                     bindings.set(b);
                     status_msg.set(Some((
@@ -138,27 +143,33 @@ pub fn AgentBindingSelector(
                                 .into_iter()
                                 .map(|(id, name)| {
                                     let is_selected = id == current_selected;
-                                    let bound_to = current_bindings.get(&id).cloned();
-                                    let is_bound_elsewhere = bound_to
-                                        .as_ref()
-                                        .is_some_and(|ch| ch != &ch_id);
-                                    let label = if is_bound_elsewhere {
+                                    // Many-to-one binding model: an agent already
+                                    // serving other channels is still selectable
+                                    // here (the old UI wrongly disabled it — a
+                                    // relic of the lossy one-channel-per-agent
+                                    // map). Annotate for context instead.
+                                    let other_channels: Vec<String> = current_bindings
+                                        .get(&id)
+                                        .map(|chs| {
+                                            chs.iter()
+                                                .filter(|ch| *ch != &ch_id)
+                                                .cloned()
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let label = if other_channels.is_empty() {
+                                        name
+                                    } else {
                                         let bound_prefix = t_string!(i18n, common.bound_to_prefix).to_string();
                                         format!(
                                             "{} ({} {})",
                                             name,
                                             bound_prefix,
-                                            bound_to.unwrap_or_default()
+                                            other_channels.join(", ")
                                         )
-                                    } else {
-                                        name
                                     };
                                     view! {
-                                        <option
-                                            value=id
-                                            selected=is_selected
-                                            disabled=is_bound_elsewhere
-                                        >
+                                        <option value=id selected=is_selected>
                                             {label}
                                         </option>
                                     }

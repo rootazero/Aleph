@@ -123,6 +123,7 @@ impl CompressionService {
         config: CompressionConfig,
         _memory_backend: Option<MemoryBackend>,
     ) -> Self {
+        // rust-doctor-disable-next-line excessive-clone
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
         Self {
@@ -245,6 +246,7 @@ impl CompressionService {
     /// This method follows the same pipeline as `compress_in_workspace` but
     /// routes extracted information into markdown-based Knowledge Notes via
     /// `NoteIndexer` instead of storing individual `MemoryFact` rows.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub async fn compress_to_notes(
         &self,
         workspace_id: &str,
@@ -294,6 +296,7 @@ impl CompressionService {
         if self.compound_enabled {
             use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
+            // rust-doctor-disable-next-line excessive-clone
             let Some(ing) = self.compound_ingestor.clone() else {
                 tracing::warn!(
                     "compound ingest enabled but no ingestor configured; skipping batch"

@@ -911,29 +911,6 @@ impl AgentHarness {
             }
         }
     }
-
-    /// One Think→Act turn; returns whether the session should continue.
-    pub async fn run_turn(
-        &self,
-        session_id: &SessionId,
-        callback: &mut dyn HarnessCallback,
-    ) -> Result<TurnState, HarnessError> {
-        let events = self.deps.session.get_events(session_id, None, None).await?;
-        let iterations = count_assistant_messages(&events).saturating_add(1);
-        let tool_calls_made = count_tool_calls(&events);
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let mut history = std::collections::VecDeque::new();
-        self.run_turn_internal(
-            session_id,
-            callback,
-            iterations,
-            tool_calls_made,
-            &mut history,
-            &cancel,
-        )
-        .await
-        .map(|step| step.state)
-    }
 }
 
 /// Index at which events "since the last `AssistantMessage`" begin.
@@ -942,22 +919,6 @@ pub(crate) fn tail_start_index(events: &[SessionEventRecord]) -> usize {
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
         .map_or(0, |idx| idx + 1)
-}
-
-/// Count `AssistantMessage` events in the log.
-pub(crate) fn count_assistant_messages(events: &[SessionEventRecord]) -> usize {
-    events
-        .iter()
-        .filter(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .count()
-}
-
-/// Count `ToolCallRequested` events.
-pub(crate) fn count_tool_calls(events: &[SessionEventRecord]) -> usize {
-    events
-        .iter()
-        .filter(|r| matches!(r.event, SessionEvent::ToolCallRequested { .. }))
-        .count()
 }
 
 /// Serialize each `NativeToolCall` as a JSON `tool_use` block.

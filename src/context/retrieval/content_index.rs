@@ -270,7 +270,25 @@ impl ContentIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>, IndexError> {
-        if limit == 0 {
+        self.search_sessions(&[session_id], query, limit)
+    }
+
+    /// [`Self::search`] over a *set* of session ids, ranked as one pool.
+    ///
+    /// Exists for epoch-aware retrieval: a compaction-driven session split
+    /// moves the run to `epoch + 1` but seeds the child with the parent's
+    /// `[Full output persisted: …]` markers verbatim, so the child's
+    /// `ctx_search` must also see rows keyed to earlier epochs of the same
+    /// base session key. Callers own the trust boundary — every id passed
+    /// must belong to one trust domain (epochs of one key do; two different
+    /// agents' keys do not). An empty set matches nothing, never everything.
+    pub fn search_sessions(
+        &self,
+        session_ids: &[&str],
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, IndexError> {
+        if limit == 0 || session_ids.is_empty() {
             return Ok(Vec::new());
         }
         let Some(match_expr) = sanitize_fts_query(query) else {
@@ -280,13 +298,13 @@ impl ContentIndex {
         // with; the floor keeps a small `limit` (e.g. 3) from starving it.
         let fetch = limit.saturating_mul(OVERFETCH_FACTOR).max(MIN_FETCH);
         let conn = self.lock();
-        let porter = query_index(&conn, "chunks", session_id, &match_expr, fetch)?;
+        let porter = query_index(&conn, "chunks", session_ids, &match_expr, fetch)?;
         // The trigram side is best-effort: a query whose every term is shorter
         // than 3 chars matches nothing there, and a trigram quirk must never
         // fail a search the porter index already answered. Degrade to
         // porter-only on any trigram error.
         let trigram =
-            query_index(&conn, "chunks_tri", session_id, &match_expr, fetch).unwrap_or_default();
+            query_index(&conn, "chunks_tri", session_ids, &match_expr, fetch).unwrap_or_default();
         drop(conn);
 
         let mut fused = rrf_fuse(porter, trigram);
@@ -304,13 +322,46 @@ impl ContentIndex {
     /// own* is indexed yet — a global count would leak the existence of other
     /// sessions' output.
     pub fn len(&self, session_id: &str) -> Result<usize, IndexError> {
+        self.len_sessions(&[session_id])
+    }
+
+    /// [`Self::len`] over a set of session ids (see [`Self::search_sessions`]
+    /// for why a set: epoch-aware retrieval after a session split). An empty
+    /// set counts nothing.
+    pub fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
+        if session_ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders: Vec<String> = (1..=session_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT count(*) FROM chunks WHERE session_id IN ({})",
+            placeholders.join(", ")
+        );
         let conn = self.lock();
-        let n: i64 = conn.query_row(
-            "SELECT count(*) FROM chunks WHERE session_id = ?1",
-            params![session_id],
-            |r| r.get(0),
-        )?;
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = session_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        let n: i64 = stmt.query_row(params.as_slice(), |r| r.get(0))?;
         Ok(n as usize)
+    }
+
+    /// Distinct session ids that currently own rows in either FTS table. Used
+    /// by the tool-result TTL sweeper to map removed blob directories back to
+    /// their index rows: the dir name is a sanitized, non-invertible form of
+    /// the key, so the sweep matches *forward* — list ids, sanitize each,
+    /// compare against the removed dir names.
+    pub fn list_sessions(&self) -> Result<Vec<String>, IndexError> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT session_id FROM chunks UNION SELECT session_id FROM chunks_tri")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// True iff `session_id` has no chunks indexed.
@@ -435,31 +486,47 @@ struct RankedRow {
 }
 
 /// Run `match_expr` against one FTS5 `table` with title-weighted BM25, over the
-/// rows owned by `session_id` only, returning up to `fetch` rows in rank order
-/// (best first). `table` is an internal constant (`"chunks"` / `"chunks_tri"`),
-/// never user input, so interpolating it into the SQL is injection-safe;
-/// `session_id` is bound, not interpolated.
+/// rows owned by any of `session_ids`, returning up to `fetch` rows in rank
+/// order (best first). `table` is an internal constant (`"chunks"` /
+/// `"chunks_tri"`), never user input, so interpolating it into the SQL is
+/// injection-safe; the session ids are bound, not interpolated.
 fn query_index(
     conn: &Connection,
     table: &str,
-    session_id: &str,
+    session_ids: &[&str],
     match_expr: &str,
     fetch: usize,
 ) -> Result<Vec<RankedRow>, IndexError> {
+    if session_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // `?1` is the MATCH expression, `?2..` the session ids, the last
+    // placeholder the LIMIT.
+    let id_placeholders: Vec<String> = (0..session_ids.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect();
+    let limit_pos = session_ids.len() + 2;
     let sql = format!(
         "SELECT source, chunk_no, title,
                 snippet({table}, 1, '', '', ' … ', 14) AS snip,
                 body
          FROM {table}
-         WHERE {table} MATCH ?1 AND session_id = ?2
+         WHERE {table} MATCH ?1 AND session_id IN ({ids})
          ORDER BY bm25({table}, {TITLE_WEIGHT})
-         LIMIT ?3"
+         LIMIT ?{limit_pos}",
+        ids = id_placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;
     // Clamp to i64 so a very large `fetch` cannot truncate to a negative
     // value, which SQLite would interpret as "no limit" (unbounded scan).
     let fetch = i64::try_from(fetch).unwrap_or(i64::MAX);
-    let rows = stmt.query_map(params![match_expr, session_id, fetch], |row| {
+    let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(session_ids.len() + 2);
+    bound.push(&match_expr);
+    for id in session_ids {
+        bound.push(id);
+    }
+    bound.push(&fetch);
+    let rows = stmt.query_map(bound.as_slice(), |row| {
         Ok(RankedRow {
             source: row.get(0)?,
             chunk_no: row.get(1)?,
@@ -1212,6 +1279,44 @@ mod tests {
         assert!(idx.is_empty("sess-a").unwrap(), "A must be wiped");
         assert_eq!(idx.len("sess-b").unwrap(), 1, "B must survive A's purge");
         assert!(!idx.search("sess-b", "beta payload", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_sessions_spans_epochs_of_one_key() {
+        // Epoch-aware retrieval: rows written under the parent epoch key must
+        // be reachable when the caller searches the child + parent key set.
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text("agent:a:main", "call_1", "bash", "epochalpha payload\n")
+            .unwrap();
+        idx.index_text("agent:a:main:s1", "call_2", "bash", "epochbeta payload\n")
+            .unwrap();
+
+        let both = ["agent:a:main:s1", "agent:a:main"];
+        assert!(
+            !idx.search_sessions(&both, "epochalpha", 5).unwrap().is_empty(),
+            "parent-epoch rows must be visible to the widened scope"
+        );
+        assert!(!idx.search_sessions(&both, "epochbeta", 5).unwrap().is_empty());
+        assert_eq!(idx.len_sessions(&both).unwrap(), 2);
+        // A single-key search stays scoped (no cross-epoch bleed by default).
+        assert!(idx.search("agent:a:main:s1", "epochalpha", 5).unwrap().is_empty());
+        // An empty set matches nothing — never an unscoped scan.
+        assert!(idx.search_sessions(&[], "epochalpha", 5).unwrap().is_empty());
+        assert_eq!(idx.len_sessions(&[]).unwrap(), 0);
+    }
+
+    #[test]
+    fn list_sessions_returns_distinct_owning_sessions() {
+        let idx = ContentIndex::open_in_memory().unwrap();
+        idx.index_text("sess-a", "call_1", "bash", "alpha body\n")
+            .unwrap();
+        idx.index_text("sess-a", "call_2", "bash", "alpha two\n")
+            .unwrap();
+        idx.index_text("sess-b", "call_1", "bash", "beta body\n")
+            .unwrap();
+        let mut sessions = idx.list_sessions().unwrap();
+        sessions.sort();
+        assert_eq!(sessions, vec!["sess-a".to_string(), "sess-b".to_string()]);
     }
 
     #[test]

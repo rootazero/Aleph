@@ -4,6 +4,17 @@
 /// agent run. Matches the deleted `Lane::Subagent` default.
 pub(super) const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 
+/// Default bounded window for the `wait` action (seconds). When it elapses with
+/// the child still running, `wait` returns `still_running` and the parent model
+/// may re-issue `wait` to keep blocking — a longer wait is expressed as
+/// repeated bounded waits, never one unbounded block.
+pub(super) const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 120;
+
+/// Ceiling on a single `wait` window (seconds). Kept well under the subagent
+/// tool's 1_800_000ms wall-clock budget so one `wait` can never hang the turn;
+/// the model chunks a longer wait into repeated bounded calls.
+pub(super) const MAX_WAIT_TIMEOUT_SECS: u64 = 600;
+
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
 pub(super) enum SubagentAction {
@@ -11,6 +22,15 @@ pub(super) enum SubagentAction {
     Run(RunArgs),
     /// Check status of a background sub-agent.
     CheckStatus(String),
+    /// Park until a background sub-agent finishes or the bounded window elapses
+    /// (event-driven, no per-check LLM turn). One id → wait for that agent;
+    /// many ids → wait for whichever finishes first (fan-out first-completion).
+    /// Mirrors `check_status`'s output shape on completion; returns
+    /// `still_running` on timeout.
+    Wait {
+        request_ids: Vec<String>,
+        timeout_secs: u64,
+    },
     /// Cancel a still-running background sub-agent by `request_id`. Hits the
     /// shared `CancellationToken`; the running task observes it on its next
     /// await point and unwinds cleanly. Idempotent — cancelling an unknown

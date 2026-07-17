@@ -319,6 +319,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         power,
         memory_context_provider,
         memory_backend,
+        // Summary-reuse reads must resolve the same project-scoped storage id
+        // the session-compactor writes use (see harness_bridge/mod.rs field doc).
+        memory_project_scoped: config.memory.project_scoped,
         tool_catalog,
         session_epoch_registrar,
         // Reasonix-parity cheap-tier summarization: when `[context_budget]

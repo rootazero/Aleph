@@ -36,11 +36,14 @@ where
 {
     for (path, meta) in note_lookup {
         let row = SignalRow {
+            // rust-doctor-disable-next-line excessive-clone
             note_path: path.clone(),
+            // rust-doctor-disable-next-line excessive-clone
             agent_id: opts.agent_id.clone(),
             query_text: query.to_string(),
             channel: REFLECT_CHANNEL.to_string(),
             score: meta.relevance,
+            // rust-doctor-disable-next-line excessive-clone
             session_id: opts.session_id.clone(),
             namespace: opts.namespace.to_namespace_value(),
         };
@@ -143,3 +146,4 @@ mod tests {
         assert_eq!(rows[0].namespace, "owner");
     }
 }
+

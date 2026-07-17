@@ -321,6 +321,104 @@ async fn live_restore_adds_missing_tasks_and_members() {
     assert!(ids.contains(&"snap-only"), "snap-only must be restored");
 }
 
+/// TEAMS-SNAP-1: restoring a snapshot of a DELETED team must land members and
+/// tasks on the freshly recreated team — `create_team` mints a new id, and the
+/// old code kept writing against the snapshot's stale id, so the first
+/// `add_member` failed NotFound, the restore aborted, and each retry leaked
+/// another empty shell team.
+#[tokio::test]
+async fn restore_after_team_delete_rebinds_to_recreated_team() {
+    let (snap, teams, coord) = setup().await;
+    let team = seed_team(teams.as_ref()).await;
+    teams
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: "leader".into(),
+            role: "leader".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    teams
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: "worker".into(),
+            role: "worker".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    coord
+        .create_task(NewCoordTask {
+            team_id: Some(team.id.clone()),
+            subject: "restore-me".into(),
+            description: "".into(),
+            owner: Some("worker".into()),
+            priority: Priority::Normal,
+            blocked_by: vec![],
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    // A leader-authored operating protocol must survive a restore-after-delete:
+    // it is injected verbatim into every member's launch context by the handoff
+    // builder, so dropping it is a silent partial-fidelity restore.
+    teams
+        .set_protocol(&team.id, Some("always write tests first".into()))
+        .await
+        .unwrap();
+    let s = capture_snapshot(
+        snap.as_ref(),
+        teams.as_ref(),
+        coord.as_ref(),
+        &team.id,
+        "v1",
+        "",
+    )
+    .await
+    .unwrap();
+
+    // Delete the team (store requires disband first), then restore from the snapshot.
+    teams.disband_team(&team.id).await.unwrap();
+    teams.delete_team(&team.id).await.unwrap();
+    let diff = restore_snapshot(
+        snap.as_ref(),
+        teams.as_ref(),
+        coord.as_ref(),
+        &s.snapshot_id,
+        false,
+    )
+    .await
+    .expect("restore of a deleted team must succeed");
+
+    // The diff points at the team the restore actually landed on.
+    let effective = &diff.team_id;
+    assert_ne!(effective, &team.id, "recreated team gets a fresh id");
+    let recreated_team = teams
+        .get_team(effective)
+        .await
+        .unwrap()
+        .expect("recreated team must exist");
+    assert_eq!(
+        recreated_team.protocol.as_deref(),
+        Some("always write tests first"),
+        "the captured operating protocol must survive restore-after-delete"
+    );
+    let members = teams.get_members(effective).await.unwrap();
+    let ids: Vec<&str> = members.iter().map(|m| m.agent_id.as_str()).collect();
+    assert!(ids.contains(&"leader"), "leader restored: {ids:?}");
+    assert!(ids.contains(&"worker"), "worker restored: {ids:?}");
+    let tasks = coord
+        .list_tasks(CoordTaskFilter {
+            team_id: Some(effective.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(tasks.len(), 1, "task restored under the recreated team");
+    assert_eq!(tasks[0].subject, "restore-me");
+}
+
 #[tokio::test]
 async fn delete_snapshot_is_idempotent() {
     let (snap, teams, coord) = setup().await;

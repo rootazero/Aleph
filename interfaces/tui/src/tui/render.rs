@@ -49,6 +49,7 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
         session: &state.session_key,
         tokens: state.total_tokens,
         context_gauge: state.context_gauge,
+        cache_stat: state.cache_stat,
         is_connected: state.is_connected,
         tool_progress_mode: state.tool_progress_mode,
         spinner_frame: state.spinner_frame,

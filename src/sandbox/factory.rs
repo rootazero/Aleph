@@ -283,9 +283,11 @@ mod tests {
             &crate::config::types::ShellSecurityConfig::default(),
         );
 
-        let before = std::fs::read_dir(tmp.path())
-            .map(|d| d.count())
-            .unwrap_or(0);
+        let mut before = 0;
+        let mut before_dir = tokio::fs::read_dir(tmp.path()).await.unwrap();
+        while let Ok(Some(_)) = before_dir.next_entry().await {
+            before += 1;
+        }
         assert_eq!(before, 0, "no session dirs before first execute");
 
         sandbox
@@ -302,9 +304,11 @@ mod tests {
             .await
             .expect("enabled sandbox should execute via driver");
 
-        let after = std::fs::read_dir(tmp.path())
-            .map(|d| d.count())
-            .unwrap_or(0);
+        let mut after = 0;
+        let mut after_dir = tokio::fs::read_dir(tmp.path()).await.unwrap();
+        while let Ok(Some(_)) = after_dir.next_entry().await {
+            after += 1;
+        }
         assert_eq!(
             after, 1,
             "WorkspaceSandbox must create exactly one session dir on first execute"

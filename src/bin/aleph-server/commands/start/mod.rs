@@ -1115,7 +1115,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         EventType::TeamTaskCompleted,
                         EventType::TeamTaskFailed,
                         EventType::TeamDisbanded,
-                        EventType::TeamMessageSent,
                     ]),
                     move |global_event| {
                         let handler = team_logger_clone.clone();
@@ -1451,6 +1450,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             &mut server,
             wm,
             agent_result.agent_registry.as_ref(),
+            &event_bus,
             &memory_db,
             args.daemon,
         );
@@ -1467,8 +1467,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Tailnet web — picks the *server's* directories, not its own laptop.
     register_fs_handlers(&mut server, &app_config, args.daemon);
 
-    // Agent management (agent_manager created earlier for tool config sharing)
-    register_agents_handlers(&mut server, &agent_manager, &event_bus);
+    // Agent management (agent_manager created earlier for tool config sharing).
+    // The runtime-sync context closes the TOML ↔ runtime-registry split:
+    // agents.create hot-registers, agents.delete evicts + clears bindings —
+    // without it both only take effect at next boot.
+    let agents_runtime_ctx = match (&agent_result.agent_registry, &workspace_manager) {
+        (Some(registry), Some(wm)) => Some(Arc::new(
+            alephcore::gateway::handlers::agents::AgentsRuntimeCtx {
+                registry: Arc::clone(registry),
+                session_store: session_store.clone(),
+                config: app_config.clone(),
+                env_store: Arc::clone(wm),
+            },
+        )),
+        _ => None,
+    };
+    register_agents_handlers(&mut server, &agent_manager, &event_bus, agents_runtime_ctx);
 
     // Wire the event bus into the global slot read by the team dispatcher's
     // member-run path, so member runs fan out to team.<id>.*. Mirrors the

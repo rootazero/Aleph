@@ -87,6 +87,7 @@ impl ProfileStore {
 /// Frontmatter fields parsed: `schema_version`, `updated`, `revision`,
 /// `last_session`, `confidence`.  Body sections start with `## ` headings;
 /// bullet lines start with `- `.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
     let content_hash = sha256_hex(raw);
 

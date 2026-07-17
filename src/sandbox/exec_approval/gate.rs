@@ -13,7 +13,7 @@ use super::action::ApprovalAction;
 /// is shown `bash` has not been shown anything.
 #[async_trait]
 pub trait ApprovalRequester: Send + Sync {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome;
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,31 @@ impl ApprovalOutcome {
     }
 }
 
+/// A human's answer to an approval request: the outcome, plus any free-text
+/// reason attached to a denial (`/deny <reason>` from a channel, the `reason`
+/// field on `exec.approval.resolve`).
+///
+/// The reason is what turns a bare "denied" into an instruction the model can
+/// act on — hermes ships the same affordance. Requesters whose transport
+/// cannot carry one (buttons, auto-deny policies, test stubs) build the
+/// response via `From<ApprovalOutcome>`, which leaves it `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalResponse {
+    pub outcome: ApprovalOutcome,
+    /// Set only when `outcome` is [`ApprovalOutcome::Denied`] and the human
+    /// supplied a reason.
+    pub deny_reason: Option<String>,
+}
+
+impl From<ApprovalOutcome> for ApprovalResponse {
+    fn from(outcome: ApprovalOutcome) -> Self {
+        Self {
+            outcome,
+            deny_reason: None,
+        }
+    }
+}
+
 pub struct ApprovalGate {
     /// Swappable so boot can construct the gate before the channel registry
     /// exists, then wire the real requester via `set_requester` once channels
@@ -68,7 +93,7 @@ impl ApprovalGate {
         *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(requester);
     }
 
-    pub async fn request_approval_for_action(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    pub async fn request_approval_for_action(&self, action: &ApprovalAction) -> ApprovalResponse {
         // Clone the Arc out of the lock and drop the guard before awaiting —
         // a std `RwLock` guard is not `Send` and must not be held across await.
         let requester = self
@@ -80,7 +105,7 @@ impl ApprovalGate {
             Some(requester) => requester.request_approval(action).await,
             None => {
                 tracing::warn!("No approval requester configured, defaulting to denied");
-                ApprovalOutcome::Denied
+                ApprovalOutcome::Denied.into()
             }
         }
     }
@@ -96,7 +121,7 @@ impl ApprovalGate {
 /// [`request_approval_for_action`]: ApprovalGate::request_approval_for_action
 #[async_trait]
 impl ApprovalRequester for ApprovalGate {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         self.request_approval_for_action(action).await
     }
 }
@@ -120,8 +145,8 @@ mod tests {
         struct AlwaysApprove;
         #[async_trait::async_trait]
         impl ApprovalRequester for AlwaysApprove {
-            async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalOutcome {
-                ApprovalOutcome::Approved
+            async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalResponse {
+                ApprovalOutcome::Approved.into()
             }
         }
 
@@ -129,13 +154,13 @@ mod tests {
         let gate = ApprovalGate::new(None);
         // No requester wired → denied (never a silent auto-approve).
         assert_eq!(
-            gate.request_approval_for_action(&action).await,
+            gate.request_approval_for_action(&action).await.outcome,
             ApprovalOutcome::Denied
         );
         // Once the requester is installed, escalations reach it.
         gate.set_requester(Arc::new(AlwaysApprove));
         assert_eq!(
-            gate.request_approval_for_action(&action).await,
+            gate.request_approval_for_action(&action).await.outcome,
             ApprovalOutcome::Approved
         );
     }

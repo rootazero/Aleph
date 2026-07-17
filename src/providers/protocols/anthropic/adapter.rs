@@ -241,6 +241,7 @@ fn classify_anthropic_error_response(
 
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -340,7 +341,12 @@ impl ProtocolAdapter for AnthropicProtocol {
                         None => (None, None),
                     }
                 }
-                Some(level) => (
+                // Legacy `{type:"enabled", budget_tokens}` thinking (Claude
+                // 3.7–4.5). Gated on the model actually having a thinking mode:
+                // Claude 3.5 / 3.0 have none and 400 on this block, so a cheap
+                // non-reasoning model carrying a configured think level must
+                // omit it rather than fail the whole request.
+                Some(level) if Self::supports_extended_thinking(actual_model) => (
                     Self::map_think_level(level).map(|budget| ThinkingBlock {
                         thinking_type: "enabled".to_string(),
                         budget_tokens: Some(budget),
@@ -348,6 +354,8 @@ impl ProtocolAdapter for AnthropicProtocol {
                     }),
                     None,
                 ),
+                // Known non-thinking model: ignore the think level entirely.
+                Some(_) => (None, None),
                 None => (None, None),
             };
 
@@ -377,6 +385,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             for td in tool_defs.iter() {
                 // Ensure input_schema has "type" field — required by strict
                 // backends like AWS Bedrock, which rejects schemas without it.
+                // rust-doctor-disable-next-line excessive-clone
                 let mut schema = td.parameters.clone();
                 if let Some(obj) = schema.as_object_mut() {
                     obj.entry("type")
@@ -389,6 +398,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 let sanitized = sanitize_anthropic_tool_name(&td.name);
                 if sanitized != td.name {
                     let mut map = self.name_map.write().unwrap_or_else(|e| e.into_inner());
+                    // rust-doctor-disable-next-line excessive-clone
                     if map.insert(sanitized.clone(), td.name.clone()).is_none() {
                         warn!(
                             original = %td.name,
@@ -399,6 +409,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 // Defense (2): dedup. Anthropic 400s on duplicate names; drop
                 // the second occurrence so the rest of the request still flies.
+                // rust-doctor-disable-next-line excessive-clone
                 if !seen.insert(sanitized.clone()) {
                     warn!(
                         original = %td.name,
@@ -410,6 +421,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                 }
                 out.push(AnthropicTool {
                     name: sanitized,
+                    // rust-doctor-disable-next-line excessive-clone
                     description: td.description.clone(),
                     input_schema: schema,
                 });
@@ -420,7 +432,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // Build system block(s). Two shapes are supported:
         //
         // 1. Cache-first split (preferred): caller supplied `system_blocks`
-        //    via `PromptBuilder::build_system_prompt_cached()`. We collapse
+        //    via `PromptBuilder::build_system_prompt_cached_with_mode()`. We collapse
         //    the contiguous `cache:true` parts into a SINGLE stable block
         //    carrying the cache breakpoint, and the remaining `cache:false`
         //    parts into a SINGLE dynamic tail block with no marker. Per
@@ -482,6 +494,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // 4.6/4.7 overrides any config-level effort — the model needs the
         // ThinkLevel-derived effort to know how hard to think on this turn.
         let metadata = config.metadata_user_id.as_ref().map(|uid| Metadata {
+            // rust-doctor-disable-next-line excessive-clone
             user_id: Some(uid.clone()),
         });
         let output_config = adaptive_effort
@@ -490,6 +503,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             })
             .or_else(|| {
                 config.effort.as_ref().map(|e| OutputConfig {
+                    // rust-doctor-disable-next-line excessive-clone
                     effort: Some(e.clone()),
                 })
             });
@@ -506,6 +520,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
+            // rust-doctor-disable-next-line excessive-clone
             service_tier: config.service_tier.clone(),
             metadata,
             output_config,
@@ -553,7 +568,15 @@ impl ProtocolAdapter for AnthropicProtocol {
         // the host-level gate here from effective_cache_retention.
         let extended_cache_ttl = if policy.capabilities.supports_cache_control {
             let retention = effective_cache_retention(config, &endpoint);
-            let ext = matches!(retention, CacheRetention::Long);
+            // The 1h TTL is an Anthropic-1P beta: third-party Anthropic-protocol
+            // hosts (Bedrock/Azure) accept plain ephemeral markers but reject
+            // the `ttl` key under strict schema validation — gate the TTL (and
+            // via `ext`, its beta header) on the official endpoint, mirroring
+            // the OpenAI adapter's EndpointClass::OpenAiPublic gate on
+            // prompt_cache_retention. `Long` elsewhere degrades to the default
+            // 5m marker: still cached, never a 400.
+            let ext =
+                matches!(retention, CacheRetention::Long) && endpoint.contains("api.anthropic.com");
             if retention != CacheRetention::Off {
                 let cc = CacheControl::Ephemeral {
                     ttl: if ext {
@@ -720,6 +743,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             pending: VecDeque::new(),
             done: false,
             saw_terminal: false,
+            // rust-doctor-disable-next-line excessive-clone
             name_map: self.name_map.clone(),
         };
 

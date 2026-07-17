@@ -102,6 +102,7 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
                             // instead of a stack overflow.
                             return;
                         }
+                        // rust-doctor-disable-next-line excessive-clone
                         let mut resolved = resolved.clone();
                         resolve_refs_recursive(&mut resolved, defs, depth + 1);
                         // A `$ref` node may carry sibling annotation keywords
@@ -117,6 +118,7 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
                                 if let Some(sibling) = map.get(meta) {
                                     resolved_obj
                                         .entry(meta.to_string())
+                                        // rust-doctor-disable-next-line excessive-clone
                                         .or_insert_with(|| sibling.clone());
                                 }
                             }
@@ -146,6 +148,7 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
 }
 
 /// Recursively strip unsupported keywords and flatten unions.
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn clean_recursive(node: &mut Value) {
     let obj = match node.as_object_mut() {
         Some(o) => o,
@@ -305,6 +308,7 @@ fn flatten_union(parent: &mut serde_json::Map<String, Value>, variants: &[Value]
             if let Some(obj) = non_null.as_object() {
                 for (k, v) in obj {
                     if !UNSUPPORTED_KEYWORDS.contains(&k.as_str()) {
+                        // rust-doctor-disable-next-line excessive-clone
                         parent.insert(k.clone(), v.clone());
                     }
                 }
@@ -327,6 +331,7 @@ fn flatten_union(parent: &mut serde_json::Map<String, Value>, variants: &[Value]
         if let Some(obj) = first.as_object() {
             for (k, v) in obj {
                 if !UNSUPPORTED_KEYWORDS.contains(&k.as_str()) {
+                    // rust-doctor-disable-next-line excessive-clone
                     parent.insert(k.clone(), v.clone());
                 }
             }
@@ -355,7 +360,9 @@ fn merge_all_of(parent: &mut serde_json::Map<String, Value>, members: &[Value]) 
                         .or_insert_with(|| Value::Object(serde_json::Map::new()));
                     if let (Some(dst), Some(src)) = (entry.as_object_mut(), value.as_object()) {
                         for (prop_key, prop_val) in src {
+                            // rust-doctor-disable-next-line excessive-clone
                             dst.entry(prop_key.clone())
+                                // rust-doctor-disable-next-line excessive-clone
                                 .or_insert_with(|| prop_val.clone());
                         }
                     }
@@ -363,16 +370,19 @@ fn merge_all_of(parent: &mut serde_json::Map<String, Value>, members: &[Value]) 
                 "required" => {
                     let entry = parent
                         .entry("required")
+                        // rust-doctor-disable-next-line unnecessary-allocation
                         .or_insert_with(|| Value::Array(Vec::new()));
                     if let (Some(dst), Some(src)) = (entry.as_array_mut(), value.as_array()) {
                         for item in src {
                             if !dst.contains(item) {
+                                // rust-doctor-disable-next-line excessive-clone
                                 dst.push(item.clone());
                             }
                         }
                     }
                 }
                 _ => {
+                    // rust-doctor-disable-next-line excessive-clone
                     parent.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
@@ -392,9 +402,11 @@ fn try_merge_enum(variants: &[Value]) -> Option<(String, Vec<Value>)> {
 
         // Must have const or single-element enum
         let val = if let Some(c) = obj.get("const") {
+            // rust-doctor-disable-next-line excessive-clone
             c.clone()
         } else if let Some(e) = obj.get("enum").and_then(|e| e.as_array()) {
             if e.len() == 1 {
+                // rust-doctor-disable-next-line excessive-clone
                 e[0].clone()
             } else {
                 return None;

@@ -121,6 +121,7 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
     let new_refresh = body["refresh_token"]
         .as_str()
         .map(String::from)
+        // rust-doctor-disable-next-line excessive-clone
         .or_else(|| cred.refresh.clone());
 
     info!(
@@ -129,13 +130,18 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
     );
 
     Ok(OAuthCredential {
+        // rust-doctor-disable-next-line excessive-clone
         provider: cred.provider.clone(),
         access: new_access.to_string(),
         refresh: new_refresh,
         expires: Some(new_expires_ms),
+        // rust-doctor-disable-next-line excessive-clone
         client_id: cred.client_id.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         client_secret: cred.client_secret.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         token_endpoint: cred.token_endpoint.clone(),
+        // rust-doctor-disable-next-line excessive-clone
         email: cred.email.clone(),
     })
 }

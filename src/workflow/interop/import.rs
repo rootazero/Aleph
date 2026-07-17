@@ -495,8 +495,9 @@ struct AgentOpts {
     schema: Option<serde_json::Value>,
     isolation: Option<String>,
     agent_type: Option<String>,
-    /// Lead-review gate — parsed from the bare literal `review: true` so the
-    /// safety gate survives a header-stripped round-trip.
+    /// Lead-review gate (`review: true`). Recovered on the bare path so a
+    /// header-stripped round-trip cannot silently drop an oversight gate
+    /// (a step meant to park in WaitingReview would auto-complete).
     review: bool,
     /// Per-step timeout — parsed from `timeoutSecs: <n>`.
     timeout_secs: Option<u64>,
@@ -1346,7 +1347,7 @@ await agent('fix more')
                 agent_type: Some("code-reviewer".into()),
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
-                review: false,
+                review: true,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1369,6 +1370,10 @@ await agent('fix more')
             s.schema,
             Some(serde_json::json!({"type": "object", "required": ["x"]}))
         );
+        // The oversight gate must survive a header-stripped round-trip — a
+        // silently dropped `review: true` auto-completes a step that was meant
+        // to park in WaitingReview for lead approval.
+        assert!(s.review, "lead-review gate lost in bare round-trip");
     }
 
     #[test]

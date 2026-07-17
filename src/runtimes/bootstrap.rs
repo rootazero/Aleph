@@ -36,6 +36,7 @@ pub enum BootstrapError {
 
 /// Install a capability according to its spec. Assumes `deps` are already Ready
 /// (caller handles dep resolution).
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
     let spec = match find_spec(name) {
         Some(s) => s,

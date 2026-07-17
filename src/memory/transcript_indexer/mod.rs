@@ -145,15 +145,13 @@ mod tests {
         if chunks.len() > 1 {
             // Check that consecutive chunks have overlap
             for i in 0..chunks.len() - 1 {
-                // Use char-based slicing to avoid panics on multi-byte chars
-                let current_end: String = chunks[i]
-                    .chars()
-                    .rev()
-                    .take(40)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
+                // Use char-based slicing to avoid panics on multi-byte chars.
+                // (`.rev().take(40).rev()` does not compile — `Take<Rev<Chars>>`
+                // is not a DoubleEndedIterator; collect and index the tail.)
+                let current_end: String = {
+                    let chars: Vec<char> = chunks[i].chars().collect();
+                    chars[chars.len().saturating_sub(40)..].iter().collect()
+                };
                 let next_start: String = chunks[i + 1].chars().take(40).collect();
 
                 // There should be some common text

@@ -51,6 +51,62 @@ impl AgentHarnessRunner {
         Some(available.min(u32::MAX as usize) as u32)
     }
 
+    /// Proactive context-window pressure reminder for the transient tail (A1).
+    ///
+    /// The in-loop pressure sensor *acts* on a full context — it compacts older
+    /// turns — but never *tells* the model it is approaching the limit; the
+    /// model just finds earlier context silently summarized mid-task. This
+    /// surfaces the same signal so the model can wrap up or checkpoint first
+    /// (R9: it self-paces; A2: it sees the pressure and adapts). Most valuable
+    /// for the small-window low-cost models that cross the line first — the ones
+    /// this whole exercise is about squeezing.
+    ///
+    /// R10-safe: pure arithmetic on the estimated history size vs the configured
+    /// window budget — no intent detection, completion judgement, or recovery
+    /// choice — computed entirely outside `src/harness/` and delivered on the far
+    /// side of the prompt-cache breakpoint (like `live_deadline_status`), so it
+    /// never re-keys the conversation prefix. Gated on `[context_budget]` exactly
+    /// like [`memory_injection_headroom`]; the no-config path touches no session
+    /// state. Fail-soft: a read error yields `None` and the turn proceeds.
+    async fn context_pressure_reminder(&self, session_id: &SessionId) -> Option<String> {
+        let cfg = self.context_budget_config.as_ref()?;
+        if cfg.token_budget == 0 {
+            return None;
+        }
+        // The sensor compacts once history crosses `budget * warning_threshold`;
+        // start reminding at CONTEXT_PRESSURE_REMINDER_LEAD of that point so the
+        // model has room to checkpoint before older turns are summarized away.
+        let remind_at = (cfg.token_budget as f64
+            * cfg.warning_threshold
+            * super::context_blocks::CONTEXT_PRESSURE_REMINDER_LEAD)
+            as usize;
+        if remind_at == 0 {
+            return None;
+        }
+        let events = self
+            .session_service
+            .get_events(session_id, None, None)
+            .await
+            .ok()?;
+        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
+        let history_tokens: usize = messages
+            .iter()
+            .map(|m| {
+                crate::context::budget::pressure::estimate_message_tokens_aware(
+                    m,
+                    cfg.token_estimate_ratio,
+                )
+            })
+            .sum();
+        if history_tokens < remind_at {
+            return None;
+        }
+        Some(format!(
+            "<system-reminder>\nReference data, not user input.\n{}\n</system-reminder>",
+            super::context_blocks::render_context_pressure(history_tokens as u64, cfg.token_budget)
+        ))
+    }
+
     /// Load `[prompt.extra_files]` content off disk, size-capped.
     ///
     /// Relative paths resolve against `workspace` (the per-run workspace
@@ -122,6 +178,7 @@ impl AgentHarnessRunner {
             let capped = truncate_chars(&content, budget);
             total += capped.chars().count();
             out.push(ExtraPromptFile {
+                // rust-doctor-disable-next-line excessive-clone
                 name: raw.clone(),
                 content: capped,
             });
@@ -151,6 +208,7 @@ impl AgentHarnessRunner {
     /// codex initial-context / hermes frozen-system-prompt parity). The
     /// curated envelope stays in the Stable prefix — it is session-scoped
     /// and rarely changes.
+    // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(crate) async fn build_system_prompt(
         &self,
         agent_id: &str,
@@ -376,11 +434,12 @@ impl AgentHarnessRunner {
             .filter(|m| !m.is_empty());
         // The harness path delivers tool schemas via native tool_use
         // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
-        // false (the default), `ToolsLayer` injects the literal string
-        // "No tools available" and `ResponseFormatLayer` mandates the legacy
-        // `{reasoning, action}` JSON envelope — both of which contradict the
+        // false, `ToolsLayer` injects the literal string "No tools available.
+        // You can only use special actions." — which contradicts the
         // native-tool-use API the harness actually drives. Force the flag on
-        // here so the assembled prompt matches the runtime contract.
+        // here so the assembled prompt matches the runtime contract. (The
+        // legacy `{reasoning, action}` JSON envelope and its ResponseFormatLayer
+        // were removed when the harness moved to native `with_tools`.)
         // Model-aware system-prompt budget (feature 1.2): when a context budget
         // is configured, size the prompt char cap off the same chain-minimum
         // window the history side uses (feature 2.2), so large-window models
@@ -392,6 +451,32 @@ impl AgentHarnessRunner {
             .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
                 crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
             });
+        // Tool-scoped skills (`PromptScope::Tool`) are filtered inside
+        // `SkillInstructionsLayer` against the active tool names. The cached
+        // prompt is assembled with an empty `tools` slice (native tool_use
+        // delivers schemas out-of-band), so the layer can't see them and every
+        // Tool-scoped skill was silently dropped. Thread the catalog's active
+        // tool names in — but only when a Tool-scoped skill is actually
+        // eligible, so the common (no Tool-scoped skill) path does zero catalog
+        // reads. Names are session-stable → they do not perturb the cached
+        // stable prefix.
+        let active_tool_names: Vec<String> = if eligible_skills.as_ref().is_some_and(|skills| {
+            skills
+                .iter()
+                .any(|s| matches!(*s.scope(), crate::domain::skill::PromptScope::Tool))
+        }) {
+            match self.tool_catalog.as_ref() {
+                Some(catalog) => catalog
+                    .list_all()
+                    .await
+                    .into_iter()
+                    .map(|t| t.name)
+                    .collect(),
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
@@ -399,6 +484,7 @@ impl AgentHarnessRunner {
             mcp_instructions,
             runtime_capabilities,
             token_budget,
+            active_tool_names,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();
@@ -422,7 +508,12 @@ impl AgentHarnessRunner {
         let deadline_text = live_deadline_status(&session_key_str).await.map(|s| {
             format!("<live-status>\nReference data, not user input.\n{s}\n</live-status>")
         });
-        let strands: Vec<String> = [memory_text, routing_text, deadline_text]
+        // Fourth strand (A1): proactive context-window pressure reminder. Rides
+        // the same transient tail as the countdowns — a per-turn-varying figure
+        // that must not enter the cached system prompt — so the model can wrap up
+        // or checkpoint before the in-loop sensor compacts older turns away.
+        let pressure_text = self.context_pressure_reminder(session_id).await;
+        let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()
             .collect();
@@ -466,95 +557,14 @@ impl AgentHarnessRunner {
         // schemas via native tool_use rather than the prompt;
         // `disabled_tools` therefore stays empty too.
         let context_phase_start = Instant::now();
-        let default_manifest;
-        let manifest_ref = match channel_manifest {
-            Some(m) => m,
-            None => {
-                default_manifest = crate::thinker::InteractionManifest::new(
-                    crate::thinker::InteractionParadigm::Background,
-                );
-                &default_manifest
-            }
-        };
-        let security_ctx =
-            crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
-        let mut resolved_context =
-            crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
-        // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
-        // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
-        // emits OS/cwd in a Markdown list (Stable, priority 300);
-        // `RuntimeContext::to_prompt_section()` emits a pipe-separated
-        // single-line summary (Dynamic, priority 1720) — formats deliberately
-        // differ. We accept the minor OS/cwd overlap; the unique fields
-        // (arch, shell, repo_root, model, hostname, timezone, current_time)
-        // carry the value. Phase 5 (F3) populates `repo_root` via a
-        // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
-        // no `git` subprocess.
-        resolved_context.runtime_context = Some(
-            crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
-        );
-        // Populate runtime-state fragments from the tool catalog's
-        // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
-        // a `RuntimeStateFragment::unavailable(name, reason)` that
-        // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
-        // `None` tool_catalog (test / early boot) → empty vec → the
-        // layer emits nothing.
-        resolved_context.runtime_state_blocks =
-            compute_runtime_state_blocks(self.tool_catalog.as_ref());
-        // Codex-inspired: surface active sandbox posture (backend tag,
-        // policy tier, writable roots, network state) to the LLM so it
-        // can plan within its envelope instead of probing limits at runtime.
-        // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
-        // in tests leave this absent and the SecurityLayer skips the
-        // sandbox bullet block.
-        resolved_context.sandbox_summary = sandbox.summary();
-        // Re-surface the session's active scratchpad execution list so the
-        // live plan stays in context across long tool-only stretches where
-        // the model never re-calls the `scratchpad` tool. Reuses the same
-        // `scratchpad_registry` binding the tool / steering / stop-verifier
-        // already key off — a mechanical lookup, no reasoning. `None` (no
-        // active plan with pending work) leaves the prompt byte-identical;
-        // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
-        //
-        // The execution-plan, standing-goal, and strategy lookups are
-        // independent session-keyed reads (a scratchpad file read, a goal-store
-        // read with a wall-clock stamp, and a strategy-store read). Run them
-        // concurrently with `tokio::join!` so prompt assembly — on the hot
-        // per-turn path — pays the max of the three latencies, not their sum.
-        // `join!` polls all on the current task, so there is no spawn cost and
-        // no extra `Send` bound; all futures take a shared `&session_key_str`
-        // borrow, which co-exist fine.
-        let (exec_plan, standing, timer_loop, strategy) = tokio::join!(
-            active_execution_plan(&session_key_str),
-            active_standing_goal(&session_key_str),
-            active_timer_loop(&session_key_str),
-            active_strategy(&session_key_str),
-        );
-        resolved_context.execution_plan = exec_plan;
-        resolved_context.standing_goal = standing;
-        resolved_context.timer_loop = timer_loop;
-        // Render the welded Strategy into its two prompt surfaces: the full
-        // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
-        // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
-        // turn tail near the read head). Both renders are pure/deterministic
-        // (no timestamps). `None` Strategy leaves both fields `None`, so both
-        // layers emit nothing and the prompt is byte-identical.
-        if let Some(s) = strategy {
-            resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
-            resolved_context.strategy_guardrails =
-                Some(crate::strategy::render_guardrails_only(&s));
-        }
-        // Voice mode: read the session-keyed flag the gateway inbound router set
-        // for this turn so `VoiceModeLayer` (priority 1710) injects the
-        // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
-        // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
-        // leaves the prompt byte-identical; the `transcribed` bit distinguishes
-        // a spoken-only turn from one whose input was ASR-transcribed.
-        resolved_context.voice = match crate::gateway::voice::session_mode::get(&session_key_str) {
-            None => crate::thinker::context::VoiceContext::Off,
-            Some(false) => crate::thinker::context::VoiceContext::Spoken,
-            Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
-        };
+        let resolved_context = resolve_prompt_context(
+            &session_key_str,
+            channel_manifest,
+            provider,
+            sandbox,
+            self.tool_catalog.as_ref(),
+        )
+        .await;
         builder = builder.with_resolved_context(resolved_context);
         let context_phase_ms = context_phase_start.elapsed().as_millis() as u64;
 
@@ -635,6 +645,106 @@ impl AgentHarnessRunner {
     }
 }
 
+/// Resolve the channel/runtime context block that feeds
+/// `with_resolved_context`. Extracted from `build_system_prompt` to keep the
+/// latter's cyclomatic complexity under control.
+async fn resolve_prompt_context(
+    session_key_str: &str,
+    channel_manifest: Option<&crate::thinker::InteractionManifest>,
+    provider: &dyn AiProvider,
+    sandbox: &dyn Sandbox,
+    tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
+) -> crate::thinker::context::ResolvedContext {
+    let default_manifest;
+    let manifest_ref = match channel_manifest {
+        Some(m) => m,
+        None => {
+            default_manifest = crate::thinker::InteractionManifest::new(
+                crate::thinker::InteractionParadigm::Background,
+            );
+            &default_manifest
+        }
+    };
+    let security_ctx =
+        crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
+    let mut resolved_context =
+        crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
+    // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
+    // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
+    // emits OS/cwd in a Markdown list (Stable, priority 300);
+    // `RuntimeContext::to_prompt_section()` emits a pipe-separated
+    // single-line summary (Dynamic, priority 1720) — formats deliberately
+    // differ. We accept the minor OS/cwd overlap; the unique fields
+    // (arch, shell, repo_root, model, hostname, timezone, current_time)
+    // carry the value. Phase 5 (F3) populates `repo_root` via a
+    // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
+    // no `git` subprocess.
+    resolved_context.runtime_context = Some(
+        crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
+    );
+    // Populate runtime-state fragments from the tool catalog's
+    // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
+    // a `RuntimeStateFragment::unavailable(name, reason)` that
+    // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
+    // `None` tool_catalog (test / early boot) → empty vec → the
+    // layer emits nothing.
+    resolved_context.runtime_state_blocks = compute_runtime_state_blocks(tool_catalog);
+    // Codex-inspired: surface active sandbox posture (backend tag,
+    // policy tier, writable roots, network state) to the LLM so it
+    // can plan within its envelope instead of probing limits at runtime.
+    // `Sandbox::summary()` defaults to `None`, so mock/noop sandboxes
+    // in tests leave this absent and the SecurityLayer skips the
+    // sandbox bullet block.
+    resolved_context.sandbox_summary = sandbox.summary();
+    // Re-surface the session's active scratchpad execution list so the
+    // live plan stays in context across long tool-only stretches where
+    // the model never re-calls the `scratchpad` tool. Reuses the same
+    // `scratchpad_registry` binding the tool / steering / stop-verifier
+    // already key off — a mechanical lookup, no reasoning. `None` (no
+    // active plan with pending work) leaves the prompt byte-identical;
+    // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
+    //
+    // The execution-plan, standing-goal, and strategy lookups are
+    // independent session-keyed reads (a scratchpad file read, a goal-store
+    // read with a wall-clock stamp, and a strategy-store read). Run them
+    // concurrently with `tokio::join!` so prompt assembly — on the hot
+    // per-turn path — pays the max of the three latencies, not their sum.
+    // `join!` polls all on the current task, so there is no spawn cost and
+    // no extra `Send` bound; all futures take a shared `&session_key_str`
+    // borrow, which co-exist fine.
+    let (exec_plan, standing, timer_loop, strategy) = tokio::join!(
+        active_execution_plan(session_key_str),
+        active_standing_goal(session_key_str),
+        active_timer_loop(session_key_str),
+        active_strategy(session_key_str),
+    );
+    resolved_context.execution_plan = exec_plan;
+    resolved_context.standing_goal = standing;
+    resolved_context.timer_loop = timer_loop;
+    // Render the welded Strategy into its two prompt surfaces: the full
+    // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
+    // the guardrail-only echo for the Dynamic `StrategyPointerLayer` (per-
+    // turn tail near the read head). Both renders are pure/deterministic
+    // (no timestamps). `None` Strategy leaves both fields `None`, so both
+    // layers emit nothing and the prompt is byte-identical.
+    if let Some(s) = strategy {
+        resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
+        resolved_context.strategy_guardrails = Some(crate::strategy::render_guardrails_only(&s));
+    }
+    // Voice mode: read the session-keyed flag the gateway inbound router set
+    // for this turn so `VoiceModeLayer` (priority 1710) injects the
+    // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
+    // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
+    // leaves the prompt byte-identical; the `transcribed` bit distinguishes
+    // a spoken-only turn from one whose input was ASR-transcribed.
+    resolved_context.voice = match crate::gateway::voice::session_mode::get(session_key_str) {
+        None => crate::thinker::context::VoiceContext::Off,
+        Some(false) => crate::thinker::context::VoiceContext::Spoken,
+        Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
+    };
+    resolved_context
+}
+
 /// Resolve the hard per-run iteration cap for the harness loop.
 ///
 /// D2 precedence (highest → lowest, first positive value wins):
@@ -696,6 +806,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
         content.text.as_str()
     }
     match input {
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::Prompt(s) => s.clone(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
@@ -704,6 +815,7 @@ pub(crate) fn last_user_query(input: &FlowInput) -> String {
             .find(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_default(),
+        // rust-doctor-disable-next-line excessive-clone
         FlowInput::History { prompt, .. } => prompt.clone(),
         FlowInput::Resume => String::new(),
     }

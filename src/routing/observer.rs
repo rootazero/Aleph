@@ -32,6 +32,7 @@ pub fn outcome_from_session_completed(
         iterations: iterations.min(u32::MAX as usize) as u32,
         tool_calls_made: tool_calls_made.min(u32::MAX as usize) as u32,
         terminate_reason: terminate_reason_to_raw(terminate_reason),
+        // rust-doctor-disable-next-line excessive-clone
         token_breakdown: token_breakdown.clone().unwrap_or_default(),
         estimated_cost: None,
         duration_ms: duration_ms.unwrap_or(0),
@@ -131,9 +132,13 @@ impl TraceSink for OutcomeObserver {
                     "recording routing experience"
                 );
                 tokio::spawn(Self::record_to_store(
+                    // rust-doctor-disable-next-line excessive-clone
                     self.store.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     self.agent_id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     self.model_id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     self.provider_id.clone(),
                     task_emb,
                     outcome,

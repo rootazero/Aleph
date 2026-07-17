@@ -231,7 +231,9 @@ use crate::session::in_process::InProcessActorSessionService;
 use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
 fn fresh_service() -> std::sync::Arc<dyn SessionService> {
+    // rust-doctor-disable-next-line unwrap-in-production
     let conn = rusqlite::Connection::open_in_memory().unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
     migrate_add_session_events(&conn).unwrap();
     let store: std::sync::Arc<dyn SessionEventStore> =
         std::sync::Arc::new(SqliteEventStore::new(conn));
@@ -244,8 +246,10 @@ async fn seed_session_prompt_emits_one_user_message() {
     let sid = SessionKey::ephemeral("seed-prompt");
     super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Prompt("hello".into()))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("seed Prompt");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let user_count = events
         .iter()
@@ -293,12 +297,15 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
         },
     )
     .await
+    // rust-doctor-disable-next-line unwrap-in-production
     .expect("seed History");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let users: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -306,6 +313,7 @@ async fn seed_session_history_replays_turns_and_adds_prompt() {
     let assistants: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::AssistantMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -331,6 +339,7 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
     // Pre-seed ONE user message so the log is non-empty
     seed_session(service.as_ref(), &sid, FlowInput::Prompt("earlier".into()))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
     // Then seed History with the SAME history turn + a new prompt
@@ -349,13 +358,16 @@ async fn history_input_does_not_reseed_when_log_nonempty() {
         },
     )
     .await
+    // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
 
     // Collect user texts from get_events
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let user_texts: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })
@@ -386,12 +398,15 @@ async fn seed_session_multimodal_emits_one_user_per_entry() {
     ];
     super::session_seed::seed_session(service.as_ref(), &sid, FlowInput::Multimodal(msgs))
         .await
+        // rust-doctor-disable-next-line unwrap-in-production
         .expect("seed Multimodal");
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let events = service.get_events(&sid, None, None).await.unwrap();
     let users: Vec<String> = events
         .iter()
         .filter_map(|r| match &r.event {
+            // rust-doctor-disable-next-line excessive-clone
             SessionEvent::UserMessage { content, .. } => Some(content.text.clone()),
             _ => None,
         })

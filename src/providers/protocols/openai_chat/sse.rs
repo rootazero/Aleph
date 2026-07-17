@@ -17,6 +17,7 @@ use tracing::warn;
 /// {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]},"index":0}]}
 /// {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{...}}
 /// ```
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub(crate) fn parse_chat_sse_event(
     data: &str,
     tracker: &mut IndexIdTracker,

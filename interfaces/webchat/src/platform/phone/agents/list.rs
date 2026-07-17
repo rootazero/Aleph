@@ -159,7 +159,10 @@ pub fn PhoneAgentsList() -> impl IntoView {
                             let emoji = a.emoji.clone().unwrap_or_default();
                             let name = a.name.clone().unwrap_or_else(|| a.id.clone());
                             let is_default = a.is_default;
-                            let channel = binds.get(&a.id).cloned();
+                            let channel = binds
+                                .get(&a.id)
+                                .filter(|chs| !chs.is_empty())
+                                .map(|chs| chs.join(", "));
                             view! {
                                 <div class="cell" on:click=move |_| navigate(&format!("/agents/{}", id_for_click), NavigateOptions::default())>
                                     <span class="cell-leading" style="font-size:18px;">{emoji}</span>

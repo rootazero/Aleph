@@ -28,6 +28,7 @@ where
     F: Future<Output = T>,
 {
     crate::sandbox::context::SESSION_ID
+        // rust-doctor-disable-next-line excessive-clone
         .scope(session_id.clone(), fut)
         .await
 }
@@ -50,8 +51,11 @@ pub async fn invoke_with_session_trace(
                 session_id,
                 SessionEvent::ToolCallRequested {
                     turn_id,
+                    // rust-doctor-disable-next-line excessive-clone
                     call_id: call_id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     name: name.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
                     input: input.clone(),
                     at: now_ms(),
                 },
@@ -77,7 +81,9 @@ pub async fn invoke_with_session_trace(
                         session_id,
                         SessionEvent::ToolResult {
                             turn_id,
+                            // rust-doctor-disable-next-line excessive-clone
                             call_id: call_id.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
                             output: output.clone(),
                             at: now_ms(),
                         },
@@ -99,7 +105,9 @@ pub async fn invoke_with_session_trace(
                         session_id,
                         SessionEvent::ToolCallDenied {
                             turn_id,
+                            // rust-doctor-disable-next-line excessive-clone
                             call_id: call_id.clone(),
+                            // rust-doctor-disable-next-line excessive-clone
                             reason: reason.clone(),
                             at: now_ms(),
                         },
@@ -121,6 +129,7 @@ pub async fn invoke_with_session_trace(
                         session_id,
                         SessionEvent::ToolError {
                             turn_id,
+                            // rust-doctor-disable-next-line excessive-clone
                             call_id: call_id.clone(),
                             error: e.to_string(),
                             at: now_ms(),

@@ -70,6 +70,7 @@ impl DreamStage for GoalLessonsPromoteStage {
                 Some(md) => KnowledgeNote::from_markdown(&goal.id, &md)
                     .map(|n| n.facts)
                     .unwrap_or_default(),
+                // rust-doctor-disable-next-line unnecessary-allocation
                 None => Vec::new(),
             };
 
@@ -146,7 +147,7 @@ mod tests {
         // `append_to_note` can write notes under `temp/<agent>/<cat>/`. Without
         // this, the backend treats `temp` as a DB *file*, and the note mkdir
         // fails with "Not a directory" — silently zeroing `goal_lessons_promoted`.
-        std::fs::create_dir_all(&temp).unwrap();
+        tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =

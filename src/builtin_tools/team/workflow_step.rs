@@ -110,24 +110,23 @@ impl AlephTool for WorkflowStepReviewTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Read the task's definition of done once, up front, so every verdict
-        // path can echo it back. A missing task / no criteria yields an empty
-        // list (omitted from the wire), keeping the legacy response shape.
-        let criteria = {
+        // Read the task once, up front: every verdict path echoes back its
+        // definition of done, and the retry path needs its current metadata
+        // for the budget-anchor stamp. A missing task yields empty criteria
+        // (omitted from the wire), keeping the legacy response shape.
+        let task_snapshot = {
             let task_id = match &args {
                 WorkflowStepReviewArgs::Approve { task_id, .. }
                 | WorkflowStepReviewArgs::Reject { task_id, .. }
                 | WorkflowStepReviewArgs::Retry { task_id }
                 | WorkflowStepReviewArgs::Skip { task_id, .. } => task_id,
             };
-            self.coord_store
-                .get_task(task_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|t| read_acceptance_criteria(&t.metadata))
-                .unwrap_or_default()
+            self.coord_store.get_task(task_id).await.ok().flatten()
         };
+        let criteria = task_snapshot
+            .as_ref()
+            .map(|t| read_acceptance_criteria(&t.metadata))
+            .unwrap_or_default();
 
         match args {
             WorkflowStepReviewArgs::Approve { task_id, comment } => {
@@ -195,31 +194,20 @@ impl AlephTool for WorkflowStepReviewTool {
             }
             WorkflowStepReviewArgs::Retry { task_id } => {
                 debug!(task_id = %task_id, "workflow_step_review: retry");
-                // Snapshot BEFORE the reset so a leftover lock can be released
-                // with its actual holder — releasing with "" never clears a
-                // genuinely held lock (the store checks holder equality) and
-                // would leave the retried task Pending-but-unschedulable until
-                // release_stale_locks fires.
-                let snapshot = self.coord_store.get_task(&task_id).await.ok().flatten();
-                let locked_by = snapshot.as_ref().and_then(|t| t.locked_by.clone());
-                // Re-arm the retry budget for this fresh intervention (see
-                // team_task_control Retry): baseline = failed attempts so far,
-                // stamped in the same write as the status reset.
-                let failed_so_far = self
-                    .coord_store
-                    .list_task_runs(&task_id)
-                    .await
-                    .map(|runs| crate::agents::swarm::tasks::retry::count_failed_attempts(&runs))
-                    .unwrap_or(0);
-                let metadata = snapshot.as_ref().map(|t| {
-                    crate::agents::swarm::tasks::merge_metadata_patch(
-                        &t.metadata,
-                        serde_json::json!({
-                            crate::agents::swarm::tasks::retry::RETRY_ATTEMPTS_BASE_METADATA_KEY:
-                                failed_so_far,
-                            // Clear a stale pause-origin stamp (see task_control Retry).
-                            crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
-                        }),
+                // Snapshot the leftover lock holder BEFORE the reset so it can
+                // be released below with its actual holder — releasing with ""
+                // never clears a genuinely held lock (the store checks holder
+                // equality) and would leave the retried task
+                // Pending-but-unschedulable until release_stale_locks fires.
+                let locked_by = task_snapshot.as_ref().and_then(|t| t.locked_by.clone());
+                // A reviewer-driven retry is a deliberate re-queue: stamp the
+                // budget anchor so the automatic retry ladder re-arms instead
+                // of dying on the first new failure (mirrors
+                // `team_task_control.retry`).
+                let metadata = task_snapshot.map(|t| {
+                    crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+                        t.metadata,
+                        chrono::Utc::now().timestamp().max(0) as u64,
                     )
                 });
                 self.coord_store

@@ -29,12 +29,11 @@ pub fn loop_key(session_id: &str) -> String {
     format!("loop:{session_id}")
 }
 
-// NOTE: there is deliberately NO `workflow_key` here. A workflow run's
-// strategy frame rides the materialised tasks' metadata
-// (`WORKFLOW_STRATEGY_KEY`, rendered by `build_handoff_context`) — a
-// store row keyed by run id had zero readers (`resolve_active_strategy`
-// resolves goal → loop → team → session only) and leaked one row per run,
-// so it was removed (R10 YAGNI).
+// NOTE: there is deliberately no `workflow:` tier — a workflow run's strategy
+// travels as per-step task metadata (`WORKFLOW_STRATEGY_KEY`, stamped by
+// `workflow::materialize`, rendered by `dispatcher/handoff.rs`), never as a
+// `strategies`-table row. A write-only `workflow:<run_id>` key existed for a
+// while and leaked one orphan row per run; removed (R10 zero-consumer).
 
 /// Composite-key prefix for a NAKED-loop (plain interactive chat) strategy,
 /// keyed by session. Lowest precedence in `active_strategy` (goal > loop >

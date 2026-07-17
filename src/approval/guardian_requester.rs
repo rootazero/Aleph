@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
-use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
 use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
 use crate::thinker::prompt_builder::SystemPromptPart;
@@ -261,7 +261,7 @@ impl GuardianApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for GuardianApprovalRequester {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome {
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         // Blind-judge guard: the one-line `summary` is capped at 200 chars and
         // marked with a trailing '…' when truncated. A malicious command whose
         // dangerous tail sits past the cap would be invisible to the judge —
@@ -291,7 +291,7 @@ impl ApprovalRequester for GuardianApprovalRequester {
                 if v.allow && v.risk == "low" {
                     tracing::info!(tool = %action.tool_name, rationale = %v.rationale,
                         "guardian: auto-approved low-risk action");
-                    return ApprovalOutcome::Approved;
+                    return ApprovalOutcome::Approved.into();
                 }
                 tracing::info!(tool = %action.tool_name, risk = %v.risk, allow = v.allow,
                     rationale = %v.rationale, "guardian: escalating to human");
@@ -379,9 +379,9 @@ mod tests {
     }
     #[async_trait]
     impl ApprovalRequester for CountingFallback {
-        async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalOutcome {
+        async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalResponse {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.outcome
+            self.outcome.into()
         }
     }
 
@@ -404,7 +404,7 @@ mod tests {
         });
         let guardian = GuardianApprovalRequester::new(provider, fallback.clone());
         assert_eq!(
-            guardian.request_approval(&action()).await,
+            guardian.request_approval(&action()).await.outcome,
             ApprovalOutcome::Approved
         );
         assert_eq!(fallback.calls.load(Ordering::SeqCst), 0, "human not asked");
@@ -423,7 +423,7 @@ mod tests {
             });
             let guardian = GuardianApprovalRequester::new(provider, fallback.clone());
             assert_eq!(
-                guardian.request_approval(&action()).await,
+                guardian.request_approval(&action()).await.outcome,
                 ApprovalOutcome::ApprovedForSession,
                 "the HUMAN decided (fallback outcome), not the guardian"
             );
@@ -440,7 +440,7 @@ mod tests {
         });
         let guardian = GuardianApprovalRequester::new(provider, fallback.clone());
         assert_eq!(
-            guardian.request_approval(&action()).await,
+            guardian.request_approval(&action()).await.outcome,
             ApprovalOutcome::Denied
         );
         assert_eq!(fallback.calls.load(Ordering::SeqCst), 1);
@@ -477,7 +477,7 @@ mod tests {
         });
         let guardian = GuardianApprovalRequester::new(provider, fallback.clone());
         assert_eq!(
-            guardian.request_approval(&action).await,
+            guardian.request_approval(&action).await.outcome,
             ApprovalOutcome::Denied,
             "blind action must escalate to the human, not auto-approve"
         );
@@ -574,7 +574,7 @@ mod tests {
         // First THRESHOLD approvals each hit the (down) provider and escalate.
         for _ in 0..GUARDIAN_BREAKER_THRESHOLD {
             assert_eq!(
-                guardian.request_approval(&action()).await,
+                guardian.request_approval(&action()).await.outcome,
                 ApprovalOutcome::Denied
             );
         }
@@ -588,7 +588,7 @@ mod tests {
         // The next approval must skip the doomed judge call entirely — provider
         // call count stays flat — yet still escalate to the human.
         assert_eq!(
-            guardian.request_approval(&action()).await,
+            guardian.request_approval(&action()).await.outcome,
             ApprovalOutcome::Denied
         );
         assert_eq!(
@@ -663,7 +663,7 @@ mod tests {
         let guardian = GuardianApprovalRequester::new(provider, fallback.clone());
         for _ in 0..(GUARDIAN_BREAKER_THRESHOLD + 2) {
             assert_eq!(
-                guardian.request_approval(&action()).await,
+                guardian.request_approval(&action()).await.outcome,
                 ApprovalOutcome::Denied
             );
         }

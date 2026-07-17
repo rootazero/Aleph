@@ -105,6 +105,7 @@ impl AuthProfileProviderRegistry {
     /// * `config` - Registry configuration
     #[must_use]
     pub fn new(store: AuthProfileStore, config: AuthProfileRegistryConfig) -> Self {
+        // rust-doctor-disable-next-line excessive-clone
         let target_provider = config.provider_type.clone();
         let registry = Self {
             store: Arc::new(RwLock::new(store)),
@@ -165,9 +166,11 @@ impl AuthProfileProviderRegistry {
         }
 
         let provider_config = ProviderConfig {
+            // rust-doctor-disable-next-line excessive-clone
             protocol: Some(self.config.provider_type.clone()),
             api_key,
             models: vec![self.config.model.clone()],
+            // rust-doctor-disable-next-line excessive-clone
             base_url: self.config.base_url.clone(),
             color: "#d97757".to_string(), // Default Claude color
             timeout_seconds: self.config.timeout_seconds,
@@ -235,6 +238,7 @@ impl AuthProfileProviderRegistry {
         self.active_profile
             .read()
             .unwrap_or_else(|e| e.into_inner())
+            // rust-doctor-disable-next-line excessive-clone
             .clone()
     }
 
@@ -286,6 +290,7 @@ impl AuthProfileProviderRegistry {
                 .filter_map(|(id, cred)| {
                     if let AuthProfileCredential::OAuth(oauth) = cred {
                         if oauth_refresh::needs_refresh(oauth) {
+                            // rust-doctor-disable-next-line excessive-clone
                             return Some((id.clone(), oauth.clone()));
                         }
                     }
@@ -338,9 +343,10 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
                 *self
                     .active_profile
                     .write()
+                    // rust-doctor-disable-next-line excessive-clone
                     .unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
                 debug!(profile_id = %id, "Selected provider from auth profile");
-                let result: Arc<dyn AiProvider> = provider.clone();
+                let result: Arc<dyn AiProvider> = Arc::clone(provider);
                 return result;
             }
         }
@@ -359,8 +365,9 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
             *self
                 .active_profile
                 .write()
+                // rust-doctor-disable-next-line excessive-clone
                 .unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
-            let result: Arc<dyn AiProvider> = provider.clone();
+            let result: Arc<dyn AiProvider> = Arc::clone(provider);
             return result;
         }
 

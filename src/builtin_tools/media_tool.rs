@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -17,11 +18,78 @@ use crate::tools::AlephTool;
 #[derive(Clone)]
 pub struct MediaTool {
     platform: Arc<dyn aleph_desktop::DesktopPlatform>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl MediaTool {
     pub fn new(platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
-        Self { platform }
+        Self {
+            platform,
+            approval_policy: None,
+        }
+    }
+
+    /// Attach an approval policy to gate camera/microphone capture.
+    ///
+    /// Capture actions (`camera_snap` / `camera_clip` / `record_audio`) turn on
+    /// a sensor and are checked before execution; read-only actions
+    /// (`list_audio_devices`, `speech_to_text` over an existing file) always
+    /// proceed. Without a policy, capture proceeds as before (byte-identical).
+    #[must_use]
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
+    /// Camera/mic capture actions that turn on a sensor.
+    fn is_capture_action(action: &str) -> bool {
+        matches!(action, "camera_snap" | "camera_clip" | "record_audio")
+    }
+
+    /// Check the approval policy for a capture action. Returns `Some(refusal)`
+    /// when denied or awaiting confirmation, `None` when allowed (or the action
+    /// is read-only, or no policy is configured).
+    async fn check_capture_approval(&self, action: &str) -> Option<MediaOutput> {
+        if !Self::is_capture_action(action) {
+            return None;
+        }
+        let policy = self.approval_policy.as_ref()?;
+
+        let target = format!("media {action}");
+        let (agent_id, context) = crate::approval::audit_identity("media", action, &target);
+        let request = ActionRequest {
+            action_type: ActionType::MediaCapture,
+            target,
+            agent_id,
+            context,
+            timestamp: chrono::Utc::now(),
+        };
+
+        match policy.check(&request).await {
+            ApprovalDecision::Allow => {
+                policy.record(&request, &ApprovalDecision::Allow).await;
+                None
+            }
+            ApprovalDecision::Deny { reason } => {
+                let decision = ApprovalDecision::Deny {
+                    reason: reason.clone(),
+                };
+                policy.record(&request, &decision).await;
+                Some(MediaOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Action denied by approval policy: {reason}")),
+                })
+            }
+            ApprovalDecision::Ask { prompt } => Some(MediaOutput {
+                success: false,
+                data: Some(serde_json::json!({
+                    "approval_required": true,
+                    "prompt": prompt,
+                })),
+                message: Some(format!("Approval required: {prompt}")),
+            }),
+        }
     }
 }
 
@@ -82,6 +150,13 @@ Examples:
     type Output = MediaOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Gate camera/mic capture before touching the sensor. Read-only actions
+        // (device list / STT over a file) and the no-policy path fall straight
+        // through.
+        if let Some(refusal) = self.check_capture_approval(&args.action).await {
+            return Ok(refusal);
+        }
+
         let media_cap = match self.platform.media() {
             Some(m) => m,
             None => {

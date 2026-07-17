@@ -102,7 +102,8 @@ impl BuiltinToolRegistry {
                     Arc::clone(ar),
                     Arc::clone(wm),
                     Arc::clone(sm),
-                );
+                )
+                .with_event_bus(config.event_bus.clone());
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {
@@ -117,8 +118,9 @@ impl BuiltinToolRegistry {
                     config.event_bus.clone(),
                     Arc::clone(&agent_catalog),
                 );
-                // Same persistence wiring as create: without it the deleted
-                // agent's TOML definition survives and boot resurrects it.
+                // TOML persistence parity with create: without it, deletion
+                // only touches the runtime registry and the agent silently
+                // resurrects at the next daemon boot.
                 if let Some(ref am) = config.agent_manager {
                     tool.with_agent_manager(Arc::clone(am))
                 } else {

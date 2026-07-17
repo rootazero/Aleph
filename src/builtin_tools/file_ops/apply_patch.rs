@@ -362,32 +362,51 @@ make several coordinated edits at once."#;
         };
 
         let mut hunks_applied = 0;
+        let mut skipped_context_less = 0usize;
+        // Forward search cursor: each hunk is located only in the content AT OR
+        // AFTER the end of the previous hunk's applied edit. V4A hunks are
+        // ordered top-to-bottom, so a later hunk must never bind to an earlier
+        // (already-processed) occurrence of an identical block — without this,
+        // two hunks editing two identical blocks both matched the FIRST one,
+        // silently corrupting the file. The cursor is a byte offset into the
+        // (rewritten) `content`; it always lands on a char boundary because it
+        // is set to the end of a just-spliced, valid-UTF-8 replacement.
+        let mut search_from = 0usize;
         for (i, hunk) in hunks.iter().enumerate() {
             let (old_text, new_text) = hunk_to_old_new(hunk);
             if old_text.is_empty() {
-                // Pure addition with no context — append (rare). Skip
-                // gracefully rather than producing a confusing "not found".
+                // Pure addition with no context has no anchor to place it. Count
+                // it and fail after the loop (below) rather than silently
+                // dropping it while reporting success — the model must re-emit
+                // with surrounding context or an EOF-anchored hunk.
+                skipped_context_less += 1;
                 continue;
             }
-            // Substring `locate` is the fast path and carries the rich "why"
-            // diagnostic on a miss. `locate_lines` is the codex `seek_sequence`
-            // line-anchored matcher — used as a fallback when the substring
-            // search misses (whitespace / indentation / CRLF drift in a context
-            // line), and as the *primary* matcher for EOF-anchored hunks, which
-            // must bind to the file tail rather than a head-first substring hit
-            // on an identical earlier block.
-            let substring = locate(&content, &old_text);
-            let range = if hunk.eof_anchor {
-                locate_lines(&content, &old_text, true).or_else(|| first_range(&substring))
+            // Search only the un-consumed tail `content[search_from..]`, then
+            // translate any hit back into whole-`content` coordinates. Substring
+            // `locate` is the fast path and carries the rich "why" diagnostic on
+            // a miss. `locate_lines` is the codex `seek_sequence` line-anchored
+            // matcher — a fallback when the substring search misses (whitespace /
+            // indentation / CRLF drift), and the *primary* matcher for
+            // EOF-anchored hunks, which must bind to the tail rather than a
+            // head-first substring hit on an identical earlier block.
+            let tail = &content[search_from..];
+            let substring = locate(tail, &old_text);
+            let rel_range = if hunk.eof_anchor {
+                locate_lines(tail, &old_text, true).or_else(|| first_range(&substring))
             } else {
                 match first_range(&substring) {
                     Some(r) => Some(r),
-                    None => locate_lines(&content, &old_text, false),
+                    None => locate_lines(tail, &old_text, false),
                 }
             };
-            match range {
-                Some(r) => {
-                    content = apply_ranges(&content, &[r], &new_text);
+            match rel_range {
+                Some((s, e)) => {
+                    let abs = (s + search_from, e + search_from);
+                    content = apply_ranges(&content, &[abs], &new_text);
+                    // Advance the cursor past the just-spliced replacement so the
+                    // next hunk cannot rebind to it or anything before it.
+                    search_from = abs.0 + new_text.len();
                     hunks_applied += 1;
                 }
                 None => {
@@ -404,10 +423,21 @@ make several coordinated edits at once."#;
             }
         }
 
-        // If every hunk was a context-less pure addition it was skipped above,
-        // leaving nothing applied. Reporting success here would tell the model
-        // its additions landed when the file is unchanged — fail explicitly so
-        // it re-emits the hunk with surrounding context or an EOF anchor.
+        // Any context-less pure addition could not be anchored. Reporting
+        // success would tell the model its additions landed when they were
+        // dropped — fail explicitly (whether or not other hunks applied) so it
+        // re-emits with surrounding context or an EOF anchor.
+        if skipped_context_less > 0 {
+            return fail(
+                "update",
+                path,
+                format!(
+                    "{skipped_context_less} context-less addition hunk(s) could not be placed — \
+                     include surrounding context lines or an EOF-anchored hunk so each addition \
+                     has an anchor"
+                ),
+            );
+        }
         if hunks_applied == 0 && !hunks.is_empty() {
             return fail(
                 "update",
@@ -1039,6 +1069,70 @@ mod tests {
         assert!(outcome.success, "{:?}", outcome);
         let updated = tokio::fs::read_to_string(&app_py).await.unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
+    }
+
+    #[tokio::test]
+    async fn update_multi_hunk_forward_cursor_edits_distinct_occurrences() {
+        // Two identical lines; two hunks whose replacement STILL contains the
+        // old text. Without a forward cursor the second hunk rebinds to the
+        // first (already-edited) occurrence and the file is corrupted; with the
+        // cursor each hunk edits its own occurrence in order.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("f.txt");
+        tokio::fs::write(&f, "a = a\na = a\n").await.unwrap();
+
+        let tool = ApplyPatchTool::new();
+        let hunk = |suffix: &str| Hunk {
+            header: None,
+            lines: vec![
+                HunkLine::Remove("a = a".into()),
+                HunkLine::Add(format!("a = a  # {suffix}")),
+            ],
+            eof_anchor: false,
+        };
+        let outcome = tool
+            .do_update("f.txt", None, &[hunk("one"), hunk("two")], Some(dir.path()))
+            .await;
+        assert!(outcome.success, "{:?}", outcome);
+        let updated = tokio::fs::read_to_string(&f).await.unwrap();
+        assert_eq!(
+            updated, "a = a  # one\na = a  # two\n",
+            "each hunk must edit a distinct occurrence, in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_fails_on_unplaceable_context_less_addition() {
+        // A normal hunk plus a context-less pure-add hunk: the addition has no
+        // anchor, so the whole update must fail explicitly (and leave the file
+        // untouched) rather than report success while dropping the addition.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("f.txt");
+        tokio::fs::write(&f, "keep\n").await.unwrap();
+
+        let tool = ApplyPatchTool::new();
+        let normal = Hunk {
+            header: None,
+            lines: vec![HunkLine::Remove("keep".into()), HunkLine::Add("kept".into())],
+            eof_anchor: false,
+        };
+        let pure_add = Hunk {
+            header: None,
+            lines: vec![HunkLine::Add("appended".into())],
+            eof_anchor: false,
+        };
+        let outcome = tool
+            .do_update("f.txt", None, &[normal, pure_add], Some(dir.path()))
+            .await;
+        assert!(!outcome.success, "{:?}", outcome);
+        assert!(
+            outcome.message.contains("context-less"),
+            "message must explain the unplaceable addition: {}",
+            outcome.message
+        );
+        // No partial write — the file is byte-for-byte unchanged.
+        let after = tokio::fs::read_to_string(&f).await.unwrap();
+        assert_eq!(after, "keep\n", "a failed update must not mutate the file");
     }
 
     #[tokio::test]

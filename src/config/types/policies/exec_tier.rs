@@ -445,6 +445,32 @@ mod tests {
         assert!(!auto.asks_for_arguments("bash", &json!({"operation": "delete"})));
     }
 
+    /// The documented precedence end-to-end THROUGH the merge every turn runs:
+    /// an operator's explicit `allow` — even one equal to the default — beats
+    /// the tier after `ToolPermissionsConfig::merge`. The former merge
+    /// "compression" dropped such entries, so the Ask tier re-gated tools the
+    /// operator had deliberately named.
+    #[test]
+    fn explicit_allow_survives_merge_and_beats_the_tier() {
+        let global = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("bash".to_string(), PermissionAction::Allow)]
+                .into_iter()
+                .collect(),
+        };
+        let merged = ToolPermissionsConfig::merge(&global, &ToolPermissionsConfig::default());
+        assert_eq!(
+            effective_permission(Some(&merged), Some(ExecTier::Ask), builtin("bash")),
+            PermissionAction::Allow,
+            "the operator named `bash` — the tier has nothing to say"
+        );
+        // An unnamed mutating tool is still tightened by the tier.
+        assert_eq!(
+            effective_permission(Some(&merged), Some(ExecTier::Ask), builtin("file_write")),
+            PermissionAction::Ask
+        );
+    }
+
     #[test]
     fn tier_id_roundtrip() {
         for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {

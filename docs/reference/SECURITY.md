@@ -212,7 +212,11 @@ A run with no human attached is stamped `UNATTENDED_KEY`
 is not routable** (a job carrying both a source channel and a conversation has a
 real `/approve` path — stamping it would auto-deny a working HITL flow),
 heartbeat and a2a always. `continuation_metadata` inserts the marker **last**, so
-an inherited key can never demote a continuation to attended.
+an inherited key can never demote a continuation to attended. The flag also
+rides `TurnContext.unattended`, so `session_send` stamps **wait-mode** children
+of a headless parent too (`fire_and_forget || parent.unattended`) — previously
+only fire-and-forget children were stamped and a headless parent's wait-mode
+child hung the full 120 s per gated tool before refusing.
 
 `ScopedToolService` then denies confirm-gated tools immediately instead of
 publishing an approval card into the void and blocking for the 120s timeout. The
@@ -323,7 +327,11 @@ pub struct ApprovalAction {
 
 // src/sandbox/exec_approval/gate.rs
 trait ApprovalRequester {
-    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalOutcome;
+    async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse;
+}
+pub struct ApprovalResponse {
+    pub outcome: ApprovalOutcome,
+    pub deny_reason: Option<String>, // the human's own words on a /deny <reason>
 }
 ```
 
@@ -369,6 +377,11 @@ pub enum ApprovalDecisionType {
 - **Denial is terminal** for that call, and is returned to the model as an
   in-context instruction not to retry it, rewrite it, or achieve the same result
   by other means. Three denials trip the sticky pause in `denial_ledger.rs`.
+- **A denial can carry the human's reason.** `/deny wrong directory, use /tmp`
+  (channels) or `exec.approval.resolve {reason}` (RPC) stamps
+  `ExecApprovalRecord.deny_reason`; the gate renders it verbatim in the
+  model-facing error (`The user said: "…"`) so the model re-plans on the actual
+  objection. Display-layer only — the ledger still keys on the fingerprint.
 
 ---
 
@@ -1095,17 +1108,51 @@ from the pre-revert build:
 - **`file_ops` on `tools.invoke`**: its destructive ops are argument-level and
   this surface can't honor them, so `file_ops` is now on the gateway denylist.
 
+### Closed in round 4 (2026-07-17, permission-hierarchy hardening)
+
+- **`merge()` erased the explicitness bit** (correctness): the 3-tier merge
+  dropped any override whose merged value equalled the merged default as a
+  "compression". Two casualties: a same-layer exact-name carve-out inside a
+  glob family (`github__* = ask` + `github__list_issues = allow` — the `allow`
+  vanished and the glob re-captured the tool), and the *explicitness* of an
+  `allow` — after merge, `resolve_explicit` could no longer tell "the operator
+  decided Allow" from silence, so the exec tier re-gated tools the operator
+  had deliberately named. Merge now keeps every named key; pinned end-to-end
+  (`explicit_allow_survives_merge_and_beats_the_tier`).
+- **Operator gate + confirm gate double-prompt**: `vault_store` / `agent_delete`
+  sit in both `OPERATOR_TOOLS` and `CONFIRMATION_REQUIRED_TOOLS`; an operator's
+  `AllowOnce` (which writes nothing into session memory) fell through to the
+  confirmation gate, which re-prompted the very call the operator just read.
+  The operator-approved call now skips the confirm gate for that call only;
+  operator-tier callers (who pass the config gate without an approval) still
+  hit it.
+- **Wait-mode `session_send` children of a headless parent** now inherit
+  `unattended`: `TurnContext` carries the flag (fed from `UNATTENDED_KEY` at
+  run start) and `build_sub_metadata` stamps `fire_and_forget || parent
+  .unattended` — an instant fail-closed deny instead of a 120 s hang.
+- **Free-text `/deny <reason>` back to the model** (hermes parity): the reason
+  rides `ExecApprovalRecord.deny_reason` → `ResolvedDecision` →
+  `ApprovalResponse` (the `ApprovalRequester` trait now returns outcome +
+  reason; transports that cannot carry one use `From<ApprovalOutcome>`), and
+  the dispatch gate renders it verbatim — `The user said: "…"` — in the
+  model-facing error on the confirm, config-sudo, hook-Ask and sandbox
+  elevation paths. `exec.approval.resolve` accepts an optional `reason`
+  param; the cluster reverse-RPC response carries an optional `deny_reason`
+  (older nodes ignore it). Deliberately NOT ledgered — the denial ledger keys
+  on the fingerprint, and the reason is display-layer.
+- **Entropy**: deleted the dead `ChannelPolicy` trait island
+  (`ChannelPolicy` / `WhatsAppPolicy` / `PolicyDecision`, zero consumers —
+  WhatsApp's live policy is `wa_policy/`, which consumes the
+  `ChannelAccessConfig` data types directly). `matches_glob` now compiles
+  through a bounded process-wide regex cache (it sits on the per-tool
+  `resolve_explicit` hot path).
+
 ### Still open (honest)
 
 - `tools.invoke` has no *general* argument-level tier parity (needs an approval
   transport on the RPC surface). `file_ops` — the one destructive multiplexer —
   is now denied outright there, but the general gap remains for any future
   argument-gated tool.
-- Wait-mode `session_send` children of a *headless* parent do not inherit the
-  parent's `unattended` (only fire-and-forget children are stamped, and
-  `TurnContext` has no parent-unattended field to propagate). Security-wise this
-  still fails closed — an un-routable child approval times out to a refusal — but
-  it is a 120s hang, not an instant deny.
 - The `FullRead` / `FullWrite` / `ProxyOnly` sandbox-policy variants and the
   managed per-host proxy subsystem remain dead (no producer sets them); pruning
   them is deferred (cross-platform driver match-arm surgery — track with the
@@ -1113,8 +1160,9 @@ from the pre-revert build:
 - No user-editable floor under `Full` in hermes' sense (an `approvals.deny` glob
   that survives yolo). `[policies.tool_permissions]` `deny` overrides already
   cover ~80% of it, since an explicit entry beats the tier.
-- Free-text `/deny <reason>` back to the model (hermes has it; cheap, genuinely
-  better than a bare "denied").
+- The Panel's approval card has no reason input yet — `/deny <reason>` works
+  from channels and the RPC accepts `reason`, but the Panel UI sends a bare
+  deny (UI-only gap, `interfaces/webchat`).
 
 ---
 

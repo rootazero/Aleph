@@ -77,7 +77,6 @@ pub enum EventType {
     TeamTaskCompleted,
     TeamTaskFailed,
     TeamDisbanded,
-    TeamMessageSent,
 
     // Wildcard for components that want all events
     All,
@@ -166,9 +165,10 @@ pub enum AlephEvent {
     TeamDisbanded {
         team_id: String,
     },
-
-    // Team messaging events
-    TeamMessageSent(TeamMessageEvent),
+    // NOTE: no `TeamMessageSent` — message sends are logged directly into the
+    // team event log by `MessageRouter::send`; a global-bus variant existed
+    // with zero publishers (its only producer sat behind a `with_bus` builder
+    // nothing called) and was removed (R10 zero-consumer).
 }
 
 impl AlephEvent {
@@ -205,7 +205,6 @@ impl AlephEvent {
             Self::TeamTaskCompleted { .. } => EventType::TeamTaskCompleted,
             Self::TeamTaskFailed { .. } => EventType::TeamTaskFailed,
             Self::TeamDisbanded { .. } => EventType::TeamDisbanded,
-            Self::TeamMessageSent(_) => EventType::TeamMessageSent,
         }
     }
 
@@ -242,7 +241,6 @@ impl AlephEvent {
             Self::TeamTaskCompleted { .. } => "TeamTaskCompleted",
             Self::TeamTaskFailed { .. } => "TeamTaskFailed",
             Self::TeamDisbanded { .. } => "TeamDisbanded",
-            Self::TeamMessageSent(_) => "TeamMessageSent",
         }
     }
 }
@@ -515,21 +513,6 @@ pub struct UserQuestion {
     pub question_id: String,
     pub question: String,
     pub options: Option<Vec<String>>,
-}
-
-// ============================================================================
-// Team Event Types
-// ============================================================================
-
-/// Team message sent event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeamMessageEvent {
-    pub team_id: String,
-    pub message_id: String,
-    pub from_agent: String,
-    pub to_agents: Vec<String>,
-    pub subject: String,
-    pub timestamp: i64,
 }
 
 // ============================================================================

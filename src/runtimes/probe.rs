@@ -160,17 +160,20 @@ fn find_in_dirs(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
 /// to `base`, returning a PATH string for `Command::env("PATH", ..)`. Pure and
 /// side-effect free — does NOT touch the global process env.
 fn extend_path(base: &OsStr, candidates: &[PathBuf]) -> OsString {
-    let mut seen: HashSet<PathBuf> = std::env::split_paths(base).collect();
+    let base_paths: Vec<PathBuf> = std::env::split_paths(base).collect();
+    let mut seen: HashSet<&Path> = base_paths.iter().map(|p| p.as_path()).collect();
     let mut prepended: Vec<PathBuf> = Vec::new();
     for cand in candidates {
-        if cand.is_dir() && seen.insert(cand.clone()) {
+        if cand.is_dir() && seen.insert(cand.as_path()) {
+            // rust-doctor-disable-next-line excessive-clone
             prepended.push(cand.clone());
         }
     }
     if prepended.is_empty() {
         return base.to_os_string();
     }
-    prepended.extend(std::env::split_paths(base));
+    drop(seen);
+    prepended.extend(base_paths);
     std::env::join_paths(&prepended).unwrap_or_else(|_| base.to_os_string())
 }
 
@@ -359,10 +362,12 @@ static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
 fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
     let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(re) = cache.get(pattern) {
+        // rust-doctor-disable-next-line excessive-clone
         return Some(re.clone());
     }
     match Regex::new(pattern) {
         Ok(re) => {
+            // rust-doctor-disable-next-line excessive-clone
             cache.insert(pattern, re.clone());
             Some(re)
         }

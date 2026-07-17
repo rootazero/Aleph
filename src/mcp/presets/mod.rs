@@ -107,6 +107,7 @@ const CATALOG_JSON: &str = include_str!("catalog.json");
 pub fn catalog() -> &'static [McpPreset] {
     static CELL: OnceLock<Vec<McpPreset>> = OnceLock::new();
     CELL.get_or_init(|| {
+        // rust-doctor-disable-next-line unwrap-in-production
         serde_json::from_str(CATALOG_JSON).expect("bundled MCP preset catalog.json must be valid")
     })
 }

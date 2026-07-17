@@ -30,6 +30,13 @@ pub enum ActionType {
     /// Write/mutate a personal-information store (Calendar, Reminders, Notes,
     /// Contacts) via the PIM tool.
     PimWrite,
+    /// Capture from the camera or microphone (`camera_snap` / `camera_clip` /
+    /// `record_audio`) via the media tool — a privacy-sensitive action that
+    /// turns on a sensor. macOS TCC prompts only on first use; after grant (and
+    /// on a headless/LAN daemon) capture is otherwise silent, so it gets its own
+    /// gate. Device enumeration / speech-to-text on an existing file are
+    /// read-only and are not classified here.
+    MediaCapture,
 }
 
 impl fmt::Display for ActionType {
@@ -46,6 +53,7 @@ impl fmt::Display for ActionType {
             Self::DesktopLaunchApp => "desktop launch app",
             Self::DesktopAutomation => "desktop automation script",
             Self::PimWrite => "personal-information write",
+            Self::MediaCapture => "camera/microphone capture",
         };
         write!(f, "{s}")
     }

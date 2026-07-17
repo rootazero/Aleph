@@ -13,7 +13,17 @@ pub enum TrustLevel {
 }
 
 impl TrustLevel {
-    /// Infer trust level from a socket address
+    /// Infer trust level from a socket address.
+    ///
+    /// NOTE (reverse proxy): this reads the raw socket peer and does **not**
+    /// resolve `X-Forwarded-For`, unlike the main gateway WS path
+    /// ([`crate::gateway::trusted_proxy`]). A2A is opt-in (`[a2a] enabled` is
+    /// off by default) and defaults to loopback-only; if you both enable A2A
+    /// and front it with a **same-host** reverse proxy, every proxied caller's
+    /// peer is `127.0.0.1` and would be classed `Local`. In that deployment set
+    /// `[a2a.server.security] local_bypass = false` so `Local` still requires
+    /// credentials. Full trusted-proxy resolution for A2A is a tracked
+    /// follow-up (see SECURITY.md).
     #[must_use]
     pub fn infer_from_addr(addr: &std::net::SocketAddr) -> Self {
         let ip = addr.ip();

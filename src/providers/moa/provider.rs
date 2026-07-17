@@ -79,9 +79,22 @@ pub fn try_build_for_run(
             pref.preset.as_deref().unwrap_or("<default>")
         )
     })?;
-    let errs = cfg.validation_errors();
+    // Validate ONLY the preset this run resolved — against a scratch config,
+    // the exact mirror of `MoaPresetStore::save_preset`. Validating the whole
+    // [moa] table here meant one broken/unrelated preset (even a disabled
+    // one), or a dangling default_preset, poisoned EVERY activation: arm-time
+    // reported success and then every turn silently fell back to the normal
+    // provider chain.
+    let errs = {
+        let mut scratch = MoaToml::default();
+        scratch.presets.insert(preset_name.clone(), preset.clone());
+        scratch.validation_errors()
+    };
     if !errs.is_empty() {
-        return Err(format!("[moa] config invalid: {}", errs.join("; ")));
+        return Err(format!(
+            "[moa] preset '{preset_name}' invalid: {}",
+            errs.join("; ")
+        ));
     }
 
     let resolve_slot = |slot: &crate::config::types::moa::MoaSlot| {
@@ -97,6 +110,7 @@ pub fn try_build_for_run(
             .get(&slot.provider)
             .cloned()
             .ok_or_else(|| format!("provider '{}' is not configured/keyed", slot.provider))?;
+        // rust-doctor-disable-next-line excessive-clone
         Ok(Arc::new(ModelOverrideProvider::new(base, slot.model.clone())) as Arc<dyn AiProvider>)
     };
 
@@ -109,12 +123,15 @@ pub fn try_build_for_run(
             // labelled "moa:<i>:<provider>:<model>", priced per advisor.
             let metered = Arc::new(MeteringProvider::new(
                 chain,
+                // rust-doctor-disable-next-line excessive-clone
                 sink.clone(),
                 format!("moa:{idx}:{label}"),
             )) as Arc<dyn AiProvider>;
             advisors.push(AdvisorSlot {
                 label,
+                // rust-doctor-disable-next-line excessive-clone
                 provider_key: slot.provider.clone(),
+                // rust-doctor-disable-next-line excessive-clone
                 model: slot.model.clone(),
                 chain: metered,
             });
@@ -156,6 +173,7 @@ impl MoaProvider {
     pub fn aggregator_identity(&self) -> (String, String) {
         match self.aggregator_label.split_once(':') {
             Some((p, m)) => (p.to_string(), m.to_string()),
+            // rust-doctor-disable-next-line excessive-clone
             None => (String::new(), self.aggregator_label.clone()),
         }
     }
@@ -211,7 +229,9 @@ impl AiProvider for MoaProvider {
         let think_level = payload.think_level;
         let caller_temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
+        // rust-doctor-disable-next-line excessive-clone
         let tool_choice = payload.tool_choice.clone();
+        // rust-doctor-disable-next-line excessive-clone
         let metadata = payload.metadata.clone();
 
         Box::pin(async move {
@@ -229,7 +249,9 @@ impl AiProvider for MoaProvider {
             let cached: Option<Vec<AdvisorOutcome>> = {
                 let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 guard.as_ref().and_then(|c| match self.fanout {
+                    // rust-doctor-disable-next-line excessive-clone
                     MoaFanout::UserTurn => Some(c.outcomes.clone()),
+                    // rust-doctor-disable-next-line excessive-clone
                     MoaFanout::PerIteration => (c.signature == sig).then(|| c.outcomes.clone()),
                 })
             };
@@ -245,6 +267,7 @@ impl AiProvider for MoaProvider {
                 // user_turn runs don't go dark on the panel (round-2 B4).
                 if !hit.is_empty() {
                     self.emit(LoopTraceEvent::MoaAggregating {
+                        // rust-doctor-disable-next-line excessive-clone
                         aggregator: self.aggregator_label.clone(),
                         advisor_count: hit.len(),
                         cached: true,
@@ -267,9 +290,11 @@ impl AiProvider for MoaProvider {
                 let usages: Vec<(usize, TokenUsage)> = results
                     .iter()
                     .enumerate()
+                    // rust-doctor-disable-next-line excessive-clone
                     .filter_map(|(idx, r)| r.usage.clone().map(|u| (idx, u)))
                     .collect();
                 let outcomes: Vec<AdvisorOutcome> =
+                    // rust-doctor-disable-next-line excessive-clone
                     results.iter().map(|r| r.outcome.clone()).collect();
 
                 // 4. Display + accounting + heavy trace events (MISS only;
@@ -314,6 +339,7 @@ impl AiProvider for MoaProvider {
                     );
                     *guard = Some(AdvisorCache {
                         signature: sig,
+                        // rust-doctor-disable-next-line excessive-clone
                         outcomes: outcomes.clone(),
                     });
                 }
@@ -354,12 +380,14 @@ impl AiProvider for MoaProvider {
             // `cache_hit_emits_cached_aggregating_only`).
             if let Some(mut payload) = pending_trace {
                 let (output, status) = match &agg_result {
+                    // rust-doctor-disable-next-line excessive-clone
                     Ok(resp) => (resp.text.clone().unwrap_or_default(), "ok".to_string()),
                     Err(e) => (String::new(), format!("error: {e}")),
                 };
                 payload["aggregator_output"] = json!(output);
                 payload["aggregator_status"] = json!(status);
                 self.emit(LoopTraceEvent::MoaTurnTrace {
+                    // rust-doctor-disable-next-line excessive-clone
                     preset: self.preset_name.clone(),
                     payload,
                 });

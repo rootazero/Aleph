@@ -24,10 +24,11 @@ impl WorkspaceApi {
         Ok(())
     }
 
-    /// Get all agent→channel bindings
+    /// Get all agent→channels bindings (many-to-one: an agent may be bound to
+    /// several channels; the server returns the full sorted list per agent).
     pub async fn agent_bindings(
         state: &DashboardState,
-    ) -> Result<std::collections::HashMap<String, String>, String> {
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
         let result = state.rpc_call("agents.bindings", Value::Null).await?;
         result
             .get("bindings")

@@ -170,13 +170,13 @@ fn close_overlay_resets_focus() {
 fn show_dialog_sets_focus() {
     let mut state = AppState::new("s".into(), "m".into());
     state.show_dialog(
-        "run-1".into(),
+        "telegram:bot:1:u1".into(),
         "Approve?".into(),
         vec!["Yes".into(), "No".into()],
     );
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    assert_eq!(dialog.run_id, "run-1");
+    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Approve?");
     assert_eq!(dialog.options.len(), 2);
     assert_eq!(dialog.selected, 0);
@@ -196,6 +196,18 @@ fn switch_session_clears_messages() {
         ChatMessage::System { content } => assert!(content.contains("s2")),
         other => panic!("Expected System message, got: {other:?}"),
     }
+}
+
+#[test]
+fn switch_session_drops_stale_cache_stat() {
+    // The old session's cache hit% is meaningless for a different prefix; a
+    // cache-less provider in the new session would otherwise display it
+    // forever (the stat only updates when a call reports cache activity).
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.cache_stat = Some((870, 1000));
+
+    state.switch_session("s2");
+    assert_eq!(state.cache_stat, None, "stale cache stat must not survive");
 }
 
 #[test]
@@ -405,7 +417,6 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
                 requested_tool_calls: 1,
                 executed_tool_calls: 1,
                 productive: true,
-                consecutive_errors: 0,
                 total_tokens: 64,
             },
         },
@@ -701,7 +712,11 @@ fn handle_run_error_adds_system_message() {
 #[test]
 fn open_approval_sets_focus_and_state() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.open_approval("ap-1".into(), "rm -rf /tmp/x".into(), Some("destructive".into()));
+    state.open_approval(
+        "ap-1".into(),
+        "rm -rf /tmp/x".into(),
+        Some("destructive".into()),
+    );
     assert_eq!(state.focus, Focus::Approval);
     let approval = state.approval.as_ref().unwrap();
     assert_eq!(approval.id, "ap-1");
@@ -746,6 +761,7 @@ fn handle_ask_user_shows_dialog() {
     let event = StreamEvent::AskUser {
         run_id: "run-1".into(),
         seq: 3,
+        session_key: "telegram:bot:1:u1".into(),
         question: "Allow file write?".into(),
         options: vec!["Allow".into(), "Deny".into()],
     };
@@ -753,7 +769,8 @@ fn handle_ask_user_shows_dialog() {
 
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
-    assert_eq!(dialog.run_id, "run-1");
+    // The dialog keeps the clarification key so the answer can resolve it.
+    assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Allow file write?");
 }
 

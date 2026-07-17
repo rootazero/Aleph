@@ -1,30 +1,42 @@
 //! Cache hit/miss monitor for prompt caching.
 //!
 //! Tracks whether LLM responses include cache read tokens, emitting warnings
-//! when consecutive misses suggest the stable prompt hash has changed
+//! when consecutive misses suggest the stable prompt prefix has changed
 //! unexpectedly.
+//!
+//! Two grain rules keep the signal honest (both were real false-positive /
+//! masking sources when the monitor was a single flat counter):
+//!
+//! - **Per-agent tracking.** Each agent id gets its own consecutive-miss
+//!   counter, so an interleaved cache-hitting agent can no longer reset the
+//!   counter and mask another agent's genuine prefix breakage.
+//! - **Armed only after observed cache activity.** Misses are counted only
+//!   once an agent has reported at least one non-zero `cache_read` or
+//!   `cache_creation` value. Endpoints that never report cache usage (mock
+//!   providers, Ollama, `cache_retention = off`, hosts without
+//!   `cache_control` support) produce `None`/0 readings that say nothing
+//!   about the stable prefix — they no longer pollute the counters.
 
 use crate::sync_primitives::Mutex;
+use std::collections::HashMap;
 
 // =============================================================================
 // Internal state
 // =============================================================================
 
-struct MonitorState {
+#[derive(Default)]
+struct AgentCacheState {
     consecutive_misses: u32,
     total_calls: u64,
-    total_hits: u64,
+    /// Set once this agent has observed any cache activity (read or write).
+    /// Miss counting (and the warn) is gated on it — see module docs.
+    armed: bool,
 }
 
-impl MonitorState {
-    const fn new() -> Self {
-        Self {
-            consecutive_misses: 0,
-            total_calls: 0,
-            total_hits: 0,
-        }
-    }
-}
+/// Bound on tracked agent ids. Subagent spawns can mint fresh ids over a
+/// long daemon lifetime; past the cap an arbitrary entry is evicted (the
+/// monitor is a best-effort watchdog, not an accounting ledger).
+const MAX_TRACKED_AGENTS: usize = 64;
 
 // =============================================================================
 // CacheMonitor
@@ -32,13 +44,15 @@ impl MonitorState {
 
 /// Monitor for prompt cache hit/miss tracking.
 ///
-/// Thread-safe via interior mutability.  Callers record the
-/// `cache_read_tokens` value from each call's `TokenUsage` to detect
-/// consecutive cache misses. (A per-call stable-content hash comparator
-/// used to live here too; it never gained a production caller and was
-/// wrong-grained for the process-wide singleton — removed per YAGNI.)
+/// Thread-safe via interior mutability. Callers record the
+/// `cache_read_tokens` / `cache_creation_tokens` values from each call's
+/// `TokenUsage` to detect consecutive cache misses per agent. (A per-call
+/// stable-content hash comparator and an aggregate `hit_rate()` accessor
+/// used to live here too; neither ever gained a production consumer —
+/// removed per YAGNI. Aggregate hit-rate lives in the usage DB rollup and
+/// the Panel Usage view, which are per-agent and persisted.)
 pub struct CacheMonitor {
-    state: Mutex<MonitorState>,
+    state: Mutex<HashMap<String, AgentCacheState>>,
 }
 
 impl CacheMonitor {
@@ -46,55 +60,79 @@ impl CacheMonitor {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(MonitorState::new()),
+            state: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Record cache usage from a completed LLM call.
+    /// Record cache usage from a completed LLM call attributed to `agent_id`.
     ///
-    /// A `cache_read_tokens` value of `None` or `Some(0)` counts as a miss.
-    /// After 3 or more consecutive misses (and at least 4 total calls) a
-    /// `warn!` is emitted so operators can investigate.
-    pub fn record_cache_usage(&self, cache_read_tokens: Option<u32>) {
+    /// A `cache_read_tokens` value of `None` or `Some(0)` counts as a miss —
+    /// but only once the agent is *armed* (has ever reported non-zero cache
+    /// read or creation tokens). After 3 or more consecutive armed misses
+    /// (and at least 4 total calls) a `warn!` is emitted so operators can
+    /// investigate a possible stable-prefix change.
+    pub fn record_cache_usage(
+        &self,
+        agent_id: &str,
+        cache_read_tokens: Option<u32>,
+        cache_creation_tokens: Option<u32>,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
-        state.total_calls += 1;
+        if !state.contains_key(agent_id) && state.len() >= MAX_TRACKED_AGENTS {
+            // Evict an arbitrary entry to stay bounded.
+            if let Some(k) = state.keys().next().cloned() {
+                state.remove(&k);
+            }
+        }
+        let agent = state.entry(agent_id.to_string()).or_default();
 
-        let is_hit = cache_read_tokens.is_some_and(|t| t > 0);
-        if is_hit {
-            state.total_hits += 1;
-            state.consecutive_misses = 0;
-        } else {
-            state.consecutive_misses += 1;
-            if state.consecutive_misses >= 3 && state.total_calls > 3 {
+        agent.total_calls += 1;
+
+        let read = cache_read_tokens.is_some_and(|t| t > 0);
+        let wrote = cache_creation_tokens.is_some_and(|t| t > 0);
+        if read || wrote {
+            agent.armed = true;
+        }
+
+        if read {
+            agent.consecutive_misses = 0;
+        } else if agent.armed {
+            agent.consecutive_misses += 1;
+            if agent.consecutive_misses >= 3 && agent.total_calls > 3 {
                 tracing::warn!(
-                    consecutive_misses = state.consecutive_misses,
-                    total_calls = state.total_calls,
+                    agent_id = %agent_id,
+                    consecutive_misses = agent.consecutive_misses,
+                    total_calls = agent.total_calls,
                     "prompt cache consecutive misses detected — stable prefix may have changed"
                 );
             }
         }
     }
 
-    /// Notify the monitor that a compaction has occurred.
+    /// Notify the monitor that a compaction has occurred for `agent_id`.
     ///
     /// Compaction legitimately breaks the prompt cache (the message list is
     /// rewritten), so consecutive-miss tracking is reset to avoid false
-    /// positive warnings immediately after compaction.
-    pub fn notify_compaction(&self) {
+    /// positive warnings immediately after compaction. The reset is scoped
+    /// to the compacting agent when its id is known — a global reset would
+    /// wipe every OTHER agent's in-progress miss streak on each compaction
+    /// and mute the watchdog process-wide in a busy swarm. `None` falls back
+    /// to the global reset for call sites without an agent identity.
+    pub fn notify_compaction(&self, agent_id: Option<&str>) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.consecutive_misses = 0;
-    }
-
-    /// Return the cache hit rate as a percentage in [0.0, 100.0].
-    ///
-    /// Returns `100.0` when no calls have been recorded yet.
-    pub fn hit_rate(&self) -> f64 {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.total_calls == 0 {
-            return 100.0;
+        match agent_id {
+            Some(id) => {
+                if let Some(agent) = state.get_mut(id) {
+                    agent.consecutive_misses = 0;
+                }
+            }
+            None => {
+                for agent in state.values_mut() {
+                    agent.consecutive_misses = 0;
+                }
+            }
         }
-        (state.total_hits as f64 / state.total_calls as f64) * 100.0
     }
 }
 
@@ -109,8 +147,7 @@ impl Default for CacheMonitor {
 // =============================================================================
 //
 // The cache monitor is wired into the metering provider — every LLM call
-// reports its `cache_read_tokens` to the singleton. Aggregate hit-rate is
-// observable without threading the monitor through every layer.
+// reports its cache token counts (keyed by agent id) to the singleton.
 //
 // Same `OnceLock` shape as `pricing` / `tool_result_store`: lazy install on
 // first read, `&'static` reads on the hot path.
@@ -130,46 +167,102 @@ pub fn global_cache_monitor() -> &'static CacheMonitor {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hit_rate_tracks_correctly() {
-        let monitor = CacheMonitor::new();
-        // 3 hits
-        monitor.record_cache_usage(Some(100));
-        monitor.record_cache_usage(Some(200));
-        monitor.record_cache_usage(Some(50));
-        // 1 miss
-        monitor.record_cache_usage(None);
+    fn misses(monitor: &CacheMonitor, agent: &str) -> u32 {
+        monitor
+            .state
+            .lock()
+            .expect("lock poisoned")
+            .get(agent)
+            .map_or(0, |s| s.consecutive_misses)
+    }
 
-        // 3 hits out of 4 total = 75%
-        assert!((monitor.hit_rate() - 75.0).abs() < f64::EPSILON);
+    #[test]
+    fn unarmed_agent_never_counts_misses() {
+        // An endpoint that never reports cache usage (mock, Ollama, caching
+        // off) must not accumulate misses — its readings carry no signal.
+        let monitor = CacheMonitor::new();
+        for _ in 0..10 {
+            monitor.record_cache_usage("no-cache-agent", None, None);
+        }
+        assert_eq!(misses(&monitor, "no-cache-agent"), 0);
+    }
+
+    #[test]
+    fn cache_write_arms_and_counts_as_miss() {
+        // A cold cache write (creation > 0, read == 0) is real cache activity:
+        // it arms the agent AND counts as the first consecutive miss.
+        let monitor = CacheMonitor::new();
+        monitor.record_cache_usage("a", None, Some(500));
+        assert_eq!(misses(&monitor, "a"), 1);
+        // A subsequent hit resets the streak.
+        monitor.record_cache_usage("a", Some(100), None);
+        assert_eq!(misses(&monitor, "a"), 0);
+    }
+
+    #[test]
+    fn agents_are_tracked_independently() {
+        // A cache-hitting agent must not reset another agent's miss streak.
+        let monitor = CacheMonitor::new();
+        monitor.record_cache_usage("broken", Some(10), None); // arm via a hit
+        monitor.record_cache_usage("broken", None, Some(1)); // miss 1
+        monitor.record_cache_usage("healthy", Some(999), None); // unrelated hit
+        monitor.record_cache_usage("broken", None, Some(1)); // miss 2
+        assert_eq!(misses(&monitor, "broken"), 2);
+        assert_eq!(misses(&monitor, "healthy"), 0);
     }
 
     #[test]
     fn compaction_resets_consecutive_misses() {
         let monitor = CacheMonitor::new();
         // Drive up consecutive misses past the warning threshold
-        // (needs > 3 total calls and >= 3 consecutive misses)
-        monitor.record_cache_usage(Some(100)); // hit — total_calls=1
-        monitor.record_cache_usage(None); // miss — total_calls=2
-        monitor.record_cache_usage(None); // miss — total_calls=3
-        monitor.record_cache_usage(None); // miss — total_calls=4, warn fires
+        // (needs > 3 total calls and >= 3 consecutive misses).
+        monitor.record_cache_usage("a", Some(100), None); // hit — arms
+        monitor.record_cache_usage("a", None, None); // miss
+        monitor.record_cache_usage("a", None, None); // miss
+        monitor.record_cache_usage("a", None, None); // miss — warn fires
 
         // Compaction resets the counter
-        monitor.notify_compaction();
+        monitor.notify_compaction(Some("a"));
 
         // After reset, a single miss should NOT trigger a warning
         // (consecutive_misses is back to 0, so 1 miss = 1 consecutive)
-        monitor.record_cache_usage(None); // miss — consecutive=1, no warn
-        let state = monitor.state.lock().expect("lock poisoned");
+        monitor.record_cache_usage("a", None, None);
         assert_eq!(
-            state.consecutive_misses, 1,
+            misses(&monitor, "a"),
+            1,
             "miss count should restart from 1 after compaction"
         );
     }
 
     #[test]
-    fn hit_rate_is_100_when_no_calls() {
+    fn scoped_compaction_reset_preserves_other_agents_streaks() {
+        // Agent A compacting must not wipe agent B's in-progress miss streak
+        // — a global reset would mute the watchdog process-wide whenever any
+        // agent in a busy swarm compacts.
         let monitor = CacheMonitor::new();
-        assert!((monitor.hit_rate() - 100.0).abs() < f64::EPSILON);
+        monitor.record_cache_usage("b", Some(10), None); // arm B
+        monitor.record_cache_usage("b", None, None); // B miss 1
+        monitor.record_cache_usage("b", None, None); // B miss 2
+        monitor.record_cache_usage("a", Some(10), None); // arm A
+        monitor.record_cache_usage("a", None, None); // A miss 1
+
+        monitor.notify_compaction(Some("a")); // A compacts
+
+        assert_eq!(misses(&monitor, "a"), 0, "compacting agent reset");
+        assert_eq!(misses(&monitor, "b"), 2, "other agent's streak survives");
+
+        // Global fallback (no identity) still resets everyone.
+        monitor.notify_compaction(None);
+        assert_eq!(misses(&monitor, "b"), 0);
+    }
+
+    #[test]
+    fn tracked_agents_stay_bounded() {
+        let monitor = CacheMonitor::new();
+        for i in 0..(MAX_TRACKED_AGENTS + 10) {
+            monitor.record_cache_usage(&format!("agent-{i}"), Some(1), None);
+        }
+        let len = monitor.state.lock().expect("lock poisoned").len();
+        assert!(len <= MAX_TRACKED_AGENTS, "map stayed bounded, got {len}");
     }
 }

@@ -60,9 +60,25 @@ fn final_chunk(run_id: String, seq: u64, content: String) -> StreamEvent {
     }
 }
 
+/// Per-run state behind the instant-mode planner.
+///
+/// `final_emitted` exists because "buffer empty at `RunComplete`" is ambiguous:
+/// it means either *nothing ever streamed* (→ the summary fallback should
+/// deliver the answer) or *the `is_final` chunk already flushed it* (→ a
+/// fallback would deliver the SAME text a second time — which is exactly what
+/// every slash-command fast path and simple-engine run did, since both emit an
+/// `is_final` chunk *and* a `RunComplete` carrying `final_response`).
+#[derive(Debug, Default)]
+pub(super) struct InstantState {
+    /// Accumulates streamed response deltas until the final chunk arrives.
+    pub(super) buffer: String,
+    /// A final chunk has already been emitted for this run.
+    pub(super) final_emitted: bool,
+}
+
 /// The instant-mode buffering state machine, independent of the sink.
 ///
-/// Mutates `buffer` (the per-run accumulator) and reports — via
+/// Mutates `state` (the per-run accumulator) and reports — via
 /// [`InstantOutcome`] — what the caller should emit. `next_seq` is pulled only
 /// when a replacement/flush chunk is synthesized, so the wire keeps a single
 /// monotonic sequence regardless of which path fired.
@@ -73,11 +89,13 @@ fn final_chunk(run_id: String, seq: u64, content: String) -> StreamEvent {
 /// - non-empty intermediate chunk → forwarded immediately, standalone;
 /// - normal streaming delta → buffered, nothing emitted;
 /// - final chunk → buffer + delta emitted as one final chunk;
-/// - `RunComplete` → flush buffered text (or fall back to
-///   `summary.final_response`) as a final chunk, then forward the lifecycle
-///   event so the channel can finalize.
+/// - `RunComplete` → flush buffered text as a final chunk, then forward the
+///   lifecycle event so the channel can finalize. With an empty buffer the
+///   sanitized `summary.final_response` is delivered instead — but only when
+///   no final chunk was already emitted this run (else it would be the same
+///   text twice).
 pub(super) fn plan_instant(
-    buffer: &mut String,
+    state: &mut InstantState,
     event: &StreamEvent,
     mut next_seq: impl FnMut() -> u64,
 ) -> InstantOutcome {
@@ -92,7 +110,7 @@ pub(super) fn plan_instant(
             if *is_intermediate {
                 if delta.is_empty() {
                     // Boundary marker: flush whatever has accumulated so far.
-                    let accumulated = std::mem::take(buffer);
+                    let accumulated = std::mem::take(&mut state.buffer);
                     if accumulated.is_empty() {
                         InstantOutcome::Replace(Vec::new())
                     } else {
@@ -111,16 +129,17 @@ pub(super) fn plan_instant(
                     InstantOutcome::Forward
                 }
             } else if !*is_final {
-                buffer.push_str(delta);
+                state.buffer.push_str(delta);
                 InstantOutcome::Buffered
             } else {
                 // Final chunk: combine buffered content + this delta.
-                let full_content = if buffer.is_empty() {
+                let full_content = if state.buffer.is_empty() {
                     delta.clone()
                 } else {
-                    let buffered = std::mem::take(buffer);
+                    let buffered = std::mem::take(&mut state.buffer);
                     format!("{buffered}{delta}")
                 };
+                state.final_emitted = true;
                 InstantOutcome::Replace(vec![final_chunk(run_id.clone(), next_seq(), full_content)])
             }
         }
@@ -128,15 +147,28 @@ pub(super) fn plan_instant(
         StreamEvent::RunComplete {
             run_id, summary, ..
         } => {
-            let buffered = std::mem::take(buffer);
+            let buffered = std::mem::take(&mut state.buffer);
             let flush_text = if buffered.is_empty() {
-                // Fallback: buffer empty (e.g. fire-and-forget race) — use the
-                // summary's final_response so the channel still gets the answer.
-                summary
-                    .final_response
-                    .as_ref()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
+                if state.final_emitted {
+                    // The `is_final` chunk already delivered the full answer —
+                    // a summary fallback here re-emitted the SAME text as a
+                    // second final chunk (double message on channels, double
+                    // print in the CLI) for every slash fast-path / simple
+                    // engine run, which emit both. Nothing left to flush.
+                    None
+                } else {
+                    // Fallback: nothing ever streamed (fire-and-forget race) —
+                    // deliver the summary's final_response so the channel still
+                    // gets the answer. Sanitized through the §4.7 single-source
+                    // atom: the raw summary can be pure `<think>` reasoning
+                    // (the drain scrubbed the live stream, hence the empty
+                    // buffer), which must map to "deliver nothing", not to a
+                    // visible reasoning dump.
+                    summary
+                        .final_response
+                        .as_deref()
+                        .and_then(crate::gateway::reply_emitter::sanitize_final_response)
+                }
             } else {
                 Some(buffered)
             };
@@ -160,8 +192,8 @@ pub(super) fn plan_instant(
 /// buffered into a single final message.
 pub struct InstantBufferingEmitter<E: EventEmitter> {
     inner: E,
-    /// Accumulates streamed response deltas until the final chunk arrives.
-    buffer: Mutex<String>,
+    /// Per-run planner state (delta accumulator + final-emitted marker).
+    state: Mutex<InstantState>,
 }
 
 impl<E: EventEmitter> InstantBufferingEmitter<E> {
@@ -169,7 +201,7 @@ impl<E: EventEmitter> InstantBufferingEmitter<E> {
     pub fn new(inner: E) -> Self {
         Self {
             inner,
-            buffer: Mutex::new(String::new()),
+            state: Mutex::new(InstantState::default()),
         }
     }
 }
@@ -178,10 +210,10 @@ impl<E: EventEmitter> InstantBufferingEmitter<E> {
 impl<E: EventEmitter> EventEmitter for InstantBufferingEmitter<E> {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         let outcome = {
-            let mut buffer = self.buffer.lock().await;
-            plan_instant(&mut buffer, &event, || self.inner.next_seq())
+            let mut state = self.state.lock().await;
+            plan_instant(&mut state, &event, || self.inner.next_seq())
         };
-        // (`&mut buffer` deref-coerces the guard to `&mut String`.)
+        // (`&mut state` deref-coerces the guard to `&mut InstantState`.)
         match outcome {
             InstantOutcome::Buffered => Ok(()),
             InstantOutcome::Replace(events) => {
@@ -320,14 +352,26 @@ mod tests {
         }
     }
 
+    fn run_complete(final_response: Option<&str>) -> StreamEvent {
+        StreamEvent::RunComplete {
+            run_id: "r1".into(),
+            seq: 9,
+            summary: crate::gateway::event_emitter::RunSummary {
+                final_response: final_response.map(String::from),
+                ..Default::default()
+            },
+            total_duration_ms: 0,
+        }
+    }
+
     #[test]
     fn planner_buffers_until_final() {
-        let mut buf = String::new();
+        let mut buf = InstantState::default();
         assert!(matches!(
             plan_instant(&mut buf, &chunk("a", false), seq_source()),
             InstantOutcome::Buffered
         ));
-        assert_eq!(buf, "a");
+        assert_eq!(buf.buffer, "a");
         match plan_instant(&mut buf, &chunk("b", true), seq_source()) {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
@@ -338,12 +382,15 @@ mod tests {
             }
             other => panic!("expected Replace, got {other:?}"),
         }
-        assert!(buf.is_empty(), "buffer drained after final");
+        assert!(buf.buffer.is_empty(), "buffer drained after final");
     }
 
     #[test]
     fn planner_intermediate_marker_flushes_buffer() {
-        let mut buf = String::from("progress");
+        let mut buf = InstantState {
+            buffer: "progress".into(),
+            ..Default::default()
+        };
         // Empty-delta intermediate = boundary marker → flush as intermediate.
         match plan_instant(&mut buf, &intermediate(""), seq_source()) {
             InstantOutcome::Replace(events) => {
@@ -355,12 +402,12 @@ mod tests {
             }
             other => panic!("expected Replace, got {other:?}"),
         }
-        assert!(buf.is_empty());
+        assert!(buf.buffer.is_empty());
     }
 
     #[test]
     fn planner_empty_marker_with_empty_buffer_emits_nothing() {
-        let mut buf = String::new();
+        let mut buf = InstantState::default();
         assert!(matches!(
             plan_instant(&mut buf, &intermediate(""), seq_source()),
             InstantOutcome::Replace(events) if events.is_empty()
@@ -369,25 +416,25 @@ mod tests {
 
     #[test]
     fn planner_nonempty_intermediate_forwards() {
-        let mut buf = String::from("buffered");
+        let mut buf = InstantState {
+            buffer: "buffered".into(),
+            ..Default::default()
+        };
         assert!(matches!(
             plan_instant(&mut buf, &intermediate("step done"), seq_source()),
             InstantOutcome::Forward
         ));
         // Forwarding must not disturb the running buffer.
-        assert_eq!(buf, "buffered");
+        assert_eq!(buf.buffer, "buffered");
     }
 
     #[test]
     fn planner_run_complete_flushes_buffer_then_forwards() {
-        let mut buf = String::from("answer");
-        let rc = StreamEvent::RunComplete {
-            run_id: "r1".into(),
-            seq: 9,
-            summary: crate::gateway::event_emitter::RunSummary::default(),
-            total_duration_ms: 0,
+        let mut buf = InstantState {
+            buffer: "answer".into(),
+            ..Default::default()
         };
-        match plan_instant(&mut buf, &rc, seq_source()) {
+        match plan_instant(&mut buf, &run_complete(None), seq_source()) {
             InstantOutcome::Prepend(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -397,22 +444,13 @@ mod tests {
             }
             other => panic!("expected Prepend, got {other:?}"),
         }
-        assert!(buf.is_empty());
+        assert!(buf.buffer.is_empty());
     }
 
     #[test]
     fn planner_run_complete_falls_back_to_summary() {
-        let mut buf = String::new(); // buffer empty (fire-and-forget race)
-        let rc = StreamEvent::RunComplete {
-            run_id: "r1".into(),
-            seq: 9,
-            summary: crate::gateway::event_emitter::RunSummary {
-                final_response: Some("from summary".into()),
-                ..Default::default()
-            },
-            total_duration_ms: 0,
-        };
-        match plan_instant(&mut buf, &rc, seq_source()) {
+        let mut buf = InstantState::default(); // nothing streamed (fire-and-forget race)
+        match plan_instant(&mut buf, &run_complete(Some("from summary")), seq_source()) {
             InstantOutcome::Prepend(events) => {
                 assert!(
                     matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
@@ -424,16 +462,45 @@ mod tests {
     }
 
     #[test]
-    fn planner_silent_run_complete_forwards_only() {
-        let mut buf = String::new();
-        let rc = StreamEvent::RunComplete {
-            run_id: "r1".into(),
-            seq: 9,
-            summary: crate::gateway::event_emitter::RunSummary::default(),
-            total_duration_ms: 0,
-        };
+    fn planner_no_double_delivery_after_final_chunk() {
+        // INSTANT-1: producers that emit BOTH an `is_final` chunk and a
+        // `RunComplete` carrying `final_response` (slash fast path, simple
+        // engine) must deliver the answer exactly once.
+        let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &rc, seq_source()),
+            plan_instant(&mut buf, &chunk("the answer", true), seq_source()),
+            InstantOutcome::Replace(_)
+        ));
+        assert!(
+            matches!(
+                plan_instant(&mut buf, &run_complete(Some("the answer")), seq_source()),
+                InstantOutcome::Forward
+            ),
+            "summary fallback must not re-emit the already-flushed final text"
+        );
+    }
+
+    #[test]
+    fn planner_summary_fallback_is_sanitized() {
+        // INSTANT-2: a thinking-only terminal turn (live chunks scrubbed →
+        // empty buffer, raw summary is pure `<think>`) must deliver nothing,
+        // not a visible reasoning dump (§4.7 single-source sanitize).
+        let mut buf = InstantState::default();
+        assert!(matches!(
+            plan_instant(
+                &mut buf,
+                &run_complete(Some("<think>internal scratch</think>")),
+                seq_source()
+            ),
+            InstantOutcome::Forward
+        ));
+    }
+
+    #[test]
+    fn planner_silent_run_complete_forwards_only() {
+        let mut buf = InstantState::default();
+        assert!(matches!(
+            plan_instant(&mut buf, &run_complete(None), seq_source()),
             InstantOutcome::Forward
         ));
     }

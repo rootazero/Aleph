@@ -231,12 +231,34 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let (artifact_store, event_store, message_store, team_session_store) =
         init_teams_evolution_stores(daemon).await;
 
+    // Map the optional [team_messages] TOML onto EscalationRule (the third
+    // teams storm/escalation guard, alongside [team_dispatcher] / [team_broadcast]).
+    // Each field falls back to the live EscalationRule::default() (no default
+    // duplication / drift). A threshold of 0 would escalate on the first reply,
+    // so 0 ⇒ default (P7 boundary clamp); escalation_enabled is honoured
+    // verbatim (including false) so operators can disable escalation.
+    let team_escalation_rules = {
+        use alephcore::teams::messages::EscalationRule;
+        let d = EscalationRule::default();
+        match &app_config.team_messages {
+            None => d,
+            Some(t) => EscalationRule {
+                thread_message_threshold: t
+                    .thread_message_threshold
+                    .filter(|&v| v > 0)
+                    .unwrap_or(d.thread_message_threshold),
+                enabled: t.escalation_enabled.unwrap_or(d.enabled),
+            },
+        }
+    };
     // Higher-level team components derived from the four stores above.
     let (message_router, inbox, session_coordinator) = build_team_components(
         &message_store,
         &event_store,
         &team_session_store,
         &artifact_store,
+        &team_store,
+        team_escalation_rules,
     );
 
     // Generation provider registry (TTS / image / video) — independent of
@@ -1520,6 +1542,40 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // (spawn_loop consumes the Arc).
                 dispatcher.subscribe_task_events();
                 dispatcher.spawn_loop();
+
+                // Wake-on-transition seam: every coord-task mutation flows
+                // through `CoordTaskStore::emit_task_topic` → GlobalBus, so one
+                // subscription here wakes the dispatcher on ANY task
+                // transition — review approvals, manual retries/skips/resumes
+                // (2 tools + 4 teams.* RPCs), snapshot restores — none of
+                // which thread the direct `dispatch_signal`. Without this,
+                // each such transition waited for the fallback tick (up to
+                // `fallback_tick_secs`, 60s) before dependents were claimed;
+                // a review-gated DAG crawled one approval-plus-a-minute at a
+                // time. Self-wakes from the dispatcher's own writes are
+                // harmless: `Notify` stores a single permit and a no-op tick
+                // is cheap. The direct signal wires (task_create / workflow
+                // materialize / clarify resolve) stay as the primary,
+                // bus-independent path.
+                let wake = dispatch_signal.clone();
+                tokio::spawn(async move {
+                    use alephcore::event::{EventFilter, EventType, GlobalBus};
+                    let _sub_id = GlobalBus::global()
+                        .subscribe_async(
+                            EventFilter::new(vec![
+                                EventType::TeamTaskAssigned,
+                                EventType::TeamTaskUpdated,
+                                EventType::TeamTaskCompleted,
+                                EventType::TeamTaskFailed,
+                            ]),
+                            move |_event| {
+                                wake.notify_one();
+                            },
+                        )
+                        .await;
+                    tracing::info!("Team dispatcher wake-on-task-event subscription registered");
+                });
+
                 if !daemon {
                     println!("  Team dispatcher started");
                 }

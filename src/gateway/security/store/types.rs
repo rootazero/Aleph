@@ -57,7 +57,6 @@ pub struct DeviceTokenRow {
     pub issued_at: i64,
     pub expires_at: i64,
     pub last_used_at: Option<i64>,
-    pub rotated_at: Option<i64>,
     pub revoked_at: Option<i64>,
 }
 
@@ -75,8 +74,7 @@ impl DeviceTokenRow {
             issued_at: row.get(5)?,
             expires_at: row.get(6)?,
             last_used_at: row.get(7)?,
-            rotated_at: row.get(8)?,
-            revoked_at: row.get(9)?,
+            revoked_at: row.get(8)?,
         })
     }
 }

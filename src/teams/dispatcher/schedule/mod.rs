@@ -332,26 +332,48 @@ impl TeamDispatcher {
             tracing::warn!(task_id = %task_id, run_id = %run_id, error = %e, "dispatcher: finish_task_run failed");
         }
 
-        // Terminal-while-in-flight guard: `task` is the snapshot claimed at
-        // dispatch time, so a terminal transition issued during the member
-        // run — cancel (workflow `cancel` / `team_task_control.cancel`),
-        // skip, or a manual complete — would otherwise be silently
-        // overwritten here and resurrect the task (a skipped task's timed-out
-        // run would even loop it back to Pending and re-execute work the
-        // operator explicitly waived). The attempt itself is already recorded
-        // in coord_task_runs above; only the task's terminal status is
-        // preserved. A re-fetch failure proceeds normally (P7 graceful
-        // degradation — same behaviour as before the guard).
-        let terminal_mid_flight = matches!(
-            self.coord_store.get_task(&task_id).await,
-            Ok(Some(t)) if t.status.is_terminal()
-        );
-        if terminal_mid_flight {
-            tracing::info!(task_id = %task_id, "dispatcher: task reached a terminal state mid-flight; keeping it");
+        // Finalize fence: `task` is the snapshot claimed at dispatch time, so
+        // anything that changed the row while the member ran (a cancel, an
+        // operator hard-retry back to Pending, or — after a stale-lock release
+        // on a long run — a whole successor claim) would otherwise be silently
+        // overwritten here. The attempt itself is already recorded in
+        // coord_task_runs above; [`select::finalize_disposition`] decides
+        // whether the terminal write (and whose lock/running entry) is still
+        // ours. Re-fetch failures degrade to `Proceed` (P7 — the pre-fence
+        // behaviour).
+        let latest_run_id: Option<String> = if run_id.is_empty() {
+            None
+        } else {
+            match self.coord_store.list_task_runs(&task_id).await {
+                Ok(runs) => runs.last().map(|r| r.id.clone()),
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "dispatcher: run-history re-read failed; finalize fence degraded");
+                    None
+                }
+            }
+        };
+        let current_status = match self.coord_store.get_task(&task_id).await {
+            Ok(Some(t)) => Some(t.status),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(task_id = %task_id, error = %e, "dispatcher: task re-fetch failed; finalize fence degraded");
+                None
+            }
+        };
+        let disposition =
+            select::finalize_disposition(&run_id, latest_run_id.as_deref(), current_status);
+        match &disposition {
+            select::RunFinalize::Proceed => {}
+            select::RunFinalize::KeepForeignState(s) => {
+                tracing::info!(task_id = %task_id, status = %s, "dispatcher: task left in_progress mid-flight; keeping the newer state");
+            }
+            select::RunFinalize::Superseded => {
+                tracing::warn!(task_id = %task_id, run_id = %run_id, "dispatcher: run superseded by a newer claim; leaving task/lock/tracking to the successor");
+            }
         }
 
         match outcome.status {
-            _ if terminal_mid_flight => {}
+            _ if disposition != select::RunFinalize::Proceed => {}
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
                 // Review-gated tasks park in WaitingReview for the lead to
@@ -398,10 +420,16 @@ impl TeamDispatcher {
             }
         }
 
-        if let Err(e) = self.coord_store.release_lock(&task_id, &owner).await {
-            tracing::warn!(task_id = %task_id, error = %e, "dispatcher: release_lock failed at run_task teardown");
+        // Teardown — but only of what is still OURS. A superseding claim owns
+        // the lock (same owner string would match!) and the running-map entry
+        // (same task-id key); releasing/evicting them here would let a third
+        // claim start while the successor still runs.
+        if disposition != select::RunFinalize::Superseded {
+            if let Err(e) = self.coord_store.release_lock(&task_id, &owner).await {
+                tracing::warn!(task_id = %task_id, error = %e, "dispatcher: release_lock failed at run_task teardown");
+            }
+            self.running.lock().await.remove(&task_id);
         }
-        self.running.lock().await.remove(&task_id);
         // Wake the loop so newly-unblocked dependents are picked up immediately.
         self.signal();
     }

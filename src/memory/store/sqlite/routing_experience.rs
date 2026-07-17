@@ -138,6 +138,8 @@ impl SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("record_routing_experience map insert: {e}")))?;
         let rowid = conn.last_insert_rowid();
 
+        // Table name is validated by `vec::routing_exp_vec_table_for_dim` against a static allowlist.
+        // rust-doctor-disable-next-line sql-injection-risk
         conn.execute(
             &format!("INSERT INTO {table} (rowid, embedding) VALUES (?1, ?2)"),
             params![rowid, blob],
@@ -296,6 +298,8 @@ impl SqliteMemoryBackend {
                 .optional()
                 .map_err(|e| AlephError::config(format!("prune_routing_experiences map: {e}")))?;
             if let Some(rowid) = rowid {
+                // Table name is validated by `vec::routing_exp_vec_table_for_dim` against a static allowlist.
+                // rust-doctor-disable-next-line sql-injection-risk
                 conn.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],

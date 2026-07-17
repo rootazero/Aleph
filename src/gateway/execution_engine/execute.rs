@@ -851,19 +851,11 @@ where
                                 crate::looping::TickDecision::Exhausted { note } => {
                                     // The claim already stored Stopped + the
                                     // stop reason for loop(action='status').
-                                    // Mirror the tool-stop cleanup here too:
-                                    // clear the loop-welded Strategy so the
-                                    // stale plan does not bleed into every
+                                    // Mirror the tool-stop cleanup here too so
+                                    // the stale plan does not bleed into every
                                     // later turn of this reused session (and a
                                     // future start can re-plan).
-                                    if let Some(strat) = crate::strategy::global() {
-                                        if let Err(e) = strat
-                                            .delete(&crate::strategy::loop_key(&session_key_str))
-                                        {
-                                            info!(session = %session_key_str, error = %e,
-                                                "loop: failed to delete welded strategy on cap stop (ignored)");
-                                        }
-                                    }
+                                    clear_loop_welded_strategy(&session_key_str, "cap stop");
                                     // Cap stops were the one silent ending —
                                     // the failure path already notifies. Tell
                                     // the origin channel (R5); Panel-only
@@ -1039,11 +1031,21 @@ pub(super) fn carry_policy_metadata(
 }
 
 /// Metadata of an autonomous continuation run: the inherited policy layer plus
-/// the [`UNATTENDED_KEY`] marker.
+/// the [`UNATTENDED_KEY`] marker and a `Queue` busy-input mode.
 ///
-/// The marker is written LAST and is therefore unconditional — an inherited key
-/// can never demote a continuation to "attended", which would let it park on an
-/// approval card that nobody is there to answer.
+/// Both markers are written LAST and are therefore unconditional — an inherited
+/// key can never demote a continuation to "attended" (which would let it park
+/// on an approval card that nobody is there to answer) nor re-arm it as
+/// `Steer`/`Interrupt`.
+///
+/// `Queue` is load-bearing: without it a continuation colliding with a live
+/// same-session run fell into the default `Steer` mode and its machine prompt
+/// (tick directive / goal AUDIT contract) was INJECTED into the user's attended
+/// turn as if the user had typed it — while the designed collision path
+/// (`AgentBusy` → `rearm_loop_after_busy` / `rearm_goal_after_busy`, which
+/// retries the SAME claimed step without burning an iteration) sat unreachable.
+/// `Queue` makes the gate return `AgentBusy` immediately, which
+/// [`spawn_continuation_run`]'s failure routing turns into exactly that rearm.
 ///
 /// [`UNATTENDED_KEY`]: super::UNATTENDED_KEY
 fn continuation_metadata(
@@ -1051,6 +1053,7 @@ fn continuation_metadata(
 ) -> std::collections::HashMap<String, String> {
     let mut m = policy_meta;
     m.insert(super::UNATTENDED_KEY.to_string(), "true".to_string());
+    m.insert(super::BUSY_INPUT_MODE_KEY.to_string(), "queue".to_string());
     m
 }
 
@@ -1343,12 +1346,7 @@ pub(super) async fn rearm_loop_after_busy(
             // Mirror stop_loop_on_failure's cleanup: clear the loop-welded
             // Strategy so the stale plan neither bleeds into later turns nor
             // blocks a future re-plan, then tell the user (R5).
-            if let Some(strat) = crate::strategy::global() {
-                if let Err(e) = strat.delete(&crate::strategy::loop_key(session_key_str)) {
-                    info!(session = %session_key_str, error = %e,
-                        "loop: failed to delete welded strategy on cap-trip stop (ignored)");
-                }
-            }
+            clear_loop_welded_strategy(session_key_str, "cap-trip stop");
             notify_origin(origin, format!("⏹ {note}")).await;
             info!(session = %session_key_str, note = %note,
                 "loop: cap tripped during a busy collision; loop stopped");
@@ -1387,12 +1385,7 @@ async fn stop_loop_on_failure(
             // Mirror the tool-stop cleanup (loop_manage stop): clear the
             // loop-welded Strategy so the stale plan neither bleeds into
             // later turns nor blocks a future start from re-planning.
-            if let Some(strat) = crate::strategy::global() {
-                if let Err(e) = strat.delete(&crate::strategy::loop_key(session_key_str)) {
-                    info!(session = %session_key_str, error = %e,
-                        "loop: failed to delete welded strategy on failure stop (ignored)");
-                }
-            }
+            clear_loop_welded_strategy(session_key_str, "failure stop");
         }
     }
     notify_origin(
@@ -1416,6 +1409,24 @@ pub(super) async fn notify_origin(origin: Option<&OriginRoute>, text: String) {
             .await
         {
             warn!(channel = %ch, error = %e, "continuation: failed to deliver origin notice");
+        }
+    }
+}
+
+/// Clear the loop-welded Strategy for a session (best-effort). Gateway-side
+/// single source for every authoritative loop ending here — cap-exhaustion
+/// stop, cap-trip during a busy rearm, and failure stop — so the stale plan
+/// neither bleeds into later plain turns of this reused session nor blocks a
+/// future `start` from re-planning. The tool-side endings (`loop stop`, and
+/// `start` claiming a fresh plan slot) clear the same key in
+/// `builtin_tools/loop_manage.rs`. Mirrors
+/// `goal_continuation::clear_goal_welded_strategy` (the continuation siblings
+/// keep parity).
+pub(super) fn clear_loop_welded_strategy(session: &str, context: &str) {
+    if let Some(strat) = crate::strategy::global() {
+        if let Err(e) = strat.delete(&crate::strategy::loop_key(session)) {
+            info!(session = %session, error = %e, context,
+                "loop: failed to delete welded strategy (ignored)");
         }
     }
 }
@@ -1501,6 +1512,29 @@ mod naked_loop_planner_tests {
         let k = SessionKey::main("a");
         assert!(!naked_loop_planner_should_fire(&k, true, true, "x")); // resume
         assert!(!naked_loop_planner_should_fire(&k, true, false, "   ")); // whitespace
+    }
+
+    #[test]
+    fn continuation_metadata_is_unattended_and_queues_on_collision() {
+        // LOOP4-STEER-1 contract: an autonomous continuation must never steer
+        // (inject its machine prompt into a live attended run) nor interrupt —
+        // a collision must surface as AgentBusy so the rearm path retries the
+        // same claimed step. Both markers must also override inherited values.
+        let mut inherited = std::collections::HashMap::new();
+        inherited.insert(
+            crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY.to_string(),
+            "interrupt".to_string(),
+        );
+        let m = continuation_metadata(inherited);
+        assert_eq!(
+            crate::gateway::execution_engine::BusyInputMode::from_metadata(&m),
+            crate::gateway::execution_engine::BusyInputMode::Queue,
+        );
+        assert_eq!(
+            m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
+                .map(String::as_str),
+            Some("true"),
+        );
     }
 
     #[test]
@@ -1611,7 +1645,15 @@ mod carry_policy_metadata_tests {
             Some(r#"{"default":"deny"}"#)
         );
         assert_eq!(cont.get(UNATTENDED_KEY).map(String::as_str), Some("true"));
-        assert_eq!(cont.len(), 3);
+        // `continuation_metadata` also writes the load-bearing Queue busy-input
+        // marker (LOOP4-STEER-1), so the map carries 4 keys: the two inherited
+        // policy keys + the two continuation markers.
+        assert_eq!(
+            cont.get(crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY)
+                .map(String::as_str),
+            Some("queue"),
+        );
+        assert_eq!(cont.len(), 4);
     }
 
     /// The marker is written LAST and is unconditional: a source map that somehow

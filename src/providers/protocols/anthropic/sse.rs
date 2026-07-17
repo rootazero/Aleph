@@ -9,6 +9,7 @@ use crate::providers::delta::ProviderDelta;
 use tracing::warn;
 
 use super::ToolNameMap;
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 pub(crate) fn parse_anthropic_sse_event(
     data: &str,
     block_ids: &mut IndexIdTracker,

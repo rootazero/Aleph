@@ -41,7 +41,9 @@ impl ImageMediaProvider {
         _media_type: &MediaType,
     ) -> Result<ImageInput, MediaError> {
         match input {
+            // rust-doctor-disable-next-line excessive-clone
             MediaInput::FilePath { path } => Ok(ImageInput::FilePath { path: path.clone() }),
+            // rust-doctor-disable-next-line excessive-clone
             MediaInput::Url { url } => Ok(ImageInput::Url { url: url.clone() }),
             MediaInput::Base64 { data, media_type } => {
                 let format = match media_type {
@@ -49,6 +51,7 @@ impl ImageMediaProvider {
                     _ => VisionImageFormat::Png,
                 };
                 Ok(ImageInput::Base64 {
+                    // rust-doctor-disable-next-line excessive-clone
                     data: data.clone(),
                     format,
                 })

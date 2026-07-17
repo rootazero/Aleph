@@ -24,15 +24,18 @@ use crate::providers::message::CacheControl;
 pub(super) fn effective_cache_retention(config: &ProviderConfig, endpoint: &str) -> CacheRetention {
     match config.cache_retention {
         Some(CacheRetention::Long) if !endpoint.contains("api.anthropic.com") => {
-            // Keep the existing warning that surfaces long-TTL misuse on
-            // third-party hosts. Physical injection is blocked downstream
-            // by policy.capabilities.supports_cache_control, but the user
-            // signal that they explicitly asked for Long is still useful.
+            // Keep the existing warning that surfaces long-TTL use on
+            // third-party hosts. Marker injection still depends on the
+            // endpoint's policy.capabilities.supports_cache_control (enabled
+            // for Bedrock/Azure family overlays, off for unknown proxies),
+            // and `build_request` downgrades the 1h TTL itself to the default
+            // 5m marker off the official endpoint (third-party hosts reject
+            // the Anthropic-1P `ttl` key under strict schema validation).
             tracing::warn!(
                 endpoint = %endpoint,
                 "cache_retention = long on non-official Anthropic host; \
-                 cache_control will not be injected because the endpoint \
-                 capability is disabled."
+                 the 1h TTL is downgraded to the default 5-minute marker \
+                 there (the extended-TTL beta is Anthropic-1P only)."
             );
             CacheRetention::Long
         }
@@ -50,6 +53,7 @@ pub(super) const MAX_CACHE_BREAKPOINTS: usize = 4;
 /// `SystemBlock::cached_text` marker at "ephemeral, no TTL"; this lets the
 /// 1h ephemeral variant take over without re-walking the entire system array.
 pub(super) fn promote_system_marker_ttl(payload: &mut serde_json::Value, cc: CacheControl) {
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
     let Some(arr) = payload.get_mut("system").and_then(|v| v.as_array_mut()) else {
         return;
@@ -81,6 +85,7 @@ pub(super) fn inject_cache_control_into_system_array(
     payload: &mut serde_json::Value,
     cc: CacheControl,
 ) -> bool {
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     match payload.get_mut("system") {
@@ -132,6 +137,7 @@ pub(super) fn inject_cache_control_into_recent_messages(
     if max_breakpoints == 0 {
         return;
     }
+    // rust-doctor-disable-next-line unwrap-in-production
     let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
 
     let Some(messages) = payload.get_mut("messages").and_then(|v| v.as_array_mut()) else {

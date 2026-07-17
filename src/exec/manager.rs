@@ -25,8 +25,6 @@ pub struct ExecApprovalRecord {
     pub command: String,
     /// Working directory
     pub cwd: Option<String>,
-    /// Host identifier
-    pub host: Option<String>,
     /// Agent ID
     pub agent_id: String,
     /// Session key
@@ -57,6 +55,12 @@ pub struct ExecApprovalRecord {
     /// raised outside tool dispatch (cluster node approvals, raw exec commands).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Free-text reason the human attached to a denial (`/deny <reason>` from
+    /// a channel, or the `reason` field on `exec.approval.resolve`). Relayed
+    /// to the model through [`ResolvedDecision`] so it can change approach
+    /// instead of blindly retrying. Only ever set on a `Deny`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny_reason: Option<String>,
 }
 
 impl ExecApprovalRecord {
@@ -88,7 +92,6 @@ impl ExecApprovalRecord {
             id: request.id.clone(),
             command: request.command.clone(),
             cwd: request.cwd.clone(),
-            host: None,
             agent_id: request.agent_id.clone(),
             session_key: request.session_key.clone(),
             executable,
@@ -104,6 +107,7 @@ impl ExecApprovalRecord {
             // reason) but no per-call id. The identity is scoped at the
             // tool-dispatch chokepoint that raised the gate.
             tool_call_id: crate::approval::current_tool_call_id(),
+            deny_reason: None,
         }
     }
 
@@ -122,6 +126,16 @@ impl ExecApprovalRecord {
     pub const fn is_resolved(&self) -> bool {
         self.decision.is_some()
     }
+}
+
+/// What [`ExecApprovalManager::await_registered`] resolves to: the decision
+/// (`None` = timed out / channel closed) plus any free-text reason the human
+/// attached to a denial (`/deny <reason>` or the RPC `reason` field). The
+/// reason is what turns a bare "denied" into something the model can act on.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedDecision {
+    pub decision: Option<ApprovalDecisionType>,
+    pub deny_reason: Option<String>,
 }
 
 /// Internal pending entry with channel
@@ -277,22 +291,26 @@ impl ExecApprovalManager {
 
     /// Await a previously [`register_pending`](Self::register_pending)ed
     /// approval, removing it from `pending` on resolution or timeout.
+    ///
+    /// The denial reason (if the resolver attached one) is harvested from the
+    /// removed entry here — the resolver stamps it on the record BEFORE waking
+    /// the oneshot, so it is read atomically with the decision.
     pub async fn await_registered(
         &self,
         id: String,
         rx: oneshot::Receiver<Option<ApprovalDecisionType>>,
         timeout: Duration,
-    ) -> Option<ApprovalDecisionType> {
+    ) -> ResolvedDecision {
         // Wait with timeout
         let result = tokio::time::timeout(timeout, rx).await;
 
-        // Remove from pending
-        {
+        // Remove from pending, harvesting the record the resolver annotated.
+        let deny_reason = {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
-            pending.remove(&id);
-        }
+            pending.remove(&id).and_then(|e| e.record.deny_reason)
+        };
 
-        match result {
+        let decision = match result {
             Ok(Ok(decision)) => {
                 debug!(id = %id, ?decision, "Approval resolved");
                 decision
@@ -307,6 +325,10 @@ impl ExecApprovalManager {
                 debug!(id = %id, "Approval timed out");
                 None
             }
+        };
+        ResolvedDecision {
+            decision,
+            deny_reason,
         }
     }
 
@@ -327,17 +349,43 @@ impl ExecApprovalManager {
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
     ) -> bool {
+        self.resolve_with_reason(id, decision, resolved_by, None)
+    }
+
+    /// [`Self::resolve`] carrying an optional free-text denial reason, stamped
+    /// onto the record BEFORE the waiter is woken so the awaiting requester
+    /// reads it atomically with the decision. Stored only on a `Deny` — a
+    /// reason on an approval means nothing and would only confuse the record.
+    pub fn resolve_with_reason(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+        deny_reason: Option<String>,
+    ) -> bool {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         if let Some(entry) = pending.get_mut(id) {
-            if entry.sender.is_none() {
-                warn!(id = %id, "Approval already resolved");
+            // Liveness is the honest signal, exactly as the clarification twin
+            // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
+            // a dead entry is one already resolved (`sender` taken), past its
+            // deadline, OR abandoned (receiver dropped by a cancelled run). Any
+            // of these makes the decision reach nobody — reporting `true` here
+            // is what lets a Telegram button callback / `exec.approval.resolve`
+            // reply "✅ Allowed" for an approval that was never delivered. The
+            // FIFO `resolve_for_session` path already filters on `is_live`; the
+            // by-id path must too, or the two disagree on the same registry.
+            if !entry.is_live() {
+                warn!(id = %id, "Approval already resolved, expired, or abandoned");
                 return false;
             }
 
             let decision = Self::clamp_decision(decision);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
+            if decision == ApprovalDecisionType::Deny {
+                entry.record.deny_reason = deny_reason;
+            }
             entry.record.resolved_at_ms = Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -345,6 +393,8 @@ impl ExecApprovalManager {
                     .as_millis() as u64,
             );
 
+            // `is_live()` above proved the receiver is still open under this
+            // same lock, so the send delivers — no silent drop to a zombie.
             if let Some(sender) = entry.sender.take() {
                 let _ = sender.send(Some(decision));
             }
@@ -386,6 +436,7 @@ impl ExecApprovalManager {
         index: Option<usize>,
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
+        deny_reason: Option<String>,
     ) -> SessionResolveOutcome {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
@@ -461,6 +512,9 @@ impl ExecApprovalManager {
             let summary = Self::display_line(&entry.record);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
+            if decision == ApprovalDecisionType::Deny {
+                entry.record.deny_reason = deny_reason;
+            }
             entry.record.resolved_at_ms = Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -694,8 +748,43 @@ mod tests {
             manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
             "resolve must find the entry registered by register_pending"
         );
-        let decision = manager.await_registered(id, rx, timeout).await;
-        assert_eq!(decision, Some(ApprovalDecisionType::AllowOnce));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    #[tokio::test]
+    async fn resolve_by_id_reports_false_for_an_abandoned_waiter() {
+        // Twin parity with the clarification manager: a run cancelled while its
+        // approval was parked drops the receiver. A late button tap / RPC that
+        // resolves this zombie by id must report `false` — the callback sink
+        // and `exec.approval.resolve` speak "✅ Allowed" only on a `true`, and
+        // the decision would reach nobody. Before the fix `resolve` checked only
+        // `sender.is_none()` and returned `true` for the dead entry.
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, _timeout) = manager.register_pending(record);
+        drop(rx); // the awaiting `ask_user`/tool future is gone (aborted run)
+
+        assert!(
+            !manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
+            "resolving an abandoned (receiver-closed) approval must report false"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_by_id_reports_false_for_an_expired_entry() {
+        // An expired card is not a decision surface: resolving it by id must be
+        // a no-op false, matching `resolve_for_session`'s liveness filter and
+        // the clarification twin's `resolve_after_expiry`.
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 1); // 1ms window
+        let (id, _rx, _timeout) = manager.register_pending(record);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert!(
+            !manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
+            "resolving an expired approval by id must report false"
+        );
     }
 
     #[tokio::test]
@@ -771,7 +860,13 @@ mod tests {
         // The user types `/approve` on the channel. One LIVE card — the
         // zombie must not make this ambiguous.
         assert!(matches!(
-            manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None),
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowOnce,
+                None,
+                None,
+            ),
             SessionResolveOutcome::Resolved {
                 decision: ApprovalDecisionType::AllowOnce,
                 ..
@@ -780,13 +875,62 @@ mod tests {
 
         // It must reach the LIVE card, not the older zombie.
         assert_eq!(
-            manager.await_registered(live_id, rx2, timeout).await,
+            manager
+                .await_registered(live_id, rx2, timeout)
+                .await
+                .decision,
             Some(ApprovalDecisionType::AllowOnce),
             "the live card must receive the approval; an abandoned waiter must not \
              win the session FIFO"
         );
         // And the zombie must not be renderable as a card.
-        assert!(manager.list_pending().iter().all(|p| p.record.id != "zombie"));
+        assert!(manager
+            .list_pending()
+            .iter()
+            .all(|p| p.record.id != "zombie"));
+    }
+
+    /// `/deny <reason>` end-to-end at the manager layer: the reason stamped by
+    /// the resolver must come back out of `await_registered` with the decision,
+    /// and must NOT survive onto an approval.
+    #[tokio::test]
+    async fn deny_reason_rides_the_resolved_decision() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let session_key = record.session_key.clone();
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(matches!(
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::Deny,
+                None,
+                Some("wrong directory, use /tmp".to_string()),
+            ),
+            SessionResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::Deny,
+                ..
+            }
+        ));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::Deny));
+        assert_eq!(
+            resolved.deny_reason.as_deref(),
+            Some("wrong directory, use /tmp")
+        );
+
+        // A reason on an APPROVAL is dropped — it means nothing there.
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(manager.resolve_with_reason(
+            &id,
+            ApprovalDecisionType::AllowOnce,
+            None,
+            Some("noise".to_string()),
+        ));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+        assert_eq!(resolved.deny_reason, None);
     }
 
     #[test]
@@ -821,7 +965,8 @@ mod tests {
                 &session_key,
                 None,
                 ApprovalDecisionType::AllowAlways,
-                None
+                None,
+                None,
             ),
             SessionResolveOutcome::Resolved {
                 decision: ApprovalDecisionType::AllowSession,
@@ -851,8 +996,13 @@ mod tests {
         let (_id2, _rx2, _t2) = manager.register_pending(rec2);
 
         // Bare reply → ambiguous listing, oldest first, nothing resolved.
-        match manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None)
-        {
+        match manager.resolve_for_session(
+            &session_key,
+            None,
+            ApprovalDecisionType::AllowOnce,
+            None,
+            None,
+        ) {
             SessionResolveOutcome::Ambiguous(cards) => {
                 assert_eq!(cards.len(), 2);
                 assert_eq!(cards[0], (1, "rm -rf ./build".to_string()));
@@ -864,7 +1014,13 @@ mod tests {
 
         // Out-of-range index re-lists rather than guessing.
         assert!(matches!(
-            manager.resolve_for_session(&session_key, Some(9), ApprovalDecisionType::AllowOnce, None),
+            manager.resolve_for_session(
+                &session_key,
+                Some(9),
+                ApprovalDecisionType::AllowOnce,
+                None,
+                None,
+            ),
             SessionResolveOutcome::Ambiguous(_)
         ));
 
@@ -873,6 +1029,7 @@ mod tests {
             &session_key,
             Some(1),
             ApprovalDecisionType::AllowOnce,
+            None,
             None,
         ) {
             SessionResolveOutcome::Resolved { decision, summary } => {
@@ -908,7 +1065,13 @@ mod tests {
 
         // The listing the user reads: [1=a, 2=b] (snapshotted).
         assert!(matches!(
-            manager.resolve_for_session(&session_key, None, ApprovalDecisionType::AllowOnce, None),
+            manager.resolve_for_session(
+                &session_key,
+                None,
+                ApprovalDecisionType::AllowOnce,
+                None,
+                None,
+            ),
             SessionResolveOutcome::Ambiguous(_)
         ));
 
@@ -924,6 +1087,7 @@ mod tests {
             Some(2),
             ApprovalDecisionType::AllowOnce,
             None,
+            None,
         ) {
             SessionResolveOutcome::Resolved { summary, .. } => assert_eq!(summary, "cmd-b"),
             other => panic!("expected Resolved(cmd-b), got {other:?}"),
@@ -935,6 +1099,7 @@ mod tests {
             &session_key,
             Some(1),
             ApprovalDecisionType::AllowOnce,
+            None,
             None,
         ) {
             SessionResolveOutcome::Ambiguous(cards) => {
@@ -948,6 +1113,7 @@ mod tests {
             &session_key,
             Some(1),
             ApprovalDecisionType::AllowOnce,
+            None,
             None,
         ) {
             SessionResolveOutcome::Resolved { summary, .. } => assert_eq!(summary, "cmd-c"),

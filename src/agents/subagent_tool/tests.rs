@@ -1137,3 +1137,141 @@ async fn check_status_completed_reports_run_metrics() {
         other => unreachable!("expected Success, got {other:?}"),
     }
 }
+
+// -------------------------------------------------------------------------
+// wait action — event-driven blocking on background sub-agents
+// -------------------------------------------------------------------------
+
+/// Build a tool over a caller-supplied tracker so tests can pre-populate it.
+fn tool_with_tracker(tracker: Arc<BackgroundAgentTracker>) -> SubagentTool {
+    let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+    let chain = crate::harness::chain_context::ChainContext::new();
+    SubagentTool::new(
+        provider,
+        chain,
+        make_registry(),
+        tracker,
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+}
+
+#[test]
+fn parse_wait_single_multi_and_empty() {
+    // Single request_id → one-element set, default timeout.
+    match parse_args(&json!({ "action": "wait", "request_id": "r1" })).unwrap() {
+        SubagentAction::Wait {
+            request_ids,
+            timeout_secs,
+        } => {
+            assert_eq!(request_ids, vec!["r1".to_string()]);
+            assert_eq!(timeout_secs, 120);
+        }
+        other => unreachable!("expected Wait, got {other:?}"),
+    }
+    // request_ids array → multi set (blanks dropped); timeout clamped to ceiling.
+    match parse_args(&json!({
+        "action": "wait",
+        "request_ids": ["a", "b", "  ", "c"],
+        "timeout_secs": 100_000
+    }))
+    .unwrap()
+    {
+        SubagentAction::Wait {
+            request_ids,
+            timeout_secs,
+        } => {
+            assert_eq!(
+                request_ids,
+                vec!["a".to_string(), "b".to_string(), "c".to_string()]
+            );
+            assert_eq!(timeout_secs, 600);
+        }
+        other => unreachable!("expected Wait, got {other:?}"),
+    }
+    // Neither field → error.
+    assert!(parse_args(&json!({ "action": "wait" })).is_err());
+}
+
+#[tokio::test]
+async fn wait_action_returns_completed_and_consumes() {
+    let tracker = make_tracker();
+    tracker.mark_completed("rid", CompletedOutcome::ok_text("the answer"));
+    let tool = tool_with_tracker(tracker.clone());
+
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_id": "rid", "timeout_secs": 5 }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "completed");
+            assert_eq!(output["result"], "the answer");
+        }
+        other => unreachable!("expected Success, got {other:?}"),
+    }
+    // wait consumed the result → the announce would now skip re-delivering it.
+    assert!(tracker.is_consumed("rid"));
+}
+
+#[tokio::test]
+async fn wait_action_reports_still_running_on_timeout() {
+    let tracker = make_tracker();
+    tracker.register("rid".into(), CancellationToken::new(), "long job".into());
+    let tool = tool_with_tracker(tracker);
+
+    // timeout_secs clamps to a 1s minimum; the job never finishes in-window.
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_id": "rid", "timeout_secs": 1 }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "still_running");
+            assert_eq!(output["request_id"], "rid");
+        }
+        other => unreachable!("expected still_running Success, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn wait_action_unknown_id_errors() {
+    let tool = make_tool();
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_id": "ghost", "timeout_secs": 1 }),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(matches!(result, ToolResult::Error { .. }));
+}
+
+#[tokio::test]
+async fn wait_action_multi_returns_first_completion() {
+    let tracker = make_tracker();
+    tracker.register("a".into(), CancellationToken::new(), "slow".into());
+    tracker.mark_completed("b", CompletedOutcome::ok_text("b-first"));
+    let tool = tool_with_tracker(tracker.clone());
+
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_ids": ["a", "b"], "timeout_secs": 5 }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "completed");
+            assert_eq!(output["request_id"], "b");
+            assert_eq!(output["result"], "b-first");
+        }
+        other => unreachable!("expected Success, got {other:?}"),
+    }
+    // Only the finished id is consumed; the still-running sibling is not.
+    assert!(tracker.is_consumed("b"));
+    assert!(!tracker.is_consumed("a"));
+}

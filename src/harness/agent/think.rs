@@ -181,9 +181,9 @@ fn build_request_payload<'a>(
     tools_ref: Option<&'a [crate::tool_metadata::ToolDefinition]>,
     session_id: &SessionId,
 ) -> RequestPayload<'a> {
-    // Carry the session id as provider metadata: OpenAI-family adapters use it
-    // as `prompt_cache_key` for cache-routing affinity, and the cost-metering
-    // hooks key on `metadata["session_id"]` for per-session attribution.
+    // Carry the session id as provider metadata: cost metering keys on it for
+    // per-session attribution; OpenAI adapters use it only as the fallback
+    // `prompt_cache_key` (openai_common::prompt_cache content-addresses).
     let mut metadata = std::collections::HashMap::with_capacity(1);
     metadata.insert("session_id".to_string(), session_id.to_string());
     let base = RequestPayload::new(messages)
@@ -375,12 +375,17 @@ impl AgentHarness {
             messages.push(crate::providers::message::UnifiedMessage::user(recall));
         }
 
-        // Fetch the cached metadata-form tool schema once. O(1) `Arc::clone`
-        // on the steady-state path. Hoisted above BOTH the preflight pass and
-        // the budget check so the preflight pressure gate and the budget sensor
-        // account for the real tool-schema overhead.
+        // Fetch the cached metadata-form tool schema once (O(1) `Arc::clone` on
+        // the steady-state path) and estimate its token cost once — the preflight
+        // pressure gate (2a) and the budget check (2b) consume the same value.
         let metadata_tools = self.deps.tools.metadata_schema();
         let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+        let budget_tool_tokens = if let Some(budget) = self.deps.context_budget.as_ref() {
+            let ratio = budget.lock().await.token_estimate_ratio();
+            estimate_tool_schema_tokens(&metadata_tools, ratio)
+        } else {
+            0
+        };
 
         // 2a. Preflight cheap passes (hermes-inspired). Run BEFORE the budget
         // check so token-saving transforms — tool_result pruning + historical
@@ -404,9 +409,8 @@ impl AgentHarness {
             let (pressure, fresh_tail) = match self.deps.context_budget.as_ref() {
                 Some(budget) => {
                     let guard = budget.lock().await;
-                    let tool_tokens =
-                        estimate_tool_schema_tokens(&metadata_tools, guard.token_estimate_ratio());
-                    let pressure = guard.peek_pressure(&messages, system_prompt, tool_tokens);
+                    let pressure =
+                        guard.peek_pressure(&messages, system_prompt, budget_tool_tokens);
                     (pressure, guard.fresh_tail_count())
                 }
                 None => (
@@ -431,19 +435,15 @@ impl AgentHarness {
         }
 
         // 2b. Task-10 budget check: evaluate context pressure before issuing
-        // the LLM call. The sensor now sees the real system prompt and
-        // tool-schema overhead (previously passed empty), so compaction and
-        // `FinalReply` fire on the true context size, not just message tokens.
-        let (budget_directive, budget_tool_tokens) =
-            if let Some(budget) = self.deps.context_budget.as_ref() {
-                let mut guard = budget.lock().await;
-                let tool_tokens =
-                    estimate_tool_schema_tokens(&metadata_tools, guard.token_estimate_ratio());
-                let directive = guard.before_turn(&messages, system_prompt, tool_tokens);
-                (Some(directive), tool_tokens)
-            } else {
-                (None, 0usize)
-            };
+        // the LLM call. The sensor sees the real system prompt and tool-schema
+        // overhead, so compaction directives fire on the true context size,
+        // not just message tokens.
+        let budget_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
+            let mut guard = budget.lock().await;
+            Some(guard.before_turn(&messages, system_prompt, budget_tool_tokens))
+        } else {
+            None
+        };
 
         // 2c. Apply the compaction directive (CompactAndContinue / CompactToFit /
         // SplitSession) via the context layer's single dispatch entry. Mechanical
@@ -953,7 +953,6 @@ impl AgentHarness {
             requested_tool_calls: response.tool_calls.len(),
             executed_tool_calls: 0,
             productive: false,
-            consecutive_errors: 0,
             total_tokens: turn_tokens as usize,
         };
         let outcome_for_trace;
@@ -1100,7 +1099,6 @@ impl AgentHarness {
                 requested_tool_calls: requested,
                 executed_tool_calls: executed,
                 productive: executed > 0,
-                consecutive_errors: 0,
                 total_tokens: turn_tokens as usize,
             };
             result = Ok(TurnStep::cont(executed));
@@ -1111,7 +1109,7 @@ impl AgentHarness {
         // a veto is already a guardrail intervention and must not also feed the
         // diminishing-returns window. StopDiminishing reuses the Task-5
         // grace-turn helper to give the user a terminal summary, mirroring
-        // the FinalReply path. R10-safe: no new directive variant, no new
+        // the other forced-stop paths. R10-safe: no new directive variant, no new
         // decision category — `StopDiminishing` already existed.
         //
         // The veto flag is the 3rd element of `result`; `verdict` was moved
@@ -1122,7 +1120,6 @@ impl AgentHarness {
                 let mut guard = budget.lock().await;
                 Some(guard.after_turn(crate::context::budget::TurnMetrics {
                     output_tokens,
-                    tool_calls: metrics_for_trace.requested_tool_calls,
                     productive: metrics_for_trace.productive,
                 }))
             } else {

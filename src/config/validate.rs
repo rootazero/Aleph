@@ -26,12 +26,10 @@ pub fn normalize_default_provider(cfg: &mut Config) {
     if cfg.providers.is_empty() {
         return;
     }
-    let fallback = cfg
-        .providers
-        .keys()
-        .min()
-        .expect("providers is non-empty")
-        .clone();
+    let fallback = match cfg.providers.keys().min() {
+        Some(k) => k.clone(),
+        None => return,
+    };
     warn!(
         default_provider = %current,
         fallback_provider = %fallback,

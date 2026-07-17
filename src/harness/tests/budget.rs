@@ -203,7 +203,34 @@ const BUDGETED: [&str; 12] = [
 ///
 /// Net **−8**, taking the loop to **5035**.
 ///
-/// **Batch 6 (2026-07-17): 5035 → 5115 (+80).** The first deliberate raise
+/// **Batch 6 (2026-07-17): 5035 → 4996.** Pure deletion, no relocation of live
+/// code — the one-shot turn driver `AgentHarness::run_turn` (and its two counter
+/// helpers `count_assistant_messages` / `count_tool_calls`, used by nothing else)
+/// had **zero production callers**: production drives the loop only through
+/// `run` → `run_turn_internal`. It existed solely so tests could fire a single
+/// turn. A test affordance was costing the loop's line budget, so it moved to
+/// `src/harness/tests/harness_ext.rs` as an extension trait
+/// (`AgentHarnessTestExt::run_turn`) — outside the 12-file / CEILING budget — and
+/// the ~50 call sites keep the identical `harness.run_turn(…)` shape via one
+/// import. Answering R10's three questions: it is scaffolding, not cognition; a
+/// stronger model does not need it; it has zero *production* consumers. Net
+/// **−39** from `agent.rs` (1042 → 1003 budgeted lines).
+///
+/// Also removed the dead `LoopTraceTurnMetrics.consecutive_errors` field: both
+/// emit sites in `think.rs` hardcoded `0`, the wire DTO forwarded the constant,
+/// and **no consumer ever read it** (the harness tracks the real
+/// `consecutive_failure_turns` in `run()` but never threaded it here — and
+/// threading it would grow the loop, which R10 forbids for a signal nobody reads).
+/// Deleted end-to-end: core `trace.rs` field, `AgentTraceTurnMetrics` wire field
+/// (`shared/protocol`), the `From` conversion, and three test constructions.
+/// Net **−3** more (`trace.rs` −1, `think.rs` −2).
+///
+/// Net **−42** this batch. The ratchet's own measurement now reads **4988** —
+/// the prior 5035 ceiling was itself a few lines stale against the live files, so
+/// the honest figure landed 5 below the arithmetic (5030-ish − 42). The number is
+/// the measurement, not the estimate; that is the whole point of the file.
+///
+/// **Batch 7 (2026-07-17): 4988 → 5072 (+80).** The first deliberate raise
 /// since the ratchet was pinned — two deferred tool-concurrency items land in
 /// `act.rs`, both answering R10's three questions in the open:
 ///
@@ -232,13 +259,15 @@ const BUDGETED: [&str; 12] = [
 ///     UX); consumer: the Panel live stream (`BroadcastCallback` →
 ///     `FlowStreamEvent::ToolCallDone`).
 ///
-/// Net **+80**, taking the loop to **5115**. The discipline is unchanged:
-/// down-only without a written reason — this paragraph is that reason.
+/// Net **+80**, taking the loop to **5072** — the test's own measurement;
+/// the +80 arithmetic said 5068, the same few-lines staleness Batch 6
+/// recorded. The discipline is unchanged: down-only without a written
+/// reason — this paragraph is that reason.
 ///
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5115;
+const CEILING: usize = 5072;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

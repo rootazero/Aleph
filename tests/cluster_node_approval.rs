@@ -63,11 +63,20 @@ fn spawn_center(
             }
         });
 
-        let outcome = alephcore::approval::run_node_approval(
+        // `run_node_approval` returns `(wire_outcome, deny_reason)` since
+        // round-4's `/deny <reason>` plumbing; mirror the production caller
+        // (`gateway/server/handler.rs`) — put the outcome string on the wire
+        // and attach the optional reason, rather than serializing the whole
+        // tuple as a JSON array the node would fail-closed on.
+        let (outcome, deny_reason) = alephcore::approval::run_node_approval(
             &manager, &event_bus, "node-1", "worker", &tool, &action, &reason,
         )
         .await;
-        let resp = JsonRpcResponse::success(Some(id.clone()), json!({ "outcome": outcome }));
+        let mut body = json!({ "outcome": outcome });
+        if let Some(r) = deny_reason {
+            body["deny_reason"] = Value::String(r);
+        }
+        let resp = JsonRpcResponse::success(Some(id.clone()), body);
         pending.resolve(&id, resp);
     });
 }
@@ -88,8 +97,10 @@ async fn run_case(decision: Option<ApprovalDecisionType>, expect: ApprovalOutcom
         &json!({"cmd": "curl https://example.com"}),
         "needs network",
     );
-    let outcome = requester.request_approval(&action).await;
-    assert_eq!(outcome, expect);
+    // `request_approval` returns `ApprovalResponse { outcome, deny_reason }`
+    // since round-4; a cluster node decision carries no free-text reason.
+    let response = requester.request_approval(&action).await;
+    assert_eq!(response.outcome, expect);
 }
 
 #[tokio::test]

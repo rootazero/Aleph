@@ -112,7 +112,19 @@ pub(super) async fn post_run(
     };
 
     match decision {
-        ContinuationDecision::Idle => {}
+        ContinuationDecision::Idle => {
+            // A gate-less autonomous completion is an authoritative terminal
+            // end the gate arbitration never sees (`awaiting_gate` requires a
+            // configured gate, so the claim returns `Idle` for it): clear the
+            // welded plan here, or it silently steers every later plain turn
+            // of this reused session (the goal tier resolves FIRST). Idempotent
+            // — repeated Idle rounds on a Complete goal just re-delete a
+            // missing row. The tool side deliberately defers this exact case
+            // to the hook (a gate veto must be able to reopen WITH the plan).
+            if crate::goal::pursuit::gateless_terminal_complete(&peek, gate_configured) {
+                clear_goal_welded_strategy(&session);
+            }
+        }
         ContinuationDecision::Fire {
             delay_ms,
             wake_ms,

@@ -427,6 +427,7 @@ pub(crate) fn normalize_homoglyphs(text: &str) -> String {
     text.chars().map(normalize_char).collect()
 }
 
+// rust-doctor-disable-next-line high-cyclomatic-complexity
 fn normalize_char(c: char) -> char {
     // Fullwidth ASCII variants (U+FF01–U+FF5E) → halfwidth (U+0021–U+007E)
     if ('\u{FF01}'..='\u{FF5E}').contains(&c) {

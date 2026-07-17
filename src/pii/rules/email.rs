@@ -10,6 +10,7 @@ static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
 fn email_regex() -> &'static Regex {
     EMAIL_RE.get_or_init(|| {
         Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+            // rust-doctor-disable-next-line unwrap-in-production
             .expect("static email regex compiles")
     })
 }

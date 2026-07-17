@@ -35,8 +35,7 @@ impl SnapshotWriter {
     /// LLM-written and already carries decisions verbatim; deterministic
     /// keyword-scraping of that natural language is exactly what R7/P8 ban.
     /// The remaining fields have no session-end source today and stay empty
-    /// ([`SessionSnapshot::to_prompt_text`] / the assembler's snapshot
-    /// candidate both omit empty sections).
+    /// (the assembler's snapshot candidate omits empty sections).
     pub fn write_from_summary(
         &self,
         session_id: &str,

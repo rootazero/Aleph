@@ -59,12 +59,15 @@ pub struct TeamNotifier {
     /// claimed **for the current wave of work**. Guards the concurrent
     /// dispatcher from firing the completion message once per
     /// simultaneously-finishing task; the first handler to insert a team id
-    /// wins, the rest short-circuit. NOT monotonic: any non-settled task
-    /// transition on the team (new work created — the store always emits a
-    /// `pending` update on create — or a task reset/resumed) removes the claim,
-    /// re-arming exactly one completion notification for the next wave.
-    /// Without the re-arm, run #2+ of a workflow template on the same team —
-    /// the tool's documented re-run pattern — would complete in total silence.
+    /// wins, the rest short-circuit. NOT monotonic: the claim is scoped per
+    /// WORK BATCH — any non-settled task activity on the team (new work
+    /// created — the store always emits a `pending` update on create — a task
+    /// reset/resumed, or a review park) removes the claim, re-arming exactly
+    /// one completion notification for the next wave. Without the re-arm,
+    /// run #2+ of a workflow template on the same team — the tool's
+    /// documented re-run pattern — would complete in total silence. Growth
+    /// stays bounded by the number of distinct teams (re-arming removes,
+    /// never adds).
     completed_teams: Mutex<HashSet<String>>,
 }
 
@@ -111,6 +114,17 @@ impl TeamNotifier {
                 attachments: vec![],
             })
             .await;
+    }
+
+    /// New (non-terminal) task activity on a team: release its completion
+    /// claim so the next all-terminal moment notifies again. No-op for teams
+    /// that never completed a batch.
+    fn rearm_completion_claim(&self, team_id: &str) {
+        let mut done = self
+            .completed_teams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        done.remove(team_id);
     }
 
     /// Whether every task on the team has reached a terminal state.
@@ -176,13 +190,14 @@ impl EventHandler for TeamNotifier {
             // Review-gated task parked by the dispatcher. The gate only
             // resolves through `workflow_step_review`, so the leader must be
             // told now — otherwise the DAG stalls with nobody polling the
-            // board. Other status transitions on this event are noise here.
+            // board.
             AlephEvent::TeamTaskUpdated {
                 team_id,
                 task_id,
                 status,
                 ..
             } if status.as_str() == "waiting_review" => {
+                self.rearm_completion_claim(team_id);
                 self.notify_leader(
                     team_id,
                     "Team task awaiting review",
@@ -216,10 +231,7 @@ impl EventHandler for TeamNotifier {
                 if CoordTaskStatus::from_stored(status).is_some_and(|s| !s.is_settled()) =>
             {
                 if !self.team_work_finished(team_id).await {
-                    self.completed_teams
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .remove(team_id);
+                    self.rearm_completion_claim(team_id);
                 }
             }
             AlephEvent::TeamTaskCompleted {

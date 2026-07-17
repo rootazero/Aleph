@@ -756,12 +756,13 @@ impl AlephTool for WorkflowTool {
                     strategy.as_ref(),
                 )
                 .await?;
-                // NOTE: no run-keyed strategy-store row is written here. The
-                // strategy frame the member runs actually consume is the
-                // WORKFLOW_STRATEGY_KEY task metadata rendered by
-                // build_handoff_context; a `workflow:<run_id>` store row had
-                // zero readers and no lifecycle delete, so it was removed
-                // (R10 YAGNI).
+                // Strategy delivery is metadata-only: `materialize` stamps the
+                // rendered frame under `WORKFLOW_STRATEGY_KEY` on every agent
+                // step and `handoff.rs` renders it as `## Global Strategy`. A
+                // `strategies`-table row under `workflow:<run_id>` was also
+                // written here for a while, but nothing ever read it
+                // (`resolve_active_strategy` has no workflow tier) — each run
+                // leaked one permanent orphan row. Removed (R10 zero-consumer).
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }

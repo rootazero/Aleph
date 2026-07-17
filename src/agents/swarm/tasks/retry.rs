@@ -69,6 +69,72 @@ pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
 /// as `0` → byte-identical legacy behaviour.
 pub const RETRY_ATTEMPTS_BASE_METADATA_KEY: &str = "retry_attempts_base";
 
+/// Metadata key under which the epoch (seconds) of the most recent **manual
+/// retry** (operator/leader hard-reset via `team_task_control.retry`,
+/// `workflow_step_review.retry`, `teams.task.retry`, or
+/// `teams.workflow.retry_step`) is stored.
+///
+/// A deliberate reset re-arms the automatic retry budget: only failed attempts
+/// **at or after** this anchor count against `max_retries`. Without it, a task
+/// that exhausted its budget and was then manually re-queued would fail
+/// terminally on its very first new failure — every all-time failure still
+/// counted — so the documented "fail → retry → give up" ladder never re-armed
+/// (mirrors hermes-agent, which resets `consecutive_failures` on a deliberate
+/// unblock). Absent → all recorded failures count (the pre-anchor behaviour,
+/// correct for tasks that were never manually reset).
+pub const RETRY_BUDGET_RESET_AT_METADATA_KEY: &str = "retry_budget_reset_at";
+
+/// Read the manual-retry budget anchor (epoch seconds) from `metadata`, if
+/// any. Tolerant: a missing key or non-integer value reads as `None` (count
+/// every recorded failure).
+#[must_use]
+pub fn read_retry_budget_reset_at(metadata: &Value) -> Option<u64> {
+    metadata
+        .get(RETRY_BUDGET_RESET_AT_METADATA_KEY)
+        .and_then(Value::as_u64)
+}
+
+/// Return a new metadata value with [`RETRY_BUDGET_RESET_AT_METADATA_KEY`]
+/// set to `reset_at`, preserving every other key. Mirrors
+/// [`with_retry_not_before`]: a non-object input is promoted to an empty
+/// object, and the original is left untouched (immutability).
+#[must_use]
+pub fn with_retry_budget_reset_at(metadata: Value, reset_at: u64) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            RETRY_BUDGET_RESET_AT_METADATA_KEY.to_string(),
+            Value::Number(reset_at.into()),
+        );
+    }
+    value
+}
+
+/// Count the failed/timed-out attempts that consume the current retry budget:
+/// runs whose terminal status is `Failed`/`Timeout` and which started **at or
+/// after** the manual-reset anchor (`reset_at`, absent → count all).
+///
+/// Pure and total — the counting twin of [`retry_decision`], exercised
+/// directly in tests without a live dispatcher. Orphan reclaims leave a
+/// `Running` row that never finished, so they never consume budget; only
+/// clean `Failed`/`Timeout` attempts do (unchanged from the pre-anchor rule).
+#[must_use]
+pub fn budget_failures_since(runs: &[super::CoordTaskRun], reset_at: Option<u64>) -> u32 {
+    let anchor = reset_at.unwrap_or(0);
+    runs.iter()
+        .filter(|r| {
+            matches!(
+                r.status,
+                super::TaskRunStatus::Failed | super::TaskRunStatus::Timeout
+            )
+        })
+        .filter(|r| r.started_at >= anchor)
+        .count() as u32
+}
+
 /// What the dispatcher should do with a task whose attempt just failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
@@ -432,6 +498,70 @@ mod tests {
         assert!(original.get(RETRY_NOT_BEFORE_METADATA_KEY).is_none()); // immutable
         assert_eq!(read_retry_not_before(&stamped), Some(1_700_000_000));
         assert_eq!(read_max_retries(&stamped), Some(2)); // sibling preserved
+    }
+
+    fn run(
+        status: crate::agents::swarm::tasks::TaskRunStatus,
+        started_at: u64,
+    ) -> crate::agents::swarm::tasks::CoordTaskRun {
+        crate::agents::swarm::tasks::CoordTaskRun {
+            id: format!("run-{started_at}"),
+            task_id: "t1".into(),
+            agent_id: "a".into(),
+            started_at,
+            ended_at: Some(started_at + 1),
+            status,
+            summary: None,
+            error: None,
+            review_verdict: None,
+            reviewer_kind: None,
+            reviewer_id: None,
+        }
+    }
+
+    #[test]
+    fn budget_anchor_round_trips_and_preserves_keys() {
+        let original = json!({ MAX_RETRIES_METADATA_KEY: 2 });
+        let stamped = with_retry_budget_reset_at(original.clone(), 1_700_000_000);
+        assert!(original.get(RETRY_BUDGET_RESET_AT_METADATA_KEY).is_none()); // immutable
+        assert_eq!(read_retry_budget_reset_at(&stamped), Some(1_700_000_000));
+        assert_eq!(read_max_retries(&stamped), Some(2)); // sibling preserved
+                                                         // Non-object promoted; wrong shape reads as None.
+        assert!(with_retry_budget_reset_at(json!("scalar"), 5).is_object());
+        assert_eq!(
+            read_retry_budget_reset_at(&json!({ RETRY_BUDGET_RESET_AT_METADATA_KEY: "soon" })),
+            None
+        );
+    }
+
+    #[test]
+    fn budget_counts_all_failures_without_anchor() {
+        use crate::agents::swarm::tasks::TaskRunStatus::*;
+        let runs = vec![
+            run(Failed, 10),
+            run(Completed, 20),
+            run(Timeout, 30),
+            run(Running, 40),
+        ];
+        // Failed + Timeout count; Completed and Running (orphan) never do.
+        assert_eq!(budget_failures_since(&runs, None), 2);
+    }
+
+    #[test]
+    fn budget_counts_only_failures_at_or_after_anchor() {
+        use crate::agents::swarm::tasks::TaskRunStatus::*;
+        // Three failures exhausted the old budget; a manual retry at t=100
+        // re-arms it — only the post-anchor failure counts.
+        let runs = vec![
+            run(Failed, 10),
+            run(Failed, 20),
+            run(Timeout, 30),
+            run(Failed, 150),
+        ];
+        assert_eq!(budget_failures_since(&runs, Some(100)), 1);
+        // Anchor boundary is inclusive (a failure at exactly reset_at counts).
+        assert_eq!(budget_failures_since(&runs, Some(150)), 1);
+        assert_eq!(budget_failures_since(&runs, Some(151)), 0);
     }
 
     #[test]

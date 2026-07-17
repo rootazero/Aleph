@@ -13,6 +13,7 @@ use super::super::protocol::{
 use super::parse_params;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 
 // ============================================================================
@@ -270,12 +271,12 @@ pub struct SetAgentParams {
 /// If `agent_id` is Some, binds the agent (with 1:1 constraint).
 /// If `agent_id` is None, unbinds the current agent.
 ///
-/// The `agent_registry`, when wired, is the same runtime registry the
-/// `agent_switch` tool validates against — a bind to a non-existent agent is
-/// rejected here so the Panel RPC can never create a ghost binding the tool
-/// would refuse (the inbound router resolves the binding to a runtime instance
-/// on the next message; a missing target would strand every inbound message on
-/// that channel).
+/// Delegates to the shared binding seam (`gateway::agent_binding`) — the same
+/// implementation behind the `agent_switch` tool — so both surfaces share
+/// ghost validation, no-op detection, and `Bound`/`Unbound` lifecycle events
+/// (this RPC previously emitted no event at all, leaving other Panels stale).
+/// `agent_registry: None` (a minimal server) skips validation, preserving the
+/// prior unchecked behavior rather than blocking the bind.
 ///
 /// # Example Request
 ///
@@ -286,7 +287,10 @@ pub async fn handle_set_agent(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
     agent_registry: Option<Arc<AgentRegistry>>,
+    event_bus: Option<Arc<GatewayEventBus>>,
 ) -> JsonRpcResponse {
+    use crate::gateway::agent_binding::{bind_channel_agent, unbind_channel_agent, BindError};
+
     let params: SetAgentParams =
         match serde_json::from_value(request.params.clone().unwrap_or_default()) {
             Ok(p) => p,
@@ -295,37 +299,52 @@ pub async fn handle_set_agent(
 
     match params.agent_id {
         Some(agent_id) => {
-            // Parity with the `agent_switch` tool (builtin_tools/agent_manage/switch.rs):
-            // never bind a channel to a ghost agent. When no registry is wired (a
-            // minimal server), fall back to the prior unchecked behavior rather than
-            // block the bind.
-            if let Some(registry) = agent_registry.as_ref() {
-                if registry.get(&agent_id).await.is_none() {
-                    let mut available = registry.list().await;
-                    available.sort();
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!(
-                            "Agent '{agent_id}' not found. Available agents: {}",
-                            available.join(", ")
-                        ),
-                    );
+            match bind_channel_agent(
+                agent_registry.as_deref(),
+                &workspace_manager,
+                event_bus.as_deref(),
+                &params.channel_id,
+                &agent_id,
+            )
+            .await
+            {
+                Ok(outcome) => JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "ok": true,
+                        "previous_agent": outcome.previous_agent,
+                        "no_op": outcome.no_op,
+                    }),
+                ),
+                Err(e @ (BindError::UnknownAgent { .. } | BindError::EmptyChannel)) => {
+                    JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string())
+                }
+                Err(e @ BindError::Store(_)) => {
+                    JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string())
                 }
             }
-            match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
-                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+        }
+        None => {
+            match unbind_channel_agent(&workspace_manager, event_bus.as_deref(), &params.channel_id)
+            {
+                Ok(previous) => JsonRpcResponse::success(
+                    request.id,
+                    json!({"ok": true, "previous_agent": previous}),
+                ),
+                Err(e @ BindError::EmptyChannel) => {
+                    JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string())
+                }
                 Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
             }
         }
-        None => match workspace_manager.clear_active_agent(&params.channel_id) {
-            Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
-            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
-        },
     }
 }
 
-/// Get all agent→channel bindings for the Panel.
+/// Get every channel bound to each agent for the Panel (many-to-one aware).
+///
+/// Response shape: `{"bindings": {"<agent_id>": ["<channel>", …]}}` — channels
+/// sorted. The previous one-channel-per-agent map was lossy (an agent bound to
+/// several channels showed only one); consumers were migrated with the shape.
 ///
 /// # Example Request
 ///
@@ -336,7 +355,7 @@ pub async fn handle_agent_bindings(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    match workspace_manager.get_all_agent_bindings() {
+    match workspace_manager.bindings_by_agent() {
         Ok(bindings) => JsonRpcResponse::success(request.id, json!({"bindings": bindings})),
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
     }
@@ -472,6 +491,7 @@ mod tests {
             set_agent_req("telegram", Some("ghost")),
             Arc::clone(&wm),
             Some(registry),
+            None,
         )
         .await;
         assert!(resp.is_error());
@@ -490,6 +510,7 @@ mod tests {
             set_agent_req("telegram", Some("trader")),
             Arc::clone(&wm),
             Some(registry),
+            None,
         )
         .await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
@@ -504,8 +525,13 @@ mod tests {
         // A minimal server with no runtime registry must not block binds
         // (graceful fallback — the prior unchecked behavior).
         let wm = test_workspace_mgr();
-        let resp =
-            handle_set_agent(set_agent_req("telegram", Some("ghost")), Arc::clone(&wm), None).await;
+        let resp = handle_set_agent(
+            set_agent_req("telegram", Some("ghost")),
+            Arc::clone(&wm),
+            None,
+            None,
+        )
+        .await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         assert_eq!(
             wm.get_active_agent("telegram").unwrap().as_deref(),
@@ -518,8 +544,62 @@ mod tests {
         let wm = test_workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         // Unbind (agent_id: None) never consults the registry.
-        let resp = handle_set_agent(set_agent_req("telegram", None), Arc::clone(&wm), None).await;
+        let resp =
+            handle_set_agent(set_agent_req("telegram", None), Arc::clone(&wm), None, None).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         assert!(wm.get_active_agent("telegram").unwrap().is_none());
+        // The unbind reports which agent was displaced.
+        let result = resp.result.unwrap();
+        assert_eq!(result["previous_agent"], json!("trader"));
+    }
+
+    #[tokio::test]
+    async fn set_agent_reports_previous_and_no_op() {
+        let wm = test_workspace_mgr();
+        let registry = registry_with("trader").await;
+
+        let first = handle_set_agent(
+            set_agent_req("telegram", Some("trader")),
+            Arc::clone(&wm),
+            Some(Arc::clone(&registry)),
+            None,
+        )
+        .await;
+        let first = first.result.unwrap();
+        assert_eq!(first["previous_agent"], serde_json::Value::Null);
+        assert_eq!(first["no_op"], json!(false));
+
+        // Re-binding to the same agent is a reported no-op, not an error.
+        let second = handle_set_agent(
+            set_agent_req("telegram", Some("trader")),
+            Arc::clone(&wm),
+            Some(registry),
+            None,
+        )
+        .await;
+        let second = second.result.unwrap();
+        assert_eq!(second["previous_agent"], json!("trader"));
+        assert_eq!(second["no_op"], json!(true));
+    }
+
+    // ── agents.bindings many-to-one shape ─────────────────────────────────
+
+    #[tokio::test]
+    async fn agent_bindings_reports_all_channels_per_agent() {
+        let wm = test_workspace_mgr();
+        // Many-to-one: two channels bound to the same agent must BOTH appear
+        // (the old one-channel-per-agent map collapsed them to one).
+        wm.set_active_agent("telegram", "trader").unwrap();
+        wm.set_active_agent("discord", "trader").unwrap();
+
+        let req = JsonRpcRequest::with_id("agents.bindings", None, json!(1));
+        let resp = handle_agent_bindings(req, Arc::clone(&wm)).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(
+            result["bindings"]["trader"],
+            json!(["discord", "telegram"]),
+            "all bound channels should be listed, sorted"
+        );
     }
 }

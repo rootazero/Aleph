@@ -354,4 +354,49 @@ mod tests {
             .iter()
             .any(|d| d.device_id == "node-1"));
     }
+
+    /// Regression: re-pairing a previously-revoked device must restore it to the
+    /// listable + revocable roster. Before the `upsert_device` fix the row kept
+    /// its `revoked_at` stamp, so the re-paired device held a working operator
+    /// token yet was invisible to `list_panel_devices` and untouchable by
+    /// `revoke_all_panel_devices` — it even survived a shared-token rotation.
+    #[test]
+    fn repairing_revoked_device_is_listable_and_revocable_again() {
+        let mgr = manager();
+
+        // Pair, then revoke.
+        let t1 = mgr.create_bootstrap_ticket(None).unwrap();
+        mgr.exchange_bootstrap_ticket(&t1, Some("dev-x".to_string()), None, None)
+            .unwrap();
+        assert!(mgr.revoke_device("dev-x").unwrap());
+        assert!(!mgr
+            .list_panel_devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "dev-x"));
+
+        // Re-pair the same device_id with a fresh ticket.
+        let t2 = mgr.create_bootstrap_ticket(None).unwrap();
+        let repaired = mgr
+            .exchange_bootstrap_ticket(&t2, Some("dev-x".to_string()), None, None)
+            .unwrap();
+
+        // New token works AND the device is back on the roster.
+        assert!(mgr
+            .validate_device_token(&repaired.device_token)
+            .unwrap()
+            .is_some());
+        assert!(mgr
+            .list_panel_devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "dev-x"));
+
+        // It is revocable again (was un-revocable while the row stayed hidden).
+        assert!(mgr.revoke_panel_device("dev-x").unwrap());
+        assert!(mgr
+            .validate_device_token(&repaired.device_token)
+            .unwrap()
+            .is_none());
+    }
 }

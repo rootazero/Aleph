@@ -359,12 +359,24 @@ the Swift helper.
 
 These rules must be preserved by every change to the bridge subsystem.
 
-**R1 compliance (Brain–Limb separation):** The Rust core (`alephcore`,
-`aleph-desktop`) must never link AVFoundation, Vision, AppKit, or Speech.
-The documented exception is `desktop/macos/src/permission.rs`, which uses
-`objc2-av-foundation` and `objc2-speech` solely for TCC status checks
-(`AVCaptureDevice::authorizationStatus` and
-`SFSpeechRecognizer::authorizationStatus`). No capture, recognition, or
+**R1 compliance (Brain–Limb separation):** The **brain** — `alephcore` (`src/`)
+— must never link AVFoundation, Vision, AppKit, CoreGraphics, or Speech; it
+reaches every platform capability through the `DesktopPlatform` trait only.
+
+`aleph-desktop` (`desktop/shared/`) is *not* pure brain: alongside the contracts
+(traits + types + IPC client) it hosts the cross-platform in-process limb paths
+that deliberately do **not** go over IPC — clipboard (`NSPasteboard`), app launch
+(`NSWorkspace`/`NSRunningApplication`), window enumeration (CoreGraphics), and
+screen recording (`objc2-screen-capture-kit`), all under per-OS `cfg`. These are
+by design (see FEATURE_LOCATOR §7.1: `window.*`/app/clipboard/`screen_record` run
+in-process, not as bridge methods), so `aleph-desktop` legitimately links native
+frameworks. The heavyweight capture/recognition stack (camera, audio, Vision
+OCR, Speech STT, EventKit, Contacts) still lives only behind the Swift helper.
+
+The one native-framework use in a per-OS **limb** crate worth calling out is
+`desktop/macos/src/permission.rs`, which links `objc2-av-foundation` and
+`objc2-speech` solely for TCC status checks (`AVCaptureDevice::authorizationStatus`
+and `SFSpeechRecognizer::authorizationStatus`) — no capture, recognition, or
 rendering code lives on the Rust side.
 
 **No vault access from Swift:** `AlephBridge` must never read or write

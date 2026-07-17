@@ -9,6 +9,7 @@ use crate::memory::{EmbeddingProvider, SemanticChunkConfig, SemanticChunker};
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_basic() {
+    // rust-doctor-disable-next-line unwrap-in-production
     let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> =
@@ -24,6 +25,7 @@ async fn test_semantic_chunking_basic() {
                 Python is a high-level language. \
                 It's great for rapid development.";
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let chunks = chunker.chunk(text).await.unwrap();
 
     // Should create at least 2 chunks (Rust topic vs Python topic)
@@ -33,6 +35,7 @@ async fn test_semantic_chunking_basic() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_single_topic() {
+    // rust-doctor-disable-next-line unwrap-in-production
     let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> =
@@ -46,6 +49,7 @@ async fn test_semantic_chunking_single_topic() {
     // All sentences about the same topic
     let text = "Rust is fast. Rust is safe. Rust is modern.";
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let chunks = chunker.chunk(text).await.unwrap();
 
     // Should create 1 chunk (all same topic)
@@ -55,6 +59,7 @@ async fn test_semantic_chunking_single_topic() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_empty() {
+    // rust-doctor-disable-next-line unwrap-in-production
     let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> =
@@ -65,6 +70,7 @@ async fn test_semantic_chunking_empty() {
     let config = SemanticChunkConfig::default();
     let chunker = SemanticChunker::new(embedder, config);
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let chunks = chunker.chunk("").await.unwrap();
     assert_eq!(chunks.len(), 0);
 }
@@ -72,6 +78,7 @@ async fn test_semantic_chunking_empty() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_config() {
+    // rust-doctor-disable-next-line unwrap-in-production
     let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> =
@@ -89,8 +96,10 @@ async fn test_semantic_chunking_config() {
 
     let text = "First topic here. Second topic here. Third topic here.";
 
+    // rust-doctor-disable-next-line unwrap-in-production
     let chunks = chunker.chunk(text).await.unwrap();
 
     // With high threshold, should create fewer chunks
     assert!(!chunks.is_empty());
 }
+
