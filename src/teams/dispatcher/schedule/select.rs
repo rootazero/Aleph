@@ -122,6 +122,57 @@ pub fn is_stale_review(task: &CoordTask, now_epoch: u64, ttl_secs: u64) -> bool 
     now_epoch.saturating_sub(started) > effective_ttl
 }
 
+/// How [`TeamDispatcher::run_task`] may finalise a finished member run, given
+/// what changed under it while the member was executing.
+///
+/// The run works from a claim-time snapshot, so two classes of concurrent
+/// change would otherwise be silently overwritten when it lands:
+///
+/// * an **admin action** moved the task out of `InProgress` (cancel, manual
+///   retry back to Pending, skip, …) — writing our outcome would swallow the
+///   operator's decision (a cancel resurrected, a requested retry replaced by
+///   a stale Completed);
+/// * a **successor claim** already started a newer run — possible once
+///   `release_stale_locks` frees a long run's lock (`lock_ttl_secs` <
+///   per-task timeout) and an admin reset makes the row claimable again.
+///   Writing anything would clobber the successor's state, release *its*
+///   lock (same owner string), and evict *its* running-map entry, which the
+///   orphan janitor would then "reclaim" into a duplicate third run.
+///
+/// This is the run-id fence hermes-agent uses (`expected_run_id` CAS): the
+/// mechanical guarantee that exactly one writer finalises a task row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::teams::dispatcher) enum RunFinalize {
+    /// Nothing changed under us — apply the outcome normally.
+    Proceed,
+    /// The task left `InProgress` while we ran. Keep the newer (foreign)
+    /// state: skip the terminal write, but release our own claim (lock +
+    /// running-map entry) — no successor exists yet, so both are still ours.
+    KeepForeignState(CoordTaskStatus),
+    /// A newer run superseded ours. Touch nothing: task row, lock, and
+    /// running-map entry all belong to the successor now.
+    Superseded,
+}
+
+/// Pure fence decision for [`RunFinalize`]. `my_run_id` empty (run recording
+/// unavailable) disables the supersession check; `current_status`/`latest_run_id`
+/// of `None` (re-fetch failed / row gone) fall through to `Proceed` — P7
+/// graceful degradation, identical to the pre-fence behaviour.
+#[must_use]
+pub(in crate::teams::dispatcher) fn finalize_disposition(
+    my_run_id: &str,
+    latest_run_id: Option<&str>,
+    current_status: Option<CoordTaskStatus>,
+) -> RunFinalize {
+    if !my_run_id.is_empty() && latest_run_id.is_some_and(|latest| latest != my_run_id) {
+        return RunFinalize::Superseded;
+    }
+    match current_status {
+        Some(s) if s != CoordTaskStatus::InProgress => RunFinalize::KeepForeignState(s),
+        _ => RunFinalize::Proceed,
+    }
+}
+
 /// Pure scheduling filter: from `tasks`, pick those ready to run right now,
 /// fairly distributed across owners.
 ///
@@ -576,6 +627,58 @@ mod tests {
         let picked = select_schedulable(&tasks, &running, 2, 0);
         let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(order, vec!["crit", "norm"]);
+    }
+
+    // ---- Run-finalize fence -------------------------------------------------
+
+    #[test]
+    fn finalize_proceeds_when_nothing_changed() {
+        assert_eq!(
+            finalize_disposition("r1", Some("r1"), Some(CoordTaskStatus::InProgress)),
+            RunFinalize::Proceed
+        );
+    }
+
+    #[test]
+    fn finalize_detects_superseding_run() {
+        // A newer claim recorded run r2 while we (r1) were still executing —
+        // the cancel→manual-retry race on a stale-lock-released long run.
+        assert_eq!(
+            finalize_disposition("r1", Some("r2"), Some(CoordTaskStatus::InProgress)),
+            RunFinalize::Superseded
+        );
+        // Supersession wins even over a foreign status: everything is the
+        // successor's now, including the right to react to that status.
+        assert_eq!(
+            finalize_disposition("r1", Some("r2"), Some(CoordTaskStatus::Cancelled)),
+            RunFinalize::Superseded
+        );
+    }
+
+    #[test]
+    fn finalize_keeps_foreign_state_on_admin_transition() {
+        // Cancelled mid-flight (the pre-fence guard) …
+        assert_eq!(
+            finalize_disposition("r1", Some("r1"), Some(CoordTaskStatus::Cancelled)),
+            RunFinalize::KeepForeignState(CoordTaskStatus::Cancelled)
+        );
+        // … and the previously-swallowed case: an operator hard-retried the
+        // task back to Pending while our (cancelled) run was still landing.
+        assert_eq!(
+            finalize_disposition("r1", Some("r1"), Some(CoordTaskStatus::Pending)),
+            RunFinalize::KeepForeignState(CoordTaskStatus::Pending)
+        );
+    }
+
+    #[test]
+    fn finalize_degrades_gracefully_without_signals() {
+        // No run recording (empty id) → supersession check disabled.
+        assert_eq!(
+            finalize_disposition("", Some("r2"), Some(CoordTaskStatus::InProgress)),
+            RunFinalize::Proceed
+        );
+        // Re-fetches failed (P7) → proceed exactly as before the fence.
+        assert_eq!(finalize_disposition("r1", None, None), RunFinalize::Proceed);
     }
 
     // ---- Zombie reclamation ------------------------------------------------

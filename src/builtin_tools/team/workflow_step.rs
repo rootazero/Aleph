@@ -110,24 +110,23 @@ impl AlephTool for WorkflowStepReviewTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Read the task's definition of done once, up front, so every verdict
-        // path can echo it back. A missing task / no criteria yields an empty
-        // list (omitted from the wire), keeping the legacy response shape.
-        let criteria = {
+        // Read the task once, up front: every verdict path echoes back its
+        // definition of done, and the retry path needs its current metadata
+        // for the budget-anchor stamp. A missing task yields empty criteria
+        // (omitted from the wire), keeping the legacy response shape.
+        let task_snapshot = {
             let task_id = match &args {
                 WorkflowStepReviewArgs::Approve { task_id, .. }
                 | WorkflowStepReviewArgs::Reject { task_id, .. }
                 | WorkflowStepReviewArgs::Retry { task_id }
                 | WorkflowStepReviewArgs::Skip { task_id, .. } => task_id,
             };
-            self.coord_store
-                .get_task(task_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|t| read_acceptance_criteria(&t.metadata))
-                .unwrap_or_default()
+            self.coord_store.get_task(task_id).await.ok().flatten()
         };
+        let criteria = task_snapshot
+            .as_ref()
+            .map(|t| read_acceptance_criteria(&t.metadata))
+            .unwrap_or_default();
 
         match args {
             WorkflowStepReviewArgs::Approve { task_id, comment } => {
@@ -195,12 +194,23 @@ impl AlephTool for WorkflowStepReviewTool {
             }
             WorkflowStepReviewArgs::Retry { task_id } => {
                 debug!(task_id = %task_id, "workflow_step_review: retry");
+                // A reviewer-driven retry is a deliberate re-queue: stamp the
+                // budget anchor so the automatic retry ladder re-arms instead
+                // of dying on the first new failure (mirrors
+                // `team_task_control.retry`).
+                let metadata = task_snapshot.map(|t| {
+                    crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+                        t.metadata,
+                        chrono::Utc::now().timestamp().max(0) as u64,
+                    )
+                });
                 self.coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
                             status: Some(CoordTaskStatus::Pending),
                             result: Some(String::new()),
+                            metadata,
                             ..Default::default()
                         },
                     )
