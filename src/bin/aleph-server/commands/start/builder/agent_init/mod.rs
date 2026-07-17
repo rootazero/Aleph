@@ -1410,6 +1410,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             goal_wake.spawn_periodic_recheck(60);
             let goal_wake_boot = goal_wake.clone();
             tokio::spawn(async move {
+                // Spawned before `initialize_inbound_router` publishes the
+                // channel-config snapshot; park until it is ready so `wake_identity`
+                // honors the per-channel deny layer rather than the fail-open miss
+                // default.
+                alephcore::gateway::channel_policy::wait_for_channel_config_snapshot(
+                    std::time::Duration::from_secs(30),
+                )
+                .await;
                 goal_wake_boot.rearm_parked_goals().await;
             });
         }

@@ -13,6 +13,7 @@ use crate::gateway::pair_loop_guard::PairLoopGuardConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use tokio::sync::Notify;
 
 /// Highest execution tier an untrusted (`Chat`) channel may run at.
 ///
@@ -53,6 +54,13 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
 /// callers fail closed to guest + no deny layer.
 static CHANNEL_CONFIG_SNAPSHOT: OnceLock<HashMap<String, ChannelConfig>> = OnceLock::new();
 
+/// Notified once the snapshot is published, so boot-time system-continuation
+/// scans (resume / goal wake) that are spawned *before*
+/// `initialize_inbound_router` runs can park on
+/// [`wait_for_channel_config_snapshot`] instead of racing the publish and
+/// silently dropping the per-channel deny layer.
+static SNAPSHOT_READY: Notify = Notify::const_new();
+
 /// Publish the boot channel-config snapshot. Called once from
 /// `initialize_inbound_router` after every `register_channel_config`, before the
 /// router is sealed in `Arc`. Idempotent — a later set (e.g. a second boot in a
@@ -61,6 +69,45 @@ pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
     if CHANNEL_CONFIG_SNAPSHOT.set(configs).is_err() {
         tracing::debug!("channel config snapshot already published; ignoring re-set");
     }
+    // Wake any boot scans parked in `wait_for_channel_config_snapshot`. Callers
+    // that arrive after this see the `OnceLock` already set and never park.
+    SNAPSHOT_READY.notify_waiters();
+}
+
+/// Park until the boot channel-config snapshot is published, or `timeout`
+/// elapses. Returns `true` if the snapshot is available.
+///
+/// The resume boot scan (`ResumeCoordinator`) and the goal-wake boot sweep
+/// (`GoalWakeService::rearm_parked_goals`) are both spawned early in boot —
+/// before `initialize_inbound_router` assembles and publishes the snapshot —
+/// yet both derive [`system_continuation_identity`], which reads it. Without
+/// this gate a fast boot scan reads the snapshot before it exists, hits the
+/// `unwrap_or_default` miss path, and silently runs a resumed/woken turn WITHOUT
+/// the channel's per-channel tool-deny layer (the fail-open gap this closes).
+/// Both scans call this first; the publish is unconditional at boot end, so in a
+/// healthy boot the wait resolves in milliseconds. On timeout the caller
+/// proceeds with the guest-floor + no-deny fallback (correct when no router ever
+/// publishes — e.g. a channel-less deployment). Callers proceed regardless of
+/// the outcome, so the bool is informational (returned for tests / future use).
+pub async fn wait_for_channel_config_snapshot(timeout: std::time::Duration) -> bool {
+    if CHANNEL_CONFIG_SNAPSHOT.get().is_some() {
+        return true;
+    }
+    let park = async {
+        loop {
+            // Register interest BEFORE re-checking so a publish racing between
+            // the check and the await cannot be lost.
+            let notified = SNAPSHOT_READY.notified();
+            if CHANNEL_CONFIG_SNAPSHOT.get().is_some() {
+                return;
+            }
+            notified.await;
+            if CHANNEL_CONFIG_SNAPSHOT.get().is_some() {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(timeout, park).await.is_ok()
 }
 
 /// Run-identity metadata for a **system-initiated continuation** (goal
@@ -79,9 +126,12 @@ pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
 ///   this closes — both the wake path (never stamped it) and the resume path
 ///   (its config map was never wired) silently ran without it before.
 ///
-/// A snapshot miss (unknown/unconfigured channel, or boot not yet complete)
-/// resolves to guest + no deny via `unwrap_or_default` — the same fail-closed
-/// default `channel_run_identity` pins for a live message on an unknown channel.
+/// A snapshot miss (unknown/unconfigured channel) resolves to guest + no deny
+/// via `unwrap_or_default` — the same fail-closed default `channel_run_identity`
+/// pins for a live message on an unknown channel. Boot-time system-continuation
+/// scans (resume / goal wake) park on [`wait_for_channel_config_snapshot`] first,
+/// so a *configured* channel's deny layer is never dropped merely by racing the
+/// boot publish.
 #[must_use]
 pub fn system_continuation_identity(channel: &str, conversation: &str) -> HashMap<String, String> {
     let cfg = CHANNEL_CONFIG_SNAPSHOT

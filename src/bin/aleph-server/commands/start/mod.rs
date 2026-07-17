@@ -2246,6 +2246,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 );
                 if resume_cfg.enabled {
                     if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
+                        // This scan is spawned before `initialize_inbound_router`
+                        // publishes the channel-config snapshot; park until it is
+                        // ready so `stamp_origin_identity` sees the per-channel deny
+                        // layer instead of the fail-open miss default.
+                        alephcore::gateway::channel_policy::wait_for_channel_config_snapshot(
+                            std::time::Duration::from_secs(30),
+                        )
+                        .await;
                         let coordinator = alephcore::gateway::ResumeCoordinator::new(
                             event_store,
                             resume_cfg,
