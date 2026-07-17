@@ -341,7 +341,12 @@ impl ProtocolAdapter for AnthropicProtocol {
                         None => (None, None),
                     }
                 }
-                Some(level) => (
+                // Legacy `{type:"enabled", budget_tokens}` thinking (Claude
+                // 3.7–4.5). Gated on the model actually having a thinking mode:
+                // Claude 3.5 / 3.0 have none and 400 on this block, so a cheap
+                // non-reasoning model carrying a configured think level must
+                // omit it rather than fail the whole request.
+                Some(level) if Self::supports_extended_thinking(actual_model) => (
                     Self::map_think_level(level).map(|budget| ThinkingBlock {
                         thinking_type: "enabled".to_string(),
                         budget_tokens: Some(budget),
@@ -349,6 +354,8 @@ impl ProtocolAdapter for AnthropicProtocol {
                     }),
                     None,
                 ),
+                // Known non-thinking model: ignore the think level entirely.
+                Some(_) => (None, None),
                 None => (None, None),
             };
 

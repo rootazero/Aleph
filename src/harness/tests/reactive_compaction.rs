@@ -21,6 +21,7 @@ use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::context::compact::rescue::MAX_REACTIVE_COMPACT_ATTEMPTS;
 use crate::error::{AlephError, Result as AlephResult};
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::orchestrator::dispatch::TerminateReason;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};

@@ -279,6 +279,33 @@ pub(crate) fn render_deadline(deadline_ms: u64, now_ms: u64) -> String {
     }
 }
 
+/// Fraction of the in-loop compaction point (`token_budget * warning_threshold`)
+/// at which the context-pressure reminder starts firing. 0.85 gives the model
+/// lead time to checkpoint before the sensor summarizes older turns away.
+pub(crate) const CONTEXT_PRESSURE_REMINDER_LEAD: f64 = 0.85;
+
+/// Render the context-window pressure line for the transient trailing message:
+/// how full the model's context is, as a heads-up to wrap up or checkpoint
+/// before the in-loop sensor compacts older turns away. Pure and clock-free —
+/// like [`render_deadline`] it belongs on the far side of the prompt-cache
+/// breakpoint (see [`live_deadline_status`] for why), so it never re-keys the
+/// conversation prefix. R9: the model self-paces on the number; the harness
+/// still owns the actual compaction. The producer
+/// (`AgentHarnessRunner::context_pressure_reminder`) computes the token figures
+/// and only calls this once the reminder threshold is crossed.
+pub(crate) fn render_context_pressure(used_tokens: u64, window_tokens: u64) -> String {
+    let pct = if window_tokens == 0 {
+        0
+    } else {
+        (used_tokens.saturating_mul(100) / window_tokens).min(100)
+    };
+    format!(
+        "context window: ~{used_tokens} of ~{window_tokens} tokens in use (~{pct}%). \
+         Approaching this model's context limit — older turns will be summarized \
+         away soon. Finish, or checkpoint anything important now, so it is not lost."
+    )
+}
+
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
 /// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
 /// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
@@ -416,5 +443,26 @@ mod active_strategy_tests {
             store.get(&crate::strategy::loop_key(sk)).unwrap().is_some(),
             "gating must not delete the welded row"
         );
+    }
+}
+
+#[cfg(test)]
+mod context_pressure_tests {
+    use super::render_context_pressure;
+
+    #[test]
+    fn reports_used_window_and_percentage() {
+        let s = render_context_pressure(85_000, 100_000);
+        assert!(s.contains("~85000 of ~100000"), "{s}");
+        assert!(s.contains("~85%"), "{s}");
+        assert!(s.contains("checkpoint"), "{s}");
+    }
+
+    #[test]
+    fn clamps_over_full_to_100_and_guards_zero_window() {
+        // Usage past the window never reads over 100%.
+        assert!(render_context_pressure(120, 100).contains("~100%"));
+        // A zero window (the caller guards against it) must not divide by zero.
+        assert!(render_context_pressure(50, 0).contains("~0%"));
     }
 }

@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::budget::ContextBudget;
 use crate::error::Result as AlephResult;
+use crate::harness::tests::harness_ext::AgentHarnessTestExt;
 use crate::harness::{AgentHarness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::AiProvider;

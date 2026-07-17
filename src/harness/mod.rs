@@ -26,6 +26,7 @@ mod tests {
     mod chain;
     mod driver;
     mod guardrails;
+    mod harness_ext;
     mod prompt;
     mod reactive_compaction;
     mod stability;
