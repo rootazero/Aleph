@@ -219,6 +219,13 @@ mod tests {
         assert!(!is_idempotent_builtin_name("note_schema"));
         assert!(!is_idempotent_builtin_name("doctor"));
         assert!(!is_idempotent_builtin_name("file_ops"));
+        assert!(!is_idempotent_builtin_name("a2a_agents"));
+        // Consuming / output tools masquerading as reads must stay out:
+        // retrying inbox_read can swallow messages its first (timed-out)
+        // attempt already marked read; retrying heartbeat_report(notify)
+        // double-messages the user.
+        assert!(!is_idempotent_builtin_name("inbox_read"));
+        assert!(!is_idempotent_builtin_name("heartbeat_report"));
         // Stale/phantom names must stay out.
         assert!(!is_idempotent_builtin_name("skill_reader"));
         assert!(!is_idempotent_builtin_name("list_tools"));

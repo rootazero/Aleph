@@ -99,16 +99,28 @@ impl DeferredTools {
     /// was actually deferred — so a `tool_search` that only matches resident
     /// tools costs the prompt cache nothing.
     pub fn undefer(&self, names: &[String]) {
-        let current = self.names.load();
-        if names.iter().all(|n| !current.contains(n)) {
+        // Fast path: nothing to promote — no store, no generation bump.
+        if names.iter().all(|n| !self.names.load().contains(n)) {
             return;
         }
-        let mut next = (**current).clone();
-        for name in names {
-            next.remove(name);
+        // `rcu` retries the clone-and-store on concurrent modification, so two
+        // PARALLEL `tool_search` promotions merge instead of the last store
+        // silently reinstating a name the other just removed (`tool_search`
+        // declares itself concurrent-safe, so same-batch promotions are real).
+        // The set only ever shrinks, so the retry loop trivially terminates.
+        let prev = self.names.rcu(|current| {
+            let mut next = (**current).clone();
+            for name in names {
+                next.remove(name);
+            }
+            next
+        });
+        // Bump only if THIS call actually removed something (rcu returns the
+        // set it replaced); a racing promotion of disjoint names bumps for
+        // itself.
+        if names.iter().any(|n| prev.contains(n)) {
+            self.generation.fetch_add(1, Ordering::AcqRel);
         }
-        self.names.store(Arc::new(next));
-        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 }
 

@@ -142,7 +142,10 @@ tools the tier meant to guard.
 `ToolDefinition`:
 
 - `idempotent` ← `LoopTool::is_idempotent()` — the builtin pure-read allowlist
-  (`tools/retry.rs::IDEMPOTENT_BUILTIN_TOOLS`) or an MCP server's
+  (`tools/retry.rs::is_idempotent_builtin_name`, which delegates to the single
+  `READ_ONLY_TOOLS` list in `tools/adapters/registry_adapter.rs` — read-only ⇒
+  idempotent, one source for the concurrency claim, auto-retry, and this tier
+  rule) or an MCP server's
   `readOnlyHint` / `idempotentHint` (`mcp/protocol.rs::is_idempotent`).
   Anything that declares nothing is `false`.
 - `requires_approval` ← `ToolDefinitionMetadata` (an MCP server's
@@ -383,8 +386,10 @@ is decided by the two real layers already described:
   `Ask` / `Auto` / `Full` setting. There is no per-command glob allowlist with
   `autoApprove` flags.
 
-The only command-shape allowlist in the tree is `IDEMPOTENT_BUILTIN_TOOLS`
-(`src/tools/retry.rs`), the pure-read builtins the tier treats as safe.
+The only command-shape allowlist in the tree is `READ_ONLY_TOOLS`
+(`src/tools/adapters/registry_adapter.rs`, consumed via
+`tools/retry.rs::is_idempotent_builtin_name`), the pure-read builtins the tier
+treats as safe.
 
 ---
 
@@ -1042,7 +1047,7 @@ from the pre-revert build:
 | Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor) | **aligned** |
 | Tier semantics | 4 approval values, but 2 of the 3 shipped presets share one — the axis that really moves is the sandbox profile | hermes: 3 modes + a HARDLINE floor under the top one. pi: 3-valued project TRUST, gating config *loading* | 3 tiers with honest semantics; the floor holds under all three | **aligned** |
 | Gate input | name-based argv allowlist + a Starlark rules engine over the command string | hermes: 47 regex `DANGEROUS_PATTERNS` over argument content. pi: tools declare *no* risk metadata; every gate re-derives danger from regex | **metadata-driven**: `ToolFacts` read off the declared `ToolDefinition`, never the name; one argument-level filter (`file_ops`) | **aleph-superior** — do not regress toward regex-on-shell-strings |
-| Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `IDEMPOTENT_BUILTIN_TOOLS` (pure-read builtins) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
+| Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `READ_ONLY_TOOLS` (pure-read builtins, single source for claim + retry + tier) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
 | Memory key | `{env, CANONICALIZED argv, cwd, sandbox perms}` | hermes: keys on a *pattern*, so "always" on `rm -r*` allowlists every future one. pi: no memoization at all | `grant_fingerprint(tool, canonical args)`, shared by session memory **and** the denial ledger | **gap → closed** (was: the bare tool name) |
 | Escalation *axis* (model-declared) | model-declared `SandboxPermissions` on the exec tool | hermes: plugin may re-escalate into the same gate | **present**: `bash_exec` / `code_exec` declare `allow_network` / `allow_subprocess` / `extra_writable_paths` + a `justification`, mapped to `SandboxCapabilities`, arbitrated by `ApprovalGate` (`format_capability_request`), and OS-enforced by the driver | **aligned** (arguably superior — it carries the justification to the approver) |
 | Escalation *retry ladder* | **`ToolOrchestrator`'s harness-side ladder**: on `SandboxErr::Denied`, pick a recovery strategy and re-run with elevated perms | pi: "approve-with-modification" mutates `event.input` in place, with no re-validation | none — denial is terminal and returned to the model to re-plan | **deliberately-not-ported** (R10 5th 不 / A2) — see below |

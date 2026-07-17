@@ -65,10 +65,11 @@ const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 /// they resolve per-argument in [`RegistryToolAdapter::concurrency_claim`]
 /// and stay non-idempotent (their write arm is what the Ask tier must gate).
 pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
-    // Introspection / catalog (pure reads).
+    // Introspection / catalog (pure reads). (`a2a_agents` is NOT one: its
+    // `add`/`remove` actions mutate the remote-agent trust surface — it
+    // resolves per-argument in `a2a_agents_claim`.)
     "agent_info",
     "agent_list",
-    "a2a_agents",
     "arena_query",
     "config_audit",
     "get_tool_schema",
@@ -90,11 +91,15 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "recall_context",
     "recall_events",
     "user_profile",
-    // Session / inbox reads.
+    // Session / inbox reads. (`inbox_read` is NOT one: `mark_read` defaults
+    // to true, so a read CONSUMES unread state — an auto-retry after a
+    // timed-out first attempt would return an empty view of messages the
+    // first attempt already consumed. It resolves per-argument in
+    // `inbox_read_claim`; its pure `peek`/`count_only` modes still
+    // parallelize.)
     "session_list",
     "session_read",
     "session_search",
-    "inbox_read",
     // Task reads.
     "task_list",
     "task_read_artifact",
@@ -235,19 +240,56 @@ fn note_schema_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyCla
     }
 }
 
+/// Resolve the claim for an `a2a_agents` call from its `action` tag. `list`
+/// is a pure registry read; `add` / `remove` (and anything unrecognized)
+/// mutate the remote-agent trust surface and serialize against the world.
+fn a2a_agents_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    match input.get("action").and_then(Value::as_str) {
+        Some("list") => ConcurrencyClaim::Shared,
+        _ => ConcurrencyClaim::global(),
+    }
+}
+
+/// Resolve the claim for an `inbox_read` call. `peek` / `count_only` modes
+/// are pure reads; the default mode CONSUMES unread state (`mark_read`
+/// defaults to true), so it serializes.
+fn inbox_read_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    let flag = |name: &str| input.get(name).and_then(Value::as_bool).unwrap_or(false);
+    if flag("peek")
+        || flag("count_only")
+        || matches!(input.get("mark_read"), Some(Value::Bool(false)))
+    {
+        ConcurrencyClaim::Shared
+    } else {
+        ConcurrencyClaim::global()
+    }
+}
+
 /// Resolve the claim for a `session_send` call from its target session key.
 /// `session_send` blocks up to `timeout_seconds` waiting on the child run, so
 /// a fan-out of delegations to *distinct* sessions paid N × wait serially
-/// under the old blanket `Global` claim. Binding to the named key lets
-/// disjoint delegations run concurrently ([`ExclusiveScope::Sessions`]
-/// conservatively conflicts with every non-session scope, so this only ever
-/// parallelizes sibling delegations). A missing/empty key targets a
-/// server-side default the adapter cannot resolve lexically → `Global`.
+/// under the old blanket `Global` claim. Binding to the target lets disjoint
+/// delegations run concurrently ([`ExclusiveScope::Sessions`] conservatively
+/// conflicts with every non-session scope, so this only ever parallelizes
+/// sibling delegations).
+///
+/// The claim keys on the **resolved gateway session key**
+/// ([`crate::builtin_tools::sessions::send_tool::claim_session_key`] — the
+/// same parse + gateway collapse the send executes under), NOT the raw
+/// spelling: aliased spellings that execute in one session must yield one
+/// claim key or they would wrongly parallelize. A missing / empty / invalid
+/// key (server-side default target, unresolvable here) → `Global`.
 fn session_send_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
     use crate::tools::concurrency::ConcurrencyClaim;
-    match input.get("session_key").and_then(Value::as_str) {
-        Some(key) if !key.trim().is_empty() => ConcurrencyClaim::sessions(std::iter::once(key)),
-        _ => ConcurrencyClaim::global(),
+    match input
+        .get("session_key")
+        .and_then(Value::as_str)
+        .and_then(crate::builtin_tools::sessions::send_tool::claim_session_key)
+    {
+        Some(key) => ConcurrencyClaim::sessions(std::iter::once(key)),
+        None => ConcurrencyClaim::global(),
     }
 }
 
@@ -290,14 +332,21 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         if name == "apply_patch" {
             return apply_patch_claim(input);
         }
-        // `doctor` multiplexes inspect (pure read) and `fix=true` (repairs)
-        // off one flag; `note_schema` multiplexes read/write off its `action`
-        // tag. Both resolve per-argument, like `file_ops` above.
+        // Input-dependent read/write multiplexers resolve per-argument, like
+        // `file_ops` above: `doctor` flips on `fix`, `note_schema` and
+        // `a2a_agents` on their `action` tag, `inbox_read` on whether the
+        // call consumes unread state.
         if name == "doctor" {
             return doctor_claim(input);
         }
         if name == "note_schema" {
             return note_schema_claim(input);
+        }
+        if name == "a2a_agents" {
+            return a2a_agents_claim(input);
+        }
+        if name == "inbox_read" {
+            return inbox_read_claim(input);
         }
         // `session_send` blocks on the named target session; disjoint fan-out
         // delegations parallelize under a bounded `Sessions` scope.
@@ -574,6 +623,10 @@ mod tests {
             "doctor",
             "note_schema",
             "session_send",
+            "a2a_agents",
+            "inbox_read",
+            // Output gate masquerading as a read: `notify` messages the user.
+            "heartbeat_report",
         ];
         for tool in write_tools {
             assert!(
@@ -785,6 +838,8 @@ mod tests {
             make_unified_tool("doctor", "Diagnose"),
             make_unified_tool("note_schema", "SCHEMA.md read/write"),
             make_unified_tool("session_send", "Delegate to a session"),
+            make_unified_tool("a2a_agents", "Manage remote A2A agents"),
+            make_unified_tool("inbox_read", "Read the team inbox"),
         ];
         let registry = build_registry_from_tools(tool_registry, &tools, None);
 
@@ -821,12 +876,16 @@ mod tests {
             ConcurrencyClaim::global()
         );
 
-        // session_send: named target -> bounded Sessions scope (disjoint
-        // fan-out delegations parallelize); missing/empty key -> Global.
+        // session_send: named target -> bounded Sessions scope keyed on the
+        // RESOLVED gateway key (disjoint fan-out delegations parallelize);
+        // missing/empty/unparseable key -> Global.
         let send = registry.get("session_send").unwrap();
+        let expected_key =
+            crate::builtin_tools::sessions::send_tool::claim_session_key("agent:a:main")
+                .expect("valid key resolves");
         assert_eq!(
             send.concurrency_claim(&json!({"session_key": "agent:a:main", "message": "hi"})),
-            ConcurrencyClaim::sessions(["agent:a:main"])
+            ConcurrencyClaim::sessions([expected_key])
         );
         assert_eq!(
             send.concurrency_claim(&json!({"message": "hi"})),
@@ -836,6 +895,67 @@ mod tests {
         assert_eq!(
             send.concurrency_claim(&json!({"session_key": "  ", "message": "hi"})),
             ConcurrencyClaim::global()
+        );
+        assert_eq!(
+            send.concurrency_claim(&json!({"session_key": "not a session key", "message": "hi"})),
+            ConcurrencyClaim::global(),
+            "an unparseable key cannot be pinned to one session"
+        );
+        // Aliased spellings that the gateway collapses onto ONE execution
+        // session must yield CONFLICTING claims (same claim key), or two
+        // fan-out arms would race into one session. `dm` and `group` keys
+        // with the same agent + peer both collapse to `peer`.
+        let dm = send
+            .concurrency_claim(&json!({"session_key": "agent:a:telegram:dm:u1", "message": "x"}));
+        let group = send.concurrency_claim(
+            &json!({"session_key": "agent:a:telegram:group:u1", "message": "y"}),
+        );
+        assert_ne!(
+            dm,
+            ConcurrencyClaim::global(),
+            "test key must parse to a bounded Sessions scope for the alias \
+             assertion to be meaningful"
+        );
+        assert!(
+            crate::tools::concurrency::claims_conflict(&dm, &group),
+            "gateway-collapsed aliases must conflict: dm={dm:?} group={group:?}"
+        );
+
+        // a2a_agents: list is a pure read; add/remove mutate the remote-agent
+        // trust surface.
+        let a2a = registry.get("a2a_agents").unwrap();
+        assert_eq!(
+            a2a.concurrency_claim(&json!({"action": "list"})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            a2a.concurrency_claim(&json!({"action": "add", "url": "https://x"})),
+            ConcurrencyClaim::global()
+        );
+        assert_eq!(
+            a2a.concurrency_claim(&json!({})),
+            ConcurrencyClaim::global()
+        );
+
+        // inbox_read: pure modes parallelize; the default consumes unread
+        // state and serializes.
+        let inbox = registry.get("inbox_read").unwrap();
+        assert_eq!(
+            inbox.concurrency_claim(&json!({"peek": true})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            inbox.concurrency_claim(&json!({"count_only": true})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            inbox.concurrency_claim(&json!({"mark_read": false})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            inbox.concurrency_claim(&json!({})),
+            ConcurrencyClaim::global(),
+            "default mark_read=true consumes unread state"
         );
     }
 
