@@ -235,7 +235,7 @@ impl SkillManageTool {
         if components.len() < 2
             || !components
                 .first()
-                .map_or(false, |c| ALLOWED_SUPPORT_DIRS.contains(&c.as_str()))
+                .is_some_and(|c| ALLOWED_SUPPORT_DIRS.contains(&c.as_str()))
         {
             return Err(AlephError::tool(format!(
                 "file_name must live under one of: {}/ (e.g. 'references/api.md')",

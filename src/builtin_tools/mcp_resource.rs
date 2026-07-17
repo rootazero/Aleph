@@ -56,10 +56,12 @@ impl AlephToolDyn for McpReadResourceTool {
         let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_read_resource",
-            "Read a resource from a connected MCP server. Call `mcp_list_resources` \
-             first to discover available resources and copy the exact `uri` it \
-             returns. Prefer reading an MCP resource over a web search or a shell \
-             `cat` when a connected server already exposes the content.",
+            "Read a resource from a connected MCP server by its server-qualified `uri` \
+             (e.g. `github:file:///README.md`). Call `mcp_list_resources` first to \
+             discover available resources and copy the exact `uri` it returns — do not \
+             guess a URI or read files off disk. Prefer reading an MCP resource over a \
+             web search or a shell `cat` when a connected server already exposes the \
+             content.",
             parameters,
             ToolCategory::Mcp,
         )

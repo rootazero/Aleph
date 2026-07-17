@@ -6,10 +6,13 @@
 //! live agent loop (`tool_registry_phase2` → `CoreDispatch` → harness `think`)
 //! sees external MCP tools without the manager knowing the tool system exists.
 //!
-//! It also gates the two builtin MCP utility tools (`mcp_read_resource`,
-//! `mcp_get_prompt`): each is present in the registry only while at least one
-//! connected server advertises that capability, so the agent is never offered
-//! a tool that every call would reject.
+//! It also gates the builtin MCP utility tools — the readers
+//! (`mcp_read_resource`, `mcp_get_prompt`) and their discovery twins
+//! (`mcp_list_resources`, `mcp_list_prompts`): each pair is present in the
+//! registry only while at least one connected server advertises that
+//! capability, so the agent is never offered a tool that every call would
+//! reject, and the discovery twin is always alongside the reader so the model
+//! can enumerate URIs/names instead of guessing them (or falling back to `cat`).
 
 use crate::sync_primitives::Arc;
 

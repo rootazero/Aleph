@@ -661,7 +661,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // still in flight, or for a run core could not price: an absent figure is
     // honest, "$0.00" is not. `≈` whenever `cost_status != complete`, so a
     // partially-priced run is never passed off as exact.
-    let cost_view = (!is_user).then(|| {
+    let cost_view = (!is_user).then_some({
         move || {
             let cost = chat.run_costs.with(|m| m.get(&run_for_cost).cloned())?;
             let money = cost.cost_label();

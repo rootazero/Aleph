@@ -14,7 +14,7 @@
 //! - Windows: Uses $USERPROFILE or $HOMEDRIVE+$HOMEPATH
 
 use crate::error::{AlephError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Process-global environment guard for tests that mutate `ALEPH_HOME`.
 /// Acquiring this mutex serialises tests so they don't observe each other's
@@ -363,6 +363,50 @@ fn is_safe_agent_id(agent_id: &str) -> bool {
         && !agent_id.contains('\0')
 }
 
+/// Append each `<plugin>/skills` directory found under `plugins_root` to `dirs`
+/// (deduplicated). A plugin ships its skills at `<plugin>/skills/<skill>/SKILL.md`.
+fn collect_plugin_skills_from_root(plugins_root: &Path, dirs: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(plugins_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let skills = entry.path().join("skills");
+        if skills.is_dir() && !dirs.contains(&skills) {
+            dirs.push(skills);
+        }
+    }
+}
+
+/// Return each installed / project plugin's `skills` subdirectory.
+///
+/// Plugin skills live at `<plugins_root>/<plugin>/skills`. Surfacing these to the
+/// `skill_read` / `skill_list` tools (which resolve skills by directory name)
+/// lets the model read a plugin-shipped skill through the skill mechanism instead
+/// of falling back to a raw `cat` on the plugin's files. Ordered global-then-project
+/// so callers can treat them as the lowest-precedence tier (a user/project skill of
+/// the same id shadows the plugin one by first occurrence in `get_all_skills_dirs`;
+/// `guess_source` separately classes these paths `SkillSource::Plugin` for the
+/// prompt index).
+#[must_use]
+pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // Global: ~/.aleph/plugins/<plugin>/skills
+    if let Ok(home) = get_home_dir() {
+        collect_plugin_skills_from_root(&home.join(".aleph").join("plugins"), &mut dirs);
+    }
+
+    // Project: <project|cwd>/.aleph/plugins/<plugin>/skills
+    let start = project_dir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(start) = start {
+        collect_plugin_skills_from_root(&start.join(".aleph").join("plugins"), &mut dirs);
+    }
+
+    dirs
+}
+
 pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
     use tracing::info;
 
@@ -435,10 +479,24 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         }
     }
 
-    // 3. Installed-plugin skills: base dirs published by the extension manager
-    //    (`<plugin_root>/skills`). Appended last so native skills win id
-    //    collisions by precedence; `skill_read` folds symlink twins anyway.
-    //    Empty until the first `ExtensionManager::load_all`.
+    // 3. Plugin-shipped skills (lowest precedence). Two sources, unioned and
+    //    deduped, appended last so a same-id user/project skill (scanned
+    //    earlier) shadows a plugin's — `skill_read`/`skill_list` win by first
+    //    occurrence. Without this, `skill_read(<plugin skill>)` returned
+    //    NotFound and the model fell back to `cat` on the raw plugin files.
+    //    a) Static scan of the well-known roots: ~/.aleph/plugins/<p>/skills
+    //       and project .aleph/plugins/<p>/skills — works before the extension
+    //       manager has loaded anything.
+    for d in get_plugin_skills_dirs(project_dir) {
+        if !dirs.contains(&d) {
+            info!(path = %d.display(), "Found plugin skills dir");
+            dirs.push(d);
+        }
+    }
+    //    b) Base dirs published by the extension manager (`<plugin_root>/skills`)
+    //       via `publish_plugin_skill_dirs` — covers plugin roots outside the
+    //       well-known locations (e.g. `plugins/cache/<market>/<id>/skills`).
+    //       Empty until the first `ExtensionManager::load_all`.
     for plugin_dir in plugin_skill_dirs() {
         if plugin_dir.is_dir() && !dirs.contains(&plugin_dir) {
             info!(path = %plugin_dir.display(), "Found plugin skills dir");
@@ -605,6 +663,75 @@ mod tests {
 
         // Should find the skills dir at project root
         assert!(dirs.iter().any(|d| d == &aleph_skills));
+    }
+
+    #[test]
+    fn test_get_plugin_skills_dirs_finds_project_plugin_skills() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        // Plugin `alpha` ships skills; `beta` has no skills subdir.
+        let alpha_skills = project
+            .join(".aleph")
+            .join("plugins")
+            .join("alpha")
+            .join("skills");
+        std::fs::create_dir_all(&alpha_skills).unwrap();
+        let beta = project.join(".aleph").join("plugins").join("beta");
+        std::fs::create_dir_all(&beta).unwrap();
+
+        let dirs = get_plugin_skills_dirs(Some(&project));
+        assert!(
+            dirs.iter().any(|d| d == &alpha_skills),
+            "a plugin's skills dir must be discovered"
+        );
+        // A plugin without a skills subdir contributes nothing.
+        assert!(
+            !dirs.iter().any(|d| d.starts_with(&beta)),
+            "a plugin without a skills subdir must be absent"
+        );
+    }
+
+    #[test]
+    fn test_get_plugin_skills_dirs_missing_root_no_panic() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("empty");
+        std::fs::create_dir_all(&project).unwrap();
+        // No `.aleph/plugins` under the project → the project tier contributes
+        // nothing. (The global tier may exist on the host, so assert the project
+        // path specifically is absent rather than the whole vec being empty.)
+        let dirs = get_plugin_skills_dirs(Some(&project));
+        let project_plugins = project.join(".aleph").join("plugins");
+        assert!(!dirs.iter().any(|d| d.starts_with(&project_plugins)));
+    }
+
+    #[test]
+    fn test_get_all_skills_dirs_appends_plugin_skills_last() {
+        let temp_dir = TempDir::new().unwrap();
+        let project = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir(project.join(".git")).unwrap();
+        let aleph_skills = project.join(".aleph").join("skills");
+        std::fs::create_dir_all(&aleph_skills).unwrap();
+        let plugin_skills = project
+            .join(".aleph")
+            .join("plugins")
+            .join("alpha")
+            .join("skills");
+        std::fs::create_dir_all(&plugin_skills).unwrap();
+
+        let dirs = get_all_skills_dirs(Some(&project)).unwrap();
+        assert!(
+            dirs.iter().any(|d| d == &plugin_skills),
+            "plugin skills dir must be discovered by get_all_skills_dirs"
+        );
+        // Plugin skills are lowest precedence — appended after project skills, so
+        // a same-id user/project skill (scanned earlier) shadows a plugin's.
+        let skills_idx = dirs.iter().position(|d| d == &aleph_skills).unwrap();
+        let plugin_idx = dirs.iter().position(|d| d == &plugin_skills).unwrap();
+        assert!(
+            skills_idx < plugin_idx,
+            "plugin skills must be appended last (lowest precedence)"
+        );
     }
 
     #[test]

@@ -277,6 +277,11 @@ fn parse_single_skill(
         allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
+        // Retain the on-disk SKILL.md path so the ExtensionManager's
+        // `invoke_skill_tool` path can anchor `base_dir` for Level-3 resource
+        // files. Dropping it (the old `..Default::default()`) left plugin skills
+        // with an empty base dir, forcing the model to guess paths / `cat`.
+        source_path: md_path.to_path_buf(),
         ..Default::default()
     }))
 }
@@ -736,6 +741,33 @@ mod tests {
                 assert_eq!(s.category, Some("general".to_string()));
                 assert_eq!(s.content, "Hello world!");
                 assert_eq!(s.plugin_id, "test-plugin");
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_single_skill_retains_source_path() {
+        // Regression: `parse_single_skill` dropped the SKILL.md path via
+        // `..Default::default()`, leaving plugin skills with an empty base dir
+        // (so `invoke_skill_tool` could not anchor Level-3 resource files).
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills").join("hello");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let md = skill_dir.join("SKILL.md");
+        fs::write(&md, "---\nname: hello\ndescription: Say hello\n---\nBody").unwrap();
+
+        let caps = parse_skills_dir(dir.path(), "skills", "test-plugin").unwrap();
+        match &caps[0] {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(
+                    s.source_path, md,
+                    "source_path must retain the on-disk SKILL.md path"
+                );
+                assert!(
+                    s.base_dir().ends_with("hello"),
+                    "base_dir derives from source_path"
+                );
             }
             other => panic!("Expected Skill, got {:?}", other),
         }

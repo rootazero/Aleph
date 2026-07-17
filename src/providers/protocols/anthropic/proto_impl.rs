@@ -487,7 +487,7 @@ impl AnthropicProtocol {
     /// is the gate for those wires. Version compare keeps this future-proof: a
     /// newer generation needs no edit here (same rationale as [`claude_version`]).
     pub(super) fn supports_extended_thinking(model: &str) -> bool {
-        Self::claude_version(model).map_or(true, |v| v >= (3, 7))
+        Self::claude_version(model).is_none_or(|v| v >= (3, 7))
     }
 
     /// True for models that 400 on non-default `temperature/top_p/top_k` even

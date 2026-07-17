@@ -70,9 +70,7 @@ pub fn PhoneProviders() -> impl IntoView {
     let default_saving = RwSignal::new(false);
 
     let reload = {
-        let state = state.clone();
         move || {
-            let state = state.clone();
             spawn_local(async move {
                 match ProvidersApi::list(&state).await {
                     Ok(list) => {
@@ -162,9 +160,9 @@ pub fn PhoneProviders() -> impl IntoView {
                             let state_for_default = state;
                             let state_for_enable = state;
                             let state_for_key = state;
-                            let reload_for_default = StoredValue::new(reload.clone());
-                            let reload_for_enable = StoredValue::new(reload.clone());
-                            let reload_for_key = StoredValue::new(reload.clone());
+                            let reload_for_default = StoredValue::new(reload);
+                            let reload_for_enable = StoredValue::new(reload);
+                            let reload_for_key = StoredValue::new(reload);
                             let name_for_default = StoredValue::new(name_for_default);
                             let name_for_enable = StoredValue::new(name_for_enable);
                             let name_for_key_save = StoredValue::new(name_for_key_save);
