@@ -57,9 +57,10 @@ struct UserHookGroup {
     #[serde(default)]
     matcher: Option<String>,
 
-    /// Optional explicit kind override (`observer` | `interceptor` | `resolver`).
+    /// Optional explicit kind override (`observer` | `interceptor`).
     /// When absent, defaults are derived from the event (interceptor for
-    /// events that can block, observer otherwise).
+    /// events that can block, observer otherwise). Unknown values (including
+    /// the retired `resolver`) fall back to `observer`.
     #[serde(default)]
     kind: Option<String>,
 
@@ -239,6 +240,19 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                      to fire on every occurrence of this event"
                 );
             }
+            // Second foot-gun: interceptor-kind hooks only run on events whose
+            // fire-sites dispatch interceptors; the global fire-and-forget
+            // seams (messages / provider / gateway / subagent…) run observers
+            // only, so an explicit `"kind": "interceptor"` there is dead.
+            if kind == HookKind::Interceptor && !event_supports_interceptor(event) {
+                warn!(
+                    path = %path.display(),
+                    event = %event_str,
+                    "Hook kind `interceptor` set on an event whose fire-site runs \
+                     observers only — this hook will never execute; use \
+                     `\"kind\": \"observer\"` (or drop the kind) for this event"
+                );
+            }
 
             out.push(HookConfig {
                 event,
@@ -292,12 +306,44 @@ fn parse_event(name: &str) -> Option<HookEvent> {
 /// the hook output actually stops the relevant flow; passive lifecycle
 /// events default to Observer so they don't accidentally short-circuit
 /// when the user just wants logging.
-const fn default_kind_for_event(event: HookEvent) -> HookKind {
+///
+/// `Stop` defaults to Interceptor because its whole purpose is gating the
+/// loop's stop (`ExtensionStopHookVerifier`).
+///
+/// `SessionStart` deliberately stays **Observer** by default even though its
+/// fire-site now also harvests interceptor output: a pre-existing SessionStart
+/// hook that omitted `kind` was fire-and-forget with stdout discarded, and
+/// silently flipping it to Interceptor would start injecting that stdout into
+/// the model context (and run it sequentially before the first turn). A user
+/// who WANTS SessionStart context injection opts in with `"kind":
+/// "interceptor"`.
+pub(crate) const fn default_kind_for_event(event: HookEvent) -> HookKind {
     use HookEvent::*;
     match event {
-        BeforeToolCall | BeforeAgentStart | UserPromptSubmit => HookKind::Interceptor,
+        BeforeToolCall | BeforeAgentStart | UserPromptSubmit | Stop => HookKind::Interceptor,
         _ => HookKind::Observer,
     }
+}
+
+/// Whether an event's production fire-site dispatches interceptor-kind
+/// hooks. The global fire-and-forget seams (`fire_global_observer`: message
+/// / provider / gateway / subagent / permission events) run observers only —
+/// an interceptor registered there never executes. Used for a load-time
+/// foot-gun warning, mirroring `event_supports_matcher`.
+const fn event_supports_interceptor(event: HookEvent) -> bool {
+    use HookEvent::*;
+    matches!(
+        event,
+        BeforeToolCall
+            | AfterToolCall
+            | AfterToolCallFailure
+            | BeforeAgentStart
+            | UserPromptSubmit
+            | SessionStart
+            | AgentEnd
+            | BeforeCompaction
+            | Stop
+    )
 }
 
 /// Whether an event's [`HookContext`] carries a `tool_name`, so a `matcher`

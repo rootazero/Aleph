@@ -9,6 +9,17 @@
 //! - exit 2: block stop, retry the loop (stdout = reason)
 //! - exit 3: halt the loop immediately (stdout = reason)
 //! - other / killed by signal / timeout: hook error (logged, does not block)
+//!
+//! Error semantics deliberately diverge per consumer:
+//! - **harness verifier path** (`StopHookVerifier`): fail-open — a hook
+//!   error never blocks the stop (a broken script must not wedge the loop).
+//! - **goal objective gate** (`goal_continuation::gate_veto`): fail-closed —
+//!   "gate could not be evaluated" vetoes the completion claim, because an
+//!   unverifiable goal completion must not be trusted.
+//!
+//! `hooks.json` users get the same stop-gating via the extension `Stop`
+//! event (`verification::extension_stop_gate`), evaluated right after these
+//! TOML hooks in the same `VerifierChain`.
 
 use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
@@ -342,39 +353,46 @@ async fn execute_shell_hook(
         }
     };
 
-    use tokio::io::AsyncReadExt;
-    let mut stdout_handle = child.stdout.take();
-    let mut stderr_handle = child.stderr.take();
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
 
+    let mut stdin_handle = child.stdin.take();
     let result = tokio::select! {
         r = async {
-            if let Some(mut stdin) = child.stdin.take() {
-                if let Err(e) = stdin.write_all(context_json.as_bytes()).await {
-                    tracing::debug!(error = %e, "stop hook stdin write failed");
-                }
-                drop(stdin);
-            }
-
-            let (stdout_buf, stderr_buf) = tokio::join!(
+            // Stdin write runs CONCURRENTLY with the output reads: a context
+            // JSON larger than the pipe buffer (final_text can be arbitrarily
+            // long) would otherwise deadlock against a hook that fills its
+            // stdout before draining stdin — surfacing as a spurious timeout.
+            //
+            // `read_capped` drains past the cap so a hook printing >64KB can
+            // never block on a full pipe (which would hang `wait()` into the
+            // timeout and replace the REAL exit-code verdict with a spurious
+            // Error). Truncation here is harmless: the decision rides the
+            // exit code; stdout is only the human-readable reason.
+            let (_, (stdout_buf, _), (stderr_buf, _)) = tokio::join!(
                 async {
-                    let mut buf = Vec::new();
-                    if let Some(ref mut h) = stdout_handle {
-                        let _ = h
-                            .take(MAX_OUTPUT_BYTES)
-                            .read_to_end(&mut buf)
-                            .await;
+                    if let Some(mut stdin) = stdin_handle.take() {
+                        if let Err(e) = stdin.write_all(context_json.as_bytes()).await {
+                            tracing::debug!(error = %e, "stop hook stdin write failed");
+                        }
+                        drop(stdin);
                     }
-                    buf
                 },
                 async {
-                    let mut buf = Vec::new();
-                    if let Some(ref mut h) = stderr_handle {
-                        let _ = h
-                            .take(MAX_OUTPUT_BYTES)
-                            .read_to_end(&mut buf)
-                            .await;
+                    match stdout_handle {
+                        Some(h) => {
+                            crate::extension::hooks::read_capped(h, MAX_OUTPUT_BYTES).await
+                        }
+                        None => (Vec::new(), false),
                     }
-                    buf
+                },
+                async {
+                    match stderr_handle {
+                        Some(h) => {
+                            crate::extension::hooks::read_capped(h, MAX_OUTPUT_BYTES).await
+                        }
+                        None => (Vec::new(), false),
+                    }
                 }
             );
 

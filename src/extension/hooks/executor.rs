@@ -1,7 +1,7 @@
 //! `HookExecutor` implementation — action dispatch and execution logic
 
 use super::{
-    substitute_variables, ActionResult, HookContext, HookResult, ShellHookConsent,
+    substitute_variables, ActionResult, HookContext, ShellHookConsent,
     DEFAULT_COMMAND_TIMEOUT_SECS,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
@@ -12,10 +12,69 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
+
+/// Cap on bytes read from a hook's stdout / stderr / HTTP response body.
+/// Same value as the stop-hook executor's `MAX_OUTPUT_BYTES` — a hook that
+/// dumps megabytes must not flood process memory (and, via
+/// `additional_contexts`, the model's context window; the context budget
+/// pipeline is the second line of defence). codex spills oversized hook
+/// output to disk; a hard cap is the minimal Aleph equivalent.
+const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
+
+/// Read at most `cap` bytes from `r`, then drain (and discard) the rest so
+/// the writing child process never blocks on a full pipe — a blocked child
+/// would otherwise hang `wait()` until the timeout kills it, turning
+/// "output too large" into a spurious "hook timed out".
+///
+/// Returns `(bytes, truncated)`. Callers whose protocol carries decisions in
+/// the STREAM (extension hooks: `deny:` lines / JSON objects on stdout) must
+/// treat `truncated == true` as a hard failure — a decision directive past
+/// the cap would otherwise be silently dropped and the hook would fail OPEN.
+/// Callers whose decision rides the EXIT CODE (stop hooks) can safely keep
+/// the truncated text as a best-effort reason.
+pub(crate) async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: u64) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let _ = (&mut r).take(cap).read_to_end(&mut buf).await;
+    let mut truncated = false;
+    let mut sink = [0u8; 8192];
+    loop {
+        match r.read(&mut sink).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => truncated = true,
+        }
+    }
+    (buf, truncated)
+}
+
+/// Max bytes for a single payload-mirroring env var (`ARGUMENTS` /
+/// `TOOL_INPUT`). Comfortably under every platform's `ARG_MAX` (Linux 128KB
+/// per string, macOS 256KB total) so setting it can never push the spawn
+/// over the limit. The full value is always available on stdin.
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
+
+/// Set `key` to `value` on `cmd`, but skip (with a placeholder) any value
+/// past [`MAX_ENV_VALUE_BYTES`] — an oversized env var can make `spawn` fail
+/// with E2BIG, which on an interceptor seam fails closed and blocks the tool.
+fn set_env_bounded(cmd: &mut Command, key: &str, value: Option<&str>) {
+    match value {
+        Some(v) if v.len() <= MAX_ENV_VALUE_BYTES => {
+            cmd.env(key, v);
+        }
+        Some(v) => {
+            debug!(
+                key,
+                len = v.len(),
+                "hook env value exceeds cap; omitting from env (full value is on stdin)"
+            );
+            cmd.env(key, format!("[{} bytes — read from stdin JSON]", v.len()));
+        }
+        None => {}
+    }
+}
 
 /// Render the additional-context directive for a `HookAction::Agent`.
 ///
@@ -79,6 +138,17 @@ fn build_event_payload_value(event: HookEvent, context: &HookContext) -> serde_j
 fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
     serde_json::to_string(&build_event_payload_value(event, context))
         .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Public alias of [`build_event_payload`] for out-of-band verification
+/// (`aleph hooks test`): the CLI pipes THIS to the hook's stdin, so a hook
+/// exercised there sees the exact payload structure production sends —
+/// hermes' "test through the same serializer" pattern. A hook that reads
+/// stdin (`jq -r '.tool_name'`) behaves identically in both worlds instead
+/// of hanging on an unwired stdin.
+#[must_use]
+pub fn event_payload_json(event: HookEvent, context: &HookContext) -> String {
+    build_event_payload(event, context)
 }
 
 /// Compare two directory paths for identity, canonicalising best-effort so
@@ -209,107 +279,12 @@ impl HookExecutor {
         self.hooks.len()
     }
 
-    /// Execute hooks for an event
-    pub async fn execute(
-        &self,
-        event: HookEvent,
-        context: &HookContext,
-    ) -> Result<HookResult, ExtensionError> {
-        let mut result = HookResult::default();
-
-        for hook in &self.hooks {
-            if hook.event != event {
-                continue;
-            }
-
-            // Check matcher pattern
-            if !self.matches_pattern(hook, context) {
-                continue;
-            }
-
-            // Project-scoped hooks fire only in their own workspace.
-            if !self.project_scope_allows(hook) {
-                continue;
-            }
-
-            debug!(
-                "Executing hook from plugin '{}' for event {:?}",
-                hook.plugin_name, event
-            );
-            result.hooks_executed += 1;
-
-            // Execute all actions for this hook
-            for action in &hook.actions {
-                let action_result = self
-                    .execute_action(
-                        action,
-                        context,
-                        &hook.plugin_root,
-                        &hook.plugin_name,
-                        event,
-                        hook.timeout_secs.map(Duration::from_secs),
-                    )
-                    .await;
-
-                match action_result {
-                    Ok(ar) => {
-                        // Handle special action results
-                        match action {
-                            HookAction::Prompt { .. } => {
-                                // The resolved prompt template is injected
-                                // as additional context for the next LLM
-                                // turn. (Out-of-band LLM judgment that
-                                // returns {ok,reason} is a future enhancement
-                                // — when missing, the prompt itself goes to
-                                // the calling LLM, which is the next-best
-                                // semantic.)
-                                if let Some(ref output) = ar.output {
-                                    result.additional_contexts.push(output.clone());
-                                }
-                            }
-                            HookAction::Agent { agent } => {
-                                result.agents_to_invoke.push(agent.clone());
-                                // No spawner handle exists at hook depth (R10:
-                                // the executor never runs agents inline), so
-                                // surface the request to the calling LLM as
-                                // context — it delegates via the `subagent`
-                                // tool. Same next-best semantic as Prompt.
-                                result.additional_contexts.push(agent_invoke_directive(
-                                    &hook.plugin_name,
-                                    event,
-                                    agent,
-                                ));
-                            }
-                            HookAction::Command { .. }
-                            | HookAction::Http { .. }
-                            | HookAction::Plugin { .. } => {
-                                if let Some(ref output) = ar.output {
-                                    super::parse_command_output(output, &mut result);
-                                }
-                            }
-                        }
-                        result.action_results.push(ar);
-                    }
-                    Err(e) => {
-                        warn!("Hook action failed: {}", e);
-                        result.action_results.push(ActionResult {
-                            success: false,
-                            output: None,
-                            error: Some(e.to_string()),
-                            exit_code: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        trace!(
-            "Hook execution complete: {} hooks, {} actions",
-            result.hooks_executed,
-            result.action_results.len()
-        );
-
-        Ok(result)
+    /// Whether any registered hook targets `event`. Cheap pre-flight so
+    /// fire-sites (e.g. the extension stop gate) can skip context building
+    /// entirely on the common no-hooks path.
+    #[must_use]
+    pub fn has_hooks_for(&self, event: HookEvent) -> bool {
+        self.hooks.iter().any(|h| h.event == event)
     }
 
     /// Check if a hook's pattern matches the context
@@ -407,8 +382,16 @@ impl HookExecutor {
             }
             HookAction::Agent { agent } => self.execute_agent(agent).await,
             HookAction::Http { url, headers } => {
-                self.execute_http(url, headers, context, plugin_root, event, timeout_override)
-                    .await
+                self.execute_http(
+                    url,
+                    headers,
+                    context,
+                    plugin_root,
+                    plugin_name,
+                    event,
+                    timeout_override,
+                )
+                .await
             }
             HookAction::Plugin { plugin_id, handler } => {
                 self.execute_plugin(plugin_id, handler, context, event)
@@ -535,18 +518,21 @@ impl HookExecutor {
         // hook command does not keep running as an orphan past its deadline.
         cmd.kill_on_drop(true);
 
-        // Set environment variables
+        // Set environment variables. `ARGUMENTS` / `TOOL_INPUT` mirror the
+        // tool payload as a convenience for `$ARGUMENTS`-style scripts, but a
+        // large payload (a Write tool's whole file body) can exceed the OS
+        // `ARG_MAX` limit and make `spawn` fail with E2BIG — which, on an
+        // interceptor seam, fails CLOSED and spuriously blocks the tool. The
+        // canonical full-fidelity path is the stdin JSON (`jq -r
+        // '.tool_input…'`, Claude-Code convention), so oversized values are
+        // dropped from the env with a marker rather than risking the spawn.
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
         if let Some(ref tool_name) = context.tool_name {
             cmd.env("TOOL_NAME", tool_name);
         }
-        if let Some(ref args) = context.arguments {
-            cmd.env("ARGUMENTS", args);
-        }
-        if let Some(ref input) = context.tool_input {
-            cmd.env("TOOL_INPUT", input);
-        }
+        set_env_bounded(&mut cmd, "ARGUMENTS", context.arguments.as_deref());
+        set_env_bounded(&mut cmd, "TOOL_INPUT", context.tool_input.as_deref());
         if let Some(ref file) = context.file_path {
             cmd.env("FILE", file);
         }
@@ -565,21 +551,64 @@ impl HookExecutor {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // Execute with timeout (per-hook override > executor default)
+        // Execute with timeout (per-hook override > executor default).
+        // stdout/stderr reads are capped at `MAX_HOOK_OUTPUT_BYTES` (with the
+        // remainder drained) so a hook that dumps megabytes can neither flood
+        // memory nor deadlock on a full pipe.
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
-        let output = match timeout(effective, async {
+        let (status, stdout_buf, stderr_buf) = match timeout(effective, async {
             let mut child = cmd.no_window().spawn().map_err(|e| {
                 ExtensionError::HookExecution(format!("Failed to spawn command: {e}"))
             })?;
-            if let Some(mut stdin) = child.stdin.take() {
-                // Best-effort: if stdin write fails (hook ignored stdin), keep going.
-                let _ = stdin.write_all(payload.as_bytes()).await;
-                let _ = stdin.shutdown().await;
+            let stdin_handle = child.stdin.take();
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            // Write stdin CONCURRENTLY with the output reads: a payload
+            // larger than the pipe buffer (e.g. a Write tool's whole file
+            // content in `tool_input`) would otherwise deadlock against a
+            // hook that fills its stdout first — surfacing as a spurious
+            // timeout instead of a fast result.
+            let (_, (stdout_buf, stdout_truncated), (stderr_buf, stderr_truncated)) = tokio::join!(
+                async {
+                    if let Some(mut stdin) = stdin_handle {
+                        // Best-effort: if the hook never reads stdin, the
+                        // write may fail with EPIPE — keep going.
+                        let _ = stdin.write_all(payload.as_bytes()).await;
+                        let _ = stdin.shutdown().await;
+                    }
+                },
+                async {
+                    match stdout_handle {
+                        Some(h) => read_capped(h, MAX_HOOK_OUTPUT_BYTES).await,
+                        None => (Vec::new(), false),
+                    }
+                },
+                async {
+                    match stderr_handle {
+                        Some(h) => read_capped(h, MAX_HOOK_OUTPUT_BYTES).await,
+                        None => (Vec::new(), false),
+                    }
+                }
+            );
+            let status = child.wait().await.map_err(|e| {
+                ExtensionError::HookExecution(format!("Failed to await command: {e}"))
+            })?;
+            // A truncated stdout may have LOST a decision directive (`deny:`
+            // printed after 64KB of diagnostics) — parsing the head and
+            // reporting success would fail OPEN. Surface it as a hard error
+            // instead: interceptor seams fail closed on it, observers log it.
+            if stdout_truncated {
+                return Err(ExtensionError::HookExecution(format!(
+                    "hook stdout exceeded the {MAX_HOOK_OUTPUT_BYTES}-byte cap; decision \
+                     directives may have been dropped — route diagnostics to stderr and \
+                     keep stdout for the decision protocol"
+                )));
             }
-            child
-                .wait_with_output()
-                .await
-                .map_err(|e| ExtensionError::HookExecution(format!("Failed to await command: {e}")))
+            if stderr_truncated {
+                // stderr carries no directives — truncation is harmless noise.
+                warn!("hook stderr exceeded the {MAX_HOOK_OUTPUT_BYTES}-byte cap; truncated");
+            }
+            Ok::<_, ExtensionError>((status, stdout_buf, stderr_buf))
         })
         .await
         {
@@ -591,19 +620,19 @@ impl HookExecutor {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
-        if !output.status.success() {
+        if !status.success() {
             warn!(
                 "Hook command exited with status {:?}: {}",
-                output.status.code(),
+                status.code(),
                 stderr
             );
         }
 
         Ok(ActionResult {
-            success: output.status.success(),
+            success: status.success(),
             output: if stdout.is_empty() {
                 None
             } else {
@@ -614,7 +643,7 @@ impl HookExecutor {
             } else {
                 Some(stderr)
             },
-            exit_code: output.status.code(),
+            exit_code: status.code(),
         })
     }
 
@@ -649,15 +678,45 @@ impl HookExecutor {
     /// parse the response body using the same line-prefix protocol as
     /// command hooks. Useful for team audit logs, webhooks, and
     /// LLM-judge gateways without spawning a shell.
+    ///
+    /// Gated by the same consent allowlist as shell commands: an HTTP hook
+    /// ships the full event payload (tool inputs/outputs) to an arbitrary
+    /// remote URL — an exfiltration vector every bit as serious as arbitrary
+    /// code execution, so it must not run without operator approval either.
+    /// The consent key is the RAW url template (pre-substitution), prefixed
+    /// `http:` so it can't collide with a shell command of the same text.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_http(
         &self,
         url: &str,
         headers: &HashMap<String, String>,
         context: &HookContext,
         plugin_root: &Path,
+        plugin_name: &str,
         event: HookEvent,
         timeout_override: Option<Duration>,
     ) -> Result<ActionResult, ExtensionError> {
+        if let Some(consent) = &self.consent {
+            let consent_key = format!("http:{url}");
+            if !consent.is_approved(plugin_name, &consent_key) {
+                consent.record_pending(plugin_name, &consent_key, &format!("{event:?}"));
+                warn!(
+                    plugin = plugin_name,
+                    event = ?event,
+                    "HTTP hook URL not approved — skipped. Review with `aleph hooks list`."
+                );
+                return Ok(ActionResult {
+                    success: false,
+                    output: None,
+                    error: Some(format!(
+                        "http hook from plugin '{plugin_name}' is not approved; \
+                         run `aleph hooks test` to review and approve it"
+                    )),
+                    exit_code: None,
+                });
+            }
+        }
+
         let resolved_url = substitute_variables(url, context, plugin_root);
         let payload = build_event_payload(event, context);
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
@@ -681,9 +740,42 @@ impl HookExecutor {
         }
 
         match req.send().await {
-            Ok(resp) => {
+            Ok(mut resp) => {
                 let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
+                // Stream the body up to the shared output cap; a hook
+                // endpoint returning megabytes must not flood memory or the
+                // model context. A body that HITS the cap may have lost a
+                // decision directive → hard error (fail closed), mirroring
+                // the command path.
+                let cap = MAX_HOOK_OUTPUT_BYTES as usize;
+                let mut body_bytes: Vec<u8> = Vec::new();
+                let mut body_truncated = false;
+                while body_bytes.len() < cap {
+                    match resp.chunk().await {
+                        Ok(Some(chunk)) => {
+                            let remaining = cap - body_bytes.len();
+                            if chunk.len() > remaining {
+                                body_truncated = true;
+                            }
+                            body_bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                        }
+                        _ => break,
+                    }
+                }
+                // A chunk boundary can land exactly on the cap — probe once
+                // more so "exactly 64KB then more" is not misread as complete.
+                if !body_truncated && body_bytes.len() >= cap {
+                    if let Ok(Some(_)) = resp.chunk().await {
+                        body_truncated = true;
+                    }
+                }
+                if body_truncated {
+                    return Err(ExtensionError::HookExecution(format!(
+                        "hook HTTP response body exceeded the {MAX_HOOK_OUTPUT_BYTES}-byte \
+                         cap; decision directives may have been dropped"
+                    )));
+                }
+                let body = String::from_utf8_lossy(&body_bytes).to_string();
                 if !status.is_success() {
                     warn!("Hook HTTP {} -> {}: {}", resolved_url, status, body);
                 }
@@ -801,9 +893,13 @@ impl HookExecutor {
                     }
                     Err(e) => {
                         warn!("Interceptor hook action failed: {}", e);
-                        // Interceptor failures block by default for safety
+                        // Interceptor failures block by default for safety.
+                        // `action_failed` marks this as an infrastructure
+                        // failure (not a hook decision) so fail-open seams
+                        // (extension stop gate) can tell the two apart.
                         accumulated.blocked = true;
                         accumulated.block_reason = Some(format!("Interceptor hook failed: {e}"));
+                        accumulated.action_failed = true;
                         return Ok((current_context, accumulated));
                     }
                 }
@@ -812,8 +908,16 @@ impl HookExecutor {
             // Thread this interceptor's input rewrite forward so the next
             // interceptor in the chain observes the updated arguments (the
             // documented "each hook receives the previous result" contract).
+            // BOTH context fields must be rewritten: `arguments` feeds the
+            // `$ARGUMENTS` env var, while `tool_input` feeds the stdin JSON
+            // payload's `tool_input` key — the Claude-Code-convention path
+            // (`jq -r '.tool_input…'`). Updating only `arguments` (the old
+            // behaviour) silently handed downstream interceptors the ORIGINAL
+            // input on stdin.
             if let Some(ref updated) = accumulated.updated_input {
-                current_context.arguments = Some(updated.to_string());
+                let rewritten = updated.to_string();
+                current_context.arguments = Some(rewritten.clone());
+                current_context.tool_input = Some(rewritten);
             }
         }
 
@@ -874,82 +978,6 @@ impl HookExecutor {
         futures::future::join_all(futures).await;
     }
 
-    /// Execute resolver hooks for an event
-    ///
-    /// Resolvers run sequentially in priority order and stop when one returns a value.
-    /// The `resolver_fn` is called with each hook's action results to extract the value.
-    ///
-    /// # Type Parameters
-    /// - `T`: The type of value being resolved
-    /// - `F`: A function that takes action results and returns `Option<T>`
-    pub async fn execute_resolvers<T, F>(
-        &self,
-        event: HookEvent,
-        context: &HookContext,
-        resolver_fn: F,
-    ) -> Option<T>
-    where
-        F: Fn(&[ActionResult]) -> Option<T>,
-    {
-        // Filter hooks by event and kind == Resolver
-        let mut resolvers: Vec<_> = self
-            .hooks
-            .iter()
-            .filter(|h| h.event == event && h.kind == HookKind::Resolver)
-            .collect();
-
-        // Sort by priority (lower value = earlier execution)
-        resolvers.sort_by_key(|h| h.priority.as_i32());
-
-        // Execute all actions for this hook and collect results
-        let mut action_results = Vec::new();
-        for hook in resolvers {
-            // Check matcher pattern
-            if !self.matches_pattern(hook, context) {
-                continue;
-            }
-
-            // Project-scoped hooks fire only in their own workspace.
-            if !self.project_scope_allows(hook) {
-                continue;
-            }
-
-            debug!(
-                "Executing resolver hook from plugin '{}' for event {:?}",
-                hook.plugin_name, event
-            );
-
-            action_results.clear();
-            for action in &hook.actions {
-                match self
-                    .execute_action(
-                        action,
-                        context,
-                        &hook.plugin_root,
-                        &hook.plugin_name,
-                        event,
-                        hook.timeout_secs.map(Duration::from_secs),
-                    )
-                    .await
-                {
-                    Ok(ar) => action_results.push(ar),
-                    Err(e) => {
-                        warn!(
-                            "Resolver hook action from plugin '{}' failed: {}",
-                            hook.plugin_name, e
-                        );
-                    }
-                }
-            }
-
-            // Try to resolve using the provided function
-            if let Some(value) = resolver_fn(&action_results) {
-                return Some(value);
-            }
-        }
-
-        None
-    }
 }
 
 #[cfg(test)]
@@ -1050,6 +1078,126 @@ mod tests {
             }
             other => panic!("expected Plugin action, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    fn interceptor_command_hook(command: &str) -> HookConfig {
+        HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: Default::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: command.into(),
+            }],
+            plugin_name: "chain-test".into(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+            timeout_secs: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_stdout_fails_closed_not_open() {
+        // A hook that prints >64KB then `deny:` must NOT report success with
+        // truncated head text (which would drop the deny → fail OPEN). The
+        // action errors instead, and the interceptor seam converts that to a
+        // fail-closed block with `action_failed` set.
+        use crate::extension::hooks::HookContext;
+        let big = interceptor_command_hook(
+            "head -c 100000 /dev/zero | tr '\\0' 'x'; echo; echo 'deny: too late'",
+        );
+        let executor = HookExecutor::new(vec![big]);
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .expect("interceptor pass returns Ok even on action error");
+        assert!(result.blocked, "truncated-output hook must fail closed");
+        assert!(
+            result.action_failed,
+            "must be flagged as an infrastructure failure, not a hook decision"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_stdin_does_not_deadlock() {
+        // A stdin payload larger than the OS pipe buffer (~64KB) must be
+        // written CONCURRENTLY with the output drain — a hook that ignores
+        // stdin and prints a little must still complete fast, not hang until
+        // the timeout. 120KB clears the pipe buffer while staying well under
+        // ARG_MAX (the executor also mirrors tool_input into a TOOL_INPUT env
+        // var, and an env var near ARG_MAX would fail the spawn on its own).
+        use crate::extension::hooks::HookContext;
+        let hook = interceptor_command_hook("echo 'context: ok'");
+        let executor = HookExecutor::new(vec![hook]);
+        let big_input = "x".repeat(120 * 1024);
+        let ctx = HookContext::new("s")
+            .with_tool_name("Write")
+            .with_tool_input(&big_input);
+        let start = std::time::Instant::now();
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx)
+            .await
+            .expect("must not hang");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "oversized stdin must not deadlock (took {:?})",
+            start.elapsed()
+        );
+        assert!(
+            result.additional_contexts.iter().any(|c| c == "ok"),
+            "hook must run to completion despite the large stdin payload"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interceptor_chain_propagates_rewrite_to_stdin_payload() {
+        // Regression lock for the chain contract: hook 1 rewrites the tool
+        // input; hook 2 must observe the REWRITTEN value in its stdin JSON
+        // payload (`tool_input` key — the Claude-Code `jq` convention), not
+        // just in the `$ARGUMENTS` env var. Before the fix only `arguments`
+        // was threaded forward, so stdin carried the original input.
+        use crate::extension::hooks::HookContext;
+        let rewriter =
+            interceptor_command_hook(r#"echo 'update_input: {"path":"/rewritten"}'"#);
+        let checker = interceptor_command_hook(
+            r#"input=$(cat); echo "$input" | grep -q '/rewritten' && echo 'context: saw-rewrite' || echo 'context: saw-original'"#,
+        );
+        let executor = HookExecutor::new(vec![rewriter, checker]);
+        let ctx = HookContext::new("chain")
+            .with_tool_name("Write")
+            .with_arguments(r#"{"path":"/original"}"#)
+            .with_tool_input(r#"{"path":"/original"}"#);
+
+        let (final_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, ctx)
+            .await
+            .expect("chain must run");
+
+        assert_eq!(
+            result.updated_input,
+            Some(serde_json::json!({"path": "/rewritten"}))
+        );
+        assert!(
+            result
+                .additional_contexts
+                .iter()
+                .any(|c| c == "saw-rewrite"),
+            "second interceptor must see the rewrite on stdin: {:?}",
+            result.additional_contexts
+        );
+        // Both context fields carry the rewrite forward.
+        assert_eq!(
+            final_ctx.tool_input.as_deref(),
+            Some(r#"{"path":"/rewritten"}"#)
+        );
+        assert_eq!(
+            final_ctx.arguments.as_deref(),
+            Some(r#"{"path":"/rewritten"}"#)
+        );
     }
 
     #[tokio::test]

@@ -85,6 +85,13 @@ impl ManifestAdapter for AlephTomlAdapter {
             }
         }
 
+        // Event hooks declared in [[hooks]]. Previously these were parsed
+        // into `manifest.hooks_v2` and duplicate-validated but never
+        // registered — a declared hook silently never fired.
+        if !raw.hooks.is_empty() {
+            capabilities.extend(parsers::parse_v2_hooks(&raw.hooks, &plugin_id));
+        }
+
         // Background services declared in [[services]] — gated on the
         // `background` permission so a missing grant degrades to a warning
         // instead of failing the whole plugin at the registrar.

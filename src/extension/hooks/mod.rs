@@ -8,7 +8,7 @@
 //! (`crate::extension::types::hooks`). Major groups:
 //!
 //! - Tool: `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` / `ToolResultPersist`
-//! - Agent: `BeforeAgentStart` / `AgentEnd` / `UserPromptSubmit`
+//! - Agent: `BeforeAgentStart` / `AgentEnd` / `UserPromptSubmit` / `Stop`
 //! - Session: `SessionStart` / `SessionEnd`
 //! - Subagent: `SubagentStart` / `SubagentStop`
 //! - Message: `MessageReceived` / `MessageSending` / `MessageSent`
@@ -34,11 +34,16 @@
 //!
 //! let executor = HookExecutor::new(hooks);
 //!
-//! // Execute pre-tool hooks
-//! let result = executor.execute(HookEvent::BeforeToolCall, &context).await?;
+//! // Interceptor-kind hooks (sequential, can block / rewrite):
+//! let (ctx, result) = executor
+//!     .execute_interceptors(HookEvent::BeforeToolCall, context)
+//!     .await?;
 //! if result.blocked {
 //!     return Err("Tool blocked by hook");
 //! }
+//!
+//! // Observer-kind hooks (parallel, fire-and-forget):
+//! executor.execute_observers(HookEvent::AfterToolCall, &ctx).await;
 //! ```
 
 mod consent;
@@ -47,7 +52,9 @@ mod json_output;
 mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
-pub use executor::HookExecutor;
+pub use executor::{event_payload_json, HookExecutor};
+pub(crate) use executor::read_capped;
+pub(crate) use user_settings::default_kind_for_event;
 pub use user_settings::load_user_hooks;
 
 use std::collections::HashMap;
@@ -186,10 +193,12 @@ pub struct HookResult {
     pub blocked: bool,
     /// Block reason (if blocked)
     pub block_reason: Option<String>,
-    /// Plain stdout lines (no prefix). Currently surfaced only via
-    /// [`HookResult::outputs`] — `additional_contexts` is the field that
-    /// actually reaches the LLM next turn. Kept for back-compat with
-    /// external inspectors.
+    /// Plain stdout lines (no prefix). On the `UserPromptSubmit` /
+    /// `SessionStart` seams these ARE injected as context (Claude-Code
+    /// convention: plain stdout counts there); on `prevent_continuation`
+    /// paths the first line doubles as the stop message. Elsewhere they stay
+    /// diagnostic-only — `additional_contexts` is the general-purpose channel
+    /// that reaches the LLM next turn.
     pub messages: Vec<String>,
     /// Names of agents requested by `agent`-type hooks. The executor never
     /// spawns agents inline (R10) — each entry is also rendered as an
@@ -222,6 +231,13 @@ pub struct HookResult {
     /// Hook-emitted permission decision. Last writer wins across interceptor chain.
     /// Supersedes legacy `blocked`/`denied` fields (preserved for backward compat).
     pub permission_decision: Option<PermissionDecision>,
+    /// True when an interceptor ACTION failed at the infrastructure level
+    /// (spawn error / timeout / truncated output) rather than by a deliberate
+    /// hook decision. `blocked` is still set (the tool gate fails closed on
+    /// broken hooks by policy), but seams with the OPPOSITE failure policy —
+    /// the extension stop gate is fail-open, a broken script must not wedge
+    /// the loop — read this flag to tell the two apart.
+    pub action_failed: bool,
 }
 
 impl HookResult {
@@ -249,6 +265,21 @@ impl HookResult {
             .filter(|r| !r.success)
             .filter_map(|r| r.error.as_deref())
             .collect()
+    }
+
+    /// The human-facing message for a graceful stop (`prevent_continuation` /
+    /// `continue: false`). Plain stdout (`messages`) wins over the JSON
+    /// `stopReason` that rides in `additional_contexts`; `default` is used
+    /// when a hook halted without saying why. Single source for the three
+    /// lifecycle seams that honour `prevent_continuation` (BeforeAgentStart,
+    /// UserPromptSubmit, the extension stop gate).
+    #[must_use]
+    pub fn stop_message(&self, default: &str) -> String {
+        self.messages
+            .first()
+            .or_else(|| self.additional_contexts.first())
+            .cloned()
+            .unwrap_or_else(|| default.to_string())
     }
 }
 
@@ -394,6 +425,13 @@ async fn fire_observer(
     }
     let mut ctx = HookContext::new(session_id);
     for (key, value) in env {
+        // A TOOL_NAME env entry also populates the structured field the
+        // matcher regex tests against — without this hop, a `matcher` on
+        // PermissionRequest / Notification hooks could never fire (the
+        // fire-sites pass the tool name as env only).
+        if key == "TOOL_NAME" {
+            ctx = ctx.with_tool_name(value.clone());
+        }
         ctx = ctx.with_env(key, value);
     }
     executor.execute_observers(event, &ctx).await;
@@ -554,8 +592,8 @@ mod tests {
         let executor = HookExecutor::new(vec![]);
         let context = HookContext::new("test");
 
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
 
@@ -567,7 +605,7 @@ mod tests {
     async fn test_hook_executor_with_prompt() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
             actions: vec![HookAction::Prompt {
@@ -582,8 +620,8 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
 
@@ -598,7 +636,7 @@ mod tests {
     async fn test_hook_executor_pattern_mismatch() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: Some("Write".to_string()),
             actions: vec![HookAction::Prompt {
@@ -613,8 +651,8 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Read");
 
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
 
@@ -626,7 +664,7 @@ mod tests {
     async fn test_hook_executor_regex_pattern() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: Some("Write|Edit".to_string()),
             actions: vec![HookAction::Prompt {
@@ -642,24 +680,24 @@ mod tests {
 
         // Test with Write
         let context = HookContext::new("session").with_tool_name("Write");
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Edit
         let context = HookContext::new("session").with_tool_name("Edit");
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Read (no match)
         let context = HookContext::new("session").with_tool_name("Read");
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
         assert_eq!(result.hooks_executed, 0);
@@ -669,7 +707,7 @@ mod tests {
     async fn test_hook_executor_with_agent() {
         let hooks = vec![HookConfig {
             event: HookEvent::AfterToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: None, // Matches all
             actions: vec![HookAction::Agent {
@@ -684,8 +722,8 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor
-            .execute(HookEvent::AfterToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::AfterToolCall, context)
             .await
             .unwrap();
 
@@ -801,7 +839,7 @@ mod tests {
     async fn test_hook_executor_command_with_context() {
         let hooks = vec![HookConfig {
             event: HookEvent::AfterToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: None,
             actions: vec![HookAction::Command {
@@ -816,8 +854,8 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor
-            .execute(HookEvent::AfterToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::AfterToolCall, context)
             .await
             .unwrap();
 
@@ -830,7 +868,7 @@ mod tests {
     async fn test_hook_executor_command() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: None,
             actions: vec![HookAction::Command {
@@ -845,8 +883,8 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session");
 
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &context)
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, context)
             .await
             .unwrap();
 
@@ -917,7 +955,7 @@ mod tests {
     fn command_hook(command: &str) -> HookConfig {
         HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::default(),
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: None,
             actions: vec![HookAction::Command {
@@ -940,8 +978,8 @@ mod tests {
         let executor = HookExecutor::new(vec![command_hook("echo SHOULD_NOT_RUN")])
             .with_consent(consent.clone());
 
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
             .await
             .unwrap();
 
@@ -954,6 +992,51 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].status, ConsentStatus::Pending);
         assert_eq!(pending[0].plugin_name, "consent-test");
+    }
+
+    #[tokio::test]
+    async fn unapproved_http_hook_is_skipped_and_recorded_pending() {
+        // The consent gate covers HTTP hooks too: shipping the event payload
+        // (tool inputs/outputs) to a remote URL is an exfiltration vector and
+        // must not happen without operator approval. The consent key carries
+        // an `http:` prefix so it can't collide with a same-text shell command.
+        use crate::sync_primitives::Arc;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let consent = Arc::new(ShellHookConsent::with_path(
+            dir.path().join("allowlist.json"),
+        ));
+        let hook = HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Http {
+                url: "http://127.0.0.1:9/never-called".to_string(),
+                headers: HashMap::new(),
+            }],
+            plugin_name: "consent-test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+            timeout_secs: None,
+        };
+        let executor = HookExecutor::new(vec![hook]).with_consent(consent.clone());
+
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
+            .await
+            .unwrap();
+
+        assert_eq!(result.hooks_executed, 1);
+        assert!(!result.action_results[0].success);
+        assert!(result.action_results[0].output.is_none());
+        let pending = consent.entries();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].status, ConsentStatus::Pending);
+        assert!(
+            pending[0].command.starts_with("http:"),
+            "http consent key must be namespaced: {}",
+            pending[0].command
+        );
     }
 
     #[tokio::test]
@@ -970,8 +1053,8 @@ mod tests {
         consent.approve(&fp).expect("approve");
 
         let executor = HookExecutor::new(vec![command_hook(cmd)]).with_consent(consent.clone());
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
             .await
             .unwrap();
 
@@ -990,8 +1073,8 @@ mod tests {
         // Back-compat: a `HookExecutor` with no consent gate (the default)
         // executes command hooks exactly as before.
         let executor = HookExecutor::new(vec![command_hook("echo ungated")]);
-        let result = executor
-            .execute(HookEvent::BeforeToolCall, &HookContext::new("s"))
+        let (_ctx, result) = executor
+            .execute_interceptors(HookEvent::BeforeToolCall, HookContext::new("s"))
             .await
             .unwrap();
         assert!(result.action_results[0].success);
@@ -1024,6 +1107,42 @@ mod tests {
         // Must not panic when no hooks are registered.
         let executor = HookExecutor::new(vec![]);
         fire_observer(&executor, HookEvent::GatewayStart, "s", vec![]).await;
+    }
+
+    #[tokio::test]
+    #[cfg(unix)] // POSIX-only: shell hook uses sh (touch fixture)
+    async fn fire_observer_tool_name_env_feeds_the_matcher() {
+        // Regression lock: fire-sites pass TOOL_NAME as env only; the hop
+        // into `ctx.tool_name` is what lets a `matcher` on
+        // PermissionRequest / Notification observers actually select.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sentinel = dir.path().join("matched.flag");
+        let mut hook = observer_command_hook(
+            HookEvent::Notification,
+            &format!("touch '{}'", sentinel.display()),
+        );
+        hook.matcher = Some("bash_run".to_string());
+        let executor = HookExecutor::new(vec![hook]);
+
+        // Non-matching tool name → suppressed.
+        fire_observer(
+            &executor,
+            HookEvent::Notification,
+            "s",
+            vec![("TOOL_NAME", "file_read".to_string())],
+        )
+        .await;
+        assert!(!sentinel.exists(), "non-matching TOOL_NAME must not fire");
+
+        // Matching tool name → observer runs.
+        fire_observer(
+            &executor,
+            HookEvent::Notification,
+            "s",
+            vec![("TOOL_NAME", "bash_run".to_string())],
+        )
+        .await;
+        assert!(sentinel.exists(), "matching TOOL_NAME must fire");
     }
 
     #[tokio::test]

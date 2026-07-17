@@ -194,6 +194,11 @@ mod tests {
             name: None,
             description: None,
             plugin_id: "test-plugin".to_string(),
+            kind: None,
+            matcher: None,
+            actions: Vec::new(),
+            plugin_root: None,
+            timeout_secs: None,
         })
     }
 
