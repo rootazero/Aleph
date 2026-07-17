@@ -360,6 +360,13 @@ async fn restore_after_team_delete_rebinds_to_recreated_team() {
         })
         .await
         .unwrap();
+    // A leader-authored operating protocol must survive a restore-after-delete:
+    // it is injected verbatim into every member's launch context by the handoff
+    // builder, so dropping it is a silent partial-fidelity restore.
+    teams
+        .set_protocol(&team.id, Some("always write tests first".into()))
+        .await
+        .unwrap();
     let s = capture_snapshot(
         snap.as_ref(),
         teams.as_ref(),
@@ -387,9 +394,15 @@ async fn restore_after_team_delete_rebinds_to_recreated_team() {
     // The diff points at the team the restore actually landed on.
     let effective = &diff.team_id;
     assert_ne!(effective, &team.id, "recreated team gets a fresh id");
-    assert!(
-        teams.get_team(effective).await.unwrap().is_some(),
-        "recreated team must exist"
+    let recreated_team = teams
+        .get_team(effective)
+        .await
+        .unwrap()
+        .expect("recreated team must exist");
+    assert_eq!(
+        recreated_team.protocol.as_deref(),
+        Some("always write tests first"),
+        "the captured operating protocol must survive restore-after-delete"
     );
     let members = teams.get_members(effective).await.unwrap();
     let ids: Vec<&str> = members.iter().map(|m| m.agent_id.as_str()).collect();

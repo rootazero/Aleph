@@ -108,7 +108,12 @@ impl TeamDispatcher {
                     tracing::warn!(task_id = %task.id, error = %e, "dispatcher: release_lock failed during orphan reclaim");
                 }
             }
-            let _ = self
+            // Surface a failed reset: a silent drop would loop this orphan
+            // invisibly (it stays InProgress and is retried every tick with
+            // zero log), contradicting the warn-on-error discipline every
+            // sibling path in this file already follows (release_lock above,
+            // list_tasks above, reclaim_zombies) — P7.
+            if let Err(e) = self
                 .coord_store
                 .update_task(
                     &task.id,
@@ -117,7 +122,11 @@ impl TeamDispatcher {
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+            {
+                tracing::warn!(task_id = %task.id, error = %e,
+                    "dispatcher: reclaim_orphaned reset-to-pending failed");
+            }
         }
     }
 

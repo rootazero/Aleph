@@ -11,8 +11,8 @@ use crate::config::types::{
     RoutingRuleConfig, SearchConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
     SecretsConfig, ShellSecurityConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
     StabilityToml, StopHookConfig, SubAgentConfig, TeamBroadcastConfigToml,
-    TeamDispatcherConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
-    VoiceSection,
+    TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
+    UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
@@ -264,6 +264,13 @@ pub struct Config {
     /// `team_dispatcher` above (§4.5 ↔ §4.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_broadcast: Option<TeamBroadcastConfigToml>,
+    /// Team message-router thread-escalation tunables (`[team_messages]`):
+    /// per-thread message threshold + on/off switch for the leader nudge.
+    /// Absent ⇒ `teams::messages::EscalationRule::default()` at the boot site
+    /// (byte-identical prior behaviour). The third teams storm/escalation guard
+    /// alongside `team_dispatcher` (§4.4) and `team_broadcast` (§4.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_messages: Option<TeamMessagesConfigToml>,
     /// Mid-run trajectory resume — boot-scan auto-resume of interrupted runs.
     #[serde(default)]
     pub resume: crate::config::types::ResumeConfig,
@@ -480,6 +487,7 @@ impl Default for Config {
             moa: None,
             team_dispatcher: None,
             team_broadcast: None,
+            team_messages: None,
             resume: crate::config::types::ResumeConfig::default(),
             projects: crate::config::types::ProjectsConfig::default(),
             desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),

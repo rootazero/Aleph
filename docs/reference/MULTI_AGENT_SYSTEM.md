@@ -266,7 +266,7 @@ pub struct CollaborativeSession {
 
 **Execution**: The leader agent orchestrates collaborative sessions via tools — there is no code-level orchestrator. `CollaborativeSession` is a data structure, not an active process. The leader creates the session, participants exchange turns, and the leader finalizes the outcome. Round counting (`max_rounds`) is a tool-level guardrail: `session_turn` rejects submissions beyond max_rounds.
 
-**Escalation**: Suggestion-based, not automatic. `EscalationRule` defines thresholds (e.g., thread message count > 5, review reject count > 3). When triggered, the `MessageRouter` sends a `SystemNotification` to the leader suggesting escalation. The leader (LLM) decides whether to actually escalate based on content, not just counts (R8).
+**Escalation**: Suggestion-based, not automatic. `EscalationRule` defines the thread-message threshold (default 5) and an on/off switch. When a reply thread exceeds the threshold, the `MessageRouter` sends one `SystemNotification` to the leader suggesting escalation. The leader (LLM) decides whether to actually escalate based on content, not just counts (R8). The threshold and switch are operator-tunable via the `[team_messages]` TOML section (`thread_message_threshold` / `escalation_enabled`), falling back to `EscalationRule::default()` per field when absent (a `0` threshold clamps to the default) — the message-router parallel to `[team_dispatcher]` (§4.4) and `[team_broadcast]` (§4.5), mapped at the `agent_init` boot site.
 
 **Tools**:
 - `session_collaborate` — start collaborative session (participants, topic, max_rounds)
