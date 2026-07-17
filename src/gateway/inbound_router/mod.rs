@@ -998,39 +998,79 @@ impl InboundMessageRouter {
         let raw = strip_bot_mention(ctx.message.text.trim());
         let lower = raw.trim().to_lowercase();
 
-        // Approval reply: `/approve [once|session|always]` or `/deny`.
+        // Approval reply: `/approve [n] [once|session|always]` or `/deny [n]`.
         // A bare `/approve` (or any unrecognized suffix) stays the
         // least-privilege `AllowOnce`; `session` widens the grant to the rest
         // of the session. `always` is accepted for backwards compatibility but
-        // the manager clamps it to a session grant — nothing persists.
+        // the manager clamps it to a session grant — nothing persists. The
+        // optional 1-based index picks a specific card when several pend
+        // concurrently (approval-gated calls may share a parallel batch); a
+        // bare reply then resolves NOTHING and the manager hands back the
+        // numbered listing instead of FIFO-guessing which command the user
+        // actually read.
         let is_approve = lower == "/approve" || lower.starts_with("/approve ");
         let is_deny = lower == "/deny" || lower.starts_with("/deny ");
         if is_approve || is_deny {
             if let Some(ref mgr) = self.exec_approval_manager {
+                use crate::exec::manager::SessionResolveOutcome;
                 use crate::exec::socket::ApprovalDecisionType;
+                let prefix = if is_approve { "/approve" } else { "/deny" };
+                let rest = lower.strip_prefix(prefix).unwrap_or("").trim();
+                let mut index: Option<usize> = None;
+                let mut grant: &str = "";
+                for tok in rest.split_whitespace() {
+                    if index.is_none() && tok.bytes().all(|b| b.is_ascii_digit()) {
+                        index = tok.parse().ok();
+                    } else {
+                        grant = tok;
+                    }
+                }
                 let decision = if is_approve {
-                    match lower.strip_prefix("/approve").map(str::trim) {
-                        Some("once") => ApprovalDecisionType::AllowOnce,
-                        Some("session") => ApprovalDecisionType::AllowSession,
-                        Some("always") => ApprovalDecisionType::AllowAlways,
+                    match grant {
+                        "session" => ApprovalDecisionType::AllowSession,
+                        "always" => ApprovalDecisionType::AllowAlways,
                         _ => ApprovalDecisionType::AllowOnce,
                     }
                 } else {
                     ApprovalDecisionType::Deny
                 };
-                // Reply with the EFFECTIVE decision: the manager clamps an
-                // `always` to a session grant, so never promise permanence.
+                // Reply with the EFFECTIVE decision (the manager clamps an
+                // `always` to a session grant, so never promise permanence)
+                // and echo WHAT was resolved, closing the read-what-you-
+                // approve loop.
                 let reply = match mgr.resolve_for_session(
                     &session_key,
+                    index,
                     decision,
                     ctx.message.sender_name.clone(),
                 ) {
-                    Some(ApprovalDecisionType::AllowOnce) => "✅ Approved (once).",
-                    Some(
-                        ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways,
-                    ) => "✅ Approved for this session.",
-                    Some(ApprovalDecisionType::Deny) => "❌ Denied.",
-                    None => "Nothing is awaiting your approval right now.",
+                    SessionResolveOutcome::Resolved {
+                        decision: ApprovalDecisionType::AllowOnce,
+                        summary,
+                    } => format!("✅ Approved (once): {summary}"),
+                    SessionResolveOutcome::Resolved {
+                        decision:
+                            ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways,
+                        summary,
+                    } => format!("✅ Approved for this session: {summary}"),
+                    SessionResolveOutcome::Resolved {
+                        decision: ApprovalDecisionType::Deny,
+                        summary,
+                    } => format!("❌ Denied: {summary}"),
+                    SessionResolveOutcome::NothingPending => {
+                        "Nothing is awaiting your approval right now.".to_string()
+                    }
+                    SessionResolveOutcome::Ambiguous(cards) => {
+                        let mut msg = String::from(
+                            "⚠️ Several actions are awaiting approval — reply \
+                             `/approve <n>` or `/deny <n>`:",
+                        );
+                        for (n, line) in cards {
+                            use std::fmt::Write as _;
+                            let _ = write!(msg, "\n{n}. {line}");
+                        }
+                        msg
+                    }
                 };
                 let _ = self
                     .channel_registry

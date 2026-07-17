@@ -8,7 +8,7 @@ use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, session_memory, ApprovalAction};
-use crate::session::events::{ToolOutput, TurnId};
+use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
@@ -490,7 +490,6 @@ impl ScopedToolService {
             );
             self.record_approval_decision(
                 name,
-                Some(input),
                 Some("auto-denied: unattended run, no human available to approve"),
             )
             .await;
@@ -540,7 +539,7 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
-                self.record_approval_decision(name, Some(input), Some(reason_kind.agent_hint()))
+                self.record_approval_decision(name, Some(reason_kind.agent_hint()))
                     .await;
                 // Surface the ledger's reason to the model (not just the log)
                 // so the circuit breaker actually breaks the loop.
@@ -577,19 +576,18 @@ impl ScopedToolService {
         )
         .await;
 
-        // Stamp the approval record with the tool call it gates. Requesters see
-        // only `(tool_name, reason)`, so without this the client can only pair a
-        // pending approval to a tool row by position — and `exec.approvals.pending`
-        // is an unordered map, so with two concurrent tool calls the card renders
-        // under the wrong tool and the user approves something they never read.
-        let tool_call_id = self
-            .newest_tool_call(name, Some(input))
-            .await
-            .map(|(_, id)| id);
+        // The approval record stamps itself with the tool call it gates via the
+        // ambient `CallIdentity` the harness Act phase scoped around this whole
+        // dispatch (`ExecApprovalRecord::from_request` reads it). Requesters see
+        // only `(tool_name, reason)`, so without the stamp the client can only
+        // pair a pending approval to a tool row by position — and
+        // `exec.approvals.pending` is an unordered map, so with two concurrent
+        // tool calls the card renders under the wrong tool and the user
+        // approves something they never read. The ambient id is exact per call
+        // (task-local per future), which is what lets multiple gated calls
+        // pend approval concurrently.
         let asked_at = std::time::Instant::now();
-        let outcome =
-            crate::approval::with_tool_call_id(tool_call_id, requester.request_approval(action))
-                .await;
+        let outcome = requester.request_approval(action).await;
         let waited_ms = u64::try_from(asked_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         if !outcome.is_approved() {
             let reason_kind = match outcome {
@@ -620,12 +618,8 @@ impl ScopedToolService {
                     }
                 }
             }
-            self.record_approval_decision(
-                name,
-                Some(input),
-                Some(&format!("user did not approve ({outcome:?})")),
-            )
-            .await;
+            self.record_approval_decision(name, Some(&format!("user did not approve ({outcome:?})")))
+                .await;
             // Carry the same hint on the *first* live denial too, so the agent
             // is told to change approach immediately rather than looping into
             // the auto-deny path above.
@@ -644,98 +638,25 @@ impl ScopedToolService {
                 session_memory::global().remember(key, &fingerprint);
             }
         }
-        self.record_approval_decision(name, Some(input), None).await;
+        self.record_approval_decision(name, None).await;
         Ok(())
-    }
-
-    /// Correlation ids of the tool call currently being dispatched for `name`.
-    ///
-    /// `ToolService` dispatch carries no call identity, so they are recovered
-    /// from the session log's `ToolCallRequested` events. Two tiers, both
-    /// newest-first:
-    ///
-    /// 1. **Exact (name, input) match.** The harness's within-batch dedup
-    ///    guarantees no two calls in one parallel batch share the same
-    ///    canonical `(name, args)`, so an exact input match is unambiguous
-    ///    even when a gate fired from INSIDE a parallel batch — the case the
-    ///    name-only scan gets wrong. `act_parallel` PASS 0 pre-emits every
-    ///    request event of a group before any dispatch, so for gates that can
-    ///    escape the `Global`-claim rule (a hook's per-call `Ask`, or two
-    ///    same-name calls where only one is gated) name-only correlation
-    ///    stamps the LAST event of the group onto whichever call asked first —
-    ///    the approval card renders the wrong call and the user approves a
-    ///    command they never read.
-    /// 2. **Newest name-only fallback.** Kept for callers with no input at
-    ///    hand and for the harness-guardrail `Sanitize` case, where the
-    ///    executed args differ from the logged (pre-rewrite) ones so the
-    ///    exact tier can't match. For claim-time gates
-    ///    ([`ScopedToolService::call_concurrency_claim`] forces `Global` for
-    ///    confirm/operator-gated names) the gated call is never batched and
-    ///    newest-by-name IS this call, exactly as before.
-    ///
-    /// `call_id` is the harness `call.id` — the same string clients see as
-    /// `ToolStart.tool_id`. Only approval decision points call this, so the
-    /// event-log scan stays off the hot path.
-    async fn newest_tool_call(
-        &self,
-        name: &str,
-        input: Option<&Value>,
-    ) -> Option<(TurnId, String)> {
-        use crate::session::events::SessionEvent;
-
-        let turn = self.turn_context.as_ref()?;
-        let session_svc = crate::session::service::global_session_service()?;
-        let events = match session_svc.get_events(&turn.session_key, None, None).await {
-            Ok(events) => events,
-            Err(e) => {
-                tracing::warn!(
-                    tool = %name,
-                    error = ?e,
-                    "failed to read session events — approval tool call not correlated"
-                );
-                return None;
-            }
-        };
-        let mut newest_by_name: Option<(TurnId, String)> = None;
-        for rec in events.iter().rev() {
-            let SessionEvent::ToolCallRequested {
-                turn_id,
-                call_id,
-                name: requested,
-                input: requested_input,
-                ..
-            } = &rec.event
-            else {
-                continue;
-            };
-            if requested != name {
-                continue;
-            }
-            // Exact tier: serde_json::Value equality is structural (object
-            // key order does not matter), matching the harness's canonical
-            // dedup signature closely enough for correlation.
-            if input.is_some_and(|i| requested_input == i) {
-                return Some((*turn_id, call_id.clone()));
-            }
-            if newest_by_name.is_none() {
-                newest_by_name = Some((*turn_id, call_id.clone()));
-            }
-        }
-        newest_by_name
     }
 
     /// Persist this gate's decision into the session event log (the SSOT the
     /// model replays). Without it an agent never learns that the user already
     /// refused an action and simply asks again.
     ///
+    /// Correlation reads the ambient [`crate::approval::CallIdentity`] the
+    /// harness Act phase scoped around this dispatch — exact per call, immune
+    /// to guardrail `Sanitize` rewrites and to same-name siblings in a
+    /// parallel batch (both of which broke the session-log scan this
+    /// replaced). `None` outside harness dispatch (direct `tools.invoke` RPC,
+    /// tests), where there is no `ToolCallRequested` event to anchor to
+    /// anyway — the decision is then not persisted, exactly as before.
+    ///
     /// Best-effort: a failed emit is logged, never allowed to overturn a
     /// decision the user has made.
-    async fn record_approval_decision(
-        &self,
-        name: &str,
-        input: Option<&Value>,
-        denial_reason: Option<&str>,
-    ) {
+    async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
         use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
 
         let Some(turn) = self.turn_context.as_ref() else {
@@ -746,10 +667,12 @@ impl ScopedToolService {
         };
         let session_id = &turn.session_key;
 
-        let Some((turn_id, call_id)) = self.newest_tool_call(name, input).await else {
+        let Some(crate::approval::CallIdentity { turn_id, call_id }) =
+            crate::approval::current_call_identity()
+        else {
             tracing::debug!(
                 tool = %name,
-                "no ToolCallRequested to correlate — approval decision not persisted"
+                "no ambient call identity — approval decision not persisted"
             );
             return;
         };

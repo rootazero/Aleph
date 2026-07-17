@@ -16,8 +16,11 @@
 //! that). When all of the following hold for a single dispatch group, the
 //! harness routes through [`AgentHarness::act_parallel`] instead, dispatching
 //! the actual `tools.execute(...)` futures concurrently via
-//! [`futures::stream::FuturesOrdered`] while keeping every side effect — event
-//! emit, trace, layer-3 budget, timeline push — strictly in input order:
+//! `buffer_unordered`. Live "done" callbacks fire in COMPLETION order (a fast
+//! read is not head-of-line blocked behind a slow sibling, and its duration is
+//! its real wall clock), while the transcript — `SessionEvent` emit, trace,
+//! layer-3 budget, timeline push — stays strictly in input order (the
+//! live/transcript split pi, openclaw and codex all share):
 //!
 //! * [`HarnessDeps::parallel_tool_concurrency`](crate::harness::deps::HarnessDeps)
 //!   is `Some(n)` with `n >= 2`.
@@ -62,6 +65,9 @@ use std::time::Instant;
 use futures::future::BoxFuture;
 use futures::stream;
 use futures::StreamExt;
+
+/// What one tool execute resolves to, before any event emission.
+type ExecOutcome = Result<ToolOutput, crate::tools::service::ToolError>;
 
 /// RAII guard that calls `end_turn` on drop so per-turn budget state is
 /// always released even when `act()` exits early via `?`.
@@ -520,11 +526,32 @@ impl AgentHarness {
             // kill a command they had just approved. An overrun arrives as
             // `ToolError::Timeout`, recoverable like any other tool failure; a
             // genuinely hung *run* is still caught by the stall tracker.
-            let inner = self
-                .deps
-                .tools
-                .execute_with_cancel(&call.name, call.arguments.clone(), call_cancel)
-                .await;
+            // Ambient call identity: every approval gate / record built beneath
+            // this dispatch reads the exact (turn, call.id) instead of scanning
+            // the session log by tool name (see `crate::approval::tool_call`).
+            // The scoped future is fully owned (clones, like the parallel
+            // path) — a borrowed inner future inside a task-local scope trips
+            // rustc's "Send is not general enough" HRTB limitation once this
+            // future crosses a `tokio::spawn` chain.
+            let inner = {
+                let tools = self.deps.tools.clone();
+                let name = call.name.clone();
+                let args = call.arguments.clone();
+                // Boxed: the task-local scope future is structural, and left
+                // bare it trips rustc's "Send is not general enough" HRTB
+                // limitation once this async fn crosses a `tokio::spawn`
+                // chain (subagent runtimes). Erasing to a BoxFuture is the
+                // standard workaround.
+                let fut: BoxFuture<'static, ExecOutcome> =
+                    Box::pin(crate::approval::with_call_identity(
+                        Some(crate::approval::CallIdentity {
+                            turn_id,
+                            call_id: call.id.clone(),
+                        }),
+                        async move { tools.execute_with_cancel(&name, args, call_cancel).await },
+                    ));
+                fut.await
+            };
             match inner {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
@@ -534,8 +561,14 @@ impl AgentHarness {
                     // set — the LLM has demonstrably pivoted to a working
                     // strategy.
                     self.clear_failures();
-                    self.emit_tool_success(
-                        session_id, turn_id, &call, output, started, iteration, callback,
+                    let dur_ms: u64 =
+                        started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    // Live "done" event — mirror of `on_tool_call_start`, fired
+                    // before the transcript persists (same order as the
+                    // parallel path's completion-time firing).
+                    callback.on_tool_call_done(&call.id, Some(&output.value), None, dur_ms);
+                    self.persist_tool_success(
+                        session_id, turn_id, &call, output, dur_ms, iteration,
                     )
                     .await?;
                 }
@@ -782,23 +815,21 @@ impl AgentHarness {
         }
 
         // PASS 1 — parallel: dispatch up to `parallelism` execute futures via
-        // `stream::iter(...).buffered(n)`, which polls at most `n` at a time AND
-        // yields completions in input order — semantically identical to opencode's
-        // `Effect.forEach({ concurrency: n })`. Each call's wall clock is owned by
-        // the tool layer, below the approval gate — never by this batch.
-        // A guardrail rewrite changes the path set the claim was derived from, so the
-        // pre-admission disjointness proof is void: any rewrite serializes the batch.
+        // `stream::iter(...).buffer_unordered(n)`, which polls at most `n` at a
+        // time and yields completions AS THEY RESOLVE. Each call's wall clock
+        // is owned by the tool layer, below the approval gate — never by this
+        // batch. A guardrail rewrite changes the path set the claim was derived
+        // from, so the pre-admission disjointness proof is void: any rewrite
+        // serializes the batch.
         let cap = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
         let rewritten = sanitized.iter().any(Option::is_some);
         let parallelism = if rewritten { 1 } else { cap };
-        type ExecOutcome = Result<ToolOutput, crate::tools::service::ToolError>;
-        // Build per-original-index futures, leaving None at skipped indices
-        // (cross-batch dedup already emitted synthetic ToolError in PASS 0).
-        // Run only the live futures through `.buffered()` and re-assemble
-        // results in original input order via `live_indices`, so PASS 2 keeps
-        // its existing `for (idx, exec_result) in results.iter().enumerate()`
-        // contract against `tool_calls`.
-        let mut boxed_futs_opt: Vec<Option<BoxFuture<'static, ExecOutcome>>> =
+        // Build futures only for live indices — skipped indices (cross-batch
+        // dedup / guardrail Block) already emitted their synthetic ToolError
+        // in PASS 0. Each future carries its ORIGINAL index, so the
+        // completion loop and PASS 2 address `tool_calls` directly with no
+        // positional re-assembly.
+        let mut live_futs: Vec<BoxFuture<'static, (usize, ExecOutcome)>> =
             Vec::with_capacity(tool_calls.len());
         // Gap B follow-up — keep one InFlightGuard per call alive for the
         // duration of the whole parallel dispatch. Each guard drops when this
@@ -807,7 +838,6 @@ impl AgentHarness {
         let mut in_flight_guards: Vec<crate::tools::in_flight::InFlightGuard> = Vec::new();
         for (idx, call) in tool_calls.iter().enumerate() {
             if skip[idx] || blocked[idx] {
-                boxed_futs_opt.push(None);
                 continue;
             }
             let tools = self.deps.tools.clone();
@@ -825,27 +855,59 @@ impl AgentHarness {
             if let Some(reg) = self.deps.in_flight_tool_calls.as_ref() {
                 in_flight_guards.push(reg.register(&call.id, &call.name, call_cancel.clone()));
             }
-            boxed_futs_opt.push(Some(Box::pin(async move {
-                tools.execute_with_cancel(&name, args, call_cancel).await
-            })));
+            // Ambient call identity (parallel parity with the serial path):
+            // exact per-future scoping is what lets approval-gated calls share
+            // a batch — each concurrent card stamps its own (turn, call.id).
+            let identity = crate::approval::CallIdentity {
+                turn_id,
+                call_id: call.id.clone(),
+            };
+            live_futs.push(Box::pin(async move {
+                let exec = crate::approval::with_call_identity(Some(identity), async move {
+                    tools.execute_with_cancel(&name, args, call_cancel).await
+                })
+                .await;
+                (idx, exec)
+            }));
         }
-        let live_indices: Vec<usize> = boxed_futs_opt
-            .iter()
-            .enumerate()
-            .filter_map(|(i, f)| f.as_ref().map(|_| i))
-            .collect();
-        let live_futs: Vec<BoxFuture<'static, ExecOutcome>> =
-            boxed_futs_opt.into_iter().flatten().collect();
-        let live_results: Vec<ExecOutcome> = stream::iter(live_futs)
-            .buffered(parallelism)
-            .collect()
-            .await;
-        // Reassemble per-original-index results. `None` slots are skipped
-        // calls — already emitted as synthetic errors in PASS 0; PASS 2 below
-        // ignores them via the same `skip[idx]` flag.
-        let mut results: Vec<Option<ExecOutcome>> = (0..tool_calls.len()).map(|_| None).collect();
-        for (live_idx, exec) in live_results.into_iter().enumerate() {
-            results[live_indices[live_idx]] = Some(exec);
+        // Completion-order drive loop (pi/openclaw/codex parity): each live
+        // "done" callback fires the moment ITS call resolves — a fast read is
+        // no longer head-of-line blocked behind a slow sibling, and its
+        // `duration_ms` is the tool's real wall clock instead of being
+        // inflated by the wait for earlier-indexed calls. The live event
+        // carries the raw output (the Layer-3 budget may later spill the
+        // PERSISTED copy to a marker in PASS 2 — the transcript, not the live
+        // stream, is the budgeted surface). Stall-tracker activity is also
+        // recorded per completion, so a long mixed batch no longer looks
+        // stalled until its slowest member returns.
+        let mut settled: Vec<Option<(u64, Result<ToolOutput, (String, bool)>)>> =
+            (0..tool_calls.len()).map(|_| None).collect();
+        {
+            let mut completions = stream::iter(live_futs).buffer_unordered(parallelism);
+            while let Some((idx, exec)) = completions.next().await {
+                let call = &tool_calls[idx];
+                let dur_ms: u64 = started_at[idx]
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                let outcome = match exec {
+                    Ok(output) => {
+                        callback.on_tool_call_done(&call.id, Some(&output.value), None, dur_ms);
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        let retryable = e.is_retryable();
+                        let msg = self.compose_tool_error_msg(call, &e);
+                        callback.on_tool_call_done(&call.id, None, Some(&msg), dur_ms);
+                        Err((msg, retryable))
+                    }
+                };
+                if let Some(ref tracker) = self.stall_tracker {
+                    tracker.record_activity().await;
+                }
+                settled[idx] = Some((dur_ms, outcome));
+            }
         }
         // PASS 1 complete — every future has resolved, so the in-flight
         // registry entries are no longer cancellable in any meaningful sense.
@@ -855,47 +917,43 @@ impl AgentHarness {
         // tokens or the registry.
         drop(in_flight_guards);
 
-        // PASS 2 — serial in input order: apply Layer 3 budget, emit
-        // ToolResult/ToolError, trace, push timeline entry.
-        // Skipped indices (cross-batch dedup hits, already errored in PASS 0)
-        // are passed through with no further action.
-        for (idx, exec_slot) in results.into_iter().enumerate() {
-            let Some(exec_result) = exec_slot else {
+        // PASS 2 — serial in INPUT order (the transcript order): apply Layer 3
+        // budget, emit ToolResult/ToolError session events, trace, push the
+        // timeline entry. The live callback already fired per completion
+        // above, so PASS 2 passes `live: None` — persistence and live
+        // streaming are deliberately split (emission-order transcript,
+        // completion-order live events). Skipped indices (cross-batch dedup
+        // hits, already errored in PASS 0) pass through with no further action.
+        for (idx, slot) in settled.into_iter().enumerate() {
+            let Some((dur_ms, outcome)) = slot else {
                 continue; // PASS-0 dedup-rejected; already emitted synthetic error.
             };
             let call = &tool_calls[idx];
-            let started = started_at[idx];
-            match exec_result {
+            match outcome {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
                     self.apply_turn_budget(budget_turn_id, call, &mut output);
                     // Cross-batch dedup: any success clears the failure set —
                     // the LLM has demonstrably pivoted to a working strategy.
                     self.clear_failures();
-                    self.emit_tool_success(
-                        session_id, turn_id, call, output, started, iteration, callback,
+                    self.persist_tool_success(
+                        session_id, turn_id, call, output, dur_ms, iteration,
                     )
                     .await?;
-                    if let Some(ref tracker) = self.stall_tracker {
-                        tracker.record_activity().await;
-                    }
                 }
-                Err(e) => {
+                Err((error_msg, retryable)) => {
                     // Cross-batch dedup: record the (tool, args) signature so the
                     // next turn refuses an identical repeat — but only for a
                     // NON-retryable failure. A wall-clock `Timeout` says nothing
                     // about the call, and banning it refused the retry the error
                     // text itself invites (serial parity).
-                    if !e.is_retryable() {
+                    if !retryable {
                         self.record_failure(call.name.clone(), canonical_args[idx].clone());
                     }
-                    self.emit_tool_error(
-                        session_id, turn_id, call, e, started, iteration, callback,
+                    self.persist_tool_error(
+                        session_id, turn_id, call, error_msg, retryable, dur_ms, iteration,
                     )
                     .await;
-                    if let Some(ref tracker) = self.stall_tracker {
-                        tracker.record_activity().await;
-                    }
                 }
             }
         }
@@ -977,17 +1035,20 @@ impl AgentHarness {
         }
     }
 
-    /// Persist a successful tool call: emit `SessionEvent::ToolResult`,
-    /// trace event, and timeline entry.
-    async fn emit_tool_success(
+    /// Persist a successful tool call to the transcript: emit
+    /// `SessionEvent::ToolResult`, trace event, and timeline entry. The live
+    /// "done" event is NOT fired here — both paths fire it before persisting
+    /// (the serial loop right at the call site, the parallel path per
+    /// completion in its drive loop), so live streaming and the transcript
+    /// are cleanly split.
+    async fn persist_tool_success(
         &self,
         session_id: &SessionId,
         turn_id: TurnId,
         call: &NativeToolCall,
         output: ToolOutput,
-        started: Instant,
+        dur_ms: u64,
         iteration: usize,
-        callback: &mut dyn HarnessCallback,
     ) -> Result<(), HarnessError> {
         let output_value = output.value.clone();
         let result_event = SessionEvent::ToolResult {
@@ -1000,12 +1061,6 @@ impl AgentHarness {
             .session
             .emit_event(session_id, result_event)
             .await?;
-        let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-        // Live "done" event — mirror of `on_tool_call_start`. Fired for every
-        // tool that produces a `ToolCallCompleted` persistence trace so the
-        // broadcast stream emits a `ToolCallDone` → `StreamEvent::ToolEnd`.
-        // Without it the live stream shows tool starts with no ends.
-        callback.on_tool_call_done(&call.id, Some(&output_value), None, dur_ms);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
@@ -1024,31 +1079,20 @@ impl AgentHarness {
         Ok(())
     }
 
-    /// Persist a failed tool call: emit `SessionEvent::ToolError` (best
-    /// effort — failure to persist logs at WARN, never aborts the batch),
-    /// trace event, timeline entry.
-    async fn emit_tool_error(
+    /// Compose the LLM-facing error body for a failed tool call: the upstream
+    /// `to_string()` followed by a single-line persistence hint that names the
+    /// error kind, recommends concrete alternative tools, and reminds the
+    /// model the ladder must be climbed before giving up (the persistence
+    /// doctrine in `thinker::layers::provider_guidance`). The composed text
+    /// travels through `SessionEvent::ToolError.error` and is surfaced to the
+    /// model as `tool_result(is_error=true)` in the very next Think turn —
+    /// same channel claude-code uses, no new wiring required.
+    fn compose_tool_error_msg(
         &self,
-        session_id: &SessionId,
-        turn_id: TurnId,
         call: &NativeToolCall,
-        e: crate::tools::service::ToolError,
-        started: Instant,
-        iteration: usize,
-        callback: &mut dyn HarnessCallback,
-    ) {
-        let retryable = e.is_retryable();
-        // Compose the LLM-facing error body: the upstream `to_string()`
-        // followed by a single-line persistence hint that names the
-        // error kind, recommends concrete alternative tools, and
-        // reminds the model the ladder must be climbed before giving
-        // up (the persistence doctrine in
-        // `thinker::layers::provider_guidance`). The hint
-        // travels through `SessionEvent::ToolError.error` and is
-        // surfaced to the model as `tool_result(is_error=true)` in the
-        // very next Think turn — same channel claude-code uses, no
-        // new wiring required.
-        let hint = crate::tools::fallback_registry::render_persistence_hint(&e, &call.name);
+        e: &crate::tools::service::ToolError,
+    ) -> String {
+        let hint = crate::tools::fallback_registry::render_persistence_hint(e, &call.name);
         // `NotFound` carries zero routing signal on its own (the fallback
         // registry deliberately stays silent for it — the call shape, not the
         // tool choice, is wrong). Name repair already rewrote unambiguous
@@ -1057,7 +1101,7 @@ impl AgentHarness {
         // to abstain from, so the model self-corrects in one turn instead of
         // groping via `list_tools`. Advisory text only — never auto-dispatch
         // (R7: the model picks).
-        let did_you_mean = if let crate::tools::service::ToolError::NotFound { name } = &e {
+        let did_you_mean = if let crate::tools::service::ToolError::NotFound { name } = e {
             let defs = self.deps.tools.metadata_schema();
             let offered: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
             let candidates = crate::tools::name_repair::suggest_candidates(name, &offered, 3);
@@ -1072,7 +1116,53 @@ impl AgentHarness {
         } else {
             String::new()
         };
-        let error_msg = format!("{e}{hint}{did_you_mean}");
+        format!("{e}{hint}{did_you_mean}")
+    }
+
+    /// Fire the live "done" event for a failed tool call, then persist it:
+    /// the serial-path convenience over [`Self::compose_tool_error_msg`] +
+    /// [`Self::persist_tool_error`]. Live-before-transcript matches the
+    /// parallel path, where the live event fires per completion.
+    async fn emit_tool_error(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        e: crate::tools::service::ToolError,
+        started: Instant,
+        iteration: usize,
+        callback: &mut dyn HarnessCallback,
+    ) {
+        let retryable = e.is_retryable();
+        let error_msg = self.compose_tool_error_msg(call, &e);
+        let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        // Live "done" event (error case) — paired with `on_tool_call_start`
+        // so the broadcast stream emits `ToolCallDone` → `StreamEvent::ToolEnd`
+        // with the error body.
+        callback.on_tool_call_done(&call.id, None, Some(&error_msg), dur_ms);
+        self.persist_tool_error(
+            session_id, turn_id, call, error_msg, retryable, dur_ms, iteration,
+        )
+        .await;
+    }
+
+    /// Persist a failed tool call to the transcript: emit
+    /// `SessionEvent::ToolError` (best effort — failure to persist logs at
+    /// WARN, never aborts the batch), trace event, timeline entry.
+    /// `error_msg` is the pre-composed [`Self::compose_tool_error_msg`] body,
+    /// so the live event (fired by the caller before this) and the transcript
+    /// always carry the same text.
+    #[allow(clippy::too_many_arguments)]
+    async fn persist_tool_error(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call: &NativeToolCall,
+        error_msg: String,
+        retryable: bool,
+        dur_ms: u64,
+        iteration: usize,
+    ) {
         let error_event = SessionEvent::ToolError {
             turn_id,
             call_id: call.id.clone(),
@@ -1087,13 +1177,7 @@ impl AgentHarness {
                 "failed to persist ToolError event",
             );
         }
-        let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         let error_for_timeline = error_msg.clone();
-        // Live "done" event (error case) — paired with `on_tool_call_start`
-        // so the broadcast stream emits `ToolCallDone` → `StreamEvent::ToolEnd`
-        // with the error body. Fired before the persistence trace, mirroring
-        // the success path.
-        callback.on_tool_call_done(&call.id, None, Some(&error_msg), dur_ms);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
