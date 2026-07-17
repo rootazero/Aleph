@@ -21,9 +21,35 @@ use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentMode
 use crate::sync_primitives::Arc;
 use crate::thinker::soul_archetypes::SoulArchetype;
 
+use super::super::agent_lifecycle::AgentLifecycleEvent;
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
+
+// =============================================================================
+// Runtime sync
+// =============================================================================
+
+/// Runtime-sync context for `agents.create` / `agents.delete`.
+///
+/// The agents RPC family persists to TOML via [`AgentManager`], but the
+/// runtime [`AgentRegistry`](crate::gateway::agent_instance::AgentRegistry)
+/// the inbound router resolves against is a separate list that boot builds
+/// from that TOML. Without this context the two drift until restart: a
+/// created agent is unusable (`agent_switch` / `channels.set_agent` reject
+/// it, the router can't route to it) and a deleted agent keeps serving its
+/// bound channels. Handlers that receive `Some(ctx)` keep the runtime
+/// registry and channel bindings in lock-step with the TOML write.
+pub struct AgentsRuntimeCtx {
+    /// Runtime registry the inbound router resolves agents against.
+    pub registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
+    /// Session store handed to lazily-registered instances.
+    pub session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    /// Live app config — agent defaults + profiles + providers for resolution.
+    pub config: Arc<tokio::sync::RwLock<crate::config::Config>>,
+    /// Channel-binding store, for clearing bindings on delete.
+    pub env_store: Arc<crate::gateway::agent_env::AgentEnvStore>,
+}
 
 // =============================================================================
 // Response Types
@@ -156,10 +182,15 @@ pub async fn handle_get(request: JsonRpcRequest, manager: Arc<AgentManager>) -> 
 }
 
 /// Handle agents.create — create a new agent definition
+///
+/// With `runtime: Some(..)`, the new definition is also resolved (same path
+/// as boot) and registered in the runtime registry, so the agent is
+/// immediately routable/switchable without a daemon restart.
 pub async fn handle_create(
     request: JsonRpcRequest,
     manager: Arc<AgentManager>,
     event_bus: Arc<GatewayEventBus>,
+    runtime: Option<Arc<AgentsRuntimeCtx>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.create request");
 
@@ -177,9 +208,36 @@ pub async fn handle_create(
         ..Default::default()
     };
 
-    match manager.create(def) {
+    match manager.create(def.clone()) {
         Ok(()) => {
             info!("Agent '{}' created via RPC", params.id);
+
+            // Hot-register in the runtime registry (TOML alone only takes
+            // effect at next boot). Resolution mirrors boot's resolve_all.
+            if let Some(rt) = runtime {
+                let (defaults, profiles, providers) = {
+                    let cfg = rt.config.read().await;
+                    (
+                        cfg.agents.defaults.clone(),
+                        cfg.profiles.clone(),
+                        cfg.providers.clone(),
+                    )
+                };
+                let mut resolver = crate::config::agent_resolver::AgentDefinitionResolver::new();
+                let resolved = resolver.resolve_one(&def, &defaults, &profiles, &providers);
+                let config =
+                    crate::gateway::agent_instance::AgentInstanceConfig::from_resolved(&resolved);
+                let (workspace, model) = (config.workspace.clone(), config.model.clone());
+                rt.registry
+                    .register_config(config, Arc::clone(&rt.session_store))
+                    .await;
+                AgentLifecycleEvent::Registered {
+                    agent_id: params.id.clone(),
+                    workspace,
+                    model,
+                }
+                .publish(&event_bus);
+            }
 
             let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
                 section: Some("agents".to_string()),
@@ -233,10 +291,16 @@ pub async fn handle_update(
 }
 
 /// Handle agents.delete — delete an agent definition
+///
+/// With `runtime: Some(..)`, the agent is also evicted from the runtime
+/// registry and every channel binding pointing at it is cleared — otherwise
+/// the deleted agent keeps serving its bound channels until restart, and the
+/// stale bindings then resolve to a ghost.
 pub async fn handle_delete(
     request: JsonRpcRequest,
     manager: Arc<AgentManager>,
     event_bus: Arc<GatewayEventBus>,
+    runtime: Option<Arc<AgentsRuntimeCtx>>,
 ) -> JsonRpcResponse {
     debug!("Handling agents.delete request");
 
@@ -248,6 +312,22 @@ pub async fn handle_delete(
     match manager.delete(&params.id) {
         Ok(()) => {
             info!("Agent '{}' deleted via RPC", params.id);
+
+            // Sync the runtime world: clear bindings first (inbound messages
+            // fall back to default routing immediately), then evict the
+            // instance. `manager.delete` already moved the dirs to trash.
+            if let Some(rt) = runtime {
+                if let Err(e) = rt.env_store.clear_bindings_for_agent(&params.id) {
+                    tracing::warn!(agent_id = %params.id, error = %e,
+                        "Failed to clear channel bindings for deleted agent");
+                }
+                let _ = rt.registry.remove(&params.id).await;
+                AgentLifecycleEvent::Deleted {
+                    agent_id: params.id.clone(),
+                    workspace_archived: true,
+                }
+                .publish(&event_bus);
+            }
 
             let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
                 section: Some("agents".to_string()),
@@ -434,4 +514,170 @@ pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Keep "groups" key in JSON response for webchat compatibility
     JsonRpcResponse::success(request.id, json!({ "groups": categories }))
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::agent_env::{AgentEnvStore, AgentEnvStoreConfig};
+    use crate::gateway::agent_instance::{AgentInstanceConfig, AgentRegistry};
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use tempfile::TempDir;
+
+    fn test_manager(dir: &TempDir) -> Arc<AgentManager> {
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[agents]
+
+[[agents.list]]
+id = "main"
+default = true
+name = "Main Agent"
+
+[[agents.list]]
+id = "coder"
+name = "Coder"
+"#,
+        )
+        .unwrap();
+        let workspace_root = dir.path().join("workspaces");
+        let agents_root = dir.path().join("agents");
+        let trash_root = dir.path().join("trash");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        std::fs::create_dir_all(&agents_root).unwrap();
+        std::fs::create_dir_all(&trash_root).unwrap();
+        Arc::new(AgentManager::new(
+            config_path,
+            workspace_root,
+            agents_root,
+            trash_root,
+        ))
+    }
+
+    fn test_session_store(dir: &TempDir) -> Arc<dyn crate::gateway::session_store::SessionStore> {
+        Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: dir.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    fn test_env_store(dir: &TempDir) -> Arc<AgentEnvStore> {
+        Arc::new(
+            AgentEnvStore::new(AgentEnvStoreConfig {
+                db_path: dir.path().join("env.db"),
+                default_profile: "default".to_string(),
+                archive_after_days: 0,
+            })
+            .unwrap(),
+        )
+    }
+
+    /// Build a runtime-sync ctx whose config resolves workspaces/state under
+    /// the temp dir — resolve_one must never touch the real ~/.aleph.
+    fn test_runtime_ctx(dir: &TempDir, registry: Arc<AgentRegistry>) -> Arc<AgentsRuntimeCtx> {
+        let mut cfg = crate::config::Config::default();
+        cfg.agents.defaults.workspace_root = Some(dir.path().join("workspaces"));
+        cfg.agents.defaults.agents_root = Some(dir.path().join("agents"));
+        Arc::new(AgentsRuntimeCtx {
+            registry,
+            session_store: test_session_store(dir),
+            config: Arc::new(tokio::sync::RwLock::new(cfg)),
+            env_store: test_env_store(dir),
+        })
+    }
+
+    async fn registry_with(dir: &TempDir, ids: &[&str]) -> Arc<AgentRegistry> {
+        let registry = Arc::new(AgentRegistry::new());
+        for id in ids {
+            registry
+                .register_config(
+                    AgentInstanceConfig {
+                        agent_id: (*id).to_string(),
+                        workspace: dir.path().join("workspaces").join(id),
+                        agent_dir: dir.path().join("agents").join(id),
+                        ..Default::default()
+                    },
+                    test_session_store(dir),
+                )
+                .await;
+        }
+        registry
+    }
+
+    fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest::with_id(method, Some(params), json!(1))
+    }
+
+    /// agents.create with a runtime ctx must hot-register the new agent so it
+    /// is immediately routable/switchable — TOML alone only takes effect at
+    /// the next boot (the old behavior left the agent unusable until restart).
+    #[tokio::test]
+    async fn create_hot_registers_runtime_agent() {
+        let dir = TempDir::new().unwrap();
+        let manager = test_manager(&dir);
+        let registry = registry_with(&dir, &["main", "coder"]).await;
+        let ctx = test_runtime_ctx(&dir, Arc::clone(&registry));
+        let bus = Arc::new(GatewayEventBus::new());
+
+        let resp = handle_create(
+            req("agents.create", json!({"id": "quant"})),
+            Arc::clone(&manager),
+            bus,
+            Some(ctx),
+        )
+        .await;
+        assert!(resp.is_success(), "create failed: {:?}", resp.error);
+
+        // TOML world updated…
+        assert!(manager.get("quant").is_ok());
+        // …and the runtime world too — no restart needed.
+        assert!(
+            registry.contains("quant").await,
+            "created agent must be hot-registered in the runtime registry"
+        );
+    }
+
+    /// agents.delete with a runtime ctx must evict the runtime instance and
+    /// clear every channel binding — otherwise the deleted agent keeps
+    /// serving its channels until restart, then strands them on a ghost.
+    #[tokio::test]
+    async fn delete_evicts_runtime_agent_and_clears_bindings() {
+        let dir = TempDir::new().unwrap();
+        let manager = test_manager(&dir);
+        let registry = registry_with(&dir, &["main", "coder"]).await;
+        let ctx = test_runtime_ctx(&dir, Arc::clone(&registry));
+        ctx.env_store.set_active_agent("telegram", "coder").unwrap();
+        ctx.env_store.set_active_agent("discord", "coder").unwrap();
+        let bus = Arc::new(GatewayEventBus::new());
+
+        let resp = handle_delete(
+            req("agents.delete", json!({"id": "coder"})),
+            Arc::clone(&manager),
+            bus,
+            Some(Arc::clone(&ctx)),
+        )
+        .await;
+        assert!(resp.is_success(), "delete failed: {:?}", resp.error);
+
+        // TOML world updated…
+        assert!(manager.get("coder").is_err());
+        // …runtime instance evicted…
+        assert!(!registry.contains("coder").await);
+        // …and no channel still points at the ghost.
+        assert!(ctx
+            .env_store
+            .get_active_agent("telegram")
+            .unwrap()
+            .is_none());
+        assert!(ctx.env_store.get_active_agent("discord").unwrap().is_none());
+    }
 }

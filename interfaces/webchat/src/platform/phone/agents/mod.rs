@@ -27,8 +27,9 @@ use self::list::PhoneAgentsList;
 pub struct PhoneAgentsState {
     /// All agents (one `agents.list` window).
     pub agents: RwSignal<Vec<AgentSummary>>,
-    /// agent_id → channel_name bindings (for the channel badge + filter).
-    pub bindings: RwSignal<HashMap<String, String>>,
+    /// agent_id → bound channels (for the channel badge + filter).
+    /// Many-to-one: an agent may be bound to several channels.
+    pub bindings: RwSignal<HashMap<String, Vec<String>>>,
     pub loaded: RwSignal<bool>,
     pub error: RwSignal<Option<String>>,
     /// Bumping this re-triggers the agents loader (Retry / after create / set_default / delete).

@@ -56,6 +56,7 @@ pub mod tool_display;
 pub mod control_plane;
 
 // Phase 4: Multi-Agent & Dispatcher
+pub mod agent_binding;
 pub mod agent_instance;
 pub mod agent_lifecycle;
 pub mod cancellation;

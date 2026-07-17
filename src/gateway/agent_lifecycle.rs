@@ -1,6 +1,10 @@
 //! Agent lifecycle events.
 //!
-//! Emitted via `GatewayEventBus` when agents are registered, started, or stopped.
+//! Emitted via `GatewayEventBus` (wrapped in a `TopicEvent`, see
+//! [`crate::gateway::agent_binding`]) when agents are registered, deleted, or
+//! re-bound to a channel. Every variant here has a live producer; variants
+//! without one (Started/Completed/Unregistered/Subagent*) were removed —
+//! they never fired on the wire, so no consumer can miss them.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -9,22 +13,12 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentLifecycleEvent {
-    /// Agent was registered in the registry
+    /// Agent was registered in the runtime registry (boot or `agents.create`).
     Registered {
         agent_id: String,
         workspace: PathBuf,
         model: String,
     },
-    /// Agent execution started
-    Started { agent_id: String, run_id: String },
-    /// Agent execution completed
-    Completed {
-        agent_id: String,
-        run_id: String,
-        success: bool,
-    },
-    /// Agent was unregistered (e.g., during config reload)
-    Unregistered { agent_id: String },
     /// Agent was deleted and its workspace archived
     Deleted {
         agent_id: String,
@@ -37,16 +31,11 @@ pub enum AgentLifecycleEvent {
         /// The agent previously bound to the channel, if any.
         previous_agent: Option<String>,
     },
-    /// A sub-agent was spawned by a parent agent
-    SubagentSpawned {
-        parent_agent_id: String,
-        child_run_id: String,
-        task: String,
-    },
-    /// A sub-agent completed its task
-    SubagentCompleted {
-        child_run_id: String,
-        outcome: String,
+    /// A channel's explicit agent binding was cleared (back to default routing).
+    Unbound {
+        channel: String,
+        /// The agent that was bound before the clear, if any.
+        previous_agent: Option<String>,
     },
 }
 
@@ -56,14 +45,24 @@ impl AgentLifecycleEvent {
     pub const fn topic(&self) -> &'static str {
         match self {
             Self::Registered { .. } => "agent.lifecycle.registered",
-            Self::Started { .. } => "agent.lifecycle.started",
-            Self::Completed { .. } => "agent.lifecycle.completed",
-            Self::Unregistered { .. } => "agent.lifecycle.unregistered",
             Self::Deleted { .. } => "agent.lifecycle.deleted",
             Self::Bound { .. } => "agent.lifecycle.bound",
-            Self::SubagentSpawned { .. } => "agent.lifecycle.subagent_spawned",
-            Self::SubagentCompleted { .. } => "agent.lifecycle.subagent_completed",
+            Self::Unbound { .. } => "agent.lifecycle.unbound",
         }
+    }
+
+    /// Publish this event on the bus, wrapped in a [`TopicEvent`].
+    ///
+    /// The wrap is load-bearing: a bare `publish_json` serializes topic-less,
+    /// the WS forwarder reads that as topic `""`, and every concrete
+    /// subscription (e.g. `agent.lifecycle.*`) drops it. This is the single
+    /// publish path for lifecycle events — do not hand-roll the wrap at call
+    /// sites. Delivery failures are non-fatal (bus may have no subscribers).
+    pub fn publish(&self, bus: &crate::gateway::event_bus::GatewayEventBus) {
+        let _ = bus.publish_json(&crate::gateway::event_bus::TopicEvent::new(
+            self.topic(),
+            serde_json::to_value(self).unwrap_or_default(),
+        ));
     }
 }
 
@@ -92,10 +91,10 @@ mod tests {
         };
         assert_eq!(reg.topic(), "agent.lifecycle.registered");
 
-        let started = AgentLifecycleEvent::Started {
-            agent_id: "main".to_string(),
-            run_id: "run-1".to_string(),
+        let unbound = AgentLifecycleEvent::Unbound {
+            channel: "telegram".to_string(),
+            previous_agent: Some("trader".to_string()),
         };
-        assert_eq!(started.topic(), "agent.lifecycle.started");
+        assert_eq!(unbound.topic(), "agent.lifecycle.unbound");
     }
 }
