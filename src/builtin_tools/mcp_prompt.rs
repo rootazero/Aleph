@@ -15,6 +15,8 @@ use crate::mcp::manager::McpManagerHandle;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
+use super::mcp_resource::qualified_id;
+
 /// Arguments for `mcp_get_prompt` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpGetPromptArgs {
@@ -66,7 +68,10 @@ impl AlephToolDyn for McpGetPromptTool {
         let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_get_prompt",
-            "Get a prompt template from a connected MCP server. Pass the exact `name` listed in the system prompt's 'Available MCP Resources & Prompts' section — it is already server-prefixed (e.g. `server:prompt_name`).",
+            "Get a prompt template from a connected MCP server by its server-qualified \
+             `name`. Call `mcp_list_prompts` first to discover available prompts and pass \
+             the returned `name` exactly as given (it is an opaque identifier — do not \
+             edit or shorten it).",
             parameters,
             ToolCategory::Mcp,
         )
@@ -135,6 +140,138 @@ impl AlephToolDyn for McpGetPromptTool {
     }
 }
 
+/// Upper bound on entries returned by a single `mcp_list_prompts` call —
+/// mirrors [`super::mcp_resource`]'s resource cap so a misbehaving server
+/// cannot blow the model's context.
+const MAX_PROMPT_ENTRIES: usize = 500;
+
+/// Arguments for the `mcp_list_prompts` discovery tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpListPromptsArgs {
+    /// Optional: restrict the listing to a single server by its id (or name).
+    /// Omit to list prompts from every connected server.
+    #[serde(default)]
+    pub server: Option<String>,
+}
+
+/// One discovered MCP prompt, carrying the exact `name` to hand to
+/// `mcp_get_prompt` plus the argument shape it accepts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptEntry {
+    /// Server id this prompt belongs to.
+    pub server: String,
+    /// Opaque, server-qualified id ready for `mcp_get_prompt` — pass verbatim;
+    /// do not construct or edit it (see [`super::mcp_resource::qualified_id`]
+    /// on the doubled server segment).
+    pub name: String,
+    /// Prompt description, when the server supplied one.
+    pub description: Option<String>,
+    /// Arguments this prompt accepts.
+    pub arguments: Vec<crate::mcp::McpPromptArgument>,
+}
+
+/// Output from `mcp_list_prompts`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpListPromptsOutput {
+    /// Discovered prompts (capped at [`MAX_PROMPT_ENTRIES`]).
+    pub prompts: Vec<McpPromptEntry>,
+    /// Number of entries returned.
+    pub count: usize,
+    /// Set when the cap truncated the list; narrow with the `server` filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Discovery counterpart to [`McpGetPromptTool`]: lists the prompt templates
+/// every connected server advertises so the model knows what it can fetch. Each
+/// entry's `name` is an opaque, server-qualified id built by
+/// [`super::mcp_resource::qualified_id`] — the exact form [`McpGetPromptTool`]
+/// parses. Capability-gated by the MCP tool bridge alongside the get-prompt tool.
+pub struct McpListPromptsTool {
+    handle: McpManagerHandle,
+}
+
+impl McpListPromptsTool {
+    /// Create a new MCP list-prompts tool.
+    #[must_use]
+    pub const fn new(handle: McpManagerHandle) -> Self {
+        Self { handle }
+    }
+}
+
+impl AlephToolDyn for McpListPromptsTool {
+    fn name(&self) -> &str {
+        "mcp_list_prompts"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        let schema = schemars::schema_for!(McpListPromptsArgs);
+        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
+        ToolDefinition::new(
+            "mcp_list_prompts",
+            "Discover the prompt templates exposed by connected MCP servers. Call \
+             this FIRST, then fetch one with `mcp_get_prompt`, copying the exact \
+             server-qualified `name` returned here.",
+            parameters,
+            ToolCategory::Mcp,
+        )
+    }
+
+    fn call(
+        &self,
+        args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
+        Box::pin(async move {
+            let args: McpListPromptsArgs = serde_json::from_value(args)?;
+            let servers = self.handle.list_servers().await?;
+
+            let mut entries = Vec::new();
+            let mut truncated = false;
+            'servers: for info in servers {
+                if info.prompt_count == 0 {
+                    continue;
+                }
+                if let Some(ref want) = args.server {
+                    if &info.id != want && &info.name != want {
+                        continue;
+                    }
+                }
+                let Some(client) = self.handle.get_client(&info.id).await? else {
+                    continue;
+                };
+                for p in client.list_prompts().await {
+                    if entries.len() >= MAX_PROMPT_ENTRIES {
+                        truncated = true;
+                        break 'servers;
+                    }
+                    entries.push(McpPromptEntry {
+                        // Server-qualify so the id round-trips through
+                        // `mcp_get_prompt`'s single-strip parser (see
+                        // `qualified_id` for why the segment ends up doubled).
+                        name: qualified_id(&info.id, &p.name),
+                        server: info.id.clone(),
+                        description: p.description,
+                        arguments: p.arguments,
+                    });
+                }
+            }
+
+            let count = entries.len();
+            let note = truncated.then(|| {
+                format!(
+                    "Result truncated at {MAX_PROMPT_ENTRIES} prompts; \
+                     re-run with the `server` filter to narrow."
+                )
+            });
+            Ok(serde_json::to_value(McpListPromptsOutput {
+                prompts: entries,
+                count,
+                note,
+            })?)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +301,15 @@ mod tests {
         let json = json!({"name": "server:simple_prompt"});
         let args: McpGetPromptArgs = serde_json::from_value(json).unwrap();
         assert!(args.arguments.is_none());
+    }
+
+    #[test]
+    fn list_prompts_args_server_optional() {
+        let args: McpListPromptsArgs = serde_json::from_value(json!({})).unwrap();
+        assert!(args.server.is_none());
+        let args: McpListPromptsArgs = serde_json::from_value(json!({"server": "gh"})).unwrap();
+        assert_eq!(args.server.as_deref(), Some("gh"));
+        let schema = serde_json::to_string(&schemars::schema_for!(McpListPromptsArgs)).unwrap();
+        assert!(schema.contains("server"));
     }
 }

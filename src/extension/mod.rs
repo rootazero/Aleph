@@ -464,18 +464,36 @@ impl ExtensionManager {
         for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
             skill_dirs.push(d.path);
         }
-        // Plugin-bundled skills (`<plugins_root>/<plugin>/skills/`). Without this a
-        // plugin that ships skills registers into the PluginRegistry but never
-        // reaches the LLM's `<available_skills>` index — the model can't discover
-        // it and falls back to `cat`-ing the plugin directory. Uses the SAME
-        // enumeration `skill_read` consumes (`utils::paths::plugin_skill_dirs`), so
-        // the index and the reader stay consistent: what the model can see, it can
-        // also read.
-        for pdir in crate::utils::paths::plugin_skill_dirs(Some(self.discovery.working_dir())) {
-            if !skill_dirs.contains(&pdir) {
-                skill_dirs.push(pdir);
+
+        // Plugin-shipped skills: each loaded plugin's `<root_dir>/skills`. Bridging
+        // these into the SkillSystem is what makes plugin skills appear in the model's
+        // `<available_skills>` index — previously they were parsed into the plugin
+        // registry but never reached the index, so the model couldn't perceive them and
+        // resorted to `cat` on the raw plugin files. `guess_source` classes these
+        // paths `SkillSource::Plugin`, so they outrank Global/Bundled on collisions.
+        let plugin_skill_dirs: Vec<PathBuf> = {
+            let registry = self.plugin_registry.read().await;
+            let mut dirs = Vec::new();
+            for record in registry.list_plugins() {
+                let plugin_skills = record.root_dir.join("skills");
+                if plugin_skills.is_dir()
+                    && !skill_dirs.contains(&plugin_skills)
+                    && !dirs.contains(&plugin_skills)
+                {
+                    dirs.push(plugin_skills);
+                }
             }
-        }
+            dirs
+        };
+        skill_dirs.extend(plugin_skill_dirs.iter().cloned());
+        // Publish the same roots so `get_all_skills_dirs` (the `skill_read` /
+        // `skill_list` tools' search set) folds them in too — the SkillSystem scan
+        // above only feeds the prompt index. This complements the static
+        // `get_plugin_skills_dirs` scan with plugin roots outside the well-known
+        // locations (e.g. `plugins/cache/<market>/<id>/skills`).
+        crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
+
+
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
         }

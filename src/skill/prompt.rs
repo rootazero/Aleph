@@ -42,14 +42,15 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
     "To use a skill, first call the `skill_read` tool with the skill name \
      to load its full instructions, then follow those instructions. \
      Use `skill_list` to discover available skills if needed.\n\n\
-     To read a skill's bundled resource files (a REFERENCE.md, CHECKLIST.md, \
-     or any file listed in its `available_files`), call `skill_read` again with \
-     the `file_name` argument (e.g. `skill_read(skill_id, \
-     file_name='references/guide.md')`) — do NOT `cat`, `file_read`, or open \
-     them by absolute path. Reading a resource by path skips `${ALEPH_SKILL_DIR}` \
-     and inline-shell expansion and can hand you stale or wrong content; use the \
-     absolute `location` path returned by `skill_read` ONLY to execute bundled \
-     scripts, never to read markdown/text resources.\n\n\
+     When a skill's instructions reference a bundled sub-file (e.g. \
+     `references/guide.md` or a script), load it through `skill_read` by \
+     passing that skill-relative path as `file_name` — do NOT read it with a \
+     shell `cat`/`file_read` on a raw path. `skill_read` resolves the path \
+     inside the skill, expands `${ALEPH_SKILL_DIR}` and inline-shell snippets, \
+     and enforces the size/containment guards a raw read skips; a plain `cat` \
+     returns the un-rendered template instead. Use the absolute `location` \
+     path returned by `skill_read` ONLY to execute bundled scripts, never to \
+     read markdown/text resources.\n\n\
      When a user's request matches a skill's <when> trigger, proactively \
      invoke that skill without waiting for an explicit request.\n\n\
      Each skill carries a <version> tag. If a skill's <version> differs from \

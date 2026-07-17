@@ -106,11 +106,12 @@ pub enum WorkflowArgs {
         #[serde(default)]
         run_id: Option<String>,
     },
-    /// Render a saved template into a Claude-Code-compatible `.workflow.js`.
+    /// Render a saved template into a Claude-Code-compatible dynamic-workflow
+    /// `.mjs` (the extension Claude Code's workflow loader recognises).
     Export {
         /// Name of the saved template to render.
         name: String,
-        /// Also write it to `$ALEPH_HOME/workflows/<name>.workflow.js`.
+        /// Also write it to `$ALEPH_HOME/workflows/<name>.mjs`.
         #[serde(default)]
         write_file: bool,
     },
@@ -158,7 +159,7 @@ pub struct WorkflowRunStep {
     /// Per-step model override the dispatcher resolves at launch (read from the
     /// `workflow_model` metadata the compiler stamped). Present only for steps
     /// that pin a model — so the inspecting LLM sees which model a step is (or
-    /// was) running on without exporting the template to `.workflow.js` (R8).
+    /// was) running on without exporting the template to a `.mjs` file (R8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// For failed steps: the (bounded) error text, so the LLM can decide
@@ -202,7 +203,7 @@ pub struct WorkflowToolOutput {
     /// order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<WorkflowRunStep>>,
-    /// Populated by `export` — the rendered `.workflow.js` text.
+    /// Populated by `export` — the rendered `.mjs` (dynamic-workflow) text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered: Option<String>,
     /// Populated by `import` — imperative constructs that could not be mapped.
@@ -595,8 +596,11 @@ impl AlephTool for WorkflowTool {
          finishes its member run but stays cancelled. `pause` parks a run's \
          not-yet-started steps and `resume` releases them (a clarify step \
          awaiting the user's reply stays parked). \
-         `export` renders a template to a Claude-Code-compatible .workflow.js; \
-         `import` parses one back into a template. `proposals` lists MetaSkill \
+         `export` renders a template to a Claude-Code-compatible dynamic-workflow \
+         .mjs (writes `<name>.mjs` when write_file=true); `import` parses one \
+         (a `.mjs`/`.js`/`.workflow.js` or AWI manifest JSON — import reads the \
+         raw text, so the extension is immaterial) back into a template. \
+         `proposals` lists MetaSkill \
          drafts the dream pipeline auto-grew from recurring skill use; \
          `describe_proposal` reviews one's steps + provenance before \
          `accept_proposal` activates it. For `run`, create a team first so \
@@ -658,7 +662,7 @@ impl AlephTool for WorkflowTool {
                 // drops is the per-step model override, so surface it separately
                 // in `models` (the rest of the interchange metadata stays
                 // `export`-only). Without this an LLM cannot see which model a
-                // step runs on without rendering the template to `.workflow.js`.
+                // step runs on without rendering the template to a `.mjs` file.
                 let models = manifest_step_models(&manifest);
                 let message = format!("workflow '{name}' has {} step(s)", manifest.steps.len());
                 Ok(WorkflowToolOutput {
@@ -1071,7 +1075,12 @@ impl AlephTool for WorkflowTool {
                 let manifest = workflow::store::load(&name)?;
                 let rendered = workflow::render_workflow_js(&manifest);
                 let message = if write_file {
-                    let path = workflow::store::write_text(&name, "workflow.js", &rendered)?;
+                    // `.mjs` — the extension Claude Code's workflow menu / the
+                    // `~/.claude/workflows` loader recognise for a dynamic
+                    // workflow (the reference engineering files are `*.mjs`). The
+                    // rendered body/embed-header are unchanged; only the on-disk
+                    // extension moves off Aleph's legacy `.workflow.js`.
+                    let path = workflow::store::write_text(&name, "mjs", &rendered)?;
                     format!("exported workflow '{name}' → {}", path.display())
                 } else {
                     format!("rendered workflow '{name}' ({} bytes)", rendered.len())

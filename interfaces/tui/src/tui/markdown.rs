@@ -156,7 +156,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
         match ch {
             '*' => {
                 // Check for bold (**) or italic (*)
-                let is_bold = chars.get(i + 1).map_or(false, |&(_, c)| c == '*');
+                let is_bold = chars.get(i + 1).is_some_and(|&(_, c)| c == '*');
                 if is_bold {
                     // Bold: **text**
                     if let Some(end) = find_double_marker(&chars, i + 2, '*') {
@@ -253,15 +253,15 @@ fn flush_plain(text: &str, start: usize, end: usize, style: Style, spans: &mut V
 
 /// Find a single closing marker character, returning the char index (not byte index).
 fn find_single_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
-    (from..chars.len()).find(|&idx| chars.get(idx).map_or(false, |c| c.1 == marker))
+    (from..chars.len()).find(|&idx| chars.get(idx).is_some_and(|c| c.1 == marker))
 }
 
 /// Find a double closing marker (e.g., **), returning the char index of the first char.
 fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
     let len = chars.len();
     (from..len.saturating_sub(1)).find(|&idx| {
-        let first = chars.get(idx).map_or(false, |c| c.1 == marker);
-        let second = chars.get(idx + 1).map_or(false, |c| c.1 == marker);
+        let first = chars.get(idx).is_some_and(|c| c.1 == marker);
+        let second = chars.get(idx + 1).is_some_and(|c| c.1 == marker);
         first && second
     })
 }
@@ -271,7 +271,7 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
     // start is at '['
     // Find closing ']'
     let mut i = start + 1;
-    while chars.get(i).map_or(false, |&(_, c)| c != ']') {
+    while chars.get(i).is_some_and(|&(_, c)| c != ']') {
         i += 1;
     }
     if i >= chars.len() {
@@ -281,13 +281,13 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
 
     // Next char must be '('
     i += 1;
-    if chars.get(i).map_or(true, |&(_, c)| c != '(') {
+    if chars.get(i).is_none_or(|&(_, c)| c != '(') {
         return None;
     }
 
     // Find closing ')'
     i += 1;
-    while chars.get(i).map_or(false, |&(_, c)| c != ')') {
+    while chars.get(i).is_some_and(|&(_, c)| c != ')') {
         i += 1;
     }
     if i >= chars.len() {

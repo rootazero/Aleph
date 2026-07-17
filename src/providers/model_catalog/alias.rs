@@ -79,6 +79,7 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
     // from this table — keeping the model-name path at parity with the
     // provider-alias path ([`canonical_provider_id`]) and the preset roster.
     ("minimax", "minimax"),
+    ("doubao", "doubao"),
     ("command", "cohere"),
     ("sonar", "perplexity"),
     ("step", "stepfun"),
@@ -178,6 +179,12 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
         Some("zai")
     } else if p.contains("minimax") {
         Some("minimax")
+    } else if p.contains("doubao") || p.contains("volcengine") || p == "ark" {
+        // Volcengine Ark serves the Doubao family. Match the preset name and
+        // its aliases (`volcengine`, `ark`). `ark` is compared EXACTLY, never
+        // as a substring — `spark` (讯飞星火) contains "ark" and must not be
+        // misrouted here.
+        Some("doubao")
     } else if p.contains("cohere") || p.contains("command") {
         Some("cohere")
     } else if p.contains("perplexity") || p.contains("sonar") {
@@ -302,6 +309,20 @@ mod tests {
         // Regression guard: genuine OpenAI / vertex-anthropic semantics intact.
         assert_eq!(canonical_provider_id("openai"), Some("openai"));
         assert_eq!(canonical_provider_id("vertex-anthropic"), Some("anthropic"));
+    }
+
+    #[test]
+    fn doubao_wired_on_both_paths_without_spark_collision() {
+        // Provider-alias path: preset name + aliases (volcengine, ark) -> doubao.
+        assert_eq!(canonical_provider_id("doubao"), Some("doubao"));
+        assert_eq!(canonical_provider_id("volcengine"), Some("doubao"));
+        assert_eq!(canonical_provider_id("ark"), Some("doubao"));
+        // `spark` (讯飞星火) contains the substring "ark" but must NOT be
+        // misrouted to doubao — `ark` is matched exactly.
+        assert_ne!(canonical_provider_id("spark"), Some("doubao"));
+        // Model-name path: doubao ids -> doubao (parity with the alias path).
+        assert_eq!(infer_vendor("doubao-seed-1-8-251228"), Some("doubao"));
+        assert_eq!(infer_vendor("doubao-1.5-pro-256k"), Some("doubao"));
     }
 
     #[test]

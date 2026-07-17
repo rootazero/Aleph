@@ -676,7 +676,11 @@ pub enum RemovedAgent {
     Instance(Arc<AgentInstance>),
     /// The agent was still a lazy config entry; its config is returned so the
     /// caller can archive the workspace it would have used.
-    Lazy(AgentInstanceConfig),
+    ///
+    /// Boxed: `AgentInstanceConfig` is ~352 bytes vs the `Arc` in `Instance`,
+    /// so an unboxed payload would bloat every `RemovedAgent` (clippy
+    /// `large_enum_variant`).
+    Lazy(Box<AgentInstanceConfig>),
 }
 
 impl RemovedAgent {
@@ -851,7 +855,7 @@ impl AgentRegistry {
         let mut agents = self.agents.write().await;
         match agents.remove(agent_id) {
             Some(AgentEntry::Instance(inst)) => Some(RemovedAgent::Instance(inst)),
-            Some(AgentEntry::Config { config, .. }) => Some(RemovedAgent::Lazy(config)),
+            Some(AgentEntry::Config { config, .. }) => Some(RemovedAgent::Lazy(Box::new(config))),
             None => None,
         }
     }

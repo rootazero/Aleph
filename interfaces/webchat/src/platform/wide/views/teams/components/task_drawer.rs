@@ -360,7 +360,7 @@ pub fn TaskDetailDrawer(
                                         <button
                                             class="px-2 py-1 text-xs rounded bg-danger/10 text-danger hover:bg-danger/20 cursor-pointer"
                                             disabled=move || busy.get()
-                                            on:click=move |ev| submit_reject(ev)
+                                            on:click=submit_reject
                                         >
                                             {t_string!(i18n, teams.kanban.actions.reject).to_string()}
                                         </button>

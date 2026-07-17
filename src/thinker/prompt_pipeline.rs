@@ -392,7 +392,11 @@ mod tests {
         // were never threaded on any production path, so they injected nothing
         // every run. (Session resume actually reaches the model via the memory
         // assembler's recall message, not the system prompt.)
-        assert_eq!(pipeline.layer_count(), 40);
+        // → 41: McpResourceIndexLayer (1704, Dynamic) added — injects the
+        // connected servers' resource/prompt index so the model knows which
+        // URIs/names `mcp_read_resource`/`mcp_get_prompt` can read
+        // (2026-07-17, see `thinker/layers/mcp_resources.rs`).
+        assert_eq!(pipeline.layer_count(), 41);
     }
 
     #[test]

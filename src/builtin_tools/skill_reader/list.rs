@@ -33,9 +33,15 @@ pub struct SkillSummary {
     /// Brief description
     pub description: String,
 
-    /// Absolute path to the skill directory
-    /// This allows the agent to locate scripts and resources within the skill
-    pub location: String,
+    /// Absolute path to the skill directory.
+    ///
+    /// Deliberately elided from the listing (`None` → skipped on serialize): a
+    /// discovery listing that handed the model the absolute path of *every*
+    /// skill up front taught it to `cat <path>/SKILL.md` instead of calling
+    /// `skill_read(id)`. The model reads a skill by its `id`; the resolved path
+    /// is returned by `skill_read` only when a specific skill is actually read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 
     /// Trigger keywords (if any)
     pub triggers: Vec<String>,
@@ -147,7 +153,9 @@ impl ListSkillsTool {
             id,
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
-            location: skill_dir.to_string_lossy().to_string(),
+            // Elided from the listing on purpose — see `SkillSummary::location`.
+            // The model reads by `id`; the path is only surfaced by `skill_read`.
+            location: None,
             triggers: Vec::new(), // v2 doesn't use triggers
             files,
             source: Some(source),

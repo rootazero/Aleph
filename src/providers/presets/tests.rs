@@ -134,7 +134,7 @@ fn moonshot_cn_preset_uses_cn_endpoint() {
     let p = get_preset("moonshot-cn").expect("moonshot-cn preset");
     assert_eq!(p.base_url, "https://api.moonshot.cn/v1");
     assert_eq!(p.protocol, "openai");
-    assert_eq!(p.default_model, "kimi-k2-0905-preview");
+    assert_eq!(p.default_model, "kimi-k2.6");
 }
 
 #[test]
@@ -150,7 +150,11 @@ fn kimi_cn_alias_resolves_to_moonshot_cn() {
 #[test]
 fn moonshot_fallbacks_include_current_lineup() {
     let p = get_preset("moonshot").expect("moonshot preset");
-    assert!(p.fallback_models.contains(&"kimi-k2-turbo-preview"));
+    // Lineup refreshed to the K2.6/K2.5 flagship pair (previews retired), with
+    // the moonshot-v1-* legacy tail retained.
+    assert_eq!(p.default_model, "kimi-k2.6");
+    assert!(p.fallback_models.contains(&"kimi-k2.6"));
+    assert!(p.fallback_models.contains(&"kimi-k2.5"));
     assert!(p.fallback_models.contains(&"moonshot-v1-8k"));
 }
 
@@ -174,7 +178,7 @@ fn test_get_merged_preset_builtin_only() {
     assert_eq!(preset.base_url, "https://api.openai.com/v1");
     assert_eq!(preset.protocol, "openai");
     assert_eq!(preset.color, "#10a37f");
-    assert_eq!(preset.default_model, "gpt-5.4");
+    assert_eq!(preset.default_model, "gpt-5.6");
 }
 
 #[test]

@@ -293,7 +293,7 @@ impl ScopedToolService {
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
         let started = std::time::Instant::now();
-        let (effective_input, pre_hook_contexts) =
+        let (effective_input, mut pre_hook_contexts) =
             match self.run_before_tool_hooks(name, input.clone()).await {
                 Ok(outcome) => outcome,
                 Err(err) => {
@@ -307,6 +307,19 @@ impl ScopedToolService {
                     return rejection;
                 }
             };
+
+        // Cat-guard: when a raw `file_read` / shell read targets a file inside
+        // an installed (or plugin-shipped) skill, append a non-blocking
+        // `<system-reminder>` steering the model to `skill_read` — which
+        // preprocesses `${ALEPH_SKILL_DIR}` / inline shell and records usage —
+        // instead of `cat`-ing the raw file. Rides the same context-wrapping as
+        // hook `context:` lines (applied only on the success path, dropped on
+        // failure), so no execution is blocked (R7: surface the fact, let the
+        // model self-correct). Defense-in-depth, not a security boundary — the
+        // shell can still read the file. Mirrors hermes `file_safety` read-steer.
+        if let Some(steer) = super::cat_guard::skill_read_steer(name, &effective_input) {
+            pre_hook_contexts.push(steer);
+        }
 
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize

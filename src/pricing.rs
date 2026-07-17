@@ -118,7 +118,7 @@ struct PriceTier {
 /// Static price table. Entries are scanned in declaration order; the first
 /// `model_prefix` that prefix-matches wins. Order more-specific prefixes
 /// before broader catch-alls. Sources are vendor pricing pages as of
-/// 2026-06; refresh by bumping the literals here and recompiling.
+/// 2026-07; refresh by bumping the literals here and recompiling.
 const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "anthropic",
@@ -175,6 +175,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
+                // Sonnet 5 (current default). Durable rate $3/$15 (a launch
+                // promo of $2/$10 runs to 2026-08-31; we keep the durable rate
+                // so estimates don't under-report once it ends).
+                model_prefix: "claude-sonnet-5",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.30),
+                cache_creation_per_mtok: Some(3.75),
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "claude-sonnet-4",
                 input_per_mtok: Some(3.0),
                 output_per_mtok: Some(15.0),
@@ -212,8 +223,16 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "openai",
         &[
-            // GPT-5 family (openclaw catalog, 2026-03 snapshot). Dotted
-            // specifics precede the broad `gpt-5` fallback.
+            // GPT-5 family (openclaw catalog). Dotted specifics precede the
+            // broad `gpt-5` fallback. 5.6 is the current default.
+            Rates {
+                model_prefix: "gpt-5.6",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(30.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "gpt-5.5",
                 input_per_mtok: Some(5.0),
@@ -351,6 +370,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "google",
         &[
             Rates {
+                // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input;
+                // long-context >200K steps up (~$4/$18) but is left to the base
+                // rate here — best-effort. Must precede broad `gemini` (flash).
+                model_prefix: "gemini-3.1-pro",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(12.0),
+                cache_read_per_mtok: Some(0.20),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(12.0),
+            },
+            Rates {
                 model_prefix: "gemini-2.5-pro",
                 input_per_mtok: Some(1.25),
                 output_per_mtok: Some(10.0),
@@ -378,37 +408,45 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "deepseek",
+        // V4 rates from the official pricing page (RMB → USD @ ~7.2). The
+        // legacy deepseek-chat / deepseek-reasoner aliases retire 2026-07-24
+        // and now bill at v4-flash rates. Prior figures were stale V3 and
+        // mis-scaled (v4-pro was ~4x too high, v4-flash cache_read 10x).
         &[
             Rates {
+                // ¥3 in / ¥6 out / ¥0.025 cache-hit.
                 model_prefix: "deepseek-v4-pro",
-                input_per_mtok: Some(1.74),
-                output_per_mtok: Some(3.48),
-                cache_read_per_mtok: Some(0.145),
+                input_per_mtok: Some(0.42),
+                output_per_mtok: Some(0.83),
+                cache_read_per_mtok: Some(0.0035),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
             Rates {
+                // ¥1 in / ¥2 out / ¥0.02 cache-hit.
                 model_prefix: "deepseek-v4-flash",
                 input_per_mtok: Some(0.14),
                 output_per_mtok: Some(0.28),
-                cache_read_per_mtok: Some(0.028),
+                cache_read_per_mtok: Some(0.0028),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
             Rates {
+                // Thinking-mode alias of v4-flash; billed at v4-flash rates.
                 model_prefix: "deepseek-reasoner",
-                input_per_mtok: Some(0.55),
-                output_per_mtok: Some(2.19),
-                cache_read_per_mtok: Some(0.14),
+                input_per_mtok: Some(0.14),
+                output_per_mtok: Some(0.28),
+                cache_read_per_mtok: Some(0.0028),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
             Rates {
-                // deepseek-chat (V3) and the family fallback.
+                // Broad fallback; deepseek-chat is now the v4-flash
+                // non-thinking alias → same v4-flash rates.
                 model_prefix: "deepseek",
-                input_per_mtok: Some(0.27),
-                output_per_mtok: Some(1.10),
-                cache_read_per_mtok: Some(0.07),
+                input_per_mtok: Some(0.14),
+                output_per_mtok: Some(0.28),
+                cache_read_per_mtok: Some(0.0028),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -469,21 +507,29 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "moonshot",
         &[
-            // K2.5/K2.6 published rates differ from the legacy family
-            // fallback below.
+            // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
+            // the legacy family fallback below. K2.7-code shares K2.6's tier.
+            Rates {
+                model_prefix: "kimi-k2.7",
+                input_per_mtok: Some(0.95),
+                output_per_mtok: Some(4.0),
+                cache_read_per_mtok: Some(0.19),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "kimi-k2.6",
                 input_per_mtok: Some(0.95),
                 output_per_mtok: Some(4.0),
-                cache_read_per_mtok: Some(0.15),
+                cache_read_per_mtok: Some(0.16),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
             Rates {
                 model_prefix: "kimi-k2.5",
-                input_per_mtok: Some(0.38),
-                output_per_mtok: Some(1.72),
-                cache_read_per_mtok: Some(0.15),
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(3.0),
+                cache_read_per_mtok: Some(0.10),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -512,7 +558,26 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "zai",
         &[
             Rates {
+                // GLM-5.2 flagship (z.ai USD). Must precede glm-5 / glm-5-turbo.
+                model_prefix: "glm-5.2",
+                input_per_mtok: Some(1.40),
+                output_per_mtok: Some(4.40),
+                cache_read_per_mtok: Some(0.26),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Correction: old row carried GLM-5-Turbo's rate; GLM-5.1 = 1.4/4.4.
                 model_prefix: "glm-5.1",
+                input_per_mtok: Some(1.40),
+                output_per_mtok: Some(4.40),
+                cache_read_per_mtok: Some(0.26),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Precede broad glm-5 so Turbo isn't under-priced at the 5 rate.
+                model_prefix: "glm-5-turbo",
                 input_per_mtok: Some(1.20),
                 output_per_mtok: Some(4.0),
                 cache_read_per_mtok: Some(0.24),
@@ -575,14 +640,53 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     // now resolves, so this section is consulted.
     (
         "minimax",
-        &[Rates {
-            model_prefix: "minimax-m2",
-            input_per_mtok: Some(0.30),
-            output_per_mtok: Some(1.20),
-            cache_read_per_mtok: None,
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
+        &[
+            Rates {
+                // M3 (current default) — without this row the default id
+                // reports CostStatus::Unknown. Must precede minimax-m2.
+                model_prefix: "minimax-m3",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.40),
+                cache_read_per_mtok: Some(0.12),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "minimax-m2",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(1.20),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    // ── Volcengine Doubao (Ark) ──────────────────────────────────────────
+    // Previously ABSENT: `canonical_provider_id` had no doubao branch, so every
+    // doubao run reported CostStatus::Unknown. Now wired (alias.rs) + priced.
+    // RMB → USD @ ~7.2; best-effort (Doubao tiers shift often).
+    (
+        "doubao",
+        &[
+            Rates {
+                // Doubao-Seed flagship line (Seed 1.x/2.x). Mid-tier estimate.
+                model_prefix: "doubao-seed",
+                input_per_mtok: Some(0.42),
+                output_per_mtok: Some(2.08),
+                cache_read_per_mtok: Some(0.083),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Legacy non-Seed fallback (doubao-1.5-pro-256k etc.).
+                model_prefix: "doubao",
+                input_per_mtok: Some(0.11),
+                output_per_mtok: Some(0.28),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
     ),
 ];
 
@@ -991,7 +1095,8 @@ mod tests {
 
     #[test]
     fn deepseek_chat_is_priced() {
-        // 1M input @ $0.27 + 1M output @ $1.10 = $1.37.
+        // deepseek-chat is now the v4-flash non-thinking alias:
+        // 1M input @ $0.14 + 1M output @ $0.28 = $0.42.
         let breakdown = TokenBreakdown {
             input: 1_000_000,
             output: 1_000_000,
@@ -1000,25 +1105,29 @@ mod tests {
         let est = estimate("deepseek", "deepseek-chat", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
-            (est.usd - 1.37).abs() < 1e-6,
-            "expected $1.37, got ${}",
+            (est.usd - 0.42).abs() < 1e-6,
+            "expected $0.42, got ${}",
             est.usd
         );
     }
 
     #[test]
-    fn deepseek_reasoner_more_specific_prefix_wins() {
-        // 1M output @ $2.19 (reasoner) not $1.10 (chat fallback).
+    fn deepseek_v4_pro_more_specific_prefix_wins() {
+        // v4-pro ($0.42 in + $0.83 out = $1.25 for 1M each) is a more specific
+        // prefix than the broad `deepseek` fallback ($0.14 + $0.28 = $0.42).
         let breakdown = TokenBreakdown {
+            input: 1_000_000,
             output: 1_000_000,
             ..Default::default()
         };
-        let est = estimate("deepseek", "deepseek-reasoner", &breakdown);
+        let pro = estimate("deepseek", "deepseek-v4-pro", &breakdown);
         assert!(
-            (est.usd - 2.19).abs() < 1e-6,
-            "expected $2.19, got ${}",
-            est.usd
+            (pro.usd - 1.25).abs() < 1e-6,
+            "expected $1.25, got ${}",
+            pro.usd
         );
+        let broad = estimate("deepseek", "deepseek-chat", &breakdown);
+        assert!(broad.usd < pro.usd, "broad fallback must be cheaper than v4-pro");
     }
 
     #[test]
@@ -1280,8 +1389,8 @@ mod tests {
         let glm51 = estimate("zhipu", "glm-5.1", &breakdown);
         assert_eq!(glm51.status, CostStatus::Complete);
         assert!(
-            (glm51.usd - 1.20).abs() < 1e-6,
-            "expected $1.20, got ${}",
+            (glm51.usd - 1.40).abs() < 1e-6,
+            "expected $1.40, got ${}",
             glm51.usd
         );
         // GLM-4.x falls back to the family rate.
@@ -1351,6 +1460,39 @@ mod tests {
             "expected $0.95, got ${}",
             k26.usd
         );
+    }
+
+    #[test]
+    fn doubao_priced_after_vendor_wiring() {
+        // Doubao previously reported CostStatus::Unknown (no canonical_provider_id
+        // branch + no price table entry). Now both provider name and aliases
+        // resolve to the doubao rate card.
+        let input_1m = TokenBreakdown {
+            input: 1_000_000,
+            ..Default::default()
+        };
+        for provider in ["doubao", "volcengine", "ark"] {
+            let est = estimate(provider, "doubao-seed-1-8-251228", &input_1m);
+            assert_eq!(
+                est.status,
+                CostStatus::Complete,
+                "provider {provider} should price the doubao Seed default"
+            );
+            assert!(est.usd > 0.0);
+        }
+    }
+
+    #[test]
+    fn minimax_m3_default_is_priced() {
+        // With the default advanced to M3, its canonical id must hit a rate row
+        // (previously only minimax-m2 existed -> M3 would be Unknown).
+        let input_1m = TokenBreakdown {
+            input: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("minimax", "MiniMax-M3", &input_1m);
+        assert_eq!(est.status, CostStatus::Complete);
+        assert!((est.usd - 0.60).abs() < 1e-6, "expected $0.60, got ${}", est.usd);
     }
 
     #[test]

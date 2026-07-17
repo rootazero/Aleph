@@ -293,7 +293,7 @@ impl FileEditTool {
         let snippet = render_edit_snippet(
             &new_content,
             applied
-                .get(0)
+                .first()
                 .expect("invariant: at least one range was applied")
                 .0,
             &replacement,

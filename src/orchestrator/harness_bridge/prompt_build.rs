@@ -425,10 +425,45 @@ impl AgentHarnessRunner {
             .filter(|s| !s.is_empty());
         let runtime_caps_phase_ms = runtime_caps_phase_start.elapsed().as_millis() as u64;
 
+        // Sub-agent catalog: surface the delegatable agents so `AgentCatalogLayer`
+        // (priority 1704) renders `<available_agents>`. This field had NO
+        // production population site — the layer was inert and the model
+        // discovered agents only reactively (by guessing an id and reading the
+        // error). The delegatable set is the builtin sub-agents (explore / coder /
+        // researcher / plan / verify) ∪ the registry's registered sub-agents
+        // (user / project / plugin defs, folded in by `register_from_dirs`);
+        // registry entries win id collisions (a user override of a builtin). This
+        // mirrors `AgentRegistry::resolve`'s builtin+disk merge, so the catalog
+        // matches what `delegate` can actually spawn even when builtins are not
+        // eagerly registered in this particular registry. Session-stable, so it
+        // sits in the cached stable prefix without re-keying.
+        let available_agents = {
+            use crate::agents::AgentMode;
+            let mut by_id: std::collections::BTreeMap<String, crate::agents::AgentDef> =
+                crate::agents::builtin_agents()
+                    .into_iter()
+                    .filter(|a| a.mode == AgentMode::SubAgent)
+                    .map(|a| (a.id.clone(), a))
+                    .collect();
+            for a in self.agent_registry.list_subagents() {
+                by_id.insert(a.id.clone(), a);
+            }
+            (!by_id.is_empty()).then(|| {
+                by_id
+                    .into_values()
+                    .map(|a| crate::thinker::prompt_layer::AgentCatalogEntry {
+                        id: a.id,
+                        description: a.description,
+                        when_to_use: a.when_to_use,
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
-        // extra files, no MCP server instructions, no MCP resource index, and no
-        // runtime capabilities.
+        // extra files, no MCP server instructions, no MCP resource index, no
+        // runtime capabilities, and no delegatable agents to advertise.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
@@ -438,6 +473,7 @@ impl AgentHarnessRunner {
             && mcp_instructions.is_none()
             && mcp_resource_index.is_none()
             && runtime_capabilities.is_none()
+            && available_agents.is_none()
         {
             return None;
         }
@@ -503,6 +539,7 @@ impl AgentHarnessRunner {
             runtime_capabilities,
             token_budget,
             active_tool_names,
+            available_agents,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();

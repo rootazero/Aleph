@@ -121,15 +121,15 @@ pub struct ContextBudgetToml {
     /// `summaryModel` parity). When set, compaction's summarization call routes
     /// to a provider built from the *primary* provider's config (same vendor /
     /// API key / endpoint / protocol) with this model substituted — typically a
-    /// flash-tier sibling (e.g. `claude-haiku-4-5`, `gemini-2.5-flash-lite`,
-    /// `deepseek-chat`). Summarization is read-and-condense work where the
+    /// flash-tier sibling (e.g. `claude-haiku-4-5`, `gemini-3-flash-preview`,
+    /// `deepseek-v4-flash`). Summarization is read-and-condense work where the
     /// strongest model is almost never required, so routing it here yields a
     /// large per-token cost reduction with no measurable quality regression.
     ///
     /// **Unset / empty (default):** auto-fall back to the primary provider
     /// preset's declared cheap aux model (`default_aux_model` — openai→
-    /// `gpt-5.4-mini`, claude→`claude-haiku-4-5`, gemini→`gemini-2.5-flash-lite`,
-    /// deepseek→`deepseek-chat`). A provider whose preset declares no cheap tier
+    /// `gpt-5.4-mini`, claude→`claude-haiku-4-5`, gemini→`gemini-3-flash-preview`,
+    /// deepseek→`deepseek-v4-flash`). A provider whose preset declares no cheap tier
     /// (or a custom/unknown provider key) keeps summarization on the main LLM.
     ///
     /// **Opt out:** set this to the primary's own model id — the resolved model

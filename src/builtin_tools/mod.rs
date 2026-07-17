@@ -176,8 +176,14 @@ pub use heartbeat_manage::{
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use loop_manage::{LoopAction, LoopArgs, LoopOutput, LoopTool};
 pub use mcp_login::{McpLoginArgs, McpLoginOutput, McpLoginTool};
-pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
-pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
+pub use mcp_prompt::{
+    McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, McpListPromptsArgs,
+    McpListPromptsOutput, McpListPromptsTool, McpPromptEntry, PromptOutputMessage,
+};
+pub use mcp_resource::{
+    McpListResourcesArgs, McpListResourcesOutput, McpListResourcesTool, McpReadResourceArgs,
+    McpReadResourceOutput, McpReadResourceTool, McpResourceEntry,
+};
 pub use media_tool::{MediaArgs, MediaOutput, MediaTool};
 pub use media_tools::{
     AudioTranscribeArgs, AudioTranscribeOutput, AudioTranscribeTool, DocumentExtractArgs,

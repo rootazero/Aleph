@@ -181,6 +181,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     schema: call.opts.schema,
                     isolation: call.opts.isolation,
                     agent_type: call.opts.agent_type,
+                    effort: call.opts.effort,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: call.opts.review,
@@ -222,6 +223,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: call.choices,
                     review: false,
@@ -495,6 +497,10 @@ struct AgentOpts {
     schema: Option<serde_json::Value>,
     isolation: Option<String>,
     agent_type: Option<String>,
+    /// Reasoning-effort tier (`effort: "high"`). Interchange-only, recovered on
+    /// the bare path so a header-stripped `.workflow.js` round-trips its effort
+    /// hint instead of silently losing it (was dropped as an unknown key before).
+    effort: Option<String>,
     /// Lead-review gate (`review: true`). Recovered on the bare path so a
     /// header-stripped round-trip cannot silently drop an oversight gate
     /// (a step meant to park in WaitingReview would auto-complete).
@@ -611,6 +617,7 @@ fn assign_string_opt(opts: &mut AgentOpts, key: &str, val: String) {
         "model" => opts.model = Some(val),
         "isolation" => opts.isolation = Some(val),
         "agentType" => opts.agent_type = Some(val),
+        "effort" => opts.effort = Some(val),
         _ => {}
     }
 }
@@ -908,6 +915,7 @@ mod tests {
                     // Exercise the new agent-opts on the lossless roundtrip path.
                     isolation: Some("worktree".into()),
                     agent_type: Some("Explore".into()),
+                    effort: Some("high".into()),
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
@@ -925,6 +933,7 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
@@ -1020,6 +1029,7 @@ const r = await pipeline(items, s1, s2)
                 schema: None,
                 isolation: None,
                 agent_type: None,
+                effort: None,
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
@@ -1253,6 +1263,7 @@ await agent('fix more')
                 schema: None,
                 isolation: None,
                 agent_type: None,
+                effort: None,
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
@@ -1345,6 +1356,7 @@ await agent('fix more')
                 schema: Some(serde_json::json!({"type": "object", "required": ["x"]})),
                 isolation: Some("worktree".into()),
                 agent_type: Some("code-reviewer".into()),
+                effort: Some("high".into()),
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
                 review: true,
@@ -1366,6 +1378,7 @@ await agent('fix more')
         assert_eq!(s.phase.as_deref(), Some("Audit"));
         assert_eq!(s.isolation.as_deref(), Some("worktree"));
         assert_eq!(s.agent_type.as_deref(), Some("code-reviewer"));
+        assert_eq!(s.effort.as_deref(), Some("high"));
         assert_eq!(
             s.schema,
             Some(serde_json::json!({"type": "object", "required": ["x"]}))
@@ -1452,6 +1465,7 @@ await agent('fix more')
             schema: None,
             isolation: None,
             agent_type: None,
+            effort: None,
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
@@ -1663,6 +1677,7 @@ await agent('fix more')
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
@@ -1680,6 +1695,7 @@ await agent('fix more')
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
