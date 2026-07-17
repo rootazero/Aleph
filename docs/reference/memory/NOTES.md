@@ -7,7 +7,7 @@
 A separate, single-file *curated hot memory* lives at
 `~/.aleph/agents/{agent_id}/MEMORY.md` alongside the L1 notes library. It is **not** a Knowledge Note — it is a small bounded "hot zone" rendered into the system prompt at session start.
 
-- **Format:** entries separated by `\n§\n`. The `remember` tool is the only writer (LLM-driven add / replace / remove); direct edits via `self_config(write_file)` are rejected.
+- **Format:** entries separated by `\n§\n`. The `remember` tool is the only writer (LLM-driven add / replace / remove, plus an atomic `batch` action — several ops all-or-nothing, budget checked on the final state, duplicate adds skipped idempotently); direct edits via `self_config(write_file)` are rejected.
 - **Char budget:** default 2,200 chars (configurable in `[memory.curated]`). Over-budget writes are rejected; the LLM must `replace` or `remove` first.
 - **Frozen snapshot:** captured once per `(agent_id, session_key)` and reused for every prompt build in the session. Refreshes only on compression-run completion or session end (Hermes-inspired prefix-cache stability).
 - **Threat scanning:** every write goes through `content_scanner` (prompt-injection / exfiltration / SSH access / invisible-unicode patterns).
@@ -278,7 +278,7 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 
 ### 6.2 Compression Scheduler
 
-`CompressionScheduler` in `src/memory/compression/scheduler.rs` decides when to promote raw memories into notes. It tracks `pending_turns: AtomicU32` and `last_activity: Mutex<Instant>`, and `should_trigger_compression()` returns a `CompressionTrigger` enum variant (`None` | `IdleTimeout` | `TurnThreshold` | `SessionEnd` | `ManualRequest` | `BackgroundSchedule`). Turn-threshold trigger has priority over idle-timeout; idle trigger fires only when `pending_turns > 0`. Defaults: `idle_timeout_seconds = 300`, `turn_threshold = 20`, `background_interval_seconds = 3600`. When the scheduler fires, `CompressionService` (`src/memory/compression/service.rs`) consumes a batch from `raw_memories` (see `RAW_MEMORY.md` §7.1), extracts `NoteUpdate`s via the LLM extractor, and dispatches them into `NoteIndexer::write_note` (for `NoteAction::Create`) or `NoteIndexer::append_to_note` (for `Append` / `Update`). The scheduler implements `PostCompactCleanup` to reset its turn counter when compaction completes.
+`CompressionScheduler` in `src/memory/compression/scheduler.rs` is now just a turn counter: it tracks `pending_turns: AtomicU32`, and `should_trigger_compression()` returns `CompressionTrigger::TurnThreshold(n)` when `pending_turns >= turn_threshold` (default 20, `[policies.memory.compression]`) or `None` otherwise. The earlier `IdleTimeout` / `SessionEnd` / `ManualRequest` / `BackgroundSchedule` variants and the idle timer were removed — none had a live production path (the manual / session-end / background flows call `CompressionService::compress()` directly, bypassing the scheduler). The live triggers are: turn threshold, the hourly background tick (`background_interval_seconds = 3600`), the session-end flush, the correction flush (`flag_user_correction`), and the `memory.compress` RPC. When a run fires, `CompressionService` (`src/memory/compression/service.rs`) drains a batch from `raw_memories`, splits it per source, and routes each group through `CompoundIngestor::ingest_batch`, which plans and dispatches `Create` / `Append` / `Update` note writes via `NoteIndexer` (see `RAW_MEMORY.md` §7.1).
 
 ### 6.3 Cold-Start `full_rebuild()`
 

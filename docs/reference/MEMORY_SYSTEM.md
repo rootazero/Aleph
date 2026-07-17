@@ -95,7 +95,7 @@ pub trait WorkingMemoryAssembler: Send + Sync {
 4. Applies registered `MemoryExtension::on_retrieve` hooks
 5. Renders the envelope to XML via `render_with(&env, RenderStyle::Xml)`
 
-The `MemoryEnvelope` structure (`src/memory/assembler/envelope.rs`) carries schema version, query, slots (each with a `SlotKind` like `RelevantNotes` or `CuratedHot`), and metadata:
+The `MemoryEnvelope` structure (`src/memory/assembler/envelope.rs`) carries schema version, query, slots (each with a `SlotKind`: `UserProfile` / `SessionRecent` / `RelevantNotes` / `Feedback` / `RawFragments` / `Nudges`), and metadata:
 
 ```rust
 pub struct MemoryEnvelope {
@@ -115,9 +115,8 @@ The scratchpad (`src/memory/scratchpad/`) is an in-session working-memory buffer
 
 Key types:
 
-- `ScratchpadConfig` (`manager.rs`) — filename, history filename, backup-on-write flag.
-- `SessionHistory` (`history.rs`) — append-only log of completed plan items.
-- `ScratchpadManager` (`manager.rs`) — writes `scratchpad.md` + `session_history.log` under `~/.aleph/projects/<project_id>/`.
+- `ScratchpadConfig` (`manager.rs`) — filename, backup-on-write flag.
+- `ScratchpadManager` (`manager.rs`) — writes `scratchpad.md` under `~/.aleph/workspaces/<agent_id>/` (see `default_workspace_root`; per-run project overrides do NOT relocate the scratchpad — runtime working memory stays bound to the agent).
 
 Scratchpad lives at the session level (active plan, current step), whereas L0 raw memory is the session **archive** and L1 notes are cross-session knowledge. The three layers do not overlap: a scratchpad entry never becomes a note directly, and notes never flow back into the scratchpad.
 
@@ -176,10 +175,12 @@ The memory system is exposed to the LLM through built-in tools. Each links to th
 | `recall_context` | Session raw-data restore | [RETRIEVAL.md §12.4](memory/RETRIEVAL.md) |
 | `memory_reflect` | LLM synthesis over retrieved memories | [RETRIEVAL.md §14](memory/RETRIEVAL.md) |
 | `session_complete` | Mark task complete, trigger session-end capture | [RAW_MEMORY.md §6.4](memory/RAW_MEMORY.md) |
+| `remember` | Curated `MEMORY.md` hot zone (add / replace / remove / atomic batch) | §17 below |
+| `flag_user_correction` | Record a user correction — entry point of the correction rail | §17 below |
 
 ## 10. TOML Configuration
 
-Keys below are the subset of `MemoryConfig` (`src/config/types/memory.rs`) that operators actually tune. Defaults are shown inline.
+Keys below are the subset of `MemoryConfig` (`src/config/types/memory/`) that operators actually tune. Defaults are shown inline.
 
 ```toml
 [memory]
@@ -194,11 +195,6 @@ ai_retrieval_timeout_ms = 3000          # cap on LLM selection call
 ai_retrieval_max_candidates = 20        # pre-LLM candidate pool size
 ai_retrieval_fallback_count = 3         # fallback when LLM selection fails
 
-compression_enabled = true              # raw-memory → note pipeline
-compression_idle_timeout_seconds = 300  # idle seconds before a run
-compression_turn_threshold = 20         # turn count that also triggers a run
-compression_interval_seconds = 3600     # background poll cadence
-compression_batch_size = 50             # max raws processed per run
 conflict_similarity_threshold = 0.85    # dedupe/conflict cutoff
 max_facts_in_context = 5                # notes injected per turn
 raw_memory_fallback_count = 3           # raws used if notes are insufficient
@@ -232,11 +228,29 @@ min_strength = 0.1                      # prune threshold
 protected_types = ["personal"]          # never decayed
 
 [memory.reflection]
-enabled = false                         # session-end reflection pass
-min_turns = 5
+enabled = false                # master switch — flipping this ONE flag lights the
+                               # whole lessons + open-loops pipeline (LLM call per
+                               # substantive session end, so it stays opt-in)
+min_turns = 5                  # substance gate: skip trivial sessions
 min_user_chars = 200
-cooldown_minutes = 30
+cooldown_minutes = 30          # per-agent throttle; the watermark persists to the
+                               # compression_metadata table (consumer key
+                               # "session_reflection") so restarts don't reset it
+open_loop_tracking = true      # extract unresolved questions / promised follow-ups
+                               # in the SAME reflection call → OPEN_LOOPS.md
+open_loop_inject_prompt = true # inject persisted open loops into the next
+                               # session's curated context (R5 — AI 主动到达)
 ```
+
+Compression **scheduling** lives under `[policies]`, not `[memory]` (`src/config/types/policies/memory.rs`):
+
+```toml
+[policies.memory.compression]
+turn_threshold = 20                # conversation turns before a compression run
+background_interval_seconds = 3600 # hourly background drain cadence
+```
+
+The live compression triggers are: turn threshold, hourly background interval, session-end flush, correction flush (`flag_user_correction`), and the `memory.compress` RPC. The former idle-timeout trigger (and its `idle_timeout_seconds` knob) was removed — it never had a reachable production path; old config files carrying the key still parse (unknown keys ignored). Batch size is fixed at 50 raws per run.
 
 Embedding provider, rerank, scoring pipeline, and noise filter live in dedicated subtables — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
@@ -322,9 +336,16 @@ Symptom: a note you know exists does not surface in search results.
 
 Aleph maintains three LLM-readable markdown files per agent —
 `SCHEMA.md`, `index.md`, `log.md` — and a `NoteOrientation` trait that
-projects the live `notes_index` into them. The note orientation layer is
-injected into the prompt in Context/Hybrid modes and available as the
-`note_orient` tool in Tools/Hybrid modes. Schema mutation goes through
+projects the live `notes_index` into them. The orientation envelope
+(schema + note index + recent-log tail) is injected at prompt build:
+`src/orchestrator/harness_bridge/prompt_build.rs` calls
+`MemoryContextProvider::build_orientation_user_message` (which returns
+`None` in Tools mode or when no wiki handle is registered) and merges
+the resulting XML with the curated-memory envelope via
+`merge_stable_memory_envelopes`; the merged string rides the stable
+prompt prefix that `CuratedMemoryLayer` injects verbatim, so
+deployments without notes stay byte-identical. The same data is
+available as the `note_orient` tool in Tools/Hybrid modes. Schema mutation goes through
 the always-registered `note_schema` tool with optimistic concurrency via
 content hashes. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §2](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md)
@@ -351,3 +372,49 @@ LLM: novel synthesis check) decides filing. The `query_filed` SQLite
 table deduplicates by `sha256(query)`. `NoteSynthesis` weekly stage
 excludes `query/` to prevent recursion. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §5](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).
+
+## 17. Correction rail, destination ladder & acknowledgment contract
+
+**Correction rail (显式纠错链).** When the user corrects the model, the
+`flag_user_correction` tool writes a `RawMemorySource::Correction` row at
+path `aleph://correction/{id}` (severity-tagged, optional
+`suggested_rule`) and kicks an **immediate** compress→link drain off the
+critical path — the model's own "the user corrected me" judgement replaces
+the old keyword `SignalDetector` (R7). The `FeedbackDistill` dream stage
+(`src/memory/dreaming/stages/feedback_distill.rs`) later reads corrections
+via the `aleph://correction/` path prefix (own `feedback_distill` watermark
+on `compression_metadata`; runs on **both** the Consolidate and Synthesize
+strategies) and asks the LLM to pick `New` / `Strengthen` / `Supersede` /
+`Skip` per signal — High/Critical severities bypass the batch quorum. The
+output is `feedback/` notes, surfaced two ways: normal relevance retrieval,
+plus the always-on `FeedbackFloorLoader`
+(`src/memory/assembler/feedback_floor.rs`) which unconditionally promotes up
+to 6 High/Critical rules into the envelope's `Feedback` slot (pre-populated
+like `UserProfile`, never dropped by re-rank). Corrections must NOT be
+hand-written as `feedback/` notes — the distillation gate deduplicates and
+strengthens them.
+
+**Curated hot zone (`remember`).** The `remember` tool is the sole writer
+of the per-agent `MEMORY.md` hot zone (see [NOTES.md](memory/NOTES.md)
+sibling-concept section): `add` / `replace` / `remove`, plus an atomic
+`batch` action — several operations applied all-or-nothing, with the char
+budget validated on the **final** state only and duplicate `add`s inside a
+batch skipped idempotently.
+
+**Destination ladder (D1).** The single authoritative "where does a new
+memory go" ladder lives in the memory-protocol prompt layer
+(`src/thinker/layers/memory_protocol.rs`), first matching rung wins:
+1. durable preference / identity fact / standing instruction → `remember`
+(HOT); 2. user corrected you → `flag_user_correction` (self-discovered
+lessons instead go to `note_manage` as `lesson` notes); 3. reusable domain
+knowledge → `note_manage` (DURABLE); 4. transient task state → scratchpad,
+never a memory tool. Update-over-create is preferred throughout.
+
+**Acknowledgment contract (D4).** Successful writes return a `destination`
+receipt (`remember` names the MEMORY.md hot zone; `flag_user_correction`
+names the `aleph://correction/{id}` row and the feedback-distillation
+rail). The prompts instruct the model to close its reply with ONE short
+sentence, in the user's language, saying what was recorded and to which
+tier — never quoting the stored content back verbatim, and treating the
+tool's success response as terminal (no repeated writes, no re-echo into
+another memory tool). This replaces the earlier "silent logging" design.
