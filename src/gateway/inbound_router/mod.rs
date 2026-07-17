@@ -1017,18 +1017,27 @@ impl InboundMessageRouter {
                 let prefix = if is_approve { "/approve" } else { "/deny" };
                 let rest = lower.strip_prefix(prefix).unwrap_or("").trim();
                 let mut index: Option<usize> = None;
-                let mut grant: &str = "";
+                let mut grant: Option<&str> = None;
+                let mut malformed = false;
                 for tok in rest.split_whitespace() {
                     if index.is_none() && tok.bytes().all(|b| b.is_ascii_digit()) {
-                        index = tok.parse().ok();
+                        // An unparseable (overflow) index must NOT silently
+                        // degrade to a bare approve — clamp out-of-range so it
+                        // resolves nothing and re-lists instead.
+                        index = Some(tok.parse().unwrap_or(usize::MAX));
+                    } else if grant.is_none() && matches!(tok, "once" | "session" | "always") {
+                        grant = Some(tok);
                     } else {
-                        grant = tok;
+                        // Any unrecognized token demotes the grant to the
+                        // least-privilege AllowOnce (old exact-match parity:
+                        // "please session" never widened the grant).
+                        malformed = true;
                     }
                 }
                 let decision = if is_approve {
-                    match grant {
-                        "session" => ApprovalDecisionType::AllowSession,
-                        "always" => ApprovalDecisionType::AllowAlways,
+                    match (malformed, grant) {
+                        (false, Some("session")) => ApprovalDecisionType::AllowSession,
+                        (false, Some("always")) => ApprovalDecisionType::AllowAlways,
                         _ => ApprovalDecisionType::AllowOnce,
                     }
                 } else {

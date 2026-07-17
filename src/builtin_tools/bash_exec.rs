@@ -275,11 +275,15 @@ impl BashExecTool {
     /// Drive `code_exec_args` inside a detached task and return a `process_id`
     /// immediately. The task re-enters the current `SESSION_ID` scope (task
     /// locals don't propagate into `tokio::spawn`) so the sandbox still targets
-    /// the right per-session workspace.
+    /// the right per-session workspace, and re-enters the ambient
+    /// `CallIdentity` so a sandbox-elevation approval raised by the detached
+    /// command still stamps the bash call that spawned it (otherwise the card
+    /// reverts to the uncorrelated pre-identity state for exactly this path).
     fn spawn_background(&self, code_exec_args: CodeExecArgs) -> CodeExecOutput {
         let registry = process_registry();
         let caller = session_label();
         let sid = current_session();
+        let identity = crate::approval::current_call_identity();
         let inner = self.inner.clone();
         let preview = code_exec_args.code.clone();
 
@@ -301,10 +305,13 @@ impl BashExecTool {
             // foreground timeout clamp — a backgrounded `cargo build` may
             // legitimately run for the full 1h ceiling. `call_unclamped` runs
             // `execute` directly, bypassing the clamp in `AlephTool::call`.
-            let result = match sid {
-                Some(sid) => SESSION_ID.scope(sid, inner.call_unclamped(code_exec_args)).await,
-                None => inner.call_unclamped(code_exec_args).await,
-            };
+            let result = crate::approval::with_call_identity(identity, async move {
+                match sid {
+                    Some(sid) => SESSION_ID.scope(sid, inner.call_unclamped(code_exec_args)).await,
+                    None => inner.call_unclamped(code_exec_args).await,
+                }
+            })
+            .await;
             let output = result
                 .unwrap_or_else(|e| error_output(format!("bash: background task error: {e}")));
             reg.complete(id, output);

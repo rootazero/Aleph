@@ -204,7 +204,7 @@ impl AgentHarness {
         let mut remaining = tool_calls.into_iter();
         for (start, end) in groups {
             // Cooperative steer checkpoint at the group boundary. Groups run
-            // sequentially; a parallel group's `.buffered()` wave is not
+            // sequentially; a parallel group's `buffer_unordered` wave is not
             // interruptible mid-flight by design, so we stop *before*
             // launching the next group when a mid-turn user message arrived,
             // and defer everything still pending. R7/R10: mechanical.

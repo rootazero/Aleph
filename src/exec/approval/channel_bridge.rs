@@ -44,8 +44,9 @@ impl ChannelApprovalBridge {
     /// `session_key` 是发起会话的结构化 key 字符串（router 侧
     /// `ctx.session_key.to_string()` 的同一形态）：record 必须携带它，
     /// `/approve`/`/deny` 文本回复才能经 `resolve_for_session` 命中这条
-    /// 审批（FIFO）。传空则回退为 `channel:conversation` 合成 key（仅按钮
-    /// 回调可达）。
+    /// 审批（仅此会话恰有一张活卡时直接命中；多卡并发时会拒绝裸回复、
+    /// 回编号清单，须 `/approve <n>` 指定——见 `SessionResolveOutcome`）。
+    /// 传空则回退为 `channel:conversation` 合成 key（仅按钮回调可达）。
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
