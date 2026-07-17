@@ -464,6 +464,42 @@ impl ExtensionManager {
         for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
             skill_dirs.push(d.path);
         }
+
+        // Fold installed-plugin skills into the same discovery set the
+        // SkillSystem scans (→ `<available_skills>`) AND `skill_read` resolves
+        // against, so a plugin's bundled skills reach the model through their
+        // existing home instead of being invisible on disk (the gap that pushed
+        // the model to a raw `cat SKILL.md`). Base dir = `<plugin_root>/skills`,
+        // derived from each parsed skill's authoritative `source_path` (only the
+        // skills the adapter actually accepted). Command-type entries live under
+        // `commands/` and are intentionally excluded. `guess_source` classes
+        // these paths `Plugin`, so they outrank Global/Bundled on collisions.
+        let plugin_skill_dirs: Vec<PathBuf> = {
+            let registry = self.plugin_registry.read().await;
+            let mut set = std::collections::BTreeSet::new();
+            for skill in registry.list_skills() {
+                if !matches!(skill.skill_type, crate::extension::types::SkillType::Skill) {
+                    continue;
+                }
+                // `<plugin>/skills/<id>/SKILL.md` → base `<plugin>/skills`.
+                if let Some(base) = skill
+                    .source_path
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                {
+                    if base.is_dir() {
+                        set.insert(base.to_path_buf());
+                    }
+                }
+            }
+            set.into_iter().collect()
+        };
+        skill_dirs.extend(plugin_skill_dirs.iter().cloned());
+        // Publish the plugin skill roots so `get_all_skills_dirs` (the
+        // `skill_read` tool's search set) folds them in too — the SkillSystem
+        // scan above only feeds the prompt index.
+        crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
+
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
         }

@@ -317,6 +317,40 @@ fn collect_project_skills_dirs(
     dirs
 }
 
+/// Process-global set of installed-plugin skill base directories
+/// (`<plugin_root>/skills`), published once by the extension manager after it
+/// parses every plugin (`ExtensionManager::load_all`).
+///
+/// `get_all_skills_dirs` — the single source both the `skill_read` tool and the
+/// per-run skill discovery consult — appends these so a plugin's bundled skills
+/// are `skill_read`-able by their bare directory name, exactly like a native
+/// `~/.aleph/skills` skill. The extension manager owns the authoritative plugin
+/// locations (it just parsed them) but runs long after `get_all_skills_dirs`'s
+/// callers are constructed, so a process-global publish is used rather than
+/// threading the list through every call site (mirrors the `CHANNEL_CONFIG_
+/// SNAPSHOT` pattern). Empty until the first `load_all`, which is fine: plugins
+/// aren't loaded before then and `skill_read` only runs per-request afterwards.
+static PLUGIN_SKILL_DIRS: std::sync::RwLock<Vec<PathBuf>> = std::sync::RwLock::new(Vec::new());
+
+/// Publish the installed plugins' skill base directories for skill discovery.
+/// Called by the extension manager after every (re)load so the set stays in
+/// sync with what is actually installed. Replaces the previous set wholesale.
+pub fn publish_plugin_skill_dirs(dirs: Vec<PathBuf>) {
+    let mut guard = PLUGIN_SKILL_DIRS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = dirs;
+}
+
+/// Snapshot the currently-published plugin skill base directories.
+#[must_use]
+pub fn plugin_skill_dirs() -> Vec<PathBuf> {
+    PLUGIN_SKILL_DIRS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 /// True when `agent_id` is a single safe path component (non-empty, no path
 /// separators, no parent refs, no NUL). Mirrors [`get_agent_config_dir`]'s
 /// guard so skill discovery can build `~/.aleph/agents/<id>/skills` without
@@ -398,6 +432,17 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
                 is_dir = global_claude.is_dir(),
                 "~/.claude/skills not found or not a directory"
             );
+        }
+    }
+
+    // 3. Installed-plugin skills: base dirs published by the extension manager
+    //    (`<plugin_root>/skills`). Appended last so native skills win id
+    //    collisions by precedence; `skill_read` folds symlink twins anyway.
+    //    Empty until the first `ExtensionManager::load_all`.
+    for plugin_dir in plugin_skill_dirs() {
+        if plugin_dir.is_dir() && !dirs.contains(&plugin_dir) {
+            info!(path = %plugin_dir.display(), "Found plugin skills dir");
+            dirs.push(plugin_dir);
         }
     }
 

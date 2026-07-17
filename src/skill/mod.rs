@@ -711,14 +711,51 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Extract the owning plugin id from a plugin-bundled skill path.
+///
+/// Plugin skills live at `<…>/plugins/<plugin_id>/skills/<skill>/SKILL.md`, and
+/// bundled ones nest a marketplace layer
+/// (`<…>/plugins/cache/<market>/<plugin_id>/skills/…`). Rather than assume the
+/// component right after `plugins`, take the component immediately *before* the
+/// `skills` segment — robust to both layouts. Returns `None` for non-plugin
+/// paths (no `plugins` ancestor before a `skills` segment).
+fn plugin_id_from_path(path: &Path) -> Option<String> {
+    let comps: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    let mut saw_plugins = false;
+    for (i, c) in comps.iter().enumerate() {
+        if c == "plugins" || c == "plugins.local" {
+            saw_plugins = true;
+        } else if c == "skills" && saw_plugins && i >= 1 {
+            return comps.get(i - 1).cloned().filter(|id| !id.is_empty());
+        }
+    }
+    None
+}
+
 /// Guess the `SkillSource` from a file path.
 ///
+/// - Under `<…>/plugins/<id>/skills/` (any root) → Plugin(id)
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled
 /// - Under `~/.aleph/skills/` otherwise → Global
 /// - Contains `.aleph/skills` but not under home → Workspace
 /// - Otherwise → Bundled (e.g. Claude Code compatibility paths)
 fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
+
+    // Plugin-bundled skills take precedence: they live under a `plugins/<id>/
+    // skills` tree (never matching the `.aleph/skills` check below) and must be
+    // classed `Plugin` so they outrank Global/Bundled in the prompt index and
+    // `skill_read` collision resolution. Before this branch every plugin skill
+    // fell through to `Bundled`, mis-ranking it as lowest priority.
+    if let Some(plugin_id) = plugin_id_from_path(path) {
+        return SkillSource::Plugin(crate::domain::skill::PluginId::new(plugin_id));
+    }
 
     // Cache the bundled manifest to avoid re-reading from disk on every call.
     static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::InstallRegistry>> =
@@ -940,6 +977,47 @@ Content."#,
     fn guess_source_bundled_fallback() {
         let path = PathBuf::from("/usr/share/aleph/skills/git/SKILL.md");
         assert_eq!(guess_source(&path), SkillSource::Bundled);
+    }
+
+    #[test]
+    fn guess_source_plugin_dir() {
+        use crate::domain::skill::PluginId;
+        // `<home>/.aleph/plugins/<plugin>/skills/<id>/SKILL.md` → Plugin(<plugin>).
+        let path = PathBuf::from("/home/u/.aleph/plugins/my-plugin/skills/foo/SKILL.md");
+        assert_eq!(
+            guess_source(&path),
+            SkillSource::Plugin(PluginId::new("my-plugin"))
+        );
+        // The base dir (what rescan passes) resolves identically.
+        let base = PathBuf::from("/home/u/.aleph/plugins/my-plugin/skills");
+        assert_eq!(
+            guess_source(&base),
+            SkillSource::Plugin(PluginId::new("my-plugin"))
+        );
+    }
+
+    #[test]
+    fn guess_source_plugin_bundled_cache_nesting() {
+        use crate::domain::skill::PluginId;
+        // Bundled/marketplace nesting `plugins/cache/<market>/<plugin>/skills`
+        // must still pick the plugin (component before `skills`), not `cache`.
+        let path = PathBuf::from(
+            "/home/u/.aleph/plugins/cache/aleph-official/writer/skills/draft/SKILL.md",
+        );
+        assert_eq!(
+            guess_source(&path),
+            SkillSource::Plugin(PluginId::new("writer"))
+        );
+    }
+
+    #[test]
+    fn plugin_id_from_path_non_plugin_is_none() {
+        // A normal skills path has no `plugins` ancestor → not a plugin skill.
+        assert_eq!(
+            plugin_id_from_path(Path::new("/home/u/.aleph/skills/foo/SKILL.md")),
+            None
+        );
+        assert_eq!(plugin_id_from_path(Path::new("/tmp/whatever")), None);
     }
 
     #[test]
