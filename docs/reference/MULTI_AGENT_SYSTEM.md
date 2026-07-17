@@ -785,6 +785,48 @@ foreground spawn path returns — `iterations`, `tool_calls_made`,
 
 A failed background sub-agent surfaces as a `ToolResult::Error`.
 
+### wait Action (event-driven blocking)
+
+`check_status`/`list` are poll actions — each call costs the parent a full LLM
+turn. When the parent must block on a specific result before continuing, the
+`wait` action parks on the tracker's completion notifier instead of spin-polling:
+
+- `{"action": "wait", "request_id": "...", "timeout_secs": 120}` — block until
+  that sub-agent finishes or the bounded window elapses. On completion it returns
+  the **same shape** `check_status` gives (a failure still surfaces as a
+  `ToolResult::Error`); on timeout it returns `{"status": "still_running",
+  "request_id": "...", "elapsed_secs": N, "waited_secs": 120, ...}` so the model
+  may `wait` again.
+- `{"action": "wait", "request_ids": ["a", "b", ...], "timeout_secs": 120}` —
+  fan-out first-completion: returns as soon as **any** id in the set finishes,
+  reporting which one (`request_id`). Drain the rest by dropping it and calling
+  `wait` again. A failed first-completion comes back as a `status: "failed"`
+  Success (not a `ToolResult::Error`) so it does not trip the harness failure
+  counter — the model sees which child failed and can wait for the rest. Mirrors
+  codex `wait_agent`.
+
+`timeout_secs` defaults to 120 and is clamped to 600 (`DEFAULT_WAIT_TIMEOUT_SECS`
+/ `MAX_WAIT_TIMEOUT_SECS` in `types.rs`) — well under the subagent tool's
+`1_800_000`ms wall-clock budget, so a single `wait` can never hang the turn.
+
+Implementation (`src/agents/background_tracker.rs`): a `tokio::sync::Notify`
+`completion` signal fires at the end of `mark_completed`; `wait`/`wait_any` use
+the same `Notified::enable` arm-before-check loop as
+`builtin_tools::process_registry::wait` (no lost wakeup, no busy-poll). This
+mirrors the bash-background `wait` primitive, closing the asymmetry where only
+shell background jobs had an efficient blocking wait. To keep a concurrent waiter
+from ever seeing a completing agent as `NotFound`, `mark_completed` now inserts
+into `completed` **before** removing from `running` (the id is never absent from
+both maps); `flat_nodes` de-dupes by id to tolerate the brief double-presence.
+
+**Announce dedup.** A result delivered on-demand (via `wait`, or a `check_status`
+that returned the outcome) is marked consumed
+(`BackgroundAgentTracker::mark_consumed`); the proactive `subagent_announce` (R5)
+checks `is_consumed` and skips re-delivering what the model already saw — so the
+poll/wait path and the announce path never double-inject the same result (hermes
+`_completion_consumed` parity). Both paths share the process-global
+`BackgroundAgentTracker::global()` instance.
+
 ### list Action
 
 `{"action": "list"}` enumerates every background sub-agent the tracker still

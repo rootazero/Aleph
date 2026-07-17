@@ -5,7 +5,9 @@ use futures::FutureExt;
 use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
 
-use crate::agents::background_tracker::{CompletedOutcome, CompletedSnapshot};
+use crate::agents::background_tracker::{
+    CompletedOutcome, CompletedSnapshot, WaitAnyOutcome, WaitOutcome,
+};
 use crate::agents::progress::SubagentProgress;
 use crate::agents::runtime::AgentRuntimeConfig;
 use crate::agents::AgentDef;
@@ -29,8 +31,11 @@ impl LoopTool for SubagentTool {
          For complex goals that can be broken into independent sub-tasks, use 'batch_tasks' \
          to launch multiple sub-agents in parallel — the system automatically runs them \
          in background and returns request_ids. Background completions are announced \
-         back to you proactively as a system message — no need to poll; check_status/list \
-         remain available for on-demand inspection. \
+         back to you proactively as a system message — no need to poll. When you must \
+         block on a specific result before continuing, use 'wait' (request_id): it parks \
+         until that sub-agent finishes or a bounded window elapses, costing ONE call \
+         instead of repeated check_status polls. check_status/list remain available for \
+         on-demand inspection. \
          For Mixture-of-Agents (best-quality answers to one hard question), set \
          'proposer_models' to a list of models and 'synthesize'=true: the same 'task' runs \
          on every model in parallel, then one aggregator sub-agent folds the proposals into \
@@ -44,8 +49,8 @@ impl LoopTool for SubagentTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "check_status", "cancel", "list", "send_message", "read_inbox"],
-                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'cancel' interrupts a still-running background sub-agent identified by request_id. 'list' enumerates every background sub-agent (running and recently-completed) with their request_ids — use it to recover a request_id you no longer hold."
+                    "enum": ["run", "check_status", "wait", "cancel", "list", "send_message", "read_inbox"],
+                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided). 'wait' blocks (event-driven, no busy-poll) until a background sub-agent finishes or the bounded 'timeout_secs' window elapses — pass 'request_id' to wait on one, or 'request_ids' to wait for whichever of a set finishes first. It returns the completed result in ONE call, or status 'still_running' so you can wait again. 'cancel' interrupts a still-running background sub-agent identified by request_id. 'list' enumerates every background sub-agent (running and recently-completed) with their request_ids — use it to recover a request_id you no longer hold."
                 },
                 "task": {
                     "type": "string",
@@ -105,7 +110,7 @@ impl LoopTool for SubagentTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Maximum time in seconds for the sub-agent to run. Default: 120.",
+                    "description": "For 'run': maximum seconds the sub-agent may run (default 120). For 'wait': the bounded blocking window in seconds (default 120, capped at 600) — on elapse you get 'still_running' and may wait again.",
                     "default": 120
                 },
                 "run_in_background": {
@@ -119,7 +124,12 @@ impl LoopTool for SubagentTool {
                 },
                 "request_id": {
                     "type": "string",
-                    "description": "Check status of a background sub-agent. Provide request_id without task to retrieve the result."
+                    "description": "Identifies a background sub-agent for check_status / wait / cancel. Provide request_id without task to retrieve the result (check_status)."
+                },
+                "request_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "For 'wait' only: a set of background request_ids to wait on. 'wait' returns as soon as the FIRST of them finishes (reporting which), so you can react to a fan-out in completion order. Use 'request_id' instead to wait on a single sub-agent."
                 },
                 "name": {
                     "type": "string",
@@ -302,6 +312,10 @@ impl LoopTool for SubagentTool {
                 // the same request_id again later without it vanishing.
                 match self.background_tracker.result_snapshot(&request_id) {
                     Some(snap) => {
+                        // The parent has now seen the terminal result on-demand;
+                        // mark it consumed so the proactive announce does not
+                        // spend a fresh turn re-delivering it (dedup with wait).
+                        self.background_tracker.mark_consumed(&request_id);
                         if let CompletedOutcome::Err(err) = &snap.outcome {
                             return ToolResult::Error {
                                 error: error_with_trail(err, &snap.progress_tail),
@@ -321,6 +335,80 @@ impl LoopTool for SubagentTool {
                         };
                     }
                 }
+            }
+            SubagentAction::Wait {
+                request_ids,
+                timeout_secs,
+            } => {
+                // Park on the tracker's completion notifier (no busy-poll, no
+                // per-check LLM turn). The delivered result is marked consumed
+                // inside the tracker so the announce won't re-deliver it.
+                let dur = std::time::Duration::from_secs(timeout_secs);
+
+                // Single id → the simple wait (nicer elapsed_secs on timeout).
+                if request_ids.len() == 1 {
+                    let request_id = &request_ids[0];
+                    return match self.background_tracker.wait(request_id, dur).await {
+                        // Identical shape to check_status so the model reads a
+                        // finished agent the same way regardless of how it asked.
+                        WaitOutcome::Completed(snap) => {
+                            if let CompletedOutcome::Err(err) = &snap.outcome {
+                                ToolResult::Error {
+                                    error: error_with_trail(err, &snap.progress_tail),
+                                    retryable: false,
+                                }
+                            } else {
+                                ToolResult::Success {
+                                    output: completed_to_json(request_id, "completed", &snap),
+                                }
+                            }
+                        }
+                        WaitOutcome::TimedOut { elapsed_secs } => ToolResult::Success {
+                            output: json!({
+                                "status": "still_running",
+                                "request_id": request_id,
+                                "elapsed_secs": elapsed_secs,
+                                "waited_secs": timeout_secs,
+                                "note": "Sub-agent still running when the wait window elapsed. Call 'wait' again with this request_id to keep blocking, or do other work and check back — its completion is also announced to you.",
+                            }),
+                        },
+                        WaitOutcome::NotFound => ToolResult::Error {
+                            error: format!(
+                                "No background sub-agent found with request_id '{request_id}'"
+                            ),
+                            retryable: false,
+                        },
+                    };
+                }
+
+                // Many ids → wait for whichever finishes first (fan-out
+                // first-completion). A failed first-completion is returned as a
+                // Success carrying the `failed` report (not a ToolResult::Error)
+                // so it does not trip the harness failure counter — the model
+                // sees which child failed and can wait for the rest.
+                return match self.background_tracker.wait_any(&request_ids, dur).await {
+                    WaitAnyOutcome::Completed {
+                        request_id,
+                        snapshot,
+                    } => ToolResult::Success {
+                        output: completed_to_json(&request_id, "completed", &snapshot),
+                    },
+                    WaitAnyOutcome::TimedOut { still_running } => ToolResult::Success {
+                        output: json!({
+                            "status": "still_running",
+                            "still_running": still_running,
+                            "waited_secs": timeout_secs,
+                            "note": "No sub-agent in the set finished within the wait window. Call 'wait' again with these request_ids to keep blocking, or do other work — completions are also announced to you.",
+                        }),
+                    },
+                    WaitAnyOutcome::NotFound => ToolResult::Error {
+                        error:
+                            "None of the given request_ids matches a known background sub-agent \
+                             (all unknown or expired)"
+                                .to_string(),
+                        retryable: false,
+                    },
+                };
             }
             SubagentAction::Cancel(request_id) => {
                 let hit = self.background_tracker.cancel(&request_id);

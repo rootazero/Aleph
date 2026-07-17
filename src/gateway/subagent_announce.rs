@@ -86,6 +86,20 @@ async fn announce_one(
         .clone()
         .unwrap_or_else(|| result.child_session_id.clone());
 
+    // Dedup with the on-demand paths: if the parent already saw this result via
+    // a `wait` or a `check_status` tool call, skip the proactive announce rather
+    // than spending a fresh parent turn re-delivering what the model has already
+    // folded in. Pure data check against the process-global tracker (the same
+    // instance the spawn/wait paths use) — no reasoning, R7/R10 clean.
+    if crate::agents::background_tracker::BackgroundAgentTracker::global().is_consumed(&request_id)
+    {
+        debug!(
+            request_id = %request_id,
+            "subagent announce: result already consumed on-demand; skipping proactive delivery"
+        );
+        return;
+    }
+
     let Some(session_key) = SessionKey::from_key_string(&global_event.source_session_id) else {
         debug!(
             session = %global_event.source_session_id,
