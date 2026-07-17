@@ -408,7 +408,16 @@ impl ScopedToolService {
                 // retry to avoid duplicate side effects on a timeout that
                 // may have already reached the server. R10-safe: no policy
                 // selection beyond the static idempotency classification.
-                let idempotent = crate::tools::retry::is_idempotent_builtin_name(name);
+                //
+                // Ask the registry FIRST so an MCP tool's server-declared
+                // `readOnlyHint`/`idempotentHint` (surfaced through
+                // `LoopTool::is_idempotent`) actually reaches this gate — the
+                // builtin name table only knows builtins, so without this a
+                // read-only MCP tool never got its one retry on a transient
+                // transport blip. The name-table fallback still covers any
+                // builtin not routed through `RegistryToolAdapter`.
+                let idempotent = self.inner.is_idempotent(name)
+                    || crate::tools::retry::is_idempotent_builtin_name(name);
                 let raw_outcome =
                     crate::tools::retry::execute_with_one_shot_backoff(idempotent, || {
                         let input = effective_input.clone();
