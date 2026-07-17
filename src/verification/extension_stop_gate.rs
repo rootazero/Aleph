@@ -256,6 +256,7 @@ mod tests {
     use crate::extension::{HookAction, HookConfig, HookKind, HookPriority};
     use std::path::PathBuf;
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn stop_hook_config(command: &str) -> HookConfig {
         HookConfig {
             event: HookEvent::Stop,

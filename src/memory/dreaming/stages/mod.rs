@@ -1,5 +1,7 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
+use async_trait::async_trait;
+
 pub mod co_recall_edges;
 pub mod corpus_narrative;
 pub mod daily_digest;
@@ -55,41 +57,6 @@ pub(crate) fn is_provider_exhausted(err: &crate::error::AlephError) -> bool {
             | crate::error::AlephError::RateLimitError { .. }
     )
 }
-
-#[cfg(test)]
-mod exhaustion_tests {
-    use super::is_provider_exhausted;
-    use crate::error::AlephError;
-
-    #[test]
-    fn quota_exhausted_403_surfaces_as_authentication_error_and_aborts() {
-        // The shape actually observed in production: Kimi/Moonshot returns 403
-        // "You've reached your usage limit for this billing cycle".
-        let err = AlephError::authentication(
-            "kimi",
-            "Anthropic authentication failed (403): You've reached your usage limit",
-        );
-        assert!(is_provider_exhausted(&err));
-    }
-
-    #[test]
-    fn rate_limit_aborts() {
-        assert!(is_provider_exhausted(&AlephError::rate_limit(
-            "429 too many requests"
-        )));
-    }
-
-    #[test]
-    fn transient_errors_do_not_abort_the_cycle() {
-        assert!(!is_provider_exhausted(&AlephError::NetworkError {
-            message: "connection reset".to_string(),
-            suggestion: None,
-        }));
-        assert!(!is_provider_exhausted(&AlephError::other("bad json")));
-    }
-}
-
-use async_trait::async_trait;
 
 use super::{distill_action, DreamContext};
 use crate::error::AlephError;
@@ -199,5 +166,38 @@ pub(crate) async fn gate_action_evidence(
                 Some(reason),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod exhaustion_tests {
+    use super::is_provider_exhausted;
+    use crate::error::AlephError;
+
+    #[test]
+    fn quota_exhausted_403_surfaces_as_authentication_error_and_aborts() {
+        // The shape actually observed in production: Kimi/Moonshot returns 403
+        // "You've reached your usage limit for this billing cycle".
+        let err = AlephError::authentication(
+            "kimi",
+            "Anthropic authentication failed (403): You've reached your usage limit",
+        );
+        assert!(is_provider_exhausted(&err));
+    }
+
+    #[test]
+    fn rate_limit_aborts() {
+        assert!(is_provider_exhausted(&AlephError::rate_limit(
+            "429 too many requests"
+        )));
+    }
+
+    #[test]
+    fn transient_errors_do_not_abort_the_cycle() {
+        assert!(!is_provider_exhausted(&AlephError::NetworkError {
+            message: "connection reset".to_string(),
+            suggestion: None,
+        }));
+        assert!(!is_provider_exhausted(&AlephError::other("bad json")));
     }
 }

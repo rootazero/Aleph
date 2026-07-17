@@ -1435,8 +1435,7 @@ async fn append_relations_is_noop_when_all_already_present() {
         confidence: 1.0,
     };
     indexer
-        // rust-doctor-disable-next-line excessive-clone
-        .append_relations(AGENT, "reference/note-c", &[rel.clone()])
+        .append_relations(AGENT, "reference/note-c", std::slice::from_ref(&rel))
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();

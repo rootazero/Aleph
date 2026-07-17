@@ -605,8 +605,10 @@ mod tests {
 
     #[test]
     fn migrate_is_noop_when_fetch_already_present() {
-        let mut cfg = Config::default();
-        cfg.fetch = Some(crate::config::types::FetchConfigInternal::default());
+        let mut cfg = Config {
+            fetch: Some(crate::config::types::FetchConfigInternal::default()),
+            ..Config::default()
+        };
         cfg.policies.web_fetch.crawl4ai.enabled = true;
         cfg.migrate_fetch();
         assert!(
