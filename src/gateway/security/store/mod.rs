@@ -3,16 +3,17 @@
 //! Unified `SQLite` storage for security data.
 //!
 //! Under LAN-trust this store is the persistence layer for the secret vault
-//! master key (shared-token chain), cluster-node device records, channel
-//! policies, and the security audit log. Device-auth tokens, HTTP sessions,
-//! and device pairing requests were removed with the authentication layer.
+//! master key (shared-token chain), cluster-node device records, remote Panel
+//! device-auth tokens + bootstrap tickets (see `tokens.rs` / `devices.rs` /
+//! `bootstrap_tickets.rs`), channel sender policies, and the security audit log.
 //!
-//! Legacy tables: the migration chain below still creates `sessions`,
-//! `tokens`, and `pairing_requests` (SCHEMA_V2/V3) and v9/v10 still rebuild
-//! `pairing_requests` for the 'browser'/'node' CHECK variants, but no code
-//! on HEAD reads or writes these three tables anymore. The migrations are
-//! kept solely so existing databases upgrade cleanly — do not wire new
-//! features to these tables.
+//! Legacy tables: the migration chain below still creates `sessions` and
+//! `pairing_requests` (SCHEMA_V2/V3; v9/v10 rebuild `pairing_requests` for the
+//! 'browser'/'node' CHECK variants), but no code on HEAD reads or writes those
+//! two anymore — they are kept solely so existing databases upgrade cleanly.
+//! Do not wire new features to them. The `tokens` table is **not** dead: the
+//! device-auth token store in `tokens.rs` actively reads and writes it (the
+//! remote Panel device-token flow reuses it).
 
 use crate::sync_primitives::Mutex;
 use rusqlite::{Connection, Result as SqliteResult};
