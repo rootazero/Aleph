@@ -83,11 +83,13 @@ pub struct MemoryEnvelope {
 }
 ```
 
-Slots are typed by `SlotKind`:
+Slots are typed by `SlotKind` (`src/memory/assembler/envelope.rs`):
 - `RelevantNotes` — retrieved notes from hybrid search
-- `CuratedHot` — entries from `MEMORY.md` hot snapshot
-- `UserProfile` — synthesized user model
-- `Extension` — added by third-party extensions
+- `UserProfile` — synthesized user model (pre-populated, never dropped by re-rank)
+- `Feedback` — user-taught rules/corrections distilled into `feedback/` notes (pre-populated like `UserProfile`)
+- `SessionRecent` — recent-session material (prior-session snapshot, daily digest)
+- `RawFragments` — raw-memory fallback fragments
+- `Nudges` — proactive nudge items
 
 The rendered XML is injected as a `role=user` message containing a fenced `<MemoryEnvelope>` block. All user-supplied fields are `xml_escape`d. See [MEMORY_SYSTEM.md §5](../MEMORY_SYSTEM.md) for the full assembler architecture.
 

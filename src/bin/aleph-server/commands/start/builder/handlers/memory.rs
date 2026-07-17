@@ -276,9 +276,6 @@ pub(in crate::commands::start) fn init_compression_service(
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
     policy: &alephcore::CompressionPolicy,
     daemon: bool,
-    command_handler: Option<
-        std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
-    >,
     compound_ingestor: Option<
         std::sync::Arc<dyn alephcore::memory::notes::ingest::CompoundIngestor>,
     >,
@@ -293,9 +290,6 @@ pub(in crate::commands::start) fn init_compression_service(
 
     let config = CompressionConfig::from_policy(policy);
     let mut service = CompressionService::new(memory_db.clone(), provider, embedder, config);
-    if let Some(handler) = command_handler {
-        service = service.with_command_handler(handler);
-    }
     if let Some(ing) = compound_ingestor {
         service = service.with_compound_ingestor(ing);
     }
@@ -342,12 +336,14 @@ pub(in crate::commands::start) fn init_memory_context_provider(
     embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
+    injection_mode: alephcore::MemoryInjectionMode,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     init_memory_context_provider_with_extensions(
         memory_db,
         embedder,
         provider,
         assembler_config,
+        injection_mode,
         None,
         None,
         None,
@@ -358,11 +354,16 @@ pub(in crate::commands::start) fn init_memory_context_provider(
 /// and profile synthesizer.
 ///
 /// `embedder: None` = FTS-only deployment; memory injection still runs.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     memory_db: &MemoryBackend,
     embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
+    // `memory.injection_mode` from config. Without this the provider stays on
+    // the default (Hybrid) and an `injection_mode = "tools"` deployment would
+    // still auto-inject memory/orientation/profile into every prompt.
+    injection_mode: alephcore::MemoryInjectionMode,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
     wiki: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
     profile_synthesizer: Option<
@@ -379,6 +380,7 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
         ),
         None => alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), embedder),
     };
+    let mcp = mcp.with_injection_mode(injection_mode);
     let mcp = if let Some(ext) = extensions {
         mcp.with_extensions(ext)
     } else {

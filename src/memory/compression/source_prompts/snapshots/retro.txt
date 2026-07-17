@@ -5,6 +5,9 @@ RULES:
 2. Capture: what worked, what failed, gotchas discovered, tool usage patterns, sequencing tricks.
 3. Skip details only relevant to this specific run. Focus on transferable lessons.
 4. Strongly prefer category `lesson`. Allow `tool` or `learning` when clearly more specific.
+5. Phrase each lesson evidence → implication: when <situation>, <what happened> → future default: <rule>. Preserve verbatim greppable handles — file paths, exact command/tool names, error codes; never paraphrase identifiers.
+6. Convert relative time ("yesterday", "last week") to absolute dates.
+7. Gate every fact: will a future agent plausibly act better for having it? Do not record environment-dependent transient failures as permanent truths, and do not record that a tool is broken (it gets fixed) — record the remedy, not the failure narrative. If nothing clears the bar, emit an empty plan.
 
 OUTPUT FORMAT (JSON only, no markdown code blocks):
 {

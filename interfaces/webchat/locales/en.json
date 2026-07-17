@@ -746,7 +746,6 @@
       "fallback_count": "Fallback Count",
       "compression": "Memory Compression",
       "compression_hint": "Scheduling for background memory compression (policies.memory.compression).",
-      "idle_timeout_seconds": "Idle Timeout (seconds)",
       "turn_threshold": "Turn Threshold",
       "compression_interval_seconds": "Compression Interval (seconds)",
       "retrieval_pipeline": "Retrieval Pipeline",

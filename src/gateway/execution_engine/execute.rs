@@ -729,14 +729,27 @@ where
                     cs.record_turn_and_maybe_compress();
                 }
 
-                // Async session compaction (hierarchical summarization)
+                // Async session compaction (hierarchical summarization).
+                // Capture this turn's project root BEFORE the spawn: the
+                // `projects::run_context` task-local does not cross a
+                // `tokio::spawn` boundary (and the run-loop's scope is already
+                // closed here), so resolving the project-scoped storage agent
+                // id inside the spawned task would always fall back to the
+                // base id while the in-turn readers resolve the scoped id —
+                // writes and reads would silently split. Mirrors the workspace
+                // capture in the goal_continuation hook below.
                 if let Some(ref sc) = self.session_compactor {
                     let sc = sc.clone();
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
+                    let project_root = request.workspace_override.clone();
                     tokio::spawn(async move {
                         if let Err(e) = sc
-                            .post_turn_compress(&agent_clone, &session_key_clone)
+                            .post_turn_compress(
+                                &agent_clone,
+                                &session_key_clone,
+                                project_root.as_deref(),
+                            )
                             .await
                         {
                             warn!(error = %e, "Session compaction failed");

@@ -145,9 +145,14 @@ impl MemoryContextProvider {
 
     /// Evict every snapshot whose `session_key` matches. Called on
     /// compression-complete and `SessionEnd` so the next prompt build picks
-    /// up disk mutations.
+    /// up disk mutations. Evicts the frozen orientation envelope too — it
+    /// rides the same Stable curated zone and must refresh at the same points.
     pub async fn invalidate_curated(&self, session_key: &str) {
         self.curated_snapshots
+            .write()
+            .await
+            .retain(|(_, sk), _| sk != session_key);
+        self.orientation_snapshots
             .write()
             .await
             .retain(|(_, sk), _| sk != session_key);
@@ -159,6 +164,10 @@ impl MemoryContextProvider {
     /// disk and any per-session cache must rebuild on the next prompt.
     pub async fn invalidate_curated_for_agent(&self, agent_id: &str) {
         self.curated_snapshots
+            .write()
+            .await
+            .retain(|(aid, _), _| aid != agent_id);
+        self.orientation_snapshots
             .write()
             .await
             .retain(|(aid, _), _| aid != agent_id);

@@ -71,9 +71,11 @@ impl PromptLayer for SpecialActionsLayer {
         // Phase 3 self-evolution path α — direct user-correction signaling.
         // The flag_user_correction tool persists a tagged raw_memory row that
         // FeedbackDistill later distills into a feedback/ knowledge note.
+        // Destination routing for OTHER memory kinds lives in the Memory
+        // Protocol ladder (memory_protocol.rs) — don't duplicate it here.
         output.push_str("## Self-correction Logging\n\n");
         output.push_str(
-            "When the user corrects you, states a clear preference, or pushes back, call \
+            "When the user corrects a mistake you made or pushes back on your approach, call \
              `flag_user_correction` with:\n",
         );
         output.push_str("- `content`: the correction in your own words (1-2 sentences)\n");
@@ -84,7 +86,12 @@ impl PromptLayer for SpecialActionsLayer {
         output.push_str("- `suggested_rule` (optional): a one-line imperative for next time\n\n");
         output.push_str(
             "Log only clear, generalizable signals — skip praise, acknowledgement, and your \
-             own reasoning. Continue normally, and do not announce that you logged it.\n\n",
+             own reasoning. Continue normally, then close your reply with ONE short sentence, \
+             in the user's language, acknowledging where the lesson was recorded — use the \
+             `destination` field from the tool result (e.g. \"Lesson recorded to long-term \
+             memory — feedback queue, distilled into a standing note by the nightly cycle.\"). \
+             Never quote the stored content back verbatim, never log the same correction \
+             twice, and never emit more than one acknowledgment sentence per turn.\n\n",
         );
     }
 }
@@ -131,8 +138,10 @@ mod tests {
 
     #[test]
     fn system_prompt_contains_self_correction_logging() {
-        // Phase 3 Task 20: prompt must instruct the model to call
-        // flag_user_correction conservatively and silently.
+        // Phase 3 Task 20 + D4 inversion: prompt must instruct the model to
+        // call flag_user_correction conservatively, then acknowledge the
+        // write in one short sentence (the old silent-logging contract is
+        // reversed — the user asked to be told where lessons land).
         let layer = SpecialActionsLayer;
         let config = PromptConfig::default();
         let tools = vec![];
@@ -153,8 +162,20 @@ mod tests {
             "prompt must instruct conservative use"
         );
         assert!(
-            out.contains("do not announce"),
-            "prompt must instruct silent logging"
+            !out.contains("do not announce"),
+            "silent-logging wording must be gone (D4 inversion)"
+        );
+        assert!(
+            out.contains("ONE short sentence") && out.contains("user's language"),
+            "prompt must state the one-sentence acknowledgment contract"
+        );
+        assert!(
+            out.contains("Never quote the stored content back verbatim"),
+            "acknowledgment must not echo the stored entry"
+        );
+        assert!(
+            out.contains("never log the same correction twice"),
+            "prompt must forbid re-logging the same correction"
         );
         // Section ordering — Self-correction must come AFTER the finishing
         // discipline so the model is already grounded in turn-level conduct

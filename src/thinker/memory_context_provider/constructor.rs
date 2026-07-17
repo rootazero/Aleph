@@ -74,6 +74,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
@@ -86,6 +87,25 @@ impl MemoryContextProvider {
     pub const fn with_injection_mode(mut self, mode: MemoryInjectionMode) -> Self {
         self.injection_mode = mode;
         self
+    }
+
+    /// The configured injection mode. Callers that drive the mode-gated
+    /// builders (`build_orientation_user_message` / `build_profile_user_message`)
+    /// pass this back in so the gate reflects the provider's own config.
+    #[must_use]
+    pub const fn injection_mode(&self) -> MemoryInjectionMode {
+        self.injection_mode
+    }
+
+    /// The extension registry this provider dispatches through. Used by the
+    /// session-end emit path to run the same `on_capture` pipeline on
+    /// session-close `SessionEnd` rows as the `session_complete` tool path,
+    /// without threading the registry through every `close_session` caller.
+    #[must_use]
+    pub fn extensions(
+        &self,
+    ) -> crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry> {
+        self.extensions.clone()
     }
 
     /// Set the extension registry on an existing provider (builder-style).
@@ -147,6 +167,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]
@@ -247,6 +268,7 @@ impl MemoryContextProvider {
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             #[cfg(test)]

@@ -220,6 +220,12 @@ fn lenient_rewrite_node(node: &mut Value) {
 ///   `{"anyOf": [{"type":"null"}, {<sibling keys>, "type": X}]}`
 /// - Any other multi-type shape returns `Incompatible` with a
 ///   JSON-pointer-prefixed reason (caller should downgrade `strict`)
+/// - Returns `Incompatible` when it encounters a `$ref` node or a `$defs` /
+///   `definitions` bucket: references are never resolved here, so nested
+///   subschemas behind them would ship un-normalized (e.g. objects missing
+///   `additionalProperties: false`), which `OpenAI`'s strict validator rejects
+///   for the whole request. Callers that want strict for such schemas must
+///   inline references first (see [`deref_json_schema`])
 /// - Returns `StrictResult::Ok` on success, `StrictResult::Incompatible { reason }`
 ///   when a sub-schema can't be expressed in strict mode
 pub fn normalize_strict_schema(schema: &mut Value, set_top_level_strict: bool) -> StrictResult {
@@ -233,6 +239,32 @@ fn normalize_node(
     path: &str,
 ) -> StrictResult {
     if let Value::Object(map) = node {
+        // This normalizer never resolves `$ref` targets and never descends
+        // into `$defs` / `definitions` buckets, yet OpenAI's strict validator
+        // checks every nested subschema reachable through them (e.g. tagged
+        // enums like RememberArgs::Batch, where schemars emits
+        // `operations.items.$ref` → `#/$defs/SingleOp`). Shipping such a
+        // schema with `strict: true` 400s the whole request, so bail out and
+        // let the caller downgrade this tool to the non-strict path.
+        if let Some(ref_target) = map.get("$ref") {
+            let target = ref_target.as_str().unwrap_or("<non-string>");
+            return StrictResult::Incompatible {
+                reason: format!(
+                    "{path}: unresolved $ref is not strict-compatible (target: {target})"
+                ),
+            };
+        }
+        for bucket in ["$defs", "definitions"] {
+            if map.contains_key(bucket) {
+                return StrictResult::Incompatible {
+                    reason: format!(
+                        "{path}: {bucket} bucket is not strict-compatible \
+                         (nested subschemas are not normalized)"
+                    ),
+                };
+            }
+        }
+
         if is_top_level && set_strict {
             map.insert("strict".to_string(), Value::Bool(true));
         }
@@ -944,6 +976,175 @@ mod tests {
             }
             other => panic!("expected Incompatible, got {other:?}"),
         }
+    }
+
+    // =====================================================================
+    // $ref / $defs strict incompatibility (per-tool non-strict downgrade)
+    // =====================================================================
+
+    /// Mimics the schemars output for `RememberArgs` — a tagged enum whose
+    /// `Batch` variant carries `operations.items.$ref` → `#/$defs/SingleOp`.
+    fn remember_args_shaped_schema() -> Value {
+        serde_json::json!({
+            "oneOf": [
+                {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
+                {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]},
+                {"type": "object", "properties": {"action": {"type": "string", "const": "batch"}, "operations": {"type": "array", "items": {"$ref": "#/$defs/SingleOp"}}}, "required": ["action", "operations"]}
+            ],
+            "$defs": {
+                "SingleOp": {
+                    "oneOf": [
+                        {"type": "object", "properties": {"action": {"type": "string", "const": "add"}, "content": {"type": "string"}}, "required": ["action", "content"]},
+                        {"type": "object", "properties": {"action": {"type": "string", "const": "remove"}, "old_text": {"type": "string"}}, "required": ["action", "old_text"]}
+                    ]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn remember_batch_shaped_defs_schema_returns_incompatible() {
+        let mut schema = remember_args_shaped_schema();
+        let result = normalize_strict_schema(&mut schema, true);
+        match result {
+            StrictResult::Incompatible { reason } => {
+                assert!(reason.contains("$defs"), "reason: {reason}");
+            }
+            other => panic!("expected Incompatible, got {other:?}"),
+        }
+        // The bail happens before any mutation — the schema must not have
+        // been decorated with `strict: true` on the way out.
+        assert!(
+            schema.get("strict").is_none(),
+            "rejected schema must never carry strict: true"
+        );
+    }
+
+    #[test]
+    fn remember_batch_shaped_schema_after_envelope_still_incompatible() {
+        // The Responses path runs ensure_openai_tool_envelope BEFORE
+        // normalize_strict_schema; the flatten removes the top-level oneOf
+        // but keeps the $defs bucket and the $ref in operations.items.
+        let mut schema = remember_args_shaped_schema();
+        ensure_openai_tool_envelope(&mut schema);
+        assert!(schema.get("$defs").is_some(), "envelope keeps $defs");
+        let result = normalize_strict_schema(&mut schema, true);
+        assert!(
+            matches!(result, StrictResult::Incompatible { .. }),
+            "post-envelope shape must still downgrade, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn bare_ref_node_returns_incompatible_with_pointer_path() {
+        // Even without a root $defs bucket (e.g. a caller stripped it), a
+        // bare $ref node in a visited position must trigger the downgrade —
+        // the target subschema is unreachable for normalization.
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/SingleOp" }
+                }
+            }
+        });
+        let result = normalize_strict_schema(&mut schema, false);
+        match result {
+            StrictResult::Incompatible { reason } => {
+                assert!(
+                    reason.contains(".properties.operations.items"),
+                    "reason should carry JSON-pointer path: {reason}"
+                );
+                assert!(reason.contains("#/$defs/SingleOp"), "reason: {reason}");
+            }
+            other => panic!("expected Incompatible, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_definitions_bucket_returns_incompatible() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "color": { "$ref": "#/definitions/Color" }
+            },
+            "definitions": {
+                "Color": { "type": "string", "enum": ["red", "green"] }
+            }
+        });
+        let result = normalize_strict_schema(&mut schema, false);
+        assert!(matches!(result, StrictResult::Incompatible { .. }));
+    }
+
+    #[test]
+    fn deref_then_normalize_recovers_strict_for_defs_schema() {
+        // Documents the escape hatch: inlining references first (as the
+        // Moonshot policy path does) makes the schema strict-normalizable.
+        let mut schema = remember_args_shaped_schema();
+        deref_json_schema(&mut schema);
+        ensure_openai_tool_envelope(&mut schema);
+        let result = normalize_strict_schema(&mut schema, false);
+        assert_eq!(result, StrictResult::Ok);
+        let items = &schema["properties"]["operations"]["items"];
+        assert!(items.get("$ref").is_none(), "ref inlined");
+        assert_eq!(
+            items["oneOf"][0]["additionalProperties"], false,
+            "inlined subschemas get normalized"
+        );
+    }
+
+    #[test]
+    fn ref_free_schema_strict_result_byte_identical() {
+        // Regression pin: the $ref/$defs guards must not perturb the output
+        // for schemas without references. serde_json (without preserve_order)
+        // serializes maps key-sorted, so string equality is byte-level.
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "label": { "type": ["null", "string"] },
+                "user": {
+                    "type": "object",
+                    "properties": { "age": { "type": "integer" } }
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["user"]
+        });
+        let result = normalize_strict_schema(&mut schema, true);
+        assert_eq!(result, StrictResult::Ok);
+        let expected = serde_json::json!({
+            "additionalProperties": false,
+            "properties": {
+                "label": {
+                    "anyOf": [
+                        { "type": "null" },
+                        { "type": "string" }
+                    ]
+                },
+                "user": {
+                    "additionalProperties": false,
+                    "properties": { "age": { "type": "integer" } },
+                    "type": "object"
+                },
+                "tags": {
+                    "items": { "type": "string" },
+                    "type": "array"
+                }
+            },
+            "required": ["user"],
+            "strict": true,
+            "type": "object"
+        });
+        assert_eq!(schema, expected);
+        assert_eq!(
+            serde_json::to_string(&schema).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+            "byte-identical output for $ref-free schemas"
+        );
     }
 
     // =====================================================================

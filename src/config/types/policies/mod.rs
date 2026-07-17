@@ -20,7 +20,6 @@
 //! timeout_ms = 2500
 //!
 //! [policies.memory.compression]
-//! idle_timeout_seconds = 180
 //! turn_threshold = 15
 //!
 //! [policies.retry]
@@ -101,7 +100,7 @@ mod tests {
 
         // All should use defaults
         assert_eq!(config.retry.max_retries, 3);
-        assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
+        assert_eq!(config.memory.compression.turn_threshold, 20);
         assert_eq!(config.metrics.warning_multiplier, 2.0);
     }
 
@@ -117,14 +116,13 @@ mod tests {
         assert_eq!(config.retry.max_retries, 5);
 
         // Defaults for unspecified policies
-        assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
+        assert_eq!(config.memory.compression.turn_threshold, 20);
     }
 
     #[test]
     fn test_full_policies_config() {
         let toml = r#"
             [memory.compression]
-            idle_timeout_seconds = 600
             turn_threshold = 30
 
             [retry]
@@ -142,7 +140,7 @@ mod tests {
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Verify all specified values
-        assert_eq!(config.memory.compression.idle_timeout_seconds, 600);
+        assert_eq!(config.memory.compression.turn_threshold, 30);
         assert_eq!(config.retry.max_retries, 10);
         assert_eq!(config.web_fetch.max_content_length, 50000);
         assert_eq!(config.metrics.warning_multiplier, 3.0);

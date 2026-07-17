@@ -67,17 +67,12 @@ const fn default_bm25_bonus() -> f32 {
 /// `memory_config.update` routes them back to the policy section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressionSettings {
-    #[serde(default = "default_compression_idle_timeout")]
-    pub idle_timeout_seconds: u32,
     #[serde(default = "default_compression_turn_threshold")]
     pub turn_threshold: u32,
     #[serde(default = "default_compression_background_interval")]
     pub background_interval_seconds: u32,
 }
 
-const fn default_compression_idle_timeout() -> u32 {
-    300
-}
 const fn default_compression_turn_threshold() -> u32 {
     20
 }
@@ -88,7 +83,6 @@ const fn default_compression_background_interval() -> u32 {
 impl Default for CompressionSettings {
     fn default() -> Self {
         Self {
-            idle_timeout_seconds: default_compression_idle_timeout(),
             turn_threshold: default_compression_turn_threshold(),
             background_interval_seconds: default_compression_background_interval(),
         }

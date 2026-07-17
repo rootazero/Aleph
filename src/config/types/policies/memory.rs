@@ -19,15 +19,10 @@ pub struct MemoryPolicies {
 
 /// Policy for compression scheduling
 ///
-/// Controls when memory compression is triggered based on idle time,
-/// conversation turns, and background intervals.
+/// Controls when memory compression is triggered based on conversation
+/// turns and background intervals.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompressionPolicy {
-    /// Idle timeout in seconds before triggering compression
-    /// Default: 300 (5 minutes)
-    #[serde(default = "default_idle_timeout_seconds")]
-    pub idle_timeout_seconds: u32,
-
     /// Conversation turn threshold for triggering compression
     /// Default: 20
     #[serde(default = "default_turn_threshold")]
@@ -42,15 +37,10 @@ pub struct CompressionPolicy {
 impl Default for CompressionPolicy {
     fn default() -> Self {
         Self {
-            idle_timeout_seconds: default_idle_timeout_seconds(),
             turn_threshold: default_turn_threshold(),
             background_interval_seconds: default_background_interval_seconds(),
         }
     }
-}
-
-const fn default_idle_timeout_seconds() -> u32 {
-    300
 }
 
 const fn default_turn_threshold() -> u32 {
@@ -62,12 +52,6 @@ const fn default_background_interval_seconds() -> u32 {
 }
 
 impl CompressionPolicy {
-    /// Get idle timeout as `std::time::Duration`
-    #[must_use]
-    pub const fn idle_timeout_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.idle_timeout_seconds as u64)
-    }
-
     /// Get background interval as `std::time::Duration`
     #[must_use]
     pub const fn background_interval_duration(&self) -> std::time::Duration {
@@ -82,20 +66,20 @@ mod tests {
     #[test]
     fn test_compression_defaults() {
         let policy = CompressionPolicy::default();
-        assert_eq!(policy.idle_timeout_seconds, 300);
         assert_eq!(policy.turn_threshold, 20);
         assert_eq!(policy.background_interval_seconds, 3600);
     }
 
     #[test]
     fn test_memory_policies_nested() {
+        // `idle_timeout_seconds` was removed with the dead idle-trigger path;
+        // old config files carrying it must still parse (unknown keys ignored).
         let toml = r#"
             [compression]
             idle_timeout_seconds = 180
             turn_threshold = 15
         "#;
         let policies: MemoryPolicies = toml::from_str(toml).unwrap();
-        assert_eq!(policies.compression.idle_timeout_seconds, 180);
         assert_eq!(policies.compression.turn_threshold, 15);
         // Default for unspecified
         assert_eq!(policies.compression.background_interval_seconds, 3600);
@@ -105,8 +89,8 @@ mod tests {
     fn test_duration_helpers() {
         let compression = CompressionPolicy::default();
         assert_eq!(
-            compression.idle_timeout_duration(),
-            std::time::Duration::from_secs(300)
+            compression.background_interval_duration(),
+            std::time::Duration::from_secs(3600)
         );
     }
 }

@@ -404,6 +404,17 @@ pub fn build_feedback_distill_prompt(
          - a STRENGTHEN of an existing candidate (same rule, more evidence)\n\
          - a SUPERSEDE of an existing candidate (better wording / corrects it)\n\
          - a SKIP (transient noise, not actionable)\n\n\
+         Quality bar for every `rule` you emit:\n\
+         - Phrase evidence → implication: when <situation>, the user said \"<verbatim quote>\" \
+         → future default: <rule>.\n\
+         - Preserve verbatim greppable handles — file paths, exact command/tool names, error \
+         codes; never paraphrase identifiers.\n\
+         - Convert relative time (\"yesterday\", \"last week\") to absolute dates.\n\
+         - Empty output beats noise: for each signal ask \"Will a future agent plausibly act \
+         better for having this?\" — if not, SKIP it.\n\
+         - Anti-rot denylist: never store environment-dependent transient failures as \
+         permanent truths, and never store a negative assertion that a tool is broken (it \
+         gets fixed) — store the remedy, not the failure narrative.\n\n\
          Existing feedback-note candidates (you MUST reference these IDs verbatim if you \
          choose strengthen or supersede):\n\
          existing_candidates: {candidates_block}\n\n\
@@ -623,6 +634,22 @@ mod tests {
         let prompt = build_feedback_distill_prompt(&corrections, &[], 3);
         assert!(prompt.contains("severity_hint: high"));
         assert!(prompt.contains("suggested_rule: rule for F1"));
+    }
+
+    #[test]
+    fn prompt_includes_distillation_quality_rules() {
+        // Quality bar: evidence→implication phrasing, verbatim greppable
+        // handles, absolute dates, empty-output-preferred gate, and the
+        // anti-rot denylist (store the remedy, not the failure narrative).
+        let corrections = vec![fake_correction("F1", "x", "med")];
+        let prompt = build_feedback_distill_prompt(&corrections, &[], 3);
+        assert!(prompt.contains("future default"));
+        assert!(prompt.contains("never paraphrase identifiers"));
+        assert!(prompt.contains("absolute dates"));
+        assert!(prompt.contains("Will a future agent plausibly act better"));
+        assert!(prompt.contains("remedy, not the failure narrative"));
+        // The empty sentinel must stay intact for the tolerant parser.
+        assert!(prompt.contains("Return `{\"actions\": []}` if nothing actionable."));
     }
 
     #[test]

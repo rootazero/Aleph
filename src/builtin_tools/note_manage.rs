@@ -1236,9 +1236,8 @@ impl AlephTool for NoteManageTool {
          contradicts are force-surfaced at retrieval. \
          Use this tool to store and retrieve long-term knowledge and preferences. \
          This is the DURABLE tier — searchable and recalled on relevance, not always \
-         in-prompt. If a fact is identity-level and worth re-reading EVERY session \
-         regardless of topic (a core preference, standing correction), also pin it to \
-         the hot zone with `remember`. \
+         in-prompt. ROUTING: the authoritative destination ladder lives in the memory \
+         protocol section of your system prompt. \
          IMPORTANT: notes form a wiki — when creating a note, ALWAYS connect it to \
          related notes via the `links` parameter; linkless notes become orphan \
          islands and are archived early. The create result returns `related_notes` \
@@ -1372,7 +1371,10 @@ fn validate_category(category: &str) -> Result<()> {
 /// designed for; without it the entire Strict scope (and its persistence
 /// patterns) was unreachable in production.
 pub(crate) fn scan_note_for_threats(text: &str) -> Result<()> {
-    scan_note_at_scope(text, crate::security::injection_patterns::ThreatScope::Strict)
+    scan_note_at_scope(
+        text,
+        crate::security::injection_patterns::ThreatScope::Strict,
+    )
 }
 
 /// Exfiltration-only note scan (`ThreatScope::All`): flags classic
@@ -1429,6 +1431,23 @@ mod tests {
         assert!(validate_category("subagent-run").is_ok());
         assert!(validate_category("unknown-cat").is_err());
         assert!(validate_category("").is_err());
+    }
+
+    #[test]
+    fn description_defers_routing_to_the_protocol_ladder() {
+        // Destination-ladder alignment: routing lives in ONE place (the
+        // memory-protocol prompt layer). The old "also pin it to the hot zone
+        // with `remember`" sentence instructed a dual write and misrouted
+        // "standing correction" — it must not resurface.
+        let d = <NoteManageTool as AlephTool>::DESCRIPTION;
+        assert!(
+            d.contains("authoritative destination ladder"),
+            "must cross-reference the memory-protocol ladder"
+        );
+        assert!(
+            !d.contains("also pin") && !d.contains("standing correction"),
+            "pre-ladder dual-write advice must not resurface"
+        );
     }
 
     use crate::memory::store::SqliteMemoryBackend;
@@ -1513,7 +1532,9 @@ mod tests {
         // invisible in the session agent's graph (the multi-agent split defect).
         let (_dir, tool) = mk_tool();
         let resolved = crate::tools::turn_context::TURN_CONTEXT
-            .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&blank_args()))
+            .sync_scope(turn_ctx("research"), || {
+                tool.resolve_agent_id(&blank_args())
+            })
             .unwrap();
         assert_eq!(resolved, "research");
     }
@@ -1634,9 +1655,12 @@ mod tests {
     #[tokio::test]
     async fn query_without_embedder_falls_back_to_fts() {
         let (_d, tool) = mk_tool();
-        tool.call(create_args("fts-target", "- tokioruntime scheduling deep dive"))
-            .await
-            .unwrap();
+        tool.call(create_args(
+            "fts-target",
+            "- tokioruntime scheduling deep dive",
+        ))
+        .await
+        .unwrap();
         let r = tool
             .call(NoteManageArgs {
                 action: NoteManageAction::Query,

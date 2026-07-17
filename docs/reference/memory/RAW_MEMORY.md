@@ -79,6 +79,15 @@ pub enum RawMemorySource {
 
     // Phase 3 self-evolution — user-correction signal.
     Correction { severity: String, suggested_rule: Option<String> },
+
+    // Spec 3 (Dream signals) — one row per tool invocation. `content` carries
+    // a short human-readable summary; structured stats live in `source_detail`.
+    ToolInvocation { tool_name: String, success: bool, duration_ms: u64 },
+
+    // Batch 2 (session-end reflection) — a first-person "lessons learned"
+    // distillation produced once a substantive session ends. Already condensed;
+    // ingestable (compound ingestor turns it into feedback/lessons notes).
+    Reflection,
 }
 
 /// Sub-reason for `RawMemorySource::SessionEnd`.
@@ -121,6 +130,8 @@ pub struct RawMemory {
 | `Delegation { child_agent_id }` | `"delegation"` | `{ "child_agent_id": "..." }` |
 | `SessionEnd { reason }` | `"session_end"` | `{ "reason": "disconnect" \| "task_done" }` |
 | `Correction { severity, suggested_rule }` | `"correction"` | `{ "severity": "...", "suggested_rule": "..." }` |
+| `ToolInvocation { tool_name, success, duration_ms }` | `"tool_invocation"` | `{ "tool_name": "...", "success": true, "duration_ms": 42 }` |
+| `Reflection` | `"reflection"` | `None` |
 
 `from_persisted(token, detail)` reconstructs the enum. Unknown tokens fall through to `ToolOutput` for backward compatibility.
 
@@ -161,12 +172,12 @@ The `attachment_text` column and the `RawMemory::with_attachment_text` builder e
 
 ### 6.4 Capture Hooks (Spec 1)
 
-Three additional producers feed `raw_memories` via the Spec 1 memory capture hooks. Each writes rows with a dedicated `RawMemorySource` variant; `CompressionService::extract_note_updates_for_source` dispatches each group to a specialised system prompt via `memory::compression::source_prompts::prompt_for`.
+Three additional producers feed `raw_memories` via the Spec 1 memory capture hooks. Each writes rows with a dedicated `RawMemorySource` variant; `CompressionService::compress_to_notes` groups the drained batch per source and hands each group to `CompoundIngestor::ingest_batch`, which derives the group's specialised system prompt via `memory::compression::source_prompts::prompt_for`.
 
 - **`PreCompress`** — emitted by `SessionCompactor` before a session chunk is dropped to summary. The pre-drop raw text lands in `raw_memories` so the RESCUE prompt can extract durable knowledge before the chunk is gone. Producer: `src/memory/session_compactor/mod.rs` (production path) and `src/components/session_compactor/compactor.rs::replace_with_summary` (event-driven variant). Writer injected via `SessionCompactor::with_raw_memory_writer(..)`.
 - **`Delegation { child_agent_id }`** — emitted by `A2ASubAgent::execute` (`src/a2a/sub_agent.rs`) on the success branch just before `Ok(SubAgentResult)`. Content carries delegation prompt + sub-agent summary; the LESSON prompt distills durable parent-agent lessons (tool patterns, gotchas, failure modes). Parent `agent_id` lifted from `request.execution_context.metadata["parent_agent_id"]` (falls back to `"default"`).
 - **`SessionEnd { reason }`** — two flavours:
-  - `reason = Disconnect`: emitted by `SessionManager::close_session` (`src/gateway/session_manager/ops.rs`) with the conversation tail (up to 64 most-recent messages). DIGEST prompt distills user preferences, project progress, unfinished items.
+  - `reason = Disconnect`: emitted by `SessionManager::close_session` (`src/gateway/session_manager/ops/emit.rs`) with the conversation tail (up to 64 most-recent messages). The row passes the memory-extension `on_capture` filters (registry resolved from the startup-registered `SESSION_END_MCP` cell; no registry → direct insert). DIGEST prompt distills user preferences, project progress, unfinished items.
   - `reason = TaskDone`: emitted by the new `session_complete` builtin tool (`src/builtin_tools/session_complete.rs`) when the LLM marks a self-contained task complete. RETRO prompt captures transferable lessons — the R8 LLM-sovereignty path for task-boundary detection.
 
 All producers are synchronous-write / async-extract: each writes exactly one `raw_memories` row and returns; extraction runs later in `CompressionService` per its normal schedule. Emission is fire-and-forget (`tokio::spawn`) so hook overhead is kept out of the hot path.
@@ -177,7 +188,9 @@ See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-des
 
 ### 7.1 CompressionService
 
-`src/memory/compression/service.rs` drives the L0→L1 distillation. Per workspace tick it calls `get_unprocessed_raw_memories(workspace_id, batch_size)`, filters out `RawMemorySource::Transcript` rows (transcripts are already chunk-indexed; they do not need a second distillation pass), converts each remaining row into a `MemoryEntry` — injecting `attachment_text` when present — runs note extraction, writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`, and finally calls `mark_raw_as_processed(consumed_ids)`. The latest `created_at` of the consumed batch becomes the new `last_compression_timestamp`.
+`src/memory/compression/service.rs` drives the L0→L1 distillation. Per workspace tick it calls `get_unprocessed_raw_memories(workspace_id, batch_size)`, then partitions the batch: `RawMemorySource::ToolInvocation` rows are per-call **telemetry** (consumed by the insights aggregator and dream signal metrics by source, independent of `is_processed`), not knowledge — they never enter the note-extraction LLM batch and are marked processed immediately so the unprocessed queue stays bounded. `Transcript` rows **are** ingested alongside SessionEnd / PreCompress / Delegation / Reflection (the historical filter that excluded them assumed a separate per-turn pipeline that never landed; excluding them starved L1 — Spec 1 G3-B). `Correction` rows are primarily consumed by the `FeedbackDistill` dream stage via the `aleph://correction/` path prefix, isolated from the `is_processed` flag this pipeline owns.
+
+The remaining ingestable rows are grouped by prompt-affecting source identity (a mixed drain MUST be split — the ingestor derives its per-source prompt from `raws[0].source`, so ungrouped Reflection/SessionEnd/Delegation rows would silently degrade to whichever source was fetched first). Each group goes through `CompoundIngestor::ingest_batch`, which writes/updates markdown notes under `<memory_dir>/<workspace>/<category>/<file>.md`; rows are marked processed per group right after that group's ingest settles (a failed group stays unprocessed and retries; an empty plan defers rows still within a 6-hour grace window). The latest `created_at` of the drained batch becomes the new `last_compression_timestamp`.
 
 ### 7.2 recall_context
 

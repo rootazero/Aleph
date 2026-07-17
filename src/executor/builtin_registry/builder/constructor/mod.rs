@@ -458,7 +458,8 @@ impl BuiltinToolRegistry {
                 rerank_cfg.as_ref(),
                 scoring_cfg.as_ref(),
                 expansion_cfg.as_ref(),
-            );
+            )
+            .with_project_scoping(config.memory_project_scoped);
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
@@ -1120,6 +1121,7 @@ impl BuiltinToolRegistry {
             // held as constructed instances (config_audit / media_* / recall_context).
             config: config.config.clone(),
             media_pipeline: config.media_pipeline.clone(),
+            memory_project_scoped: config.memory_project_scoped,
             recall_context_db: config.memory_db.clone(),
             memory_trace_db: config.memory_db.clone(),
             tools,

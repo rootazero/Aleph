@@ -230,7 +230,7 @@ async fn context_mode_injects_fenced_message_and_hides_memory_tools() {
     //  will short-circuit to None — that is acceptable here, but if it IS present
     //  the XML fence must be correct.)
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question", None)
+        .build_memory_user_message("agent-test", "integration test question", None, None)
         .await
         .unwrap();
 
@@ -278,7 +278,7 @@ async fn tools_mode_skips_injection_and_registers_memory_tools() {
 
     // Provider: Tools mode must always return None.
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question", None)
+        .build_memory_user_message("agent-test", "integration test question", None, None)
         .await
         .unwrap();
     assert!(msg.is_none(), "Tools mode must not auto-inject");
@@ -330,7 +330,7 @@ async fn hybrid_mode_does_both() {
     // Provider: Hybrid mode auto-injects (same as Context).
     // If the envelope is non-empty after assembly, a fenced message is returned.
     let msg = provider
-        .build_memory_user_message("agent-test", "integration test question", None)
+        .build_memory_user_message("agent-test", "integration test question", None, None)
         .await
         .unwrap();
 
