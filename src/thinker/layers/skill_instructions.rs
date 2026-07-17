@@ -99,9 +99,9 @@ impl PromptLayer for SkillInstructionsLayer {
         };
         let xml = sanitize_for_prompt(&xml, SanitizeLevel::Moderate);
         output.push_str("## Available Skills\n\n");
-        output.push_str(
-            "Invoke a skill via the `skill_read` tool to load specialized instructions for a task.\n",
-        );
+        // `DEFERRED_LOADING_GUIDANCE` already opens with "To use a skill, first
+        // call the `skill_read` tool…", so we don't prepend a redundant lead-in
+        // sentence here (entropy reduction — the two duplicated each other).
         output.push_str(crate::skill::prompt::DEFERRED_LOADING_GUIDANCE);
         output.push_str("\n\n");
         output.push_str(&xml);

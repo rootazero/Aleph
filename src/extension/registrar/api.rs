@@ -72,10 +72,9 @@ impl<'a> CapabilityApi<'a> {
             CapabilityDeclaration::Service(service) => {
                 self.registry.register_service(service);
             }
-            CapabilityDeclaration::Command(command) => {
-                self.registry.register_command(command);
-            }
             CapabilityDeclaration::Skill(skill) => {
+                // Plugin `commands/` markdown arrives here too, as a
+                // `SkillRegistration` tagged `skill_type = Command`.
                 self.registry.register_skill(skill);
             }
             CapabilityDeclaration::Agent(agent) => {
@@ -137,8 +136,8 @@ impl<'a> CapabilityApi<'a> {
 mod tests {
     use super::*;
     use crate::extension::registry::{
-        AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
-        SkillRegistration, ToolRegistration,
+        AgentRegistration, HookRegistration, ServiceRegistration, SkillRegistration,
+        ToolRegistration,
     };
     use crate::extension::types::HookEvent;
 
@@ -307,14 +306,6 @@ mod tests {
         api.register_capability(make_service()).unwrap();
         api.register_capability(make_skill()).unwrap();
 
-        api.register_capability(CapabilityDeclaration::Command(CommandRegistration {
-            name: "test-slash".to_string(),
-            description: "d".to_string(),
-            handler: "h".to_string(),
-            plugin_id: "test-plugin".to_string(),
-        }))
-        .unwrap();
-
         api.register_capability(CapabilityDeclaration::Agent(AgentRegistration {
             name: "test-agent".to_string(),
             description: Some("d".to_string()),
@@ -339,7 +330,6 @@ mod tests {
         assert!(reg.get_tool("my_tool").is_some());
         assert_eq!(reg.list_hooks().len(), 1);
         assert!(reg.get_service("test-service").is_some());
-        assert!(reg.get_command("test-slash").is_some());
         assert!(reg.get_skill("test-skill").is_some());
         assert!(reg.get_agent("test-agent").is_some());
     }

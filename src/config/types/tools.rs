@@ -179,6 +179,13 @@ pub fn default_core_tools() -> Vec<String> {
         "search", "web_fetch", "memory_search", "remember",
         "skill_read", "skill_list", "scratchpad", "note_manage",
         "system", "get_tool_schema", "moa",
+        // MCP native read mechanism — kept core (never schema-collapsed) so a
+        // model that sees the `<available MCP resources>` index can call
+        // `mcp_read_resource`/`mcp_get_prompt` in one step instead of a
+        // `get_tool_schema` round-trip, which is friction that otherwise pushes
+        // it toward `cat`-ing `file://` paths. Symmetric with `skill_read` above.
+        // No-op when no MCP server is connected (the names have no live tool).
+        "mcp_read_resource", "mcp_get_prompt",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -744,7 +751,9 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "get_tool_schema"));
         assert!(c.core.iter().any(|t| t == "subagent"));
         assert!(c.core.iter().any(|t| t == "moa"));
-        assert_eq!(c.core.len(), 20);
+        assert!(c.core.iter().any(|t| t == "mcp_read_resource"));
+        assert!(c.core.iter().any(|t| t == "mcp_get_prompt"));
+        assert_eq!(c.core.len(), 22);
         assert!(!c.truncate_tool_descriptions);
     }
 

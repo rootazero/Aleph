@@ -77,12 +77,15 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
         Err(e) => return e.with_id(request.id),
     };
 
-    // Look up the command in the plugin registry
+    // Look up the command in the plugin registry. Plugin `commands/` markdown is
+    // stored as a `SkillRegistration` tagged `skill_type = Command`; its markdown
+    // body (`content`) is the handler payload (the old `CommandRegistration.handler`).
     let command_handler = {
         let registry = manager.get_plugin_registry().await;
         registry
-            .get_command(&params.command_name)
-            .map(|cmd| (cmd.plugin_id.clone(), cmd.handler.clone()))
+            .get_skill(&params.command_name)
+            .filter(|s| s.skill_type == crate::extension::SkillType::Command)
+            .map(|s| (s.plugin_id.clone(), s.content.clone()))
     };
 
     let (registered_plugin_id, handler) = match command_handler {

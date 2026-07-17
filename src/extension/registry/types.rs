@@ -107,19 +107,6 @@ const fn default_service_auto_start() -> bool {
 // P3 Optional Registration Types
 // ============================================================================
 
-/// In-chat command registration (e.g., /mycommand)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandRegistration {
-    /// Command name without leading slash
-    pub name: String,
-    /// Description shown in command help
-    pub description: String,
-    /// Handler function name within the plugin
-    pub handler: String,
-    /// ID of the plugin that registered this command
-    pub plugin_id: String,
-}
-
 // ============================================================================
 // Diagnostics
 // ============================================================================
@@ -526,17 +513,6 @@ mod tests {
             auto_start: true,
         };
         assert_ne!(service.start_handler, service.stop_handler);
-    }
-
-    #[test]
-    fn test_command_registration() {
-        let command = CommandRegistration {
-            name: "remind".to_string(),
-            description: "Set a reminder".to_string(),
-            handler: "handle_remind".to_string(),
-            plugin_id: "reminder-plugin".to_string(),
-        };
-        assert_eq!(command.name, "remind");
     }
 
     #[test]

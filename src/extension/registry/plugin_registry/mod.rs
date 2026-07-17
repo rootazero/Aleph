@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use super::types::{
-    AgentRegistration, CommandRegistration, HookRegistration, PluginDiagnostic,
-    ServiceRegistration, SkillRegistration, ToolRegistration,
+    AgentRegistration, HookRegistration, PluginDiagnostic, ServiceRegistration, SkillRegistration,
+    ToolRegistration,
 };
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 
@@ -34,10 +34,9 @@ pub struct PluginRegistry {
     /// Registered background services by ID
     services: HashMap<String, ServiceRegistration>,
 
-    /// Registered in-chat commands by name
-    commands: HashMap<String, CommandRegistration>,
-
-    /// Registered skills by name
+    /// Registered skills by name. Plugin `commands/` markdown also lives here,
+    /// as entries tagged `skill_type = SkillType::Command` — see
+    /// [`crate::extension::ExtensionManager::get_all_commands`].
     skills: HashMap<String, SkillRegistration>,
 
     /// Registered agents by name
@@ -62,7 +61,6 @@ impl PluginRegistry {
         self.tools.clear();
         self.hooks.clear();
         self.services.clear();
-        self.commands.clear();
         self.skills.clear();
         self.agents.clear();
         self.diagnostics.clear();
@@ -269,34 +267,6 @@ impl PluginRegistry {
     // In-Chat Command Registration
     // =========================================================================
 
-    /// Register an in-chat command (e.g., /mycommand).
-    ///
-    /// The command is stored under both its namespaced key (`plugin_id:name`) and its
-    /// short name (`name`) for backward compatibility. First-come wins for the short key.
-    pub fn register_command(&mut self, command: CommandRegistration) {
-        let namespaced_key = format!("{}:{}", command.plugin_id, command.name);
-        let short_key = command.name.clone();
-
-        // Register under short name for backward compat (first-come wins)
-        self.commands
-            .entry(short_key)
-            .or_insert_with(|| command.clone());
-        // Always register under namespaced key
-        self.commands.insert(namespaced_key, command);
-    }
-
-    /// Get an in-chat command by name.
-    #[must_use]
-    pub fn get_command(&self, name: &str) -> Option<&CommandRegistration> {
-        self.commands.get(name)
-    }
-
-    /// List all registered in-chat commands.
-    #[must_use]
-    pub fn list_commands(&self) -> Vec<&CommandRegistration> {
-        self.commands.values().collect()
-    }
-
     // =========================================================================
     // Skill Registration
     // =========================================================================
@@ -409,10 +379,8 @@ impl PluginRegistry {
         // Remove all services from this plugin
         self.services.retain(|_, s| s.plugin_id != plugin_id);
 
-        // Remove all in-chat commands from this plugin
-        self.commands.retain(|_, c| c.plugin_id != plugin_id);
-
-        // Remove all skills from this plugin
+        // Remove all skills (and `commands/`-derived Command-typed skills) from
+        // this plugin
         self.skills.retain(|_, s| s.plugin_id != plugin_id);
 
         // Remove all agents from this plugin
@@ -436,8 +404,17 @@ impl PluginRegistry {
             tools: self.tools.len(),
             hooks: self.hooks.len(),
             services: self.services.len(),
-            commands: self.commands.len(),
-            skills: self.skills.len(),
+            // Commands and skills share one store, split by `skill_type`.
+            commands: self
+                .skills
+                .values()
+                .filter(|s| s.skill_type == crate::extension::types::SkillType::Command)
+                .count(),
+            skills: self
+                .skills
+                .values()
+                .filter(|s| s.skill_type == crate::extension::types::SkillType::Skill)
+                .count(),
             agents: self.agents.len(),
             diagnostics: self.diagnostics.len(),
         }
