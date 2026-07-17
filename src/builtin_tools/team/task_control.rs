@@ -159,18 +159,29 @@ impl AlephTool for TeamTaskControlTool {
             }
             TeamTaskControlArgs::Retry { task_id } => {
                 debug!(task_id = %task_id, "team_task_control: retry");
-                let current = self.fetch_status(&task_id).await?;
-                if matches!(current, CoordTaskStatus::InProgress) {
+                let current = self.coord_store.get_task(&task_id).await?.ok_or_else(|| {
+                    AlephError::invalid_input(format!("task '{task_id}' not found"))
+                })?;
+                if matches!(current.status, CoordTaskStatus::InProgress) {
                     return Err(AlephError::invalid_input(
                         "cannot retry an in-progress task — cancel it first".to_string(),
                     ));
                 }
+                // A deliberate hard-retry re-arms the automatic retry budget:
+                // stamp the anchor so only failures from here on count against
+                // max_retries (otherwise a budget-exhausted task dies again on
+                // its first new failure).
+                let metadata = crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+                    current.metadata,
+                    chrono::Utc::now().timestamp().max(0) as u64,
+                );
                 self.coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
                             status: Some(CoordTaskStatus::Pending),
                             result: Some(String::new()),
+                            metadata: Some(metadata),
                             ..Default::default()
                         },
                     )

@@ -383,12 +383,29 @@ pub async fn handle_workflow_retry_step(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // A deliberate re-queue re-arms the automatic retry budget: stamp the
+    // anchor onto the task's current metadata so only failures from here on
+    // count against max_retries (mirrors `workflow_step_review.retry`). A
+    // missing/unreadable task skips the stamp and lets update_task surface
+    // the real error below.
+    let metadata = coord_store
+        .get_task(&params.task_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|t| {
+            crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+                t.metadata,
+                chrono::Utc::now().timestamp().max(0) as u64,
+            )
+        });
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Pending),
                 result: Some(String::new()),
+                metadata,
                 ..Default::default()
             },
         )
@@ -588,12 +605,19 @@ pub async fn handle_task_retry(
             "Cannot retry an in-progress task — cancel it first".to_string(),
         );
     }
+    // Deliberate hard-retry → re-arm the automatic retry budget (see
+    // `team_task_control.retry` — same anchor, same rationale).
+    let metadata = crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
+        current.metadata,
+        chrono::Utc::now().timestamp().max(0) as u64,
+    );
     if let Err(e) = coord_store
         .update_task(
             &params.task_id,
             CoordTaskUpdate {
                 status: Some(CoordTaskStatus::Pending),
                 result: Some(String::new()),
+                metadata: Some(metadata),
                 ..Default::default()
             },
         )
