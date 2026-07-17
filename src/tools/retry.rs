@@ -59,12 +59,17 @@ pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
     "user_profile",
     // File / code search — pure reads
     "search",
-    // Skill discovery — pure reads
+    // Skill discovery — pure reads. NB: the tool is registered as `skill_read`
+    // (the module is `skill_reader`); `skill_reader` was a ghost name matching
+    // no live tool.
     "skill_status",
-    "skill_reader",
-    // Tool introspection — pure reads
-    "list_tools",
-    "search_tools",
+    "skill_read",
+    "skill_list",
+    // Tool introspection — pure reads. The live meta-tools are `tool_search`
+    // (progressive disclosure) and `get_tool_schema`; `list_tools` /
+    // `search_tools` were never registered — dead keys that could only ever be
+    // claimed by a future unrelated tool of that name.
+    "tool_search",
     "get_tool_schema",
     // Web — GET-only path via safe_fetch
     "web_fetch",
@@ -229,5 +234,20 @@ mod tests {
         assert!(!is_idempotent_builtin_name("bash_exec"));
         assert!(!is_idempotent_builtin_name("session_send"));
         assert!(!is_idempotent_builtin_name("nonexistent_tool"));
+    }
+
+    /// The allowlist must key on the tools' REGISTERED names, not module names
+    /// or never-registered ghosts — otherwise the entry classifies nothing.
+    #[test]
+    fn idempotent_allowlist_uses_live_tool_names() {
+        // Live read-only meta-tools are recognized.
+        assert!(is_idempotent_builtin_name("skill_read"));
+        assert!(is_idempotent_builtin_name("skill_list"));
+        assert!(is_idempotent_builtin_name("tool_search"));
+        assert!(is_idempotent_builtin_name("get_tool_schema"));
+        // Ghost names that match no registered tool are gone.
+        assert!(!is_idempotent_builtin_name("skill_reader"));
+        assert!(!is_idempotent_builtin_name("list_tools"));
+        assert!(!is_idempotent_builtin_name("search_tools"));
     }
 }

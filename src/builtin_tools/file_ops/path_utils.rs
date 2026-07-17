@@ -65,13 +65,33 @@ pub fn get_denied_paths() -> Vec<String> {
         // Note: output directory is intentionally NOT denied
     }
 
-    // Add Unix-specific paths
+    // Add Unix-specific paths. Beyond the classic credential files, deny the
+    // privilege-escalation / persistence surfaces an agent's file tools must
+    // never read or clobber — writing any of these is a host-takeover vector
+    // (sudoers, cron, PAM, the dynamic-linker preload hook), and reading the
+    // SSH host-key dir or root's home leaks credentials. Mirrors hermes-agent's
+    // `_SENSITIVE_PATH_PREFIXES`; each is a directory or leaf covered by the
+    // canonicalizing prefix match below.
     #[cfg(unix)]
     {
-        denied_paths.extend(["/etc/passwd".to_string(), "/etc/shadow".to_string()]);
+        denied_paths.extend([
+            "/etc/passwd".to_string(),
+            "/etc/shadow".to_string(),
+            "/etc/sudoers".to_string(),
+            "/etc/sudoers.d".to_string(),
+            "/etc/ssh".to_string(),
+            "/etc/pam.d".to_string(),
+            "/etc/crontab".to_string(),
+            "/etc/cron.d".to_string(),
+            "/etc/ld.so.preload".to_string(),
+            "/root/.ssh".to_string(),
+        ]);
     }
 
-    // Add Windows-specific sensitive paths
+    // Add Windows-specific sensitive paths. The `%APPDATA%` / `%LOCALAPPDATA%`
+    // tokens are expanded at match time by [`path_is_denied`] — without that
+    // two of these three rules never fire (a canonical path never literally
+    // contains `%APPDATA%`).
     #[cfg(target_os = "windows")]
     {
         denied_paths.extend([
@@ -82,6 +102,104 @@ pub fn get_denied_paths() -> Vec<String> {
     }
 
     denied_paths
+}
+
+/// Expand a denylist entry's leading `~` (home) and Windows environment tokens
+/// (`%APPDATA%` / `%LOCALAPPDATA%` / `%USERPROFILE%`) to concrete paths so the
+/// prefix comparison below sees the same shape a canonical path has. Unix
+/// entries carry no `%…%` tokens, so the Windows expansion is a no-op there.
+fn expand_denied_entry(denied: &str) -> String {
+    // `mut` is only exercised on Windows (the env-token expansion below); on
+    // other targets the binding is written once.
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut out = if denied.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            home.join(denied.strip_prefix("~/").unwrap_or(denied))
+                .to_string_lossy()
+                .to_string()
+        } else {
+            denied.to_string()
+        }
+    } else {
+        denied.to_string()
+    };
+    #[cfg(target_os = "windows")]
+    {
+        for (token, var) in [
+            ("%APPDATA%", "APPDATA"),
+            ("%LOCALAPPDATA%", "LOCALAPPDATA"),
+            ("%USERPROFILE%", "USERPROFILE"),
+        ] {
+            if out.contains(token) {
+                if let Ok(val) = std::env::var(var) {
+                    out = out.replace(token, &val);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether an already-canonical path falls under any denylist entry.
+///
+/// The single source of truth for the deny check, shared by
+/// [`check_and_resolve_path`] and by the per-entry re-checks that enumeration /
+/// relocation operations (`stats`, `organize`, recursive `copy`) run on paths
+/// they discover *after* the initial gate — a symlink or glob match can point
+/// at a denied target the top-level path never named. Each entry is expanded
+/// ([`expand_denied_entry`]) and normalized the SAME way as the input (resolving
+/// symlinks in existing ancestors) before the component-wise prefix compare, so
+/// a symlinked ancestor (`/etc` → `/private/etc` on macOS) cannot defeat it.
+pub fn path_is_denied(canonical: &Path, denied_paths: &[String]) -> bool {
+    for denied in denied_paths {
+        let denied_expanded = expand_denied_entry(denied);
+        let denied_norm = safe_normalize(Path::new(&denied_expanded))
+            .unwrap_or_else(|_| PathBuf::from(&denied_expanded));
+        if canonical.starts_with(&denied_norm) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `canonical` is a Linux `/proc/<pid>/…` pseudo-file that leaks another
+/// process's secrets (environment, memory, mappings). These are not covered by
+/// the credential denylist and are not regular files an agent has any business
+/// reading — `/proc/<pid>/environ` alone exposes every exported secret of a
+/// running process. Defense-in-depth mirroring hermes-agent's
+/// `_is_blocked_device_path`; a no-op on non-Linux where `/proc` is absent.
+pub fn is_blocked_proc_path(canonical: &Path) -> bool {
+    use std::path::Component;
+    let mut comps = canonical.components();
+    // Must be rooted at `/proc/<something>/…`.
+    if comps.next() != Some(Component::RootDir) {
+        return false;
+    }
+    if comps.next() != Some(Component::Normal(std::ffi::OsStr::new("proc"))) {
+        return false;
+    }
+    // `<pid>` (or `self` / `thread-self`) — any single component.
+    if comps.next().is_none() {
+        return false;
+    }
+    // Block the secret-bearing leaves anywhere below the pid dir.
+    const BLOCKED_LEAVES: &[&str] = &[
+        "environ",
+        "cmdline",
+        "mem",
+        "maps",
+        "smaps",
+        "smaps_rollup",
+        "numa_maps",
+        "auxv",
+        "pagemap",
+        "stack",
+        "syscall",
+    ];
+    canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|leaf| BLOCKED_LEAVES.contains(&leaf))
 }
 
 /// Reject glob patterns that would escape the (already deny-checked) base
@@ -123,6 +241,123 @@ pub(crate) fn reject_unsafe_glob_pattern(pattern: &str) -> Result<(), ToolError>
     Ok(())
 }
 
+/// Expand `$HOME`/`$USER`, a leading `~`, and a relative base into a concrete
+/// path **without canonicalizing** — so a final-component symlink is preserved
+/// (canonicalization would resolve it to its target). Shared by
+/// [`check_and_resolve_path`] and [`resolve_for_removal`].
+fn expand_input_path(
+    path: &Path,
+    output_dir_override: Option<&Path>,
+) -> Result<PathBuf, ToolError> {
+    // First, expand environment variables in the path string
+    let path_str = path.to_string_lossy();
+    let expanded_str = if path_str.contains('$') {
+        let mut result = path_str.to_string();
+        // Expand $HOME
+        if let Some(home) = dirs::home_dir() {
+            result = result.replace("$HOME", &home.to_string_lossy());
+        }
+        // Expand $USER
+        if let Ok(user) = std::env::var("USER") {
+            result = result.replace("$USER", &user);
+        }
+        // Only expand $HOME and $USER for security — arbitrary env var expansion
+        // could allow path injection via attacker-controlled environment variables.
+        PathBuf::from(result)
+    } else {
+        path.to_path_buf()
+    };
+
+    // Expand ~ to home directory
+    if expanded_str.starts_with("~/") || expanded_str.as_os_str() == "~" {
+        let home = dirs::home_dir()
+            .ok_or_else(|| ToolError::InvalidArgs("Cannot determine home directory".to_string()))?;
+        Ok(home.join(
+            expanded_str
+                .strip_prefix("~")
+                .unwrap_or_else(|_| std::path::Path::new("")),
+        ))
+    } else if expanded_str.is_relative() {
+        // Relative paths are resolved to:
+        // 1. Per-run FsScope base (task-local — worktree root for isolated
+        //    agents, workspace artifact dir for normal runs)
+        // 2. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
+        // 3. Error if neither is available — callers must provide a base directory
+        let base_dir = if let Some(scope) = crate::tools::fs_scope::current() {
+            info!(fs_scope = %scope.base.display(), "check_path: using per-run FsScope base");
+            scope.base
+        } else if let Some(override_dir) = output_dir_override {
+            info!(output_dir = %override_dir.display(), "check_path: using ToolContext output_dir override");
+            override_dir.to_path_buf()
+        } else {
+            return Err(ToolError::InvalidArgs(
+                "Relative path requires an active run scope or an output directory override; \
+                 provide an absolute path instead"
+                    .to_string(),
+            ));
+        };
+        Ok(base_dir.join(expanded_str))
+    } else {
+        Ok(expanded_str)
+    }
+}
+
+/// Resolve a path for a **removal or rename** whose final component must NOT be
+/// followed when it is a symlink.
+///
+/// `check_and_resolve_path` canonicalizes a final-component symlink to its
+/// *target*; a `delete`/`move` acting on that target would destroy the tree the
+/// link points at and leave the link dangling (or move the target out from
+/// under it). Filesystem `remove_file` / `rename` never follow a final symlink,
+/// so operating on the link path is both correct and what the user meant.
+///
+/// The full deny check still runs against the resolved target (via
+/// [`check_and_resolve_path`]), and the link's own location is deny-checked too,
+/// so neither the link nor its target can name a protected location. Returns the
+/// path to operate on: the un-followed link when the final component is a
+/// symlink, otherwise the canonical target (identical to
+/// `check_and_resolve_path`).
+pub fn resolve_for_removal(
+    path: &Path,
+    denied_paths: &[String],
+    output_dir_override: Option<&Path>,
+) -> Result<PathBuf, ToolError> {
+    // Deny-check the resolved target first (conservative: a link whose target is
+    // protected cannot be used as a handle to it).
+    let canonical_target = check_and_resolve_path(path, denied_paths, output_dir_override)?;
+
+    let expanded = expand_input_path(path, output_dir_override)?;
+    let is_symlink = std::fs::symlink_metadata(&expanded)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if !is_symlink {
+        return Ok(canonical_target);
+    }
+
+    // The final component is a symlink: operate on the LINK, not its target.
+    // Canonicalize only the PARENT (resolving any intermediate symlinks + the
+    // FsScope rebase) and re-attach the un-followed final component.
+    let Some(file_name) = expanded.file_name() else {
+        return Ok(canonical_target);
+    };
+    let parent = expanded.parent().unwrap_or_else(|| Path::new("/"));
+    let canon_parent = safe_normalize(parent)
+        .map_err(|e| ToolError::Execution(format!("Failed to resolve parent: {e}")))?;
+    let canon_parent = match crate::tools::fs_scope::current().and_then(|s| s.rebase_path(&canon_parent)) {
+        Some(rebased) => safe_normalize(&rebased)
+            .map_err(|e| ToolError::Execution(format!("Failed to normalize rebased parent: {e}")))?,
+        None => canon_parent,
+    };
+    let link_path = canon_parent.join(file_name);
+    if path_is_denied(&link_path, denied_paths) {
+        return Err(ToolError::InvalidArgs(format!(
+            "Access denied: {} is in a protected location",
+            path.display()
+        )));
+    }
+    Ok(link_path)
+}
+
 /// Check if path is allowed and resolve it
 ///
 /// Path resolution rules:
@@ -147,62 +382,10 @@ pub fn check_and_resolve_path(
 ) -> Result<PathBuf, ToolError> {
     info!(path = %path.display(), "check_path: input path");
 
-    // First, expand environment variables in the path string
-    let path_str = path.to_string_lossy();
-    let expanded_str = if path_str.contains('$') {
-        let mut result = path_str.to_string();
-
-        // Expand $HOME
-        if let Some(home) = dirs::home_dir() {
-            result = result.replace("$HOME", &home.to_string_lossy());
-        }
-
-        // Expand $USER
-        if let Ok(user) = std::env::var("USER") {
-            result = result.replace("$USER", &user);
-        }
-
-        // Only expand $HOME and $USER for security — arbitrary env var expansion
-        // could allow path injection via attacker-controlled environment variables.
-
-        info!(original = %path_str, expanded = %result, "check_path: expanded environment variables");
-        PathBuf::from(result)
-    } else {
-        path.to_path_buf()
-    };
-
-    // Expand ~ to home directory
-    let expanded = if expanded_str.starts_with("~/") || expanded_str.as_os_str() == "~" {
-        let home = dirs::home_dir()
-            .ok_or_else(|| ToolError::InvalidArgs("Cannot determine home directory".to_string()))?;
-        home.join(
-            expanded_str
-                .strip_prefix("~")
-                .unwrap_or_else(|_| std::path::Path::new("")),
-        )
-    } else if expanded_str.is_relative() {
-        // Relative paths are resolved to:
-        // 1. Per-run FsScope base (task-local — worktree root for isolated
-        //    agents, workspace artifact dir for normal runs)
-        // 2. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
-        // 3. Error if neither is available — callers must provide a base directory
-        let base_dir = if let Some(scope) = crate::tools::fs_scope::current() {
-            info!(fs_scope = %scope.base.display(), "check_path: using per-run FsScope base");
-            scope.base
-        } else if let Some(override_dir) = output_dir_override {
-            info!(output_dir = %override_dir.display(), "check_path: using ToolContext output_dir override");
-            override_dir.to_path_buf()
-        } else {
-            return Err(ToolError::InvalidArgs(
-                "Relative path requires an active run scope or an output directory override; \
-                 provide an absolute path instead"
-                    .to_string(),
-            ));
-        };
-        base_dir.join(expanded_str)
-    } else {
-        expanded_str
-    };
+    // Env-var / `~` / relative-base expansion (NO canonicalization — a final
+    // symlink is preserved). Shared with `resolve_for_removal` so the two
+    // resolvers cannot drift on how a spelled path becomes a filesystem path.
+    let expanded = expand_input_path(path, output_dir_override)?;
 
     info!(expanded = %expanded.display(), exists = expanded.exists(), "check_path: expanded path");
 
@@ -245,44 +428,33 @@ pub fn check_and_resolve_path(
         None => canonical,
     };
 
-    // Check against denied paths
-    let path_str = canonical.to_string_lossy();
-    for denied in denied_paths {
-        let denied_expanded = if denied.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                home.join(denied.strip_prefix("~/").unwrap_or(denied))
-                    .to_string_lossy()
-                    .to_string()
-            } else {
-                denied.clone()
-            }
-        } else {
-            denied.clone()
-        };
+    // Check against denied paths. Uses Path-component prefix matching (not
+    // string starts_with, which would falsely match "/foo-bar" against "/foo")
+    // via the shared `path_is_denied` helper, which canonicalizes each denied
+    // entry the same way as the input so a symlinked ancestor (macOS
+    // `/etc` -> `/private/etc`) cannot defeat it.
+    if path_is_denied(&canonical, denied_paths) {
+        info!(
+            canonical = %canonical.display(),
+            "check_path: ACCESS DENIED - path matches denied pattern"
+        );
+        return Err(ToolError::InvalidArgs(format!(
+            "Access denied: {} is in a protected location",
+            path.display()
+        )));
+    }
 
-        // Use Path::starts_with for proper directory-prefix matching.
-        // String starts_with would falsely match "/foo-bar" when "/foo" is denied.
-        //
-        // Canonicalize the denied path the SAME way as the input (resolving
-        // symlinks) before comparing. Otherwise a symlinked ancestor defeats the
-        // check: on macOS `/etc` -> `/private/etc`, so a denied literal
-        // "/etc/passwd" never prefix-matches the canonical "/private/etc/passwd",
-        // silently allowing access.
-        let canonical_path = Path::new(&*path_str);
-        let denied_norm = safe_normalize(Path::new(&denied_expanded))
-            .unwrap_or_else(|_| PathBuf::from(&denied_expanded));
-        if canonical_path.starts_with(&denied_norm) {
-            info!(
-                path_str = %path_str,
-                denied = %denied,
-                denied_expanded = %denied_expanded,
-                "check_path: ACCESS DENIED - path matches denied pattern"
-            );
-            return Err(ToolError::InvalidArgs(format!(
-                "Access denied: {} is in a protected location",
-                path.display()
-            )));
-        }
+    // Defense-in-depth: block `/proc/<pid>/{environ,maps,mem,…}` secret-bearing
+    // pseudo-files regardless of the credential denylist.
+    if is_blocked_proc_path(&canonical) {
+        info!(
+            canonical = %canonical.display(),
+            "check_path: ACCESS DENIED - /proc secret pseudo-file"
+        );
+        return Err(ToolError::InvalidArgs(format!(
+            "Access denied: {} exposes another process's secrets",
+            path.display()
+        )));
     }
 
     info!(canonical = %canonical.display(), "check_path: path allowed");
@@ -474,6 +646,50 @@ mod tests {
         .await
         .expect("rebase must succeed");
         assert_eq!(resolved, wt_c.join("src/a.rs"));
+    }
+
+    #[test]
+    fn path_is_denied_matches_directory_prefix_not_string_prefix() {
+        let root = tempdir().unwrap();
+        let secret_dir = root.path().join("secret");
+        fs::create_dir(&secret_dir).unwrap();
+        let sibling = root.path().join("secret-sibling");
+        fs::create_dir(&sibling).unwrap();
+        let denied = vec![secret_dir.to_string_lossy().to_string()];
+        // `path_is_denied` expects an already-canonical input (its contract);
+        // canonicalize the dirs so a symlinked tempdir root (macOS
+        // `/var` → `/private/var`) does not defeat the prefix compare.
+        let secret_c = secret_dir.canonicalize().unwrap();
+        let sibling_c = sibling.canonicalize().unwrap();
+
+        assert!(path_is_denied(&secret_c.join("k.pem"), &denied));
+        // A string-prefix sibling ("secret-sibling") must NOT match.
+        assert!(!path_is_denied(&sibling_c.join("ok.txt"), &denied));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_blocked_proc_path_flags_secret_leaves_only() {
+        use std::path::Path;
+        assert!(is_blocked_proc_path(Path::new("/proc/1234/environ")));
+        assert!(is_blocked_proc_path(Path::new("/proc/self/maps")));
+        assert!(is_blocked_proc_path(Path::new("/proc/1/mem")));
+        // A benign /proc leaf and non-/proc paths are allowed.
+        assert!(!is_blocked_proc_path(Path::new("/proc/1234/status")));
+        assert!(!is_blocked_proc_path(Path::new("/proc/cpuinfo")));
+        assert!(!is_blocked_proc_path(Path::new("/home/u/environ")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn denied_paths_cover_privilege_escalation_surfaces() {
+        let denied = get_denied_paths();
+        for p in ["/etc/sudoers", "/etc/cron.d", "/etc/pam.d", "/root/.ssh"] {
+            assert!(
+                denied.iter().any(|d| d == p),
+                "{p} missing from denylist: {denied:?}"
+            );
+        }
     }
 
     /// The deny gate evaluates the FINAL (post-rebase) path — a rebase can

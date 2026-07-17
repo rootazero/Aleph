@@ -229,12 +229,17 @@ impl ToolResultStore {
     /// their own directory is what lets [`Self::purge_all`] wipe one session
     /// without touching another's files.
     fn blob_dir(&self) -> PathBuf {
-        if self.session.is_empty() {
+        self.blob_dir_for(&self.session)
+    }
+
+    /// Blob directory for an arbitrary session key under this store's root.
+    /// Shared by [`Self::blob_dir`] and [`Self::purge_all`], which must reach
+    /// earlier-epoch directories the read scope widens to.
+    fn blob_dir_for(&self, key: &str) -> PathBuf {
+        if key.is_empty() {
             self.inner.base_dir.clone()
         } else {
-            self.inner
-                .base_dir
-                .join(sanitize_for_filename(&self.session))
+            self.inner.base_dir.join(sanitize_for_filename(key))
         }
     }
 
@@ -432,33 +437,47 @@ impl ToolResultStore {
     /// to delete every *other* tab's blobs and index rows too, leaving their
     /// in-context `[Full output persisted: …]` markers pointing at files that
     /// no longer existed.
+    ///
+    /// The purge iterates the FULL read scope ([`Self::read_scope_keys`]) — this
+    /// handle's own key **plus every earlier epoch** of the same base session.
+    /// A compaction split seeds the child (epoch N+1) with the parent's
+    /// `[Full output persisted: …]` markers and lets `ctx_search` / `read_file`
+    /// read the parent's (epoch N) blobs and index rows. Purging only the
+    /// current epoch would leave exactly that pre-split content minable after
+    /// the denial breaker trips — the hole this countermeasure exists to close.
+    /// Widening stays inside INV-ISO (epochs of one base key are one trust
+    /// domain); it never touches another agent or conversation.
     pub fn purge_all(&self) {
-        // 1. Remove this session's offloaded `.txt` blobs (the
-        //    `read_file`-via-marker vector). Scoped by directory: a scoped
-        //    handle only ever wrote into `blob_dir()`.
-        if let Ok(entries) = std::fs::read_dir(self.blob_dir()) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("txt") {
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        tracing::warn!(
-                            file = %path.display(),
-                            error = %e,
-                            "purge_all: failed to remove offloaded tool-result blob"
-                        );
+        let idx = self.index();
+        for key in self.read_scope_keys() {
+            // 1. Remove this key's offloaded `.txt` blobs (the
+            //    `read_file`-via-marker vector). Scoped by directory: each
+            //    (base-key, epoch) wrote into its own `blob_dir_for(key)`.
+            if let Ok(entries) = std::fs::read_dir(self.blob_dir_for(&key)) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("txt") {
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            tracing::warn!(
+                                file = %path.display(),
+                                error = %e,
+                                "purge_all: failed to remove offloaded tool-result blob"
+                            );
+                        }
                     }
                 }
             }
-        }
-        // 2. Clear this session's FTS5 rows (the `ctx_search` vector). `index()`
-        // opens it lazily, so this also catches an on-disk `index.db` left by an
-        // earlier turn that was never reopened this run.
-        if let Some(idx) = self.index() {
-            if let Err(e) = idx.clear(&self.session) {
-                tracing::warn!(
-                    error = %e,
-                    "purge_all: failed to clear offloaded-output index"
-                );
+            // 2. Clear this key's FTS5 rows (the `ctx_search` vector). `index()`
+            // opens it lazily, so this also catches an on-disk `index.db` left by
+            // an earlier turn that was never reopened this run.
+            if let Some(idx) = idx {
+                if let Err(e) = idx.clear(&key) {
+                    tracing::warn!(
+                        session = %key,
+                        error = %e,
+                        "purge_all: failed to clear offloaded-output index"
+                    );
+                }
             }
         }
     }
@@ -1098,6 +1117,49 @@ mod tests {
         // A different base key still sees nothing (INV-ISO across agents).
         let other = ToolResultStore::for_session(&root, "agent:other:main:s1");
         assert!(other.search("epochblob", 5).is_empty());
+    }
+
+    #[test]
+    fn purge_all_from_child_epoch_wipes_parent_epoch_content() {
+        // Anti-reference-bypass: after the denial breaker trips in a child epoch
+        // (post-compaction split), the parent epoch's offloaded blobs AND index
+        // rows — which the child can read via the widened scope — must ALSO be
+        // purged, or a paused session can still mine pre-split content.
+        let (root, _base) = test_store("epoch_aware_purge");
+        let root = Arc::new(root);
+        let parent_key = crate::routing::session_key::SessionKey::Main {
+            agent_id: "agent-a".to_string(),
+            main_key: "main".to_string(),
+            epoch: 0,
+        };
+        let child_key = parent_key.with_next_epoch();
+        let parent = ToolResultStore::for_session(&root, parent_key.to_key_string());
+        let child = ToolResultStore::for_session(&root, child_key.to_key_string());
+
+        let text = "epochsecret payload ".repeat(200);
+        let marker = parent
+            .persist_if_large("call_p", "bash", &text, 1)
+            .expect("parent blob persisted");
+        let _ = parent.index_output("call_p", "bash", &text);
+        let parent_blob = marker_path(&marker);
+        assert!(parent_blob.exists());
+        assert!(
+            !child.search("epochsecret", 5).is_empty(),
+            "precondition: child can read the parent-epoch content"
+        );
+
+        // The breaker fires on the CHILD handle.
+        child.purge_all();
+
+        assert!(
+            !parent_blob.exists(),
+            "parent-epoch blob must be purged when the child trips the breaker"
+        );
+        assert!(
+            child.search("epochsecret", 5).is_empty(),
+            "parent-epoch index rows must be unreachable after the child's purge"
+        );
+        assert_eq!(child.indexed_sections(), 0);
     }
 
     #[test]

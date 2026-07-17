@@ -59,11 +59,12 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "a2a_agents",
     "arena_query",
     "config_audit",
-    "doctor",
     "get_tool_schema",
     "list_models",
-    "list_tools",
-    "search_tools",
+    // Progressive-disclosure meta-tool (reads the catalog, promotes a deferred
+    // tool). NB: `list_tools` / `search_tools` were ghost names matching no
+    // registered tool; the live one is `tool_search`.
+    "tool_search",
     "read_config_guide",
     "node_list",
     // Search / retrieval (no mutation).
@@ -494,6 +495,10 @@ mod tests {
             "heartbeat_update",
             "skill_install",
             "channel_pairing",
+            // `doctor` with `fix=true` rebuilds the data dir / clears stale
+            // locks — a filesystem mutation. It must NOT be pre-approved as a
+            // freely-parallel read.
+            "doctor",
         ];
         for tool in write_tools {
             assert!(
@@ -512,6 +517,9 @@ mod tests {
             "web_fetch",
             "knowledge",
             "file_read",
+            // The live progressive-disclosure meta-tool (formerly the ghost
+            // names `list_tools` / `search_tools`).
+            "tool_search",
         ];
         for tool in read_tools {
             assert!(

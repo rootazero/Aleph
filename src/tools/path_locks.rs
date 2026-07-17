@@ -49,6 +49,29 @@ pub async fn lock_path(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     cell.lock_owned().await
 }
 
+/// Acquire the write locks for two canonical paths in a deadlock-free order.
+///
+/// Two concurrent operations that each touch the same pair of paths in opposite
+/// order (A holds `x` wants `y`, B holds `y` wants `x`) would deadlock; locking
+/// in a canonical (sorted) order breaks the cycle. When both paths are equal a
+/// single lock is taken (re-locking the same per-path mutex from one task would
+/// deadlock against itself). Returns the held guards; drop them to release.
+pub async fn lock_two(
+    a: &Path,
+    b: &Path,
+) -> (
+    tokio::sync::OwnedMutexGuard<()>,
+    Option<tokio::sync::OwnedMutexGuard<()>>,
+) {
+    if a == b {
+        return (lock_path(a).await, None);
+    }
+    let (first, second) = if a < b { (a, b) } else { (b, a) };
+    let g1 = lock_path(first).await;
+    let g2 = lock_path(second).await;
+    (g1, Some(g2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
