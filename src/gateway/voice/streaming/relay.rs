@@ -2,22 +2,68 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, Mutex};
 
 use super::{build_transcriber, StreamConfig, StreamHandles, StreamingTarget};
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 
+/// A black-holed / unreachable backend must fail `voice.stream.start` fast so
+/// the Panel falls back to batch instead of hanging the RPC for the OS TCP
+/// timeout (often 60s+).
+const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Upper bound on concurrently open backend streams. The Panel holds exactly
+/// one per listening period; anything approaching this is leaked entries, so
+/// the oldest is evicted (dropping its sole sender closes the backend).
+const MAX_ACTIVE_STREAMS: usize = 8;
+
+/// Belt-and-suspenders reap age. Pump-exit removal is the primary cleanup;
+/// this sweeps entries whose backend never closed (utterances are ≤ 30 s, so
+/// anything this old is a leak, not a conversation).
+const STREAM_TTL: Duration = Duration::from_secs(10 * 60);
+
+struct StreamEntry {
+    tx: mpsc::Sender<Vec<u8>>,
+    opened: Instant,
+}
+
 /// Active streams: stream_id → audio sender into the backend bridge task.
 #[derive(Default, Clone)]
 pub struct StreamRegistry {
-    inner: Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>>,
+    inner: Arc<Mutex<HashMap<String, StreamEntry>>>,
 }
 
 impl StreamRegistry {
     pub async fn insert(&self, tx: mpsc::Sender<Vec<u8>>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner.lock().await.insert(id.clone(), tx);
+        let mut guard = self.inner.lock().await;
+        // Opportunistic hygiene at the only growth point: reap expired
+        // entries, then evict the oldest if still at capacity. Dropping an
+        // entry's sender closes its backend; the pump then publishes the
+        // terminal closed event and re-removes (a no-op).
+        guard.retain(|_, e| e.opened.elapsed() < STREAM_TTL);
+        while guard.len() >= MAX_ACTIVE_STREAMS {
+            let oldest = guard
+                .iter()
+                .min_by_key(|(_, e)| e.opened)
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => {
+                    tracing::warn!(stream_id = %k, "voice stream cap reached — evicting oldest");
+                    guard.remove(&k);
+                }
+                None => break,
+            }
+        }
+        guard.insert(
+            id.clone(),
+            StreamEntry {
+                tx,
+                opened: Instant::now(),
+            },
+        );
         id
     }
 
@@ -28,7 +74,7 @@ impl StreamRegistry {
     /// Clone the audio sender so the `audio` handler can push frames without
     /// holding the registry lock across the (awaiting) send.
     pub async fn audio_sender(&self, id: &str) -> Option<mpsc::Sender<Vec<u8>>> {
-        self.inner.lock().await.get(id).cloned()
+        self.inner.lock().await.get(id).map(|e| e.tx.clone())
     }
 
     pub async fn remove(&self, id: &str) {
@@ -44,6 +90,11 @@ impl StreamRegistry {
 /// exits. To keep that chain intact the pump must NOT hold an `audio_tx`, so we
 /// destructure `StreamHandles`: the registry owns the only `audio_tx`, the pump
 /// owns only `delta_rx`.
+///
+/// The pump's exit is the single funnel for every stream death — client stop,
+/// backend WS drop, fatal server status — so it publishes the terminal
+/// `{closed: true}` marker on the delta topic and removes the registry entry
+/// itself (making a leaked entry impossible once the backend is gone).
 pub async fn start_stream(
     reg: &StreamRegistry,
     bus: Arc<GatewayEventBus>,
@@ -54,9 +105,17 @@ pub async fn start_stream(
     let StreamHandles {
         audio_tx,
         mut delta_rx,
-    } = transcriber.open(cfg).await?;
+    } = tokio::time::timeout(OPEN_TIMEOUT, transcriber.open(cfg))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "streaming ASR backend did not answer within {}s",
+                OPEN_TIMEOUT.as_secs()
+            )
+        })??;
     let id = reg.insert(audio_tx).await; // registry owns the ONLY audio_tx
     let pump_id = id.clone();
+    let pump_reg = reg.clone();
     tokio::spawn(async move {
         // pump owns ONLY delta_rx — no live audio_tx, so the backend can close.
         while let Some(delta) = delta_rx.recv().await {
@@ -64,6 +123,14 @@ pub async fn start_stream(
             if let Err(e) = bus.publish_json(&TopicEvent::new("voice.transcribe.delta", data)) {
                 tracing::warn!(stream_id = %pump_id, err = %e, "voice delta publish failed");
             }
+        }
+        // Terminal marker: every death path funnels here. Clients treat it as
+        // "this stream is gone" (fall back to batch / reopen); the registry
+        // entry is removed so a stop-less client can't leak the slot.
+        pump_reg.remove(&pump_id).await;
+        let closed = serde_json::json!({ "stream_id": pump_id, "closed": true });
+        if let Err(e) = bus.publish_json(&TopicEvent::new("voice.transcribe.delta", closed)) {
+            tracing::warn!(stream_id = %pump_id, err = %e, "voice closed publish failed");
         }
         tracing::debug!(stream_id = %pump_id, "voice stream pump exited");
     });
@@ -82,5 +149,24 @@ mod tests {
         assert!(reg.contains(&id).await);
         reg.remove(&id).await;
         assert!(!reg.contains(&id).await);
+    }
+
+    #[tokio::test]
+    async fn cap_evicts_oldest_entry() {
+        let reg = StreamRegistry::default();
+        let mut ids = Vec::new();
+        let mut rxs = Vec::new(); // keep receivers alive so senders stay open
+        for _ in 0..MAX_ACTIVE_STREAMS {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            ids.push(reg.insert(tx).await);
+            rxs.push(rx);
+        }
+        // One over the cap: the FIRST (oldest) entry must be evicted.
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let newest = reg.insert(tx).await;
+        rxs.push(rx);
+        assert!(!reg.contains(&ids[0]).await, "oldest must be evicted");
+        assert!(reg.contains(&newest).await);
+        assert!(reg.contains(&ids[1]).await, "younger survivors stay");
     }
 }

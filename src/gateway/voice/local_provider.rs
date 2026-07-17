@@ -36,9 +36,19 @@ impl LocalTranscription {
                 base_url: local_base_url(config),
                 model: config.models.first().cloned().unwrap_or_default(),
             },
-            client: reqwest::Client::new(),
+            client: voice_client(config.timeout_seconds),
         }
     }
+}
+
+/// Shared hardened client (`generation::providers::http`) honoring the
+/// entry's `timeout_seconds`; a builder failure degrades to the stock client
+/// (P7 — never fail construction over an HTTP-client option).
+fn voice_client(timeout_seconds: u64) -> reqwest::Client {
+    crate::generation::providers::http::voice_http_client(std::time::Duration::from_secs(
+        timeout_seconds.max(1),
+    ))
+    .unwrap_or_default()
 }
 
 #[async_trait]
@@ -112,7 +122,7 @@ impl LocalVoiceProvider {
             model: config.models.first().cloned().unwrap_or_default(),
             voice: config.defaults.voice.clone().unwrap_or_default(),
             format: config.defaults.format.clone().unwrap_or_default(),
-            client: reqwest::Client::new(),
+            client: voice_client(config.timeout_seconds),
         }
     }
 
@@ -141,11 +151,13 @@ impl LocalVoiceProvider {
             body["response_format"] = serde_json::Value::String(format.clone());
         }
 
+        // No per-request timeout: the client-level deadline (built from the
+        // entry's `timeout_seconds`) governs — a per-request 60 s here would
+        // silently override a user-raised cap for slow BYO synth.
         let mut req = self
             .client
             .post(format!("{}/audio/speech", self.base_url))
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(60));
+            .json(&body);
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }

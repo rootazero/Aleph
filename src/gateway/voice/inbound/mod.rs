@@ -41,8 +41,12 @@ pub fn has_audio_attachment(msg: &InboundMessage) -> bool {
 ///
 /// - No audio attachments → returns message unchanged, `transcribed = false`.
 /// - Has audio → downloads audio bytes, sends to Whisper API for transcription.
-///   - On success: sets text to transcription, removes audio attachments.
-///   - On failure: keeps attachments, appends error hint.
+///   **Every** audio attachment is transcribed (a Telegram forward can carry
+///   several voice notes in one message); transcripts join in order.
+///   - ≥ 1 success: sets text to the joined transcription, removes audio
+///     attachments (failed ones noted inline rather than silently destroyed).
+///   - All failed: keeps attachments, appends error hint.
+///   - All empty (silence / hallucination-nulled): no transcription claimed.
 pub async fn process_inbound_voice(
     mut msg: InboundMessage,
     stt_source: &SttSource,
@@ -60,52 +64,76 @@ pub async fn process_inbound_voice(
         .drain(..)
         .partition(|a| a.mime_type.starts_with("audio/"));
 
-    // Transcribe the first audio attachment.
-    let first_audio = &audio_attachments[0];
-    match transcribe_attachment(first_audio, stt_source).await {
-        Ok(transcription) if transcription.trim().is_empty() => {
-            // Whisper returned nothing usable — empty audio or a hallucination
-            // that the filter nulled. Don't claim a transcription (no
-            // voice-reply hint, no spurious agent turn on phantom text).
-            debug!("Voice transcription empty after hallucination filter");
-            msg.attachments = other_attachments;
-            if msg.text.is_empty() {
-                msg.text = "[No speech detected in audio]".to_string();
+    let mut transcripts: Vec<String> = Vec::new();
+    let mut failures = 0usize;
+    for (i, audio) in audio_attachments.iter().enumerate() {
+        match transcribe_attachment(audio, stt_source).await {
+            Ok(t) if t.trim().is_empty() => {
+                // Empty audio or a hallucination the filter nulled — not a
+                // failure, just nothing said in this clip.
+                debug!(
+                    index = i,
+                    "Voice transcription empty after hallucination filter"
+                );
             }
-            VoiceProcessResult {
-                message: msg,
-                transcribed: false,
+            Ok(t) => {
+                debug!(index = i, chars = t.len(), "Voice transcription succeeded");
+                transcripts.push(t.trim().to_string());
             }
-        }
-        Ok(transcription) => {
-            debug!(chars = transcription.len(), "Voice transcription succeeded");
-            let new_text = if msg.text.is_empty() {
-                transcription
-            } else {
-                format!("{}\n{}", transcription, msg.text)
-            };
-            msg.text = new_text;
-            msg.attachments = other_attachments;
-            VoiceProcessResult {
-                message: msg,
-                transcribed: true,
+            Err(e) => {
+                warn!(index = i, error = %e, "Voice transcription failed");
+                failures += 1;
             }
         }
-        Err(e) => {
-            warn!(error = %e, "Voice transcription failed");
-            let mut all_attachments = audio_attachments;
-            all_attachments.extend(other_attachments);
-            msg.attachments = all_attachments;
-            if msg.text.is_empty() {
-                msg.text = "[Voice transcription failed, please resend or use text]".to_string();
-            } else {
-                msg.text.push_str("\n[Voice transcription failed]");
-            }
-            VoiceProcessResult {
-                message: msg,
-                transcribed: false,
-            }
+    }
+
+    if !transcripts.is_empty() {
+        let mut transcription = transcripts.join("\n");
+        if failures > 0 {
+            // Partial degradation: say so instead of silently dropping clips.
+            transcription.push_str(&format!(
+                "\n[{failures} voice clip(s) failed to transcribe]"
+            ));
         }
+        let new_text = if msg.text.is_empty() {
+            transcription
+        } else {
+            format!("{}\n{}", transcription, msg.text)
+        };
+        msg.text = new_text;
+        msg.attachments = other_attachments;
+        return VoiceProcessResult {
+            message: msg,
+            transcribed: true,
+        };
+    }
+
+    if failures == 0 {
+        // Every clip was silence/hallucination — don't claim a transcription
+        // (no voice-reply hint, no spurious agent turn on phantom text).
+        msg.attachments = other_attachments;
+        if msg.text.is_empty() {
+            msg.text = "[No speech detected in audio]".to_string();
+        }
+        return VoiceProcessResult {
+            message: msg,
+            transcribed: false,
+        };
+    }
+
+    // Nothing usable and at least one hard failure: keep the attachments so
+    // the user (or a retry) still has the audio.
+    let mut all_attachments = audio_attachments;
+    all_attachments.extend(other_attachments);
+    msg.attachments = all_attachments;
+    if msg.text.is_empty() {
+        msg.text = "[Voice transcription failed, please resend or use text]".to_string();
+    } else {
+        msg.text.push_str("\n[Voice transcription failed]");
+    }
+    VoiceProcessResult {
+        message: msg,
+        transcribed: false,
     }
 }
 

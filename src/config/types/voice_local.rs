@@ -80,6 +80,12 @@ pub struct StreamingConfig {
     pub api_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// ASR model requested from the backend. Empty = adapter default
+    /// (WhisperLive handshake: "small"; Deepgram dialect: server default) —
+    /// set this when your WhisperLive server hosts a larger model, otherwise
+    /// it silently loads/serves the small one per client request.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
 }
 
 impl Default for StreamingConfig {
@@ -90,6 +96,7 @@ impl Default for StreamingConfig {
             base_url: String::new(),
             api_key: String::new(),
             language: None,
+            model: String::new(),
         }
     }
 }

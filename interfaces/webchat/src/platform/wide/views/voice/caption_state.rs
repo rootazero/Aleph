@@ -18,8 +18,16 @@ pub(crate) fn apply_delta(s: &mut CaptionState, d: Delta) {
     s.interim = d.interim;
 }
 
-/// Utterance end: drop the floating interim, mark locked (Panel fires the wave).
+/// Utterance end: fold the floating interim into the locked line and mark
+/// locked (Panel fires the wave).
+///
+/// The interim is merged, not dropped — short utterances ("对", "好的") often
+/// live entirely in the floating hypothesis when the VAD fires, and
+/// faster-whisper backends never flush a final for the trailing window after
+/// `END_OF_AUDIO`. Merging keeps the display identical to the text the agent
+/// receives (`voice_text::merge_utterance`, the same helper the send path uses).
 pub(crate) fn lock(s: &mut CaptionState) {
+    s.committed = aleph_protocol::voice_text::merge_utterance(&s.committed, &s.interim);
     s.interim.clear();
     s.locked = true;
 }
@@ -50,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn lock_drops_interim_and_marks_locked() {
+    fn lock_folds_interim_into_committed() {
         let mut s = CaptionState::default();
         apply_delta(
             &mut s,
@@ -60,8 +68,25 @@ mod tests {
             },
         );
         lock(&mut s);
-        assert_eq!(s.committed, "你好世界");
+        assert_eq!(s.committed, "你好世界吗");
         assert_eq!(s.interim, "");
+        assert!(s.locked);
+    }
+
+    #[test]
+    fn lock_with_interim_only_keeps_short_utterance() {
+        // A fast "对" lives entirely in the interim when the VAD fires — the
+        // old drop-the-interim lock erased it (streaming short-reply bug).
+        let mut s = CaptionState::default();
+        apply_delta(
+            &mut s,
+            Delta {
+                committed: String::new(),
+                interim: "对".into(),
+            },
+        );
+        lock(&mut s);
+        assert_eq!(s.committed, "对");
         assert!(s.locked);
     }
 
