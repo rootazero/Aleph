@@ -405,7 +405,6 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
                 requested_tool_calls: 1,
                 executed_tool_calls: 1,
                 productive: true,
-                consecutive_errors: 0,
                 total_tokens: 64,
             },
         },

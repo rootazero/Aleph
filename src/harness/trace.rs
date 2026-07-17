@@ -221,7 +221,6 @@ pub struct LoopTraceTurnMetrics {
     pub requested_tool_calls: usize,
     pub executed_tool_calls: usize,
     pub productive: bool,
-    pub consecutive_errors: usize,
     pub total_tokens: usize,
 }
 

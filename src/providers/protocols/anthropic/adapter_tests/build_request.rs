@@ -247,7 +247,9 @@ fn build_request_strips_sampling_params_when_thinking_enabled() {
     use crate::providers::message::UnifiedMessage;
     let msgs = [UnifiedMessage::user("Hello")];
     let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Medium));
-    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    // 3.7 genuinely supports (legacy) thinking; the sampling-strip is triggered
+    // by an enabled thinking block, so this exercises that path honestly.
+    let mut config = ProviderConfig::test_config("claude-3-7-sonnet");
     config.api_key = Some("test-key".to_string());
     config.temperature = Some(0.7);
     config.top_p = Some(0.9);

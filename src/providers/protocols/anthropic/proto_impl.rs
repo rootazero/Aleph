@@ -467,6 +467,26 @@ impl AnthropicProtocol {
         Self::claude_version(model).is_some_and(|v| v >= (4, 6))
     }
 
+    /// True for Claude models that have *any* extended-thinking mode (3.7+).
+    ///
+    /// Claude 3.7 introduced extended thinking; every later generation keeps it
+    /// (legacy `budget_tokens` on 3.7–4.5, adaptive on 4.6+). Below 3.7 —
+    /// Claude 3.5 and 3.0 — there is **no** thinking mode, and an `{type:
+    /// "enabled", budget_tokens}` block returns a 400. The old code emitted that
+    /// block for any non-adaptive model whenever a think level was set, so a
+    /// cheap non-reasoning model (Haiku 3/3.5) carrying a configured think level
+    /// hard-failed the request. This gates the legacy arm so the think level is
+    /// simply ignored there instead.
+    ///
+    /// A non-Claude model proxied through this protocol (version unknown) is
+    /// treated as thinking-capable — **fail-open**, to avoid regressing custom
+    /// reasoning endpoints; the OpenAI-compat `supports_reasoning_effort` strip
+    /// is the gate for those wires. Version compare keeps this future-proof: a
+    /// newer generation needs no edit here (same rationale as [`claude_version`]).
+    pub(super) fn supports_extended_thinking(model: &str) -> bool {
+        Self::claude_version(model).map_or(true, |v| v >= (3, 7))
+    }
+
     /// True for models that 400 on non-default `temperature/top_p/top_k` even
     /// without `thinking` enabled. Claude 4.7 removed sampling parameters and
     /// every later release (4.8, fable-5) keeps that surface.

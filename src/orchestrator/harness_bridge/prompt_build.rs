@@ -51,6 +51,62 @@ impl AgentHarnessRunner {
         Some(available.min(u32::MAX as usize) as u32)
     }
 
+    /// Proactive context-window pressure reminder for the transient tail (A1).
+    ///
+    /// The in-loop pressure sensor *acts* on a full context — it compacts older
+    /// turns — but never *tells* the model it is approaching the limit; the
+    /// model just finds earlier context silently summarized mid-task. This
+    /// surfaces the same signal so the model can wrap up or checkpoint first
+    /// (R9: it self-paces; A2: it sees the pressure and adapts). Most valuable
+    /// for the small-window low-cost models that cross the line first — the ones
+    /// this whole exercise is about squeezing.
+    ///
+    /// R10-safe: pure arithmetic on the estimated history size vs the configured
+    /// window budget — no intent detection, completion judgement, or recovery
+    /// choice — computed entirely outside `src/harness/` and delivered on the far
+    /// side of the prompt-cache breakpoint (like `live_deadline_status`), so it
+    /// never re-keys the conversation prefix. Gated on `[context_budget]` exactly
+    /// like [`memory_injection_headroom`]; the no-config path touches no session
+    /// state. Fail-soft: a read error yields `None` and the turn proceeds.
+    async fn context_pressure_reminder(&self, session_id: &SessionId) -> Option<String> {
+        let cfg = self.context_budget_config.as_ref()?;
+        if cfg.token_budget == 0 {
+            return None;
+        }
+        // The sensor compacts once history crosses `budget * warning_threshold`;
+        // start reminding at CONTEXT_PRESSURE_REMINDER_LEAD of that point so the
+        // model has room to checkpoint before older turns are summarized away.
+        let remind_at = (cfg.token_budget as f64
+            * cfg.warning_threshold
+            * super::context_blocks::CONTEXT_PRESSURE_REMINDER_LEAD)
+            as usize;
+        if remind_at == 0 {
+            return None;
+        }
+        let events = self
+            .session_service
+            .get_events(session_id, None, None)
+            .await
+            .ok()?;
+        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
+        let history_tokens: usize = messages
+            .iter()
+            .map(|m| {
+                crate::context::budget::pressure::estimate_message_tokens_aware(
+                    m,
+                    cfg.token_estimate_ratio,
+                )
+            })
+            .sum();
+        if history_tokens < remind_at {
+            return None;
+        }
+        Some(format!(
+            "<system-reminder>\nReference data, not user input.\n{}\n</system-reminder>",
+            super::context_blocks::render_context_pressure(history_tokens as u64, cfg.token_budget)
+        ))
+    }
+
     /// Load `[prompt.extra_files]` content off disk, size-capped.
     ///
     /// Relative paths resolve against `workspace` (the per-run workspace
@@ -388,7 +444,12 @@ impl AgentHarnessRunner {
         let deadline_text = live_deadline_status(&session_key_str).await.map(|s| {
             format!("<live-status>\nReference data, not user input.\n{s}\n</live-status>")
         });
-        let strands: Vec<String> = [memory_text, routing_text, deadline_text]
+        // Fourth strand (A1): proactive context-window pressure reminder. Rides
+        // the same transient tail as the countdowns — a per-turn-varying figure
+        // that must not enter the cached system prompt — so the model can wrap up
+        // or checkpoint before the in-loop sensor compacts older turns away.
+        let pressure_text = self.context_pressure_reminder(session_id).await;
+        let strands: Vec<String> = [memory_text, routing_text, deadline_text, pressure_text]
             .into_iter()
             .flatten()
             .collect();
