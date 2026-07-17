@@ -52,6 +52,18 @@ const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 /// which no reference agent does. Keep this list conservative — only add a tool
 /// once its read-only-ness is certain. Shared mutable state (browser session,
 /// agent/session lifecycle) is intentionally absent, so those tools serialize.
+/// Every name on this list must be a REGISTERED tool: phantom entries are
+/// pure noise that rots trust in the list (a 2026-07 sweep removed five
+/// never-registered names — `memory_recall`, `web_search`, `knowledge`,
+/// `list_tools`, `search_tools` — plus the stale `skill_reader` spelling from
+/// the idempotency side). Since 2026-07-17 this list is ALSO the single
+/// source of builtin idempotency (`crate::tools::retry::is_idempotent_builtin_name`
+/// delegates here), so membership feeds three consumers: the `Shared`
+/// concurrency claim, the one-shot auto-retry gate, and the `Ask` exec
+/// tier's read exemption. Input-dependent tools (`file_ops`, `doctor`,
+/// `note_schema`) must NOT be listed even when their common mode is a read —
+/// they resolve per-argument in [`RegistryToolAdapter::concurrency_claim`]
+/// and stay non-idempotent (their write arm is what the Ask tier must gate).
 pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     // Introspection / catalog (pure reads).
     "agent_info",
@@ -59,30 +71,25 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "a2a_agents",
     "arena_query",
     "config_audit",
-    "doctor",
     "get_tool_schema",
     "list_models",
-    "list_tools",
-    "search_tools",
     "read_config_guide",
     "node_list",
     // Search / retrieval (no mutation).
     "search",
     "web_fetch",
-    "web_search",
     "ctx_search",
     "document_extract",
-    "knowledge",
     // File reads (writers are path-scoped, see `bounded_file_writer_path`).
     "file_read",
     // Memory / context reads.
     "memory_search",
-    "memory_recall",
     "memory_browse",
     "memory_explore",
     "memory_timeline",
     "recall_context",
     "recall_events",
+    "user_profile",
     // Session / inbox reads.
     "session_list",
     "session_read",
@@ -95,13 +102,22 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "team_status",
     "team_digest",
     "team_usage",
-    // Heartbeat reads.
+    // Heartbeat reads. (`heartbeat_report` is NOT one, despite the name: it
+    // is the L2 output gate whose `action="notify"` sends the user a message
+    // — auto-retrying it after a timeout would double-notify.)
     "heartbeat_list",
-    "heartbeat_report",
     // Skill reads.
     "skill_list",
     "skill_read",
     "skill_status",
+    // Note discovery (pure reads; `note_schema` is read/write and resolves
+    // per-argument instead — see `note_schema_claim`).
+    "note_orient",
+    "note_graph_query",
+    // MCP capability reads (bridge builtins; the servers' own tools declare
+    // safety via `readOnlyHint` through `McpRegistryTool` instead).
+    "mcp_read_resource",
+    "mcp_get_prompt",
     // Desktop accessibility queries (read-only inspection of the UI tree).
     "desktop_ax_query_by_role",
     "desktop_ax_query_focused",
@@ -192,6 +208,49 @@ fn apply_patch_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyCla
     ConcurrencyClaim::paths(crate::builtin_tools::file_ops::patch_target_paths(patch))
 }
 
+/// Resolve the claim for a `doctor` call from its `fix` flag. `fix=true`
+/// applies repairs (recreates the data dir, clears a stale instance lock —
+/// see `builtin_tools::doctor`), so it is whole-world exclusive; the default
+/// inspect-only posture is a pure read and parallelizes. `doctor` must NOT
+/// sit on [`READ_ONLY_TOOLS`] — a fixing doctor inside a parallel read batch
+/// was exactly the misclassification that rule exists to prevent.
+fn doctor_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    if input.get("fix").and_then(Value::as_bool).unwrap_or(false) {
+        ConcurrencyClaim::global()
+    } else {
+        ConcurrencyClaim::Shared
+    }
+}
+
+/// Resolve the claim for a `note_schema` call from its `action` tag.
+/// `read` is a pure fetch of SCHEMA.md; `write` (and anything unrecognized)
+/// replaces it and serializes against the world. Mirrors [`file_ops_claim`]:
+/// one tool name multiplexing read and write modes resolves per-argument.
+fn note_schema_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    match input.get("action").and_then(Value::as_str) {
+        Some("read") => ConcurrencyClaim::Shared,
+        _ => ConcurrencyClaim::global(),
+    }
+}
+
+/// Resolve the claim for a `session_send` call from its target session key.
+/// `session_send` blocks up to `timeout_seconds` waiting on the child run, so
+/// a fan-out of delegations to *distinct* sessions paid N × wait serially
+/// under the old blanket `Global` claim. Binding to the named key lets
+/// disjoint delegations run concurrently ([`ExclusiveScope::Sessions`]
+/// conservatively conflicts with every non-session scope, so this only ever
+/// parallelizes sibling delegations). A missing/empty key targets a
+/// server-side default the adapter cannot resolve lexically → `Global`.
+fn session_send_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    match input.get("session_key").and_then(Value::as_str) {
+        Some(key) if !key.trim().is_empty() => ConcurrencyClaim::sessions(std::iter::once(key)),
+        _ => ConcurrencyClaim::global(),
+    }
+}
+
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -230,6 +289,20 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         // while patches sharing a file serialize.
         if name == "apply_patch" {
             return apply_patch_claim(input);
+        }
+        // `doctor` multiplexes inspect (pure read) and `fix=true` (repairs)
+        // off one flag; `note_schema` multiplexes read/write off its `action`
+        // tag. Both resolve per-argument, like `file_ops` above.
+        if name == "doctor" {
+            return doctor_claim(input);
+        }
+        if name == "note_schema" {
+            return note_schema_claim(input);
+        }
+        // `session_send` blocks on the named target session; disjoint fan-out
+        // delegations parallelize under a bounded `Sessions` scope.
+        if name == "session_send" {
+            return session_send_claim(input);
         }
         // `file_write` / `file_edit` mutate exactly their target path. Bind them
         // to that concrete path so two writes to the same file serialize while
@@ -494,6 +567,13 @@ mod tests {
             "heartbeat_update",
             "skill_install",
             "channel_pairing",
+            // Input-dependent read/write multiplexers resolve per-argument in
+            // `concurrency_claim` and must never sit on the static read-only
+            // list (their write arm would ride the `Shared` claim AND the
+            // idempotency consolidation would exempt them from the Ask tier).
+            "doctor",
+            "note_schema",
+            "session_send",
         ];
         for tool in write_tools {
             assert!(
@@ -505,13 +585,20 @@ mod tests {
 
     #[test]
     fn test_readonly_tools_on_allowlist() {
-        // Read-only tools must be on the allowlist so they keep parallelizing.
+        // Read-only tools must be on the allowlist so they keep parallelizing
+        // (and, since the idempotency consolidation, keep auto-retry + the
+        // Ask-tier read exemption). All names here are REGISTERED tools —
+        // the old list carried phantoms (`memory_recall`, `knowledge`).
         let read_tools = &[
             "search",
-            "memory_recall",
+            "memory_search",
             "web_fetch",
-            "knowledge",
             "file_read",
+            "user_profile",
+            "note_orient",
+            "note_graph_query",
+            "mcp_read_resource",
+            "mcp_get_prompt",
         ];
         for tool in read_tools {
             assert!(
@@ -684,6 +771,71 @@ mod tests {
                 .unwrap()
                 .concurrency_claim(&json!({"query": "x"})),
             ConcurrencyClaim::Shared
+        );
+    }
+
+    #[tokio::test]
+    async fn test_input_dependent_claims_doctor_note_schema_session_send() {
+        use crate::tools::concurrency::ConcurrencyClaim;
+
+        let tool_registry = Arc::new(MockRegistry {
+            results: HashMap::new(),
+        });
+        let tools = vec![
+            make_unified_tool("doctor", "Diagnose"),
+            make_unified_tool("note_schema", "SCHEMA.md read/write"),
+            make_unified_tool("session_send", "Delegate to a session"),
+        ];
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
+
+        // doctor: inspect (default) parallelizes; fix=true serializes.
+        let doctor = registry.get("doctor").unwrap();
+        assert_eq!(
+            doctor.concurrency_claim(&json!({})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            doctor.concurrency_claim(&json!({"fix": false})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            doctor.concurrency_claim(&json!({"fix": true})),
+            ConcurrencyClaim::global(),
+            "a fixing doctor mutates (data dir, instance lock) and must not \
+             ride a parallel read batch"
+        );
+
+        // note_schema: read parallelizes; write (and anything unrecognized)
+        // serializes.
+        let schema = registry.get("note_schema").unwrap();
+        assert_eq!(
+            schema.concurrency_claim(&json!({"action": "read"})),
+            ConcurrencyClaim::Shared
+        );
+        assert_eq!(
+            schema.concurrency_claim(&json!({"action": "write", "content": "x"})),
+            ConcurrencyClaim::global()
+        );
+        assert_eq!(
+            schema.concurrency_claim(&json!({})),
+            ConcurrencyClaim::global()
+        );
+
+        // session_send: named target -> bounded Sessions scope (disjoint
+        // fan-out delegations parallelize); missing/empty key -> Global.
+        let send = registry.get("session_send").unwrap();
+        assert_eq!(
+            send.concurrency_claim(&json!({"session_key": "agent:a:main", "message": "hi"})),
+            ConcurrencyClaim::sessions(["agent:a:main"])
+        );
+        assert_eq!(
+            send.concurrency_claim(&json!({"message": "hi"})),
+            ConcurrencyClaim::global(),
+            "an unnamed target resolves server-side; the adapter cannot pin it"
+        );
+        assert_eq!(
+            send.concurrency_claim(&json!({"session_key": "  ", "message": "hi"})),
+            ConcurrencyClaim::global()
         );
     }
 

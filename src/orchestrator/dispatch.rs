@@ -611,6 +611,17 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// The `[tool_service] parallel_tool_concurrency` cap this runner's own
+    /// Act phase dispatches with. Threaded into `SubagentTool` so spawned
+    /// subagents honour the operator's configured value (0/1 = disabled)
+    /// instead of the hardcoded default the spawner previously pinned —
+    /// an operator who disabled parallel dispatch still had subagents
+    /// running batches 8-wide. Default `None` leaves the spawner on the
+    /// config default, matching test mocks / the simple engine.
+    fn parallel_tool_concurrency(&self) -> Option<usize> {
+        None
+    }
+
     /// Estimate the context-window occupancy of this session's *next* prompt,
     /// for sessions that never ran an LLM turn (no persisted real occupancy).
     /// Deterministic token counting only — no LLM call (R7). Default `None`

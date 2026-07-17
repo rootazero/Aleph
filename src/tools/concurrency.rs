@@ -64,6 +64,21 @@ pub enum ExclusiveScope {
     /// center-local path *and* the node — so it keeps the conservative
     /// [`ExclusiveScope::Global`] claim.)
     Nodes(BTreeSet<String>),
+    /// Touches exactly this set of *local* agent sessions (delegation arms,
+    /// keyed by the resolved target session key). Two `Sessions` scopes
+    /// conflict only when they name a common session, so fan-out delegations
+    /// (`session_send` blocks up to its `timeout_seconds` waiting on the
+    /// child) to *different* sessions run concurrently instead of paying
+    /// N × wait serially.
+    ///
+    /// Unlike [`ExclusiveScope::Nodes`], a delegated session's run executes
+    /// on THIS machine and may touch arbitrary center resources (files,
+    /// stores) while the parent batch is still in flight — so a `Sessions`
+    /// scope conservatively conflicts with every *other* scope kind
+    /// (`Global`, `Paths`, `Nodes`): only disjoint sibling delegations
+    /// parallelize. Do not "optimize" the cross-kind arms to no-conflict —
+    /// the child's footprint is unknowable here.
+    Sessions(BTreeSet<String>),
 }
 
 impl ConcurrencyClaim {
@@ -114,6 +129,29 @@ impl ConcurrencyClaim {
         }
     }
 
+    /// Convenience constructor for a bounded local-session scope. Session
+    /// keys are taken verbatim (the caller's resolved target session key).
+    /// An empty set degrades to [`ExclusiveScope::Global`]: we could not pin
+    /// which session the call reaches, so assume the worst.
+    pub fn sessions<I, S>(sessions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let set: BTreeSet<String> = sessions
+            .into_iter()
+            .map(|s| s.as_ref().trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if set.is_empty() {
+            Self::global()
+        } else {
+            Self::Exclusive {
+                scope: ExclusiveScope::Sessions(set),
+            }
+        }
+    }
+
     /// The whole-world exclusive claim. Conflicts with everything.
     #[must_use]
     pub const fn global() -> Self {
@@ -126,12 +164,15 @@ impl ConcurrencyClaim {
 /// Whether two claims conflict — i.e. they must NOT run concurrently.
 ///
 /// Truth table:
-/// * `Shared`   vs `Shared`           → no conflict (reads parallelize)
-/// * `Shared`   vs `Exclusive(_)`     → conflict (read may observe a torn write)
-/// * `Global`   vs anything           → conflict (unbounded footprint)
-/// * `Paths(a)` vs `Paths(b)`         → conflict iff the path sets overlap
-/// * `Nodes(a)` vs `Nodes(b)`         → conflict iff they name a common node
-/// * `Paths(_)` vs `Nodes(_)`         → no conflict (different machines)
+/// * `Shared`      vs `Shared`           → no conflict (reads parallelize)
+/// * `Shared`      vs `Exclusive(_)`     → conflict (read may observe a torn write)
+/// * `Global`      vs anything           → conflict (unbounded footprint)
+/// * `Paths(a)`    vs `Paths(b)`         → conflict iff the path sets overlap
+/// * `Nodes(a)`    vs `Nodes(b)`         → conflict iff they name a common node
+/// * `Paths(_)`    vs `Nodes(_)`         → no conflict (different machines)
+/// * `Sessions(a)` vs `Sessions(b)`      → conflict iff they name a common session
+/// * `Sessions(_)` vs any other scope    → conflict (the delegated run's local
+///   footprint is unknowable — see [`ExclusiveScope::Sessions`])
 #[must_use]
 pub fn claims_conflict(a: &ConcurrencyClaim, b: &ConcurrencyClaim) -> bool {
     use ConcurrencyClaim::{Exclusive, Shared};
@@ -143,11 +184,16 @@ pub fn claims_conflict(a: &ConcurrencyClaim, b: &ConcurrencyClaim) -> bool {
 }
 
 fn scopes_conflict(a: &ExclusiveScope, b: &ExclusiveScope) -> bool {
-    use ExclusiveScope::{Global, Nodes, Paths};
+    use ExclusiveScope::{Global, Nodes, Paths, Sessions};
     match (a, b) {
         (Global, _) | (_, Global) => true,
         (Paths(pa), Paths(pb)) => paths_overlap(pa, pb),
         (Nodes(na), Nodes(nb)) => !na.is_disjoint(nb),
+        (Sessions(sa), Sessions(sb)) => !sa.is_disjoint(sb),
+        // A delegated session runs on THIS machine and can touch arbitrary
+        // center resources while the batch is in flight, so a bounded
+        // `Sessions` scope conservatively conflicts with every other kind.
+        (Sessions(_), _) | (_, Sessions(_)) => true,
         // A remote node's state and the center's filesystem are on different
         // machines — a bounded claim on one cannot touch the other.
         (Paths(_), Nodes(_)) | (Nodes(_), Paths(_)) => false,
@@ -347,8 +393,61 @@ mod tests {
 
     #[test]
     fn empty_node_selector_degrades_to_global() {
-        assert_eq!(ConcurrencyClaim::nodes(Vec::<&str>::new()), ConcurrencyClaim::global());
+        assert_eq!(
+            ConcurrencyClaim::nodes(Vec::<&str>::new()),
+            ConcurrencyClaim::global()
+        );
         assert_eq!(ConcurrencyClaim::nodes(["   "]), ConcurrencyClaim::global());
+    }
+
+    fn sessions(items: &[&str]) -> ConcurrencyClaim {
+        ConcurrencyClaim::sessions(items.iter().copied())
+    }
+
+    #[test]
+    fn distinct_sessions_parallelize_but_the_same_session_serializes() {
+        assert!(
+            !claims_conflict(&sessions(&["agent:a:main"]), &sessions(&["agent:b:main"])),
+            "fan-out delegations to different sessions must run concurrently"
+        );
+        assert!(
+            claims_conflict(&sessions(&["agent:a:main"]), &sessions(&["agent:a:main"])),
+            "two sends into one session must keep their relative order"
+        );
+    }
+
+    #[test]
+    fn session_scope_conservatively_conflicts_with_every_other_scope_kind() {
+        // The delegated run executes locally and its footprint is unknowable,
+        // so Sessions only ever parallelizes with disjoint sibling Sessions.
+        assert!(claims_conflict(
+            &sessions(&["agent:a:main"]),
+            &paths(&["src/a.rs"])
+        ));
+        assert!(claims_conflict(
+            &sessions(&["agent:a:main"]),
+            &nodes(&["worker-1"])
+        ));
+        assert!(claims_conflict(
+            &sessions(&["agent:a:main"]),
+            &ConcurrencyClaim::global()
+        ));
+        assert!(claims_conflict(
+            &sessions(&["agent:a:main"]),
+            &ConcurrencyClaim::Shared
+        ));
+    }
+
+    #[test]
+    fn empty_session_selector_degrades_to_global() {
+        assert_eq!(
+            ConcurrencyClaim::sessions(Vec::<&str>::new()),
+            ConcurrencyClaim::global()
+        );
+        assert_eq!(
+            ConcurrencyClaim::sessions(["  "]),
+            ConcurrencyClaim::global()
+        );
     }
 
     #[test]

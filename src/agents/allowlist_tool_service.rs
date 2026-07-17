@@ -64,6 +64,22 @@ impl ToolService for AllowlistToolService {
             .collect()
     }
 
+    async fn dispatchable_list(&self) -> Vec<ToolDefinition> {
+        // Forward the inner service's dispatchable set (visible + deferred
+        // tier), filtered by the same allowlist as `list()`. The trait default
+        // falls back to `list()`, which silently DROPS the parent
+        // `ScopedToolService`'s deferred MCP names — so a subagent's correct
+        // call to a deferred tool missed the name-repairer's Exact tier and
+        // the Fuzzy tier was free to rewrite it into a different resident
+        // tool, the exact regression `dispatchable_list` exists to prevent.
+        self.inner
+            .dispatchable_list()
+            .await
+            .into_iter()
+            .filter(|d| self.agent_def.is_tool_allowed(&d.name))
+            .collect()
+    }
+
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {
         if !self.agent_def.is_tool_allowed(name) {
             return None;

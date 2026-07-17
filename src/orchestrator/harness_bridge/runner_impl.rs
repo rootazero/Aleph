@@ -53,6 +53,13 @@ impl HarnessRunner for AgentHarnessRunner {
         Some(self.default_max_iterations)
     }
 
+    /// Hand the spawner the SAME `[tool_service] parallel_tool_concurrency`
+    /// this runner's Act phase dispatches with, so a subagent's cap cannot
+    /// drift from the operator's configured value (including 0/1 = disabled).
+    fn parallel_tool_concurrency(&self) -> Option<usize> {
+        self.parallel_tool_concurrency
+    }
+
     async fn run(
         &self,
         session_key: String,

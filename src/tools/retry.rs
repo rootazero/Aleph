@@ -32,52 +32,33 @@ use crate::tools::service::ToolError;
 /// network/timeout retry has a real chance of succeeding.
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 
-/// Built-in tool names that are safe to auto-retry on retryable errors.
-///
-/// A tool belongs here iff re-running with identical input has no
-/// observable side effect — i.e. read-only, pure-query, or naturally
-/// idempotent (HTTP GET, vector search, file listing, status probes).
-///
-/// This is the single source of truth for built-in idempotency. Adding a
-/// tool to this list requires confirming the implementation has no
-/// caller-visible side effects (no writes, no message sends, no remote
-/// state mutation). Default-deny: anything not on this list never
-/// auto-retries.
-///
-/// This list covers builtins only. MCP tools declare their own idempotency
-/// through the server's `readOnlyHint` / `idempotentHint`, surfaced as
-/// `LoopTool::is_idempotent`; extensions that declare nothing stay
-/// non-idempotent.
-pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
-    // Memory / recall — pure reads
-    "memory_search",
-    "memory_browse",
-    "memory_timeline",
-    "memory_explore",
-    "recall_context",
-    "session_search",
-    "user_profile",
-    // File / code search — pure reads
-    "search",
-    // Skill discovery — pure reads
-    "skill_status",
-    "skill_reader",
-    // Tool introspection — pure reads
-    "list_tools",
-    "search_tools",
-    "get_tool_schema",
-    // Web — GET-only path via safe_fetch
-    "web_fetch",
-    // Note discovery — pure reads
-    "note_orient",
-    "note_schema",
-    "note_graph_query",
-];
-
 /// Returns true iff `name` is a built-in tool that is safe to auto-retry.
+///
+/// A tool qualifies iff re-running with identical input has no observable
+/// side effect. The answer delegates to the read-only allowlist
+/// ([`crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS`]): read-only
+/// ⇒ idempotent, and today no builtin is idempotent-but-mutating, so one
+/// maintained list serves both the concurrency claim and this retry gate.
+///
+/// This replaces the former standalone `IDEMPOTENT_BUILTIN_TOOLS` list,
+/// which had drifted hard from the read-only allowlist (2026-07-17): ~25
+/// registered pure reads (`file_read`, `session_list`, the `desktop_ax_*`
+/// family, …) were missing — losing auto-retry AND tripping the `Ask` exec
+/// tier's `!idempotent` rule on pure reads, contradicting its own "read-only
+/// tools stay allowed" contract — while it carried phantom (`list_tools`,
+/// `search_tools`) and stale (`skill_reader` for `skill_read`) names, plus
+/// `note_schema`, whose `write` action is NOT idempotent and must not be
+/// exempted from the Ask tier. If a genuinely idempotent-but-mutating
+/// builtin ever appears (an `mkdir -p` analogue), reintroduce a small extras
+/// list here rather than polluting `READ_ONLY_TOOLS`.
+///
+/// Builtins only. MCP tools declare their own idempotency through the
+/// server's `readOnlyHint` / `idempotentHint`, surfaced as
+/// `LoopTool::is_idempotent`; extensions that declare nothing stay
+/// non-idempotent. Default-deny: anything unlisted never auto-retries.
 #[must_use]
 pub fn is_idempotent_builtin_name(name: &str) -> bool {
-    IDEMPOTENT_BUILTIN_TOOLS.contains(&name)
+    crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS.contains(&name)
 }
 
 /// Run `op` once. If it returns `Err(e)` and `e.is_retryable()` AND
@@ -226,6 +207,21 @@ mod tests {
         assert!(is_idempotent_builtin_name("memory_search"));
         assert!(is_idempotent_builtin_name("search"));
         assert!(is_idempotent_builtin_name("web_fetch"));
+        // Consolidation regressions: registered pure reads the old standalone
+        // list had drifted away from (they lost auto-retry and wrongly tripped
+        // the Ask tier's `!idempotent` rule).
+        assert!(is_idempotent_builtin_name("file_read"));
+        assert!(is_idempotent_builtin_name("skill_read"));
+        assert!(is_idempotent_builtin_name("session_list"));
+        assert!(is_idempotent_builtin_name("desktop_ax_snapshot"));
+        // Input-dependent read/write multiplexers stay non-idempotent — their
+        // write arm is exactly what the Ask tier must keep gating.
+        assert!(!is_idempotent_builtin_name("note_schema"));
+        assert!(!is_idempotent_builtin_name("doctor"));
+        assert!(!is_idempotent_builtin_name("file_ops"));
+        // Stale/phantom names must stay out.
+        assert!(!is_idempotent_builtin_name("skill_reader"));
+        assert!(!is_idempotent_builtin_name("list_tools"));
         assert!(!is_idempotent_builtin_name("bash_exec"));
         assert!(!is_idempotent_builtin_name("session_send"));
         assert!(!is_idempotent_builtin_name("nonexistent_tool"));

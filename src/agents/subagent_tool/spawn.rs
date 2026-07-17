@@ -316,6 +316,9 @@ impl SubagentTool {
         if let Some(mi) = self.default_max_iterations {
             runtime = runtime.with_default_max_iterations(mi);
         }
+        if let Some(cap) = self.parallel_tool_concurrency {
+            runtime = runtime.with_parallel_tool_concurrency(cap);
+        }
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }

@@ -135,6 +135,7 @@ async fn subagent_base_carries_4_p1_fields() {
         subagent_semaphore: None,
         routing_store: None,
         default_max_iterations: None,
+        parallel_tool_concurrency: None,
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.

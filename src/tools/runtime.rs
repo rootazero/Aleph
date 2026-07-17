@@ -93,9 +93,17 @@ pub trait LoopTool: Send + Sync {
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult;
 
     /// Whether this tool can safely run concurrently with other concurrent-safe tools.
-    /// Returns true by default. Override to false for tools that mutate shared state.
+    ///
+    /// Returns `false` by default — the fail-closed side, matching
+    /// [`is_idempotent`](LoopTool::is_idempotent) and the `READ_ONLY_TOOLS`
+    /// allowlist inversion in `RegistryToolAdapter`: a tool parallelizes only
+    /// by *explicit declaration*, so a future direct-registered mutator that
+    /// forgets the override serializes (correct, just slower) instead of
+    /// silently racing. (The default was `true` until 2026-07-17 — the exact
+    /// opposite failure mode of the allowlist it coexisted with.) Override to
+    /// `true` only for tools with no observable shared-state mutation.
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
-        true
+        false
     }
 
     /// Resource-scope-aware concurrency claim for the parallel dispatch path.
@@ -139,12 +147,12 @@ pub trait LoopTool: Send + Sync {
     /// Whether re-running this tool with identical input has no observable
     /// side effect — a declared pure read / naturally idempotent call.
     ///
-    /// `false` by default, deliberately the OPPOSITE default of
-    /// [`is_concurrent_safe`](LoopTool::is_concurrent_safe) (which defaults to
-    /// `true`): this answer feeds the `Ask` exec tier's "not idempotent =
-    /// mutating" rule, so an unknown tool must land on the fail-closed side.
-    /// Builtins answer through `RegistryToolAdapter` (the
-    /// `IDEMPOTENT_BUILTIN_TOOLS` allowlist); MCP tools answer from the
+    /// `false` by default — the same fail-closed side as
+    /// [`is_concurrent_safe`](LoopTool::is_concurrent_safe): this answer feeds
+    /// the `Ask` exec tier's "not idempotent = mutating" rule, so an unknown
+    /// tool must land on the fail-closed side. Builtins answer through
+    /// `RegistryToolAdapter` (the `READ_ONLY_TOOLS` allowlist, via
+    /// `retry::is_idempotent_builtin_name`); MCP tools answer from the
     /// server's own `readOnlyHint` / `idempotentHint`. Like the other two
     /// flags, the answer is static per tool, not input-dependent.
     fn is_idempotent(&self) -> bool {
@@ -466,11 +474,12 @@ mod tests {
     }
 
     #[test]
-    fn test_default_concurrent_safe() {
+    fn test_default_concurrent_safe_is_fail_closed() {
         let tool = EchoTool;
-        // Default implementation should return true
-        assert!(tool.is_concurrent_safe(&json!({})));
-        assert!(tool.is_concurrent_safe(&json!({"message": "hello"})));
+        // The default is fail-closed: a tool parallelizes only by explicit
+        // declaration, so a forgotten override serializes instead of racing.
+        assert!(!tool.is_concurrent_safe(&json!({})));
+        assert!(!tool.is_concurrent_safe(&json!({"message": "hello"})));
     }
 
     /// A tool that overrides is_concurrent_safe to return false.

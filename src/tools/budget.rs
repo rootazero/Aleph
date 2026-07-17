@@ -51,9 +51,10 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     ("session_search", 5_000),
     ("user_profile", 3_000),
     ("skill_status", 3_000),
-    ("skill_reader", 5_000),
-    ("list_tools", 2_000),
-    ("search_tools", 2_000),
+    // (`skill_reader` / `list_tools` / `search_tools` were phantom rows —
+    // no registered tool ever bore those names; the real skill read tool is
+    // `skill_read` below.)
+    ("skill_read", 5_000),
     ("get_tool_schema", 2_000),
     ("note_orient", 3_000),
     ("note_schema", 3_000),
@@ -148,11 +149,13 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 21 entries (14 fast + 3 slow + 2 exec + ask_user +
-        // subagent). Bumping this requires updating the table AND adjusting
-        // this constant in the same commit — the assertion is a code-review
-        // signal, not a value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 21);
+        // Locked at 19 entries (12 fast + 3 slow + 2 exec + ask_user +
+        // subagent; the 2026-07 phantom sweep removed the never-registered
+        // `list_tools` / `search_tools` rows and renamed stale `skill_reader`
+        // to `skill_read`). Bumping this requires updating the table AND
+        // adjusting this constant in the same commit — the assertion is a
+        // code-review signal, not a value check.
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 19);
     }
 
     #[test]

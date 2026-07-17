@@ -134,11 +134,8 @@ impl LoopTool for MarkdownLoopTool {
         }
     }
 
-    fn is_concurrent_safe(&self, _input: &Value) -> bool {
-        // Markdown CLI skills shell out / touch the filesystem — treat as
-        // exclusive to be safe.
-        false
-    }
+    // Markdown CLI skills shell out / touch the filesystem; they stay on the
+    // trait's fail-closed `is_concurrent_safe` default (`false` → `Global`).
 }
 
 #[cfg(test)]

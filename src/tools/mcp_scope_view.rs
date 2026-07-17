@@ -34,6 +34,31 @@ impl McpScopedToolService {
             ..ToolDefinitionMetadata::default()
         }
     }
+
+    /// Append extras (per-agent MCP-scope tools) that don't shadow a parent
+    /// definition. Shared by `list()` and `dispatchable_list()` so the two
+    /// views cannot drift on extras handling.
+    fn merge_extras(
+        mut out: Vec<ToolDefinition>,
+        extras: &[ToolRegistration],
+    ) -> Vec<ToolDefinition> {
+        let parent_names: std::collections::HashSet<String> =
+            out.iter().map(|d| d.name.clone()).collect();
+        for t in extras {
+            if !parent_names.contains(&t.name) {
+                out.push(ToolDefinition {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    input_schema: t.parameters.clone(),
+                    source: ToolSource::Extension {
+                        plugin_id: t.plugin_id.clone(),
+                    },
+                    metadata: Self::extras_metadata(&t.name),
+                });
+            }
+        }
+        out
+    }
 }
 
 #[async_trait]
@@ -55,23 +80,17 @@ impl ToolService for McpScopedToolService {
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {
-        let mut out = self.parent.list().await;
-        let parent_names: std::collections::HashSet<String> =
-            out.iter().map(|d| d.name.clone()).collect();
-        for t in &self.extras {
-            if !parent_names.contains(&t.name) {
-                out.push(ToolDefinition {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: t.parameters.clone(),
-                    source: ToolSource::Extension {
-                        plugin_id: t.plugin_id.clone(),
-                    },
-                    metadata: Self::extras_metadata(&t.name),
-                });
-            }
-        }
-        out
+        Self::merge_extras(self.parent.list().await, &self.extras)
+    }
+
+    async fn dispatchable_list(&self) -> Vec<ToolDefinition> {
+        // Forward the parent's dispatchable set (visible + deferred tier)
+        // instead of the trait default (`list()`), which silently drops the
+        // parent `ScopedToolService`'s deferred MCP names from the
+        // name-repairer's candidate set — a correct call to a deferred tool
+        // would miss the Exact tier and could be fuzzily rewritten into a
+        // different resident tool. Extras merge identically to `list()`.
+        Self::merge_extras(self.parent.dispatchable_list().await, &self.extras)
     }
 
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {

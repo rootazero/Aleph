@@ -155,6 +155,10 @@ pub struct AgentRuntime {
     /// threaded into `SpawnerBase` so a child role with no declared cap
     /// inherits one instead of running its Think→Act loop unbounded.
     default_max_iterations: Option<usize>,
+    /// The parent runner's `[tool_service] parallel_tool_concurrency`,
+    /// threaded into `SpawnerBase` so a child's Act-phase cap matches the
+    /// operator's configured value (including 0/1 = disabled).
+    parallel_tool_concurrency: Option<usize>,
 }
 
 impl AgentRuntime {
@@ -188,6 +192,7 @@ impl AgentRuntime {
             strategy: None,
             routing_store: None,
             default_max_iterations: None,
+            parallel_tool_concurrency: None,
         }
     }
 
@@ -196,6 +201,14 @@ impl AgentRuntime {
     #[must_use]
     pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
         self.default_max_iterations = Some(max_iterations);
+        self
+    }
+
+    /// Wire the parent runner's `[tool_service] parallel_tool_concurrency`,
+    /// inherited by every spawned child's Act phase.
+    #[must_use]
+    pub const fn with_parallel_tool_concurrency(mut self, cap: usize) -> Self {
+        self.parallel_tool_concurrency = Some(cap);
         self
     }
 
@@ -484,6 +497,10 @@ impl AgentRuntime {
             // B15 — the parent's iteration cap, so a capless child role does
             // not run its loop unbounded until the spawn timeout kills it.
             default_max_iterations: self.default_max_iterations,
+            // The parent's Act-phase parallel cap, so a child honours the
+            // operator's `[tool_service] parallel_tool_concurrency` (0/1 =
+            // disabled) instead of the hardcoded config default.
+            parallel_tool_concurrency: self.parallel_tool_concurrency,
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

@@ -115,6 +115,11 @@ pub struct SubagentTool {
     /// `new()` default) still yields a capped child — the spawner falls back to
     /// `FALLBACK_MAX_ITERATIONS` — it just isn't the operator's configured value.
     pub(super) default_max_iterations: Option<usize>,
+    /// The parent runner's `[tool_service] parallel_tool_concurrency`,
+    /// inherited so a child's Act-phase cap (including 0/1 = disabled)
+    /// matches the operator's configured value. `None` (the `new()` default)
+    /// leaves the spawner on the config default.
+    pub(super) parallel_tool_concurrency: Option<usize>,
 }
 
 impl SubagentTool {
@@ -161,6 +166,7 @@ impl SubagentTool {
             strategy: None,
             routing_store: None,
             default_max_iterations: None,
+            parallel_tool_concurrency: None,
         }
     }
 
@@ -169,6 +175,15 @@ impl SubagentTool {
     #[must_use]
     pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
         self.default_max_iterations = Some(max_iterations);
+        self
+    }
+
+    /// Wire the parent runner's `[tool_service] parallel_tool_concurrency`
+    /// so a spawned child's Act-phase cap matches the operator's configured
+    /// value instead of the hardcoded default.
+    #[must_use]
+    pub const fn with_parallel_tool_concurrency(mut self, cap: usize) -> Self {
+        self.parallel_tool_concurrency = Some(cap);
         self
     }
 

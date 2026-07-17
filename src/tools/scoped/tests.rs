@@ -36,6 +36,13 @@ impl LoopTool for NamedStub {
     fn schema(&self) -> Value {
         json!({ "type": "object" })
     }
+    // Declared parallel-safe so the tier tests keep their contrast: a GATE
+    // (permission Ask / tier argument filter) forcing `Global` must be
+    // distinguishable from the inner claim, which requires the ungated inner
+    // claim to be `Shared`. (The trait default is fail-closed `false`.)
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
     async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
         LoopToolResult::Success { output: json!({}) }
     }
@@ -85,6 +92,12 @@ impl LoopTool for StubTool {
     }
     fn schema(&self) -> Value {
         json!({ "type": "object" })
+    }
+    // Models a declared parallel-safe (read-only) tool; the trait default is
+    // now fail-closed `false`, so safety must be explicit (`UnsafeStubTool`
+    // below models the default/mutating side).
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
     }
     async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
         LoopToolResult::Success {
@@ -863,8 +876,8 @@ fn metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn describe_populates_builtin_budget_metadata() {
-    // `memory_search` is in both BUILTIN_TOOL_BUDGETS_MS (5_000ms) and
-    // IDEMPOTENT_BUILTIN_TOOLS.
+    // `memory_search` is in BUILTIN_TOOL_BUDGETS_MS (5_000ms) and is a
+    // declared pure read (`is_idempotent_builtin_name`).
     let registry = make_registry(&["memory_search"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
     let def = svc.describe("memory_search").await.expect("tool present");

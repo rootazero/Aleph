@@ -147,6 +147,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         subagent_semaphore: None,
         routing_store: None,
         default_max_iterations: None,
+        parallel_tool_concurrency: None,
     };
 
     let agent_def =
@@ -350,7 +351,11 @@ async fn h_t5_create_and_cleanup_within_perf_budget() {
     let cleanup_ms = t1.elapsed().as_millis();
     // Windows worktree ops (git worktree add + Defender on-access scans) run
     // far slower than POSIX; widen the budget there, keep the tight CI guard on Unix.
-    let (create_budget, cleanup_budget) = if cfg!(windows) { (8000, 4000) } else { (800, 400) };
+    let (create_budget, cleanup_budget) = if cfg!(windows) {
+        (8000, 4000)
+    } else {
+        (800, 400)
+    };
     assert!(
         create_ms < create_budget,
         "create took {create_ms}ms, budget {create_budget}ms"

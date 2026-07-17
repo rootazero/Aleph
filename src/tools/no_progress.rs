@@ -18,8 +18,8 @@
 //!
 //! This module closes that gap, mapped onto Aleph's redlines:
 //!
-//! - **Precision via the idempotency SSOT.** Only tools on
-//!   [`IDEMPOTENT_BUILTIN_TOOLS`](crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS)
+//! - **Precision via the idempotency SSOT.** Only tools passing
+//!   [`is_idempotent_builtin_name`](crate::tools::retry::is_idempotent_builtin_name)
 //!   (pure reads — no writes, sends, or remote mutation) are considered. A
 //!   tool whose result is *meant* to change between calls (a write, a clock,
 //!   a queue poll) is never flagged, so legitimate progressing loops are not

@@ -32,6 +32,12 @@ impl LoopTool for SchemaLookupTool {
         Self::NAME
     }
 
+    // Pure read over an immutable schema snapshot — safe to run alongside any
+    // other concurrent-safe call (the trait default is fail-closed `false`).
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Load the full JSON input schema for a tool whose parameters are collapsed. \
          Call this with the tool's exact name before invoking any tool whose description \
@@ -49,7 +55,10 @@ impl LoopTool for SchemaLookupTool {
     }
 
     async fn execute(&self, input: Value, _cancel: CancellationToken) -> ToolResult {
-        let name = input.get("tool_name").and_then(Value::as_str).unwrap_or_default();
+        let name = input
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if name.is_empty() {
             return ToolResult::Error {
                 error: "get_tool_schema requires a non-empty `tool_name`.".to_string(),
@@ -84,13 +93,21 @@ mod tests {
 
     fn tool() -> SchemaLookupTool {
         let mut m = std::collections::HashMap::new();
-        m.insert("browser_navigate".to_string(), json!({"type":"object","properties":{"url":{"type":"string"}}}));
+        m.insert(
+            "browser_navigate".to_string(),
+            json!({"type":"object","properties":{"url":{"type":"string"}}}),
+        );
         SchemaLookupTool::new(std::sync::Arc::new(m))
     }
 
     #[tokio::test]
     async fn returns_full_schema_when_found() {
-        let out = tool().execute(json!({"tool_name":"browser_navigate"}), CancellationToken::new()).await;
+        let out = tool()
+            .execute(
+                json!({"tool_name":"browser_navigate"}),
+                CancellationToken::new(),
+            )
+            .await;
         match out {
             ToolResult::Success { output } => {
                 assert_eq!(output["found"], json!(true));
@@ -102,11 +119,20 @@ mod tests {
 
     #[tokio::test]
     async fn suggests_on_miss() {
-        let out = tool().execute(json!({"tool_name":"browser_navigat"}), CancellationToken::new()).await;
+        let out = tool()
+            .execute(
+                json!({"tool_name":"browser_navigat"}),
+                CancellationToken::new(),
+            )
+            .await;
         match out {
             ToolResult::Success { output } => {
                 assert_eq!(output["found"], json!(false));
-                assert!(output["suggestions"].as_array().unwrap().iter().any(|s| s == "browser_navigate"));
+                assert!(output["suggestions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s == "browser_navigate"));
             }
             other => panic!("expected success, got {other:?}"),
         }
