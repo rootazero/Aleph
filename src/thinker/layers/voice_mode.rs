@@ -88,12 +88,9 @@ impl PromptLayer for VoiceModeLayer {
         matches!(mode, PromptMode::Full | PromptMode::Compact)
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // Read from the ResolvedContext — the per-request context actually
-        // threaded through the production cached prompt path (the same channel
-        // `StandingGoalLayer` / `ExecutionPlanLayer` use). The legacy
-        // `input.inbound` is never populated in production (no
-        // `PromptBuilder.inbound` field, no production caller), so reading it
-        // left this layer permanently dead.
+        // Read voice state from the ResolvedContext — the per-request context
+        // actually threaded through the production cached prompt path (the same
+        // channel `StandingGoalLayer` / `ExecutionPlanLayer` use).
         let voice = input.context.map_or(VoiceContext::Off, |ctx| ctx.voice);
         if voice.is_active() {
             output.push_str(&build_voice_guidelines(voice));

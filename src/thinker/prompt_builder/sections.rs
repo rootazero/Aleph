@@ -1,15 +1,16 @@
 //! Prompt section builders (append_* methods)
 //!
-//! All `append_*` methods that build individual prompt sections live here.
+//! Test-only section builders retained as `#[cfg(test)]` twins of the live
+//! `PromptLayer`s (RuntimeCapabilities / GenerationModels / SkillInstructions /
+//! CustomInstructions / Language). Production prompt assembly runs entirely
+//! through the layer pipeline (`PromptPipeline::execute`), never these helpers;
+//! they exist only to unit-test the shared `sanitize_for_prompt` path.
 
 use super::PromptBuilder;
-use crate::thinker::context::{DisableReason, DisabledTool, EnvironmentContract};
-use crate::thinker::interaction::Capability;
+#[cfg(test)]
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 impl PromptBuilder {
-    // ========== Shared prompt section builders ==========
-
     /// Append runtime capabilities section (test-only; pipeline uses RuntimeCapabilitiesLayer)
     #[cfg(test)]
     pub(crate) fn append_runtime_capabilities(&self, prompt: &mut String) {
@@ -41,16 +42,6 @@ impl PromptBuilder {
         }
     }
 
-    /// Append runtime context section (micro-environmental awareness)
-    pub fn append_runtime_context_section(
-        &self,
-        prompt: &mut String,
-        runtime_ctx: &crate::thinker::runtime_context::RuntimeContext,
-    ) {
-        prompt.push_str(&runtime_ctx.to_prompt_section());
-        prompt.push_str("\n\n");
-    }
-
     /// Append generation models section (test-only; pipeline uses GenerationModelsLayer)
     #[cfg(test)]
     pub(crate) fn append_generation_models(&self, prompt: &mut String) {
@@ -60,86 +51,6 @@ impl PromptBuilder {
             prompt.push_str(&models);
             prompt.push('\n');
         }
-    }
-
-    /// Append constitutional AI safety guardrails
-    ///
-    /// Adds foundational safety principles covering:
-    /// - Autonomy boundaries (no independent goals)
-    /// - Oversight priority (human supervision)
-    /// - Transparency (explain before acting)
-    /// - Data handling (protect credentials and sensitive data)
-    pub fn append_safety_constitution(&self, prompt: &mut String) {
-        prompt.push_str("## Safety Principles\n\n");
-
-        prompt.push_str("### Autonomy Boundaries\n");
-        prompt.push_str("- You have NO independent goals. Your purpose is to help the user.\n");
-        prompt.push_str("- You NEVER take actions that could affect systems beyond the user's workspace without explicit approval.\n");
-        prompt.push_str("- When uncertain about safety implications, ASK rather than ACT.\n\n");
-
-        prompt.push_str("### Oversight Priority\n");
-        prompt.push_str("- Human oversight is paramount. Never bypass, disable, or work around safety mechanisms.\n");
-        prompt.push_str("- If a tool requires approval, explain why you need it and wait.\n");
-        prompt.push_str("- Never attempt to elevate your own permissions or access.\n\n");
-
-        prompt.push_str("### Transparency\n");
-        prompt.push_str(
-            "- Always explain what you're about to do before doing it (for impactful actions).\n",
-        );
-        prompt.push_str("- If you make a mistake, acknowledge it immediately.\n");
-        prompt.push_str("- Never hide errors or pretend actions succeeded when they didn't.\n\n");
-
-        prompt.push_str("### Data Handling\n");
-        prompt.push_str("- Never expose, transmit, or store credentials, API keys, or sensitive data unless explicitly directed by the user.\n");
-        prompt.push_str(
-            "- In group contexts, respect that private user information should not be shared.\n\n",
-        );
-    }
-
-    /// Append memory-first guidance to the system prompt
-    ///
-    /// Instructs the AI to proactively search persistent memory before
-    /// answering context-dependent questions, and to store new facts
-    /// discovered during conversations.
-    pub fn append_memory_guidance(&self, prompt: &mut String) {
-        prompt.push_str("## Memory Protocol\n\n");
-        prompt.push_str("You have persistent memory across sessions. Use it.\n\n");
-
-        prompt.push_str("### Before Answering\n");
-        prompt.push_str("When the user asks about past work, preferences, or context:\n");
-        prompt.push_str("1. FIRST use `memory_search` to recall relevant facts\n");
-        prompt.push_str("2. THEN answer with recalled context\n");
-        prompt.push_str("3. ALWAYS cite sources: [Source: <path>#<id>]\n\n");
-
-        prompt.push_str("### After Learning\n");
-        prompt.push_str("When you discover new facts worth remembering:\n");
-        prompt.push_str(
-            "- User preferences → use `memory_store` with category \"user_preference\"\n",
-        );
-        prompt.push_str(
-            "- Project decisions → use `memory_store` with category \"project_decision\"\n",
-        );
-        prompt.push_str("- Task outcomes → use `memory_store` with category \"task_outcome\"\n\n");
-
-        prompt.push_str("### Memory Hygiene\n");
-        prompt.push_str("- Don't store trivial or temporary information\n");
-        prompt.push_str("- Don't store information the user explicitly asks you to forget\n");
-        prompt.push_str("- Update existing facts rather than creating duplicates\n\n");
-    }
-
-    /// Append soul continuity guidance to the system prompt
-    ///
-    /// Instructs the AI to incrementally evolve its soul manifest
-    /// based on interactions, rather than rewriting identity wholesale.
-    pub fn append_soul_continuity(&self, prompt: &mut String) {
-        prompt.push_str(
-            "## Soul Continuity\n\n\
-             Your identity files are your persistent memory of who you are.\n\
-             - After meaningful interactions that reveal new preferences, update your soul\n\
-             - After corrections from the user (\"don't do that\"), add anti-patterns\n\
-             - After discovering new expertise areas, extend your expertise list\n\
-             - Rule: Changes are gradual. Never rewrite your entire identity at once.\n\n",
-        );
     }
 
     /// Append skill instructions from SkillSystem v2 snapshot (test-only; pipeline uses SkillInstructionsLayer)
@@ -196,201 +107,5 @@ impl PromptBuilder {
                 language_name
             ));
         }
-    }
-
-    // ========== Environment Contract & Security Section Builders ==========
-
-    /// Append environment contract section describing the current channel capabilities
-    ///
-    /// This section informs the AI about:
-    /// - The current interaction paradigm (CLI, `WebRich`, Messaging, etc.)
-    /// - Active capabilities available in this environment
-    /// - Interaction constraints (output limits, streaming support)
-    pub fn append_environment_contract(&self, prompt: &mut String, contract: &EnvironmentContract) {
-        prompt.push_str("## Environment Contract\n\n");
-
-        // Paradigm description
-        prompt.push_str(&format!(
-            "**Paradigm**: {}\n\n",
-            contract.paradigm.description()
-        ));
-
-        // Active capabilities
-        if !contract.active_capabilities.is_empty() {
-            prompt.push_str("**Active Capabilities**:\n");
-            for cap in &contract.active_capabilities {
-                let (name, hint) = cap.prompt_hint();
-                prompt.push_str(&format!("- `{name}`: {hint}\n"));
-            }
-            prompt.push('\n');
-        }
-
-        // Constraints
-        let mut constraint_notes = Vec::new();
-        if let Some(max_chars) = contract.constraints.max_output_chars {
-            constraint_notes.push(format!("Max output: {max_chars} characters"));
-        }
-        if contract.constraints.prefer_compact {
-            constraint_notes.push("Prefer concise responses".to_string());
-        }
-        if contract.constraints.supports_streaming {
-            constraint_notes.push("Streaming enabled".to_string());
-        }
-
-        if !constraint_notes.is_empty() {
-            prompt.push_str("**Constraints**:\n");
-            for note in constraint_notes {
-                prompt.push_str(&format!("- {note}\n"));
-            }
-            prompt.push('\n');
-        }
-    }
-
-    /// Append security constraints section
-    ///
-    /// This section informs the AI about:
-    /// - General security notes (sandbox level, filesystem scope, etc.)
-    /// - Tools blocked by policy (should not be attempted)
-    /// - Tools requiring user approval (can be used but need confirmation)
-    pub fn append_security_constraints(
-        &self,
-        prompt: &mut String,
-        disabled_tools: &[DisabledTool],
-        security_notes: &[String],
-    ) {
-        // Only add section if there's something to report
-        if security_notes.is_empty() && disabled_tools.is_empty() {
-            return;
-        }
-
-        prompt.push_str("## Security & Constraints\n\n");
-
-        // Security notes
-        for note in security_notes {
-            let note = sanitize_for_prompt(note, SanitizeLevel::Light);
-            prompt.push_str(&format!("- {note}\n"));
-        }
-        if !security_notes.is_empty() {
-            prompt.push('\n');
-        }
-
-        // Collect policy-blocked tools
-        let blocked_by_policy: Vec<&DisabledTool> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::BlockedByPolicy { .. }))
-            .collect();
-
-        if !blocked_by_policy.is_empty() {
-            prompt.push_str("**Disabled by Policy**:\n");
-            for tool in blocked_by_policy {
-                if let DisableReason::BlockedByPolicy { ref reason } = tool.reason {
-                    prompt.push_str(&format!("- `{}` — {}\n", tool.name, reason));
-                }
-            }
-            prompt.push('\n');
-        }
-
-        // Collect approval-required tools
-        let requires_approval: Vec<&DisabledTool> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::RequiresApproval { .. }))
-            .collect();
-
-        if !requires_approval.is_empty() {
-            prompt.push_str("**Requires User Approval**:\n");
-            for tool in requires_approval {
-                if let DisableReason::RequiresApproval {
-                    prompt: ref approval_prompt,
-                } = tool.reason
-                {
-                    prompt.push_str(&format!(
-                        "- `{}` — available, but each invocation requires user confirmation ({})\n",
-                        tool.name, approval_prompt
-                    ));
-                }
-            }
-            prompt.push('\n');
-        }
-    }
-
-    /// Append protocol tokens section.
-    ///
-    /// When `SilentReply` capability is active, injects structured protocol tokens
-    /// that the LLM can use as minimal-cost responses in background mode.
-    pub fn append_protocol_tokens(&self, prompt: &mut String, contract: &EnvironmentContract) {
-        if !contract
-            .active_capabilities
-            .contains(&Capability::SilentReply)
-        {
-            return;
-        }
-        prompt.push_str(&crate::thinker::protocol_tokens::ProtocolToken::to_prompt_section());
-    }
-
-    /// Append system operational awareness guidelines.
-    ///
-    /// Only injected for Background and CLI paradigms where the LLM
-    /// may need to detect and report system issues proactively.
-    pub fn append_operational_guidelines(
-        &self,
-        prompt: &mut String,
-        paradigm: crate::thinker::interaction::InteractionParadigm,
-    ) {
-        match paradigm {
-            crate::thinker::interaction::InteractionParadigm::Background
-            | crate::thinker::interaction::InteractionParadigm::CLI => {}
-            _ => return, // Skip for Messaging, WebRich, Embedded
-        }
-
-        prompt.push_str("## System Operational Awareness\n\n");
-        prompt.push_str(
-            "You are aware of your own runtime environment and can monitor it proactively.\n\n",
-        );
-
-        prompt.push_str("### Diagnostic Capabilities (read-only, always allowed)\n");
-        prompt.push_str("- Check disk space: `df -h`\n");
-        prompt.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
-        prompt.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
-        prompt
-            .push_str("- Check configuration validity: read config files and validate structure\n");
-        prompt.push_str(
-            "- Check desktop capability availability: inspect startup logs, platform support, and OS permissions\n",
-        );
-        prompt.push_str("- Check SQLite health: verify database file accessibility\n\n");
-
-        prompt.push_str("### When You Detect Issues\n");
-        prompt.push_str(
-            "If you notice configuration conflicts, database issues, unavailable desktop capabilities,\n",
-        );
-        prompt.push_str("abnormal resource usage, or runtime capability degradation:\n\n");
-        prompt.push_str("**Action**: Report to the user with:\n");
-        prompt.push_str("1. What you observed (specific evidence)\n");
-        prompt.push_str("2. Potential impact\n");
-        prompt.push_str("3. Suggested remediation steps\n");
-        prompt.push_str("4. Do NOT execute remediation without explicit user approval\n\n");
-
-        prompt.push_str("### What You Must NEVER Do Autonomously\n");
-        prompt.push_str("- Restart Aleph services\n");
-        prompt.push_str("- Modify configuration files\n");
-        prompt.push_str("- Delete or compact databases\n");
-        prompt.push_str("- Kill processes\n");
-        prompt.push_str("- Change system settings\n\n");
-    }
-
-    /// Append memory citation standards.
-    ///
-    /// Always injected — citation standards are valuable in all interaction modes.
-    pub fn append_citation_standards(&self, prompt: &mut String) {
-        prompt.push_str("## Citation Standards\n\n");
-        prompt.push_str("When referencing information from memory or knowledge base:\n");
-        prompt.push_str("- Include source reference in format: `[Source: <path>#<id>]` or `[Source: <path>#L<line>]`\n");
-        prompt.push_str(
-            "- Sources are provided in the context metadata — do not fabricate source paths\n",
-        );
-        prompt.push_str("- If multiple sources support a claim, cite the most specific one\n");
-        prompt.push_str(
-            "- For real-time observations (current tool output, live data), no citation needed\n",
-        );
-        prompt.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
     }
 }

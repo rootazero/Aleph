@@ -58,7 +58,6 @@ mod chain_context;
 mod doctor_repair_hint;
 mod environment;
 mod heartbeat;
-mod inbound_context;
 mod multi_step_conduct;
 mod operational_guidelines;
 mod protocol_tokens;
@@ -84,9 +83,6 @@ mod memory_protocol;
 
 // --- Session context guide layer ---
 mod session_context_guide;
-
-// --- Session resume layer ---
-mod session_resume;
 
 // --- Re-exports ---
 pub use citation_standards::CitationStandardsLayer;
@@ -118,7 +114,6 @@ pub use environment::EnvironmentLayer;
 pub use extra_files::ExtraFilesLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;
-pub use inbound_context::InboundContextLayer;
 pub use memory_protocol::MemoryProtocolLayer;
 pub use multi_step_conduct::MultiStepConductLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
@@ -128,5 +123,4 @@ pub use runtime_context::RuntimeContextLayer;
 pub use security::SecurityLayer;
 pub use session_budget::SessionBudgetLayer;
 pub use session_context_guide::SessionContextGuideLayer;
-pub use session_resume::SessionResumeLayer;
 pub use voice_mode::VoiceModeLayer;

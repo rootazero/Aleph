@@ -39,26 +39,6 @@ pub enum Verbosity {
     Elaborate,
 }
 
-impl Verbosity {
-    /// Human-readable behavioral instruction for prompt injection.
-    ///
-    /// Unlike `{:?}` debug output (e.g. "Balanced"), this returns an
-    /// actionable directive the model can follow directly — keeping the
-    /// intelligence in the prompt (R9) rather than leaking enum names.
-    #[must_use]
-    pub const fn prompt_hint(self) -> &'static str {
-        match self {
-            Self::Concise => "Keep responses brief and to the point; lead with the answer.",
-            Self::Balanced => {
-                "Aim for balanced responses — enough detail to be useful, without padding."
-            }
-            Self::Elaborate => {
-                "Give thorough, comprehensive responses with context, reasoning, and examples."
-            }
-        }
-    }
-}
-
 /// Formatting style preference for responses
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -70,22 +50,6 @@ pub enum FormattingStyle {
     Markdown,
     /// Rich formatting with full feature usage
     Rich,
-}
-
-impl FormattingStyle {
-    /// Human-readable formatting instruction for prompt injection.
-    #[must_use]
-    pub const fn prompt_hint(self) -> &'static str {
-        match self {
-            Self::Minimal => "Prefer plain prose; use markdown sparingly.",
-            Self::Markdown => {
-                "Use standard markdown (headings, lists, code blocks) where it aids clarity."
-            }
-            Self::Rich => {
-                "Use rich markdown — tables, callouts, structured sections — to maximize clarity."
-            }
-        }
-    }
 }
 
 /// Relationship mode defining how AI relates to the user
@@ -103,22 +67,6 @@ pub enum RelationshipMode {
     Expert,
     /// Custom relationship with description
     Custom(String),
-}
-
-impl RelationshipMode {
-    /// Get description for prompt injection
-    #[must_use]
-    pub fn description(&self) -> &str {
-        match self {
-            Self::Peer => {
-                "We collaborate as equals, sharing ideas and working toward shared goals."
-            }
-            Self::Mentor => "I guide and teach, helping you grow while solving problems together.",
-            Self::Assistant => "I help you accomplish your goals efficiently and effectively.",
-            Self::Expert => "I provide expert consultation and professional advice in my domains.",
-            Self::Custom(desc) => desc,
-        }
-    }
 }
 
 /// Voice and communication style configuration
@@ -531,17 +479,6 @@ mod tests {
     }
 
     #[test]
-    fn test_relationship_description() {
-        assert!(RelationshipMode::Peer.description().contains("equals"));
-        assert!(RelationshipMode::Mentor.description().contains("guide"));
-        assert!(RelationshipMode::Assistant.description().contains("goals"));
-        assert!(RelationshipMode::Expert.description().contains("expert"));
-
-        let custom = RelationshipMode::Custom("My custom relationship".to_string());
-        assert_eq!(custom.description(), "My custom relationship");
-    }
-
-    #[test]
     fn test_serde_roundtrip() {
         let soul = SoulManifest {
             identity: "I am a helpful AI assistant".to_string(),
@@ -632,17 +569,6 @@ mod tests {
             ..Default::default()
         };
         assert!(with_relationship.is_empty());
-    }
-
-    #[test]
-    fn test_prompt_hints_are_human_readable() {
-        // Hints must be actionable instructions, not enum debug names.
-        assert!(Verbosity::Concise.prompt_hint().contains("brief"));
-        assert!(Verbosity::Elaborate.prompt_hint().contains("thorough"));
-        assert!(FormattingStyle::Minimal.prompt_hint().contains("plain"));
-        assert!(FormattingStyle::Rich.prompt_hint().contains("rich"));
-        // No leaked enum identifiers.
-        assert!(!Verbosity::Balanced.prompt_hint().contains("Balanced"));
     }
 
     #[test]

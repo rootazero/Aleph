@@ -3,7 +3,6 @@
 //! Profiles define the "Physics" of a workspace:
 //! - Model binding (which AI model to use)
 //! - Tool whitelist (which tools are allowed)
-//! - System prompt addendum
 //! - Generation parameters (temperature, etc.)
 //!
 //! Profiles are static templates defined in config.toml.
@@ -29,7 +28,6 @@ use super::search::default_true;
 /// description = "Rust/Python development environment"
 /// model = "claude-3-5-sonnet"
 /// tools = ["git_*", "fs_*", "terminal"]
-/// system_prompt = "You are a senior engineer..."
 /// temperature = 0.2
 ///
 /// [profiles.creative]
@@ -54,11 +52,6 @@ pub struct ProfileConfig {
     /// If empty or None, all tools are allowed
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
-
-    /// Additional system prompt to append for this profile
-    /// This is added after the base system prompt
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
 
     /// Temperature for generation (0.0 - 2.0)
     /// Lower = more deterministic, higher = more creative
@@ -88,6 +81,15 @@ pub struct ProfileConfig {
 // no strategy dial, so the honest thing is to stop offering one. `ProfileConfig`
 // does not `deny_unknown_fields`, so an existing config carrying the key still
 // parses — it is simply ignored, as it always effectively was.
+//
+// `system_prompt` (a profile-level persona overlay meant to append after the
+// base prompt) lived here and reached no prompt: `ProfileLayer` only ever
+// rendered workspace `AGENTS.md`, and the harness bridge never threaded a
+// `ProfileConfig` into prompt assembly, so a user setting `system_prompt = "…"`
+// got nothing. Removed rather than wired — `AGENTS.md` already provides the
+// project/persona overlay, so wiring it would merely duplicate a working
+// channel. Same tolerance as `CacheStrategy`: the key still parses and is
+// ignored.
 
 // =============================================================================
 // SmartRecallConfig
