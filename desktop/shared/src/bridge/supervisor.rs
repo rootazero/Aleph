@@ -83,21 +83,37 @@ pub enum SpawnDecision {
     Backoff { remaining: Duration },
 }
 
+/// A helper that spawns cleanly and then survives at least this long is treated
+/// as a *stable* session: a later crash is an isolated incident, so the backoff
+/// ladder resets and the first respawn is fast. A helper that dies sooner is a
+/// crash loop, so the ladder keeps climbing (1s→2s→…→30s) to space respawns out.
+const STABLE_UPTIME: Duration = Duration::from_secs(10);
+
 /// Single source of truth for helper respawn pacing.
 ///
 /// Composes [`Backoff`] (how long to wait between attempts) and
 /// [`RestartWindow`] (when to give up entirely) and owns the "earliest next
 /// spawn" instant. The client asks [`poll`](Self::poll) before each spawn and
-/// reports the outcome via [`record_success`](Self::record_success) /
+/// reports the outcome via [`record_spawn`](Self::record_spawn) /
 /// [`record_failure`](Self::record_failure) — it no longer tracks delay state
 /// itself, which is what let the old backoff ladder be computed and silently
 /// discarded.
+///
+/// The backoff ladder resets on a *stable* session, not on a bare fork: a
+/// forked helper that exits milliseconds later would otherwise reset the ladder
+/// on every attempt, so a crash loop paced itself at a flat 1s forever instead
+/// of climbing. Liveness is proxied by uptime ([`STABLE_UPTIME`]) rather than a
+/// handshake ping, keeping the gate self-contained.
 #[derive(Debug)]
 pub struct SpawnGate {
     backoff: Backoff,
     window: RestartWindow,
     /// Earliest instant a spawn may be attempted. `None` = no active backoff.
     next_spawn_at: Option<Instant>,
+    /// When the current helper was spawned. `None` = none running (never
+    /// spawned, or the last one already crashed). Used to distinguish a stable
+    /// session's death from a crash loop.
+    spawned_at: Option<Instant>,
 }
 
 impl SpawnGate {
@@ -109,6 +125,7 @@ impl SpawnGate {
             backoff: Backoff { step: 0 },
             window: RestartWindow::new(threshold, window),
             next_spawn_at: None,
+            spawned_at: None,
         }
     }
 
@@ -131,19 +148,34 @@ impl SpawnGate {
     /// Record a spawn failure or helper crash. Advances the backoff ladder,
     /// arms the next-spawn gate, and returns `true` when the restart threshold
     /// has been exceeded (caller should latch the bridge into disabled mode).
+    ///
+    /// If the helper that just died had been alive past [`STABLE_UPTIME`], the
+    /// ladder resets first so this isolated death cools from the first rung; a
+    /// helper that died sooner (or never spawned — a bare spawn failure) leaves
+    /// the ladder climbing so a crash loop actually spaces out.
     pub fn record_failure(&mut self) -> bool {
+        let was_stable = self
+            .spawned_at
+            .take()
+            .is_some_and(|at| at.elapsed() >= STABLE_UPTIME);
+        if was_stable {
+            self.backoff.reset();
+        }
         let delay = self.backoff.next_delay();
         self.next_spawn_at = Some(Instant::now() + delay);
         self.window.record_and_should_disable()
     }
 
-    /// Record a successful spawn. Resets the backoff ladder and clears the
-    /// gate so an isolated later failure starts cooling from the first rung.
-    /// The restart window is intentionally *not* cleared — a flapping helper
-    /// (success → crash → success → crash) must still trip the threshold.
-    pub fn record_success(&mut self) {
-        self.backoff.reset();
+    /// Record that a helper process was just spawned (fork + stdio takeover
+    /// succeeded). Clears the next-spawn gate — a spawn was allowed to proceed —
+    /// and stamps the spawn instant, but does **not** reset the backoff ladder:
+    /// a bare fork is not proof of liveness, so the ladder only resets once the
+    /// helper survives past [`STABLE_UPTIME`] (see [`record_failure`]). The
+    /// restart window is intentionally never cleared here — a flapping helper
+    /// (spawn → crash → spawn → crash) must still trip the threshold.
+    pub fn record_spawn(&mut self) {
         self.next_spawn_at = None;
+        self.spawned_at = Some(Instant::now());
     }
 }
 
@@ -214,15 +246,62 @@ mod tests {
     }
 
     #[test]
-    fn gate_clears_on_success() {
+    fn gate_clears_on_spawn() {
         let mut gate = SpawnGate::new(5, Duration::from_mins(10));
         gate.record_failure();
-        gate.record_success();
+        gate.record_spawn();
         assert_eq!(
             gate.poll(),
             SpawnDecision::Go,
-            "success must clear the gate"
+            "a spawn must clear the gate"
         );
+    }
+
+    #[test]
+    fn rapid_crash_loop_climbs_the_ladder() {
+        // Regression: a helper that forks OK then dies immediately used to reset
+        // the ladder on every spawn, pacing the loop at a flat 1s forever. A
+        // sub-STABLE_UPTIME death must instead keep the ladder climbing.
+        let mut gate = SpawnGate::new(100, Duration::from_mins(10));
+        let expected = [1u64, 2, 4, 8, 16, 30];
+        for want in expected {
+            gate.record_spawn(); // fork OK, but the helper dies right away…
+            gate.record_failure(); // …well under STABLE_UPTIME → do not reset.
+            match gate.poll() {
+                SpawnDecision::Backoff { remaining } => {
+                    assert!(
+                        remaining <= Duration::from_secs(want) && remaining > Duration::ZERO,
+                        "expected ≤{want}s backoff, got {remaining:?}"
+                    );
+                }
+                SpawnDecision::Go => panic!("expected backoff after a rapid crash"),
+            }
+        }
+    }
+
+    #[test]
+    fn stable_session_death_resets_the_ladder() {
+        let mut gate = SpawnGate::new(100, Duration::from_mins(10));
+        // Climb the ladder a few rungs via rapid crashes.
+        for _ in 0..3 {
+            gate.record_spawn();
+            gate.record_failure();
+        }
+        // Now simulate a helper that spawned and stayed alive past STABLE_UPTIME.
+        gate.record_spawn();
+        gate.spawned_at = Some(
+            Instant::now()
+                .checked_sub(STABLE_UPTIME + Duration::from_secs(1))
+                .unwrap(),
+        );
+        gate.record_failure();
+        // The ladder reset, so the first respawn cools from the 1s rung again.
+        match gate.poll() {
+            SpawnDecision::Backoff { remaining } => {
+                assert!(remaining <= Duration::from_secs(1) && remaining > Duration::ZERO);
+            }
+            SpawnDecision::Go => panic!("expected 1s backoff after stable death"),
+        }
     }
 
     #[test]

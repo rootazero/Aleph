@@ -165,12 +165,58 @@ impl PimTool {
                 }
                 "calendar_update" => {
                     let id = args.id.as_deref()?;
+                    // Partial update must not blank omitted fields. The Swift
+                    // handler assigns title/start/end UNCONDITIONALLY (only
+                    // location/notes are `if let`-guarded), so an omitted title
+                    // used to blank the event and an omitted start/end used to
+                    // move it to now() — silent data loss on any partial edit.
+                    // Read the current event and fill the gaps before writing.
+                    let needs_current =
+                        args.title.is_none() || args.start.is_none() || args.end.is_none();
+                    // Fetch the current event only when a field is omitted;
+                    // surface a fetch error as this action's error (this fn
+                    // returns Option, so a bare `?` on the Result is not valid —
+                    // thread it through the Result the arm already produces).
+                    let current = if needs_current {
+                        match pim.calendar_get_event(id).await {
+                            Ok(c) => Some(c),
+                            Err(e) => {
+                                return Some(PimOutput {
+                                    success: false,
+                                    data: None,
+                                    message: Some(e.to_string()),
+                                })
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let event = NewCalendarEvent {
-                        title: args.title.clone().unwrap_or_default(),
-                        calendar_id: args.calendar_id.clone().unwrap_or_default(),
-                        start: args.start.unwrap_or_else(chrono::Utc::now),
-                        end: args.end.unwrap_or_else(chrono::Utc::now),
-                        all_day: args.all_day.unwrap_or(false),
+                        title: args
+                            .title
+                            .clone()
+                            .or_else(|| current.as_ref().map(|c| c.title.clone()))
+                            .unwrap_or_default(),
+                        calendar_id: args
+                            .calendar_id
+                            .clone()
+                            .or_else(|| current.as_ref().map(|c| c.calendar_id.clone()))
+                            .unwrap_or_default(),
+                        start: args
+                            .start
+                            .or_else(|| current.as_ref().map(|c| c.start))
+                            .unwrap_or_else(chrono::Utc::now),
+                        end: args
+                            .end
+                            .or_else(|| current.as_ref().map(|c| c.end))
+                            .unwrap_or_else(chrono::Utc::now),
+                        all_day: args
+                            .all_day
+                            .or_else(|| current.as_ref().map(|c| c.all_day))
+                            .unwrap_or(false),
+                        // location/notes are already partial-safe on the wire
+                        // (skip_serializing_if) + Swift (`if let`): omitting them
+                        // keeps the stored value, so pass args through as-is.
                         location: args.location.clone(),
                         notes: args.notes.clone(),
                     };

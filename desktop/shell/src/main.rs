@@ -101,7 +101,82 @@ fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION
 }
 
+/// Repair the PATH for a GUI (Finder/Dock) launch.
+///
+/// A double-click launch never sources the user's shell rc, so the process
+/// inherits a minimal PATH missing Homebrew / nvm / asdf / cargo / etc. The
+/// detached daemon we spawn — and every `bash_exec` child *it* spawns — then
+/// can't find tools the user has on their interactive PATH. Probe the login
+/// shell's PATH once and merge any missing entries into this process's PATH
+/// before the daemon is spawned. Unix-only: a Windows GUI launch inherits the
+/// system PATH already. Best-effort and silent — a probe failure just leaves the
+/// inherited PATH untouched.
+///
+/// Called first thing in `main`, before any thread is spawned, so the
+/// `set_var` is sound.
+#[cfg(unix)]
+fn ensure_login_shell_path() {
+    let shell = match std::env::var("SHELL") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return,
+    };
+    // `-ilc` = interactive login shell running one command: this is what sources
+    // ~/.zprofile / ~/.zshrc / ~/.bash_profile where PATH is usually extended.
+    let output = std::process::Command::new(&shell)
+        .args(["-ilc", "printf %s \"$PATH\""])
+        .output();
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return,
+    };
+    let probed = String::from_utf8_lossy(&output.stdout);
+    let probed = probed.trim();
+    if probed.is_empty() {
+        return;
+    }
+
+    let current = std::env::var("PATH").unwrap_or_default();
+    let existing: std::collections::HashSet<&str> = current.split(':').collect();
+    let mut merged = current.clone();
+    for entry in probed.split(':') {
+        if !entry.is_empty() && !existing.contains(entry) {
+            if !merged.is_empty() {
+                merged.push(':');
+            }
+            merged.push_str(entry);
+        }
+    }
+    if merged != current {
+        std::env::set_var("PATH", merged);
+    }
+}
+
+#[cfg(not(unix))]
+fn ensure_login_shell_path() {}
+
+/// Work around WebKitGTK render-process crashes / blank-white webviews.
+///
+/// On many Mesa/driver stacks WebKitGTK's DMABUF renderer produces a blank or
+/// crashing webview, which for an AppImage build hits a slice of Linux users on
+/// first launch. Disabling it is the standard fix. Set before Tauri initializes
+/// WebKit, and only when the user has not already chosen a value. Linux-only,
+/// pure env — no business logic (R2/R10 clean).
+#[cfg(target_os = "linux")]
+fn linux_webkit_compat() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_webkit_compat() {}
+
 fn main() {
+    // Fix up the environment for GUI launches before anything reads it: the PATH
+    // probe must precede the first daemon spawn, and the WebKit workaround must
+    // precede WebKit initialization inside `tauri::Builder`.
+    ensure_login_shell_path();
+    linux_webkit_compat();
     init_tracing();
 
     let builder = tauri::Builder::default()
@@ -669,6 +744,29 @@ enum SupervisorAction {
     /// Remote target unreachable; we don't own that daemon — surface a
     /// connection error and offer retry / back-to-local instead of relaunch.
     ShowConnectionError,
+    /// The local daemon crash-looped past the relaunch budget — stop hammering
+    /// (spawning a process every poll interval forever) and surface a persistent
+    /// error. Probing continues, so a manual restart still recovers.
+    GiveUp,
+}
+
+/// Give up relaunching the local daemon after this many attempts within one
+/// down episode. Without a cap, a daemon that binds-then-crashes was relaunched
+/// every `HEALTH_POLL_INTERVAL` forever — a process-spawn / log-flood storm.
+/// Mirrors the bridge `SpawnGate` RestartWindow philosophy.
+const MAX_RELAUNCH_ATTEMPTS: u32 = 5;
+
+/// Poll-ticks to wait *after* the Nth relaunch attempt before the next one,
+/// so a crash loop spaces out instead of hammering. Each tick is one
+/// `HEALTH_POLL_INTERVAL` (~5s): 1→2→4→8→12 ticks ≈ 5s→10s→20s→40s→60s.
+const fn relaunch_backoff_ticks(attempt: u32) -> u32 {
+    match attempt {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 8,
+        _ => 12,
+    }
 }
 
 /// A small state machine that turns a stream of `/ready` probe results into
@@ -681,6 +779,13 @@ struct Supervisor {
     /// local daemon (false). Remote mode never relaunches — it surfaces a
     /// connection error instead, because the remote daemon is not ours to manage.
     remote: bool,
+    /// Relaunch attempts made in the current down episode (reset on recovery).
+    relaunch_attempts: u32,
+    /// Poll-ticks still to wait before the next relaunch attempt (backoff).
+    ticks_until_relaunch: u32,
+    /// Latched once the relaunch budget is spent — stops the storm; cleared on
+    /// recovery so a later, unrelated crash gets a fresh budget.
+    gave_up: bool,
 }
 
 impl Supervisor {
@@ -697,6 +802,9 @@ impl Supervisor {
             },
             consecutive_failures: 0,
             remote: false,
+            relaunch_attempts: 0,
+            ticks_until_relaunch: 0,
+            gave_up: false,
         }
     }
 
@@ -712,6 +820,9 @@ impl Supervisor {
             },
             consecutive_failures: 0,
             remote: true,
+            relaunch_attempts: 0,
+            ticks_until_relaunch: 0,
+            gave_up: false,
         }
     }
 
@@ -730,15 +841,39 @@ impl Supervisor {
         }
     }
 
-    /// The action to take when the target transitions to Down. Local mode
-    /// relaunches; Remote mode surfaces a connection error instead (the remote
-    /// daemon is not ours to manage).
-    const fn down_action(&self) -> SupervisorAction {
+    /// The action to take on a Down tick. Remote mode surfaces a connection
+    /// error (the remote daemon is not ours to manage). Local mode relaunches,
+    /// but with backoff + a give-up budget so a crash-looping daemon is not
+    /// respawned every poll interval forever.
+    const fn down_action(&mut self) -> SupervisorAction {
         if self.remote {
-            SupervisorAction::ShowConnectionError
-        } else {
-            SupervisorAction::Relaunch
+            return SupervisorAction::ShowConnectionError;
         }
+        // Local: budget spent → stop hammering (probing still recovers on a
+        // manual restart via the Down→Up arm).
+        if self.gave_up {
+            return SupervisorAction::Idle;
+        }
+        // Still cooling down between attempts.
+        if self.ticks_until_relaunch > 0 {
+            self.ticks_until_relaunch -= 1;
+            return SupervisorAction::Idle;
+        }
+        if self.relaunch_attempts >= MAX_RELAUNCH_ATTEMPTS {
+            self.gave_up = true;
+            return SupervisorAction::GiveUp;
+        }
+        self.ticks_until_relaunch = relaunch_backoff_ticks(self.relaunch_attempts);
+        self.relaunch_attempts += 1;
+        SupervisorAction::Relaunch
+    }
+
+    /// Reset the relaunch budget — called when the daemon transitions into a
+    /// fresh down episode, so each episode gets its own attempts/backoff.
+    const fn arm_relaunch(&mut self) {
+        self.relaunch_attempts = 0;
+        self.ticks_until_relaunch = 0;
+        self.gave_up = false;
     }
 
     /// Fold one probe result into the state machine and report the action
@@ -753,6 +888,9 @@ impl Supervisor {
                 self.consecutive_failures += 1;
                 if self.consecutive_failures >= FAILURES_TO_DECLARE_DOWN {
                     self.health = DaemonHealth::Down;
+                    // Entering a new down episode: fresh relaunch budget, then
+                    // make the first attempt immediately.
+                    self.arm_relaunch();
                     self.down_action()
                 } else {
                     SupervisorAction::Idle
@@ -762,6 +900,7 @@ impl Supervisor {
             (DaemonHealth::Down, true) => {
                 self.health = DaemonHealth::Up;
                 self.consecutive_failures = 0;
+                self.arm_relaunch();
                 SupervisorAction::ReloadPanel
             }
         }
@@ -814,6 +953,17 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
             SupervisorAction::Relaunch => {
                 tracing::warn!("daemon unreachable — attempting relaunch");
                 daemon::relaunch_if_down().await;
+            }
+            SupervisorAction::GiveUp => {
+                tracing::error!(
+                    "daemon crash-looped past the relaunch budget — giving up; \
+                     showing error (a manual restart will still be picked up)"
+                );
+                show_daemon_error(
+                    &handle,
+                    "The Aleph daemon keeps crashing on startup. \
+                     Check the logs, then restart the app.",
+                );
             }
             SupervisorAction::ReloadPanel => {
                 tracing::info!("Gateway recovered — reloading the Panel");
@@ -916,7 +1066,8 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
                 relocation_ticks = 0;
                 relocated = false;
             }
-            SupervisorAction::Relaunch => {}
+            // Local-only actions — unreachable in a remote-mode supervisor.
+            SupervisorAction::Relaunch | SupervisorAction::GiveUp => {}
         }
     }
 }
@@ -990,11 +1141,72 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_keeps_relaunching_while_down() {
-        // A failed boot starts the supervisor already down.
+    fn supervisor_backs_off_between_relaunches_then_gives_up() {
+        // A failed boot starts the supervisor already down. Relaunches must be
+        // spaced by backoff (Idle ticks) and stop after the budget, not fire
+        // every poll interval forever.
         let mut sup = Supervisor::new(false);
+        let mut relaunches = 0;
+        let mut gave_up = false;
+        // Simulate a daemon that never comes back over many poll ticks.
+        for _ in 0..200 {
+            match sup.tick(false) {
+                SupervisorAction::Relaunch => relaunches += 1,
+                SupervisorAction::GiveUp => {
+                    gave_up = true;
+                    break;
+                }
+                SupervisorAction::Idle => {} // backoff wait
+                other => panic!("unexpected action while down: {other:?}"),
+            }
+        }
+        assert_eq!(
+            relaunches, MAX_RELAUNCH_ATTEMPTS as usize,
+            "exactly the budgeted number of relaunches"
+        );
+        assert!(
+            gave_up,
+            "must give up after the budget instead of hammering"
+        );
+        // Once given up, further down ticks stay Idle — no more spawns.
+        assert_eq!(sup.tick(false), SupervisorAction::Idle);
+    }
+
+    #[test]
+    fn supervisor_spaces_relaunches_with_idle_backoff() {
+        let mut sup = Supervisor::new(false);
+        // First down tick relaunches immediately…
         assert_eq!(sup.tick(false), SupervisorAction::Relaunch);
+        // …then backs off one tick before the second attempt.
+        assert_eq!(sup.tick(false), SupervisorAction::Idle);
         assert_eq!(sup.tick(false), SupervisorAction::Relaunch);
+    }
+
+    #[test]
+    fn supervisor_rearms_relaunch_budget_after_recovery() {
+        // Spend the whole budget, recover, then crash again → fresh budget.
+        let mut sup = Supervisor::new(false);
+        for _ in 0..200 {
+            if sup.tick(false) == SupervisorAction::GiveUp {
+                break;
+            }
+        }
+        assert!(sup.gave_up, "budget should be spent");
+        // Recovery re-arms the budget.
+        assert_eq!(sup.tick(true), SupervisorAction::ReloadPanel);
+        assert!(!sup.gave_up, "recovery must clear the give-up latch");
+        // A fresh crash episode relaunches again over subsequent down ticks.
+        let mut relaunched_again = false;
+        for _ in 0..200 {
+            if sup.tick(false) == SupervisorAction::Relaunch {
+                relaunched_again = true;
+                break;
+            }
+        }
+        assert!(
+            relaunched_again,
+            "a new down episode must get a fresh relaunch budget"
+        );
     }
 
     #[test]

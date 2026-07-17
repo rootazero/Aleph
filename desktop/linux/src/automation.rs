@@ -1,5 +1,7 @@
 use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
-use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIMEOUT};
+use aleph_desktop::script_exec::{
+    is_spawn_failure, output_capped, spawn_background, RUN_SCRIPT_TIMEOUT,
+};
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -40,23 +42,39 @@ impl AutomationCapability for LinuxAutomation {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             }
             ScriptLanguage::PowerShell => {
-                let result = tokio::process::Command::new("pwsh")
-                    .args(["-NoProfile", "-Command", &source])
-                    .output()
-                    .await;
-
-                let output = match result {
-                    Ok(o) => o,
-                    Err(_) => tokio::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", &source])
-                        .output()
-                        .await
-                        .map_err(|e| {
-                            DesktopError::InputFailed(format!(
-                                "PowerShell execution failed (install pwsh or powershell): {e}"
-                            ))
-                        })?,
-                };
+                // Run pwsh (cross-platform PowerShell), falling back to the
+                // legacy `powershell` binary only when pwsh cannot be launched.
+                // Every candidate goes through `output_capped` so a
+                // non-terminating script inherits RUN_SCRIPT_TIMEOUT + the
+                // kill_on_drop reaper — the bare `.output()` this replaced had
+                // neither, so a hung script blocked the agent turn until the
+                // harness limit and leaked the child (Shell/macOS/Windows all
+                // cap uniformly; Linux PowerShell was the lone gap).
+                let mut output = None;
+                let mut last_err = None;
+                for bin in ["pwsh", "powershell"] {
+                    let mut cmd = tokio::process::Command::new(bin);
+                    cmd.args(["-NoProfile", "-Command", &source]);
+                    match output_capped(cmd, RUN_SCRIPT_TIMEOUT).await {
+                        Ok(o) => {
+                            output = Some(o);
+                            break;
+                        }
+                        // Fall through to the next interpreter only when THIS
+                        // one could not be spawned; a timeout or genuine failure
+                        // of an interpreter that *does* exist must not silently
+                        // re-run the script under another one.
+                        Err(e) if is_spawn_failure(&e) => last_err = Some(e),
+                        Err(e) => return Err(e),
+                    }
+                }
+                let output = output.ok_or_else(|| {
+                    last_err.unwrap_or_else(|| {
+                        DesktopError::InputFailed(
+                            "PowerShell execution failed (install pwsh or powershell)".into(),
+                        )
+                    })
+                })?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -44,7 +44,7 @@ impl BuiltinToolRegistry {
     /// - File operations are sandboxed by `PathPermissionChecker`
     /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
-    pub async fn with_config(config: BuiltinToolConfig) -> crate::error::Result<Self> {
+    pub async fn with_config(mut config: BuiltinToolConfig) -> crate::error::Result<Self> {
         let search_tool = if let Some(ref registry) = config.search_registry {
             SearchTool::with_registry(Arc::clone(registry))
         } else {
@@ -270,7 +270,7 @@ impl BuiltinToolRegistry {
         // pipeline starts with the platform OCR provider; registering a
         // multimodal provider later lights up the scene-`description` layer
         // with no change here.
-        let vision_bridge = {
+        let vision_pipeline = {
             let mut pipeline = crate::vision::VisionPipeline::new();
             // Resolve OCR through the injected platform's screen capability so
             // `screenshot {describe:true}` works on macOS (its OCR routes through
@@ -281,10 +281,34 @@ impl BuiltinToolRegistry {
                     &desktop_platform,
                 )),
             ));
-            Arc::new(crate::builtin_tools::desktop::VisionBridge::new(Arc::new(
-                pipeline,
-            )))
+            Arc::new(pipeline)
         };
+        let vision_bridge = Arc::new(crate::builtin_tools::desktop::VisionBridge::new(
+            Arc::clone(&vision_pipeline),
+        ));
+
+        // Media pipeline — powers media_understand / document_extract. These
+        // were advertised-but-disabled: their schema is gated on
+        // `config.media_pipeline` (constructor below) and their dispatch errors
+        // when it is None, yet nothing ever constructed one outside tests. Wire
+        // the LLM-free providers so the tools actually run: document text
+        // extraction stands alone; image understanding shares the vision
+        // pipeline (OCR text today, scene description once a multimodal vision
+        // provider is registered — no change here). AudioStubProvider is
+        // deliberately NOT registered: it only returns `NoProvider`, so adding
+        // it would make the pipeline *claim* audio support while still failing —
+        // audio_transcribe stays honestly unsupported until a real transcription
+        // provider (e.g. a Whisper MCP) is wired. Only construct when the caller
+        // did not supply a pipeline.
+        if config.media_pipeline.is_none() {
+            let mut mp = crate::media::MediaPipeline::new();
+            mp.add_provider(Box::new(crate::media::ImageMediaProvider::new(
+                Arc::clone(&vision_pipeline),
+                10,
+            )));
+            mp.add_provider(Box::new(crate::media::TextDocumentProvider));
+            config.media_pipeline = Some(Arc::new(mp));
+        }
         // Approval policy — gates sensitive desktop/PIM actions. Loaded from
         // `~/.aleph/approval-policy.json`; with no file present it falls back to
         // a permissive default (desktop actions Allow, shell Deny), so wiring
@@ -341,7 +365,11 @@ impl BuiltinToolRegistry {
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform))
             .with_approval_policy(Arc::clone(&approval_policy));
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
-        let media_tool = MediaTool::new(Arc::clone(&desktop_platform));
+        // Media tool — camera/mic capture rides the same approval policy via the
+        // `MediaCapture` action type (permissive default = Allow, so byte-
+        // identical until a policy file sets `media_capture: ask/deny`).
+        let media_tool = MediaTool::new(Arc::clone(&desktop_platform))
+            .with_approval_policy(Arc::clone(&approval_policy));
 
         // PIM tool — platform-native notes/calendar/reminders/contacts capability.
         let pim_tool = PimTool::new()
@@ -648,6 +676,11 @@ impl BuiltinToolRegistry {
         // register only when one is configured (matching the dispatch guard).
         if let Some(ref mp) = config.media_pipeline {
             use crate::tools::AlephTool;
+            // All three keep a registered schema so their advertisement (via
+            // BUILTIN_TOOL_DEFINITIONS, gated on media_pipeline) is never a
+            // schema-less entry. media_understand (image→OCR) and
+            // document_extract run for real; audio_transcribe returns a clear
+            // `NoProvider` until a transcription provider is wired.
             let media_defs = [
                 crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(mp))
                     .definition(),

@@ -28,7 +28,10 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
 use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
-use aleph_protocol::desktop_bridge::errors::ERR_PERMISSION_DENIED;
+use aleph_protocol::desktop_bridge::errors::{
+    ERR_BRIDGE_DISABLED, ERR_HELPER_CRASHED, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED,
+    ERR_PLATFORM, ERR_TIMEOUT,
+};
 use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
 
 use super::codec::{decode_line, encode};
@@ -38,22 +41,36 @@ use crate::error::{DesktopError, Result};
 
 /// Convert a bridge `RpcError` into a `DesktopError`.
 ///
-/// When `code == ERR_PERMISSION_DENIED` (-32001), the `data` field is
-/// deserialized as `PermissionGuide` and wrapped in
-/// `DesktopError::PermissionDenied` so the LLM can surface the deep link,
-/// steps, and rationale to the user.  All other errors become `BridgeFailed`.
+/// The server-defined codes (`errors.rs`) carry semantics the caller needs to
+/// distinguish, so each maps to its matching typed variant — most importantly
+/// `-32002 NotImplemented` (the method exists, the capability is deliberately
+/// absent, e.g. `pim.mail.*` on macOS) vs `-32601 MethodNotFound` (a real
+/// wiring gap). `-32001 PermissionDenied` additionally carries a
+/// `PermissionGuide` in `data` so the LLM can surface the deep link, steps, and
+/// rationale. Codes with no typed home (parse / invalid-request / internal /
+/// helper-crashed / anything unknown) fall through to `BridgeFailed`.
 fn map_bridge_error(e: RpcError) -> DesktopError {
-    if e.code == ERR_PERMISSION_DENIED {
-        if let Some(data) = e.data {
-            if let Ok(guide) = serde_json::from_value::<PermissionGuide>(data) {
-                return DesktopError::PermissionDenied {
-                    kind: guide.kind,
-                    guide: Box::new(guide),
-                };
+    match e.code {
+        ERR_PERMISSION_DENIED => {
+            if let Some(data) = e.data {
+                if let Ok(guide) = serde_json::from_value::<PermissionGuide>(data) {
+                    return DesktopError::PermissionDenied {
+                        kind: guide.kind,
+                        guide: Box::new(guide),
+                    };
+                }
             }
+            DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
         }
+        ERR_NOT_IMPLEMENTED => DesktopError::NotImplemented(e.message),
+        ERR_PLATFORM => DesktopError::PlatformError(e.message),
+        ERR_TIMEOUT => DesktopError::BridgeTimeout(e.message),
+        ERR_BRIDGE_DISABLED => DesktopError::BridgeDisabled(e.message),
+        // `-32005 HelperCrashed` has no dedicated variant; it means the helper
+        // died mid-request, which is exactly `BridgeFailed`'s remit.
+        ERR_HELPER_CRASHED => DesktopError::BridgeFailed(format!("helper crashed: {}", e.message)),
+        _ => DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message)),
     }
-    DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
 }
 
 /// Default per-call RPC deadline.
@@ -273,7 +290,7 @@ impl SwiftBridge {
         match self.spawn_process().await {
             Ok(proc) => {
                 *guard = Some(proc);
-                self.gate.lock().await.record_success();
+                self.gate.lock().await.record_spawn();
                 Ok(())
             }
             Err(e) => {
@@ -401,9 +418,23 @@ impl SwiftBridge {
             // One retry: re-ensure the helper and send again.
             self.ensure_running().await?;
 
+            // Use a FRESH id for the retry, not the one just drained. The
+            // InflightTable is shared across helper generations; the dead
+            // helper's reader task may still run `fail_all` on its stdout EOF,
+            // which drains every registered id — so re-registering the original
+            // id would let that late EOF fail the retry's own oneshot with
+            // "helper stdout closed", turning a recoverable retry into a
+            // spurious BridgeFailed. A fresh id is invisible to the old reader.
+            let retry_id = self.id_seq.fetch_add(1, Ordering::SeqCst);
+            let retry_line = encode(&Request {
+                jsonrpc: "2.0".into(),
+                id: retry_id,
+                method: method.into(),
+                params: req.params.clone(),
+            })?;
+
             let (tx2, rx2) = oneshot::channel();
-            // Re-register the same id (it was drained above).
-            self.inflight.register(id, tx2).await;
+            self.inflight.register(retry_id, tx2).await;
 
             {
                 let mut guard = self.state.lock().await;
@@ -411,7 +442,7 @@ impl SwiftBridge {
                     DesktopError::BridgeFailed("bridge not running after retry".into())
                 })?;
                 proc.stdin
-                    .write_all(line.as_bytes())
+                    .write_all(retry_line.as_bytes())
                     .await
                     .map_err(|e| DesktopError::BridgeFailed(format!("write stdin retry: {e}")))?;
                 proc.stdin
@@ -420,7 +451,7 @@ impl SwiftBridge {
                     .map_err(|e| DesktopError::BridgeFailed(format!("flush stdin retry: {e}")))?;
             }
 
-            let raw = self.await_reply(id, rx2, timeout, method).await?;
+            let raw = self.await_reply(retry_id, rx2, timeout, method).await?;
             return serde_json::from_value(raw)
                 .map_err(|e| DesktopError::BridgeFailed(format!("decode result: {e}")));
         }
@@ -531,6 +562,38 @@ done
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("bad params"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn map_bridge_error_routes_server_codes_to_typed_variants() {
+        let err = |code: i32| RpcError {
+            code,
+            message: "detail".into(),
+            data: None,
+        };
+        // -32002 must stay distinguishable from a -32601 wiring gap: it means
+        // the capability is deliberately absent (e.g. pim.mail.* on macOS).
+        assert!(matches!(
+            map_bridge_error(err(ERR_NOT_IMPLEMENTED)),
+            DesktopError::NotImplemented(_)
+        ));
+        assert!(matches!(
+            map_bridge_error(err(ERR_PLATFORM)),
+            DesktopError::PlatformError(_)
+        ));
+        assert!(matches!(
+            map_bridge_error(err(ERR_TIMEOUT)),
+            DesktopError::BridgeTimeout(_)
+        ));
+        assert!(matches!(
+            map_bridge_error(err(ERR_BRIDGE_DISABLED)),
+            DesktopError::BridgeDisabled(_)
+        ));
+        // Codes with no typed home fall through to BridgeFailed.
+        assert!(matches!(
+            map_bridge_error(err(-32601)),
+            DesktopError::BridgeFailed(_)
+        ));
     }
 
     #[tokio::test]
