@@ -110,7 +110,7 @@ pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
     save_at(&workflow_dir(), manifest)
 }
 
-/// Write rendered text (e.g. an exported `.workflow.js`) into `dir` under
+/// Write rendered text (e.g. an exported `.mjs` workflow) into `dir` under
 /// `{sanitised name}.{ext}`, atomically (temp + rename). Returns the path.
 pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     ensure_dir_at(dir)?;
@@ -225,6 +225,7 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
@@ -242,6 +243,7 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,

@@ -77,6 +77,15 @@ pub struct WorkflowManifestStep {
     /// Interchange-only; Aleph resolves execution via `agent` (the team member).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// `.workflow.js` `agent(..., { effort })` — the subagent's reasoning-effort
+    /// tier (`low`/`medium`/`high`/`xhigh`/`max`). Interchange-only, exactly like
+    /// [`isolation`](Self::isolation)/[`agent_type`](Self::agent_type): preserved
+    /// verbatim for a faithful `.workflow.js` round-trip, never consumed by the
+    /// Aleph executor (R10). Promoting it to an executable per-member override
+    /// (mirroring how per-step `model` threads into task metadata) is a clean
+    /// follow-up once the task layer grows an effort channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// Step kind — `agent` (default) or `clarify`. Part of the executable core,
     /// so it round-trips through [`to_def`](WorkflowManifest::to_def). Omitted on
     /// the wire for agent steps (byte-identical to legacy manifests).
@@ -130,6 +139,7 @@ impl WorkflowManifest {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    effort: None,
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
@@ -228,7 +238,8 @@ mod tests {
             && s.phase.is_none()
             && s.schema.is_none()
             && s.isolation.is_none()
-            && s.agent_type.is_none()));
+            && s.agent_type.is_none()
+            && s.effort.is_none()));
     }
 
     #[test]
@@ -253,6 +264,7 @@ mod tests {
                 schema: Some(serde_json::json!({"type":"object"})),
                 isolation: Some("worktree".into()),
                 agent_type: Some("Explore".into()),
+                effort: Some("high".into()),
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
@@ -286,6 +298,7 @@ mod tests {
                 schema: None,
                 isolation: Some("worktree".into()),
                 agent_type: Some("code-reviewer".into()),
+                effort: Some("max".into()),
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
                 review: false,
@@ -305,6 +318,8 @@ mod tests {
             "agentType camelCase"
         );
         assert_eq!(v["steps"][0]["isolation"], "worktree");
+        // `effort` rides the same interchange lane as isolation/agentType.
+        assert_eq!(v["steps"][0]["effort"], "max");
         // Empty extras are skipped on the wire.
         assert!(v.get("phases").is_none(), "empty phases skipped");
     }
