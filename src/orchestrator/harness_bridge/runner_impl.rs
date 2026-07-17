@@ -245,8 +245,11 @@ impl HarnessRunner for AgentHarnessRunner {
         // so the inner harness Think loop can read it. Preserve per-message
         // structure — do not flatten via string join.
         // Capture the user's last query before moving `input` so step 5b can
-        // ask MemoryContextProvider for retrieval-relevant facts.
+        // ask MemoryContextProvider for retrieval-relevant facts. Also capture
+        // whether the replayed history carries `<session_context>` compaction
+        // summaries, so the system prompt can surface `SessionContextGuideLayer`.
         let user_query = last_user_query(&input);
+        let has_session_summaries = input.carries_session_summaries();
         session_seed::seed_session(self.session_service.as_ref(), &session_id, input).await?;
 
         // Phase 4 (F2): resolve the per-run Think→Act iteration cap once
@@ -359,6 +362,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 sandbox.as_ref(),
                 workspace_override.as_deref(),
                 routing_text,
+                has_session_summaries,
             )
             .await
         {
@@ -1001,6 +1005,9 @@ impl HarnessRunner for AgentHarnessRunner {
                     sandbox.as_ref(),
                     None,
                     None,
+                    // Static overhead estimate: no real history, so no session
+                    // summaries — keeps the cached estimate stable.
+                    false,
                 )
                 .await
                 .map(|(s, _parts, _recall)| s)

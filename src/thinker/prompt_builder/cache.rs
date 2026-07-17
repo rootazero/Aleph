@@ -96,6 +96,7 @@ impl PromptBuilder {
             .with_behavior_name_opt(self.behavior_name.as_deref())
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
             .with_iteration_cap_opt(self.iteration_cap)
+            .with_session_summaries(self.has_session_summaries)
     }
 }
 

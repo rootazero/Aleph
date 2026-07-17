@@ -170,6 +170,11 @@ pub struct PromptBuilder {
     /// post-pipeline, byte-for-byte matching the `StrategyLayer` wrap. `None`
     /// leaves the prompt byte-identical to the pre-strategy build.
     strategy: Option<String>,
+    /// True when this run's history carries `<session_context>` compaction
+    /// summaries. Threaded into every `LayerInput` so `SessionContextGuideLayer`
+    /// injects its usage guide only when summaries are present. Sourced by the
+    /// harness bridge from `FlowInput::carries_session_summaries()`.
+    has_session_summaries: bool,
 }
 
 impl PromptBuilder {
@@ -190,6 +195,7 @@ impl PromptBuilder {
             iteration_cap: None,
             extra_files: None,
             strategy: None,
+            has_session_summaries: false,
         }
     }
 
@@ -285,6 +291,15 @@ impl PromptBuilder {
         self
     }
 
+    /// Mark whether this run's history carries `<session_context>` compaction
+    /// summaries, so `SessionContextGuideLayer` surfaces its guide. The harness
+    /// bridge sources the value from `FlowInput::carries_session_summaries()`.
+    #[must_use]
+    pub const fn with_session_summaries(mut self, has: bool) -> Self {
+        self.has_session_summaries = has;
+        self
+    }
+
     /// Attach a welded strategy `<strategy>` body for the subagent inline
     /// prompt. The body is the inner text (no tags); `build_system_prompt`
     /// wraps it in `<strategy> … </strategy>` exactly like `StrategyLayer`.
@@ -315,7 +330,9 @@ impl PromptBuilder {
         let input = input
             .with_behavior_name_opt(self.behavior_name.as_deref())
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input.with_iteration_cap_opt(self.iteration_cap);
+        let input = input
+            .with_iteration_cap_opt(self.iteration_cap)
+            .with_session_summaries(self.has_session_summaries);
         maybe_trace_prompt_size(&self.pipeline, path, &input);
         let mut prompt = self.pipeline.execute(path, &input);
         // Subagent strategy weld: appended post-pipeline because the Basic-path
@@ -354,7 +371,8 @@ impl PromptBuilder {
             .with_chain_context_opt(self.chain_context.as_ref())
             .with_behavior_name_opt(self.behavior_name.as_deref())
             .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
-            .with_iteration_cap_opt(self.iteration_cap);
+            .with_iteration_cap_opt(self.iteration_cap)
+            .with_session_summaries(self.has_session_summaries);
         self.pipeline.execute(AssemblyPath::Context, &input)
     }
 }

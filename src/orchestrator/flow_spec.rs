@@ -43,6 +43,26 @@ pub enum FlowHistoryTurn {
     Assistant(MessageContent),
 }
 
+impl FlowInput {
+    /// True when this run's replayed history already carries at least one
+    /// `<session_context>` compaction-summary block (injected upstream by
+    /// `memory::session_compactor::prepare_history` when raw history exceeds
+    /// the fresh tail). Threaded into the prompt builder so
+    /// `SessionContextGuideLayer` surfaces its "summaries are lossy — search,
+    /// don't guess" guide only when summaries are actually present. `prepare_history`
+    /// runs before the runner, so the flag is timely for this same run.
+    #[must_use]
+    pub fn carries_session_summaries(&self) -> bool {
+        match self {
+            FlowInput::History { turns, .. } => turns.iter().any(|turn| match turn {
+                FlowHistoryTurn::User(mc) => mc.text.contains("<session_context"),
+                FlowHistoryTurn::Assistant(_) => false,
+            }),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlowSpec {

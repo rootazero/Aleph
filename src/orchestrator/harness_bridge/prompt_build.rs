@@ -220,6 +220,7 @@ impl AgentHarnessRunner {
         sandbox: &dyn Sandbox,
         workspace: Option<&std::path::Path>,
         routing_text: Option<String>,
+        has_session_summaries: bool,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -583,7 +584,9 @@ impl AgentHarnessRunner {
         // that pass a huge value; the layer's own zero-guard keeps the
         // unset case silent.
         let cap_for_prompt = u32::try_from(iteration_cap).unwrap_or(u32::MAX);
-        builder = builder.with_iteration_cap(cap_for_prompt);
+        builder = builder
+            .with_iteration_cap(cap_for_prompt)
+            .with_session_summaries(has_session_summaries);
         // Build the stable/dynamic split AND the legacy flat string. The
         // split lights up `RequestPayload::system_blocks` (consumed by the
         // Anthropic adapter to place the prompt-cache breakpoint at the
