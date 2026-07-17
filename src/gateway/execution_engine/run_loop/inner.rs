@@ -916,6 +916,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(mi) = orchestrator.harness.default_max_iterations() {
                     t = t.with_default_max_iterations(mi);
                 }
+                // Inherit the runner's `[tool_service] parallel_tool_concurrency`
+                // so a subagent's Act-phase cap (including 0/1 = disabled)
+                // matches the operator's configured value. The whole chain
+                // (SubagentTool → AgentRuntime → SpawnerBase → HarnessDeps)
+                // previously bottomed out in a hardcoded config default, so
+                // disabling parallel dispatch never reached subagents.
+                if let Some(cap) = orchestrator.harness.parallel_tool_concurrency() {
+                    t = t.with_parallel_tool_concurrency(cap);
+                }
                 // P3 Stage I — hand subagents the shared plugin-registry handle
                 // so a role declaring `mcp_servers:` frontmatter can provision
                 // its per-agent MCP scope (reference validation + referenced-tool

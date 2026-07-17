@@ -542,6 +542,23 @@ impl Default for SessionsSendTool {
     }
 }
 
+/// Canonical concurrency-claim key for a `session_send` target: the SAME
+/// gateway session key the send actually executes under (`parse_session_key`
+/// → [`session_key_to_gateway`] collapse), rendered to its stable string.
+///
+/// The claim MUST key on the gateway form, not the raw spelling: the gateway
+/// collapse maps several routing spellings onto one execution session (e.g.
+/// `dm` and `group` keys with the same agent + peer both collapse to
+/// `peer`), so raw-string claims would judge two aliased fan-out arms
+/// disjoint and wrongly parallelize them into one session. `None` =
+/// unresolvable here (empty / invalid / defaulted target); the claim
+/// producer degrades to whole-world exclusive.
+#[must_use]
+pub fn claim_session_key(raw: &str) -> Option<String> {
+    let parsed = super::helpers::parse_session_key(raw).ok()?;
+    Some(session_key_to_gateway(&parsed).to_key_string())
+}
+
 /// Convert `routing::SessionKey` to `gateway::router::SessionKey`
 fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> SessionKey {
     match key {

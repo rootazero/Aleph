@@ -59,14 +59,21 @@ pub async fn execute_batch_move(
         match entry {
             Ok(path) => {
                 if path.is_file() {
-                    if check_and_resolve_path(&path, denied_paths, output_dir_override).is_err() {
+                    let Ok(src_canonical) =
+                        check_and_resolve_path(&path, denied_paths, output_dir_override)
+                    else {
                         errors.push(format!("{}: denied by policy", path.display()));
                         continue;
-                    }
+                    };
                     let file_name = path.file_name().unwrap_or_default();
                     // Sanitize filename to prevent path traversal via "../" in names
                     let safe_name = file_name.to_string_lossy().replace(['/', '\\'], "_");
                     let dest_path = dest_canonical.join(&safe_name);
+
+                    // Cross-agent serialization per item (sorted pair — same
+                    // guard `execute_move` takes; released each iteration).
+                    let _path_guards =
+                        crate::tools::path_locks::lock_path_pair(&src_canonical, &dest_path).await;
 
                     match fs::rename(&path, &dest_path) {
                         Ok(_) => {
@@ -241,6 +248,12 @@ pub async fn execute_organize(
         if path.parent() == Some(&category_dir) {
             continue;
         }
+
+        // Cross-agent serialization per item (sorted pair — same guard
+        // `execute_move` takes; released each iteration). `path` comes from
+        // `read_dir` on the already-canonicalized directory, so it is a
+        // stable lock key.
+        let _path_guards = crate::tools::path_locks::lock_path_pair(&path, &dest_path).await;
 
         match fs::rename(&path, &dest_path) {
             Ok(_) => {

@@ -242,6 +242,7 @@ mod tests {
             // B15 — unset here on purpose: the fallback cap must hold even when
             // no runner default is threaded through.
             default_max_iterations: None,
+            parallel_tool_concurrency: None,
         }
     }
 

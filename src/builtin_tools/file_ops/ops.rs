@@ -176,6 +176,15 @@ pub async fn execute_move(
     let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
     let to_canonical = check_and_resolve_path(to, denied_paths, output_dir_override)?;
 
+    // Cross-agent write serialization (defense in depth alongside the batch
+    // claim, which only sees ONE harness's batch): both endpoints, sorted, so
+    // crossed concurrent moves cannot ABBA-deadlock. Held through the
+    // exists-check → rename critical section — the same guard `file_write` /
+    // `file_edit` / `apply_patch` already take; `file_ops` mutations were the
+    // one family that skipped it.
+    let _path_guards =
+        crate::tools::path_locks::lock_path_pair(&from_canonical, &to_canonical).await;
+
     if !from_canonical.exists() {
         return Err(ToolError::Execution(format!(
             "Source not found: {}",
@@ -224,6 +233,12 @@ pub async fn execute_copy(
 ) -> Result<FileOpsOutput, ToolError> {
     let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
     let to_canonical = check_and_resolve_path(to, denied_paths, output_dir_override)?;
+
+    // Cross-agent serialization: the destination is written and the source is
+    // read mid-copy (a concurrent writer to either tears the copy). Sorted
+    // pair — see `execute_move`.
+    let _path_guards =
+        crate::tools::path_locks::lock_path_pair(&from_canonical, &to_canonical).await;
 
     if !from_canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -338,6 +353,11 @@ pub async fn execute_delete(
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
+    // Cross-agent serialization for the exists-check → remove critical
+    // section (a concurrent `file_edit` read-modify-write on this path must
+    // not interleave with its deletion). Same guard the writers take.
+    let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
+
     if !canonical.exists() {
         return Err(ToolError::Execution(format!(
             "Path not found: {}",
@@ -380,6 +400,11 @@ pub async fn execute_mkdir(
     output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
+
+    // Cross-agent serialization for the exists-check → create critical
+    // section (mirror of `execute_delete`; mkdir vs delete on one path must
+    // not interleave).
+    let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
 
     if canonical.exists() {
         if canonical.is_dir() {

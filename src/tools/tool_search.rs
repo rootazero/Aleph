@@ -206,6 +206,15 @@ impl LoopTool for ToolSearchTool {
         Self::NAME
     }
 
+    // Scheduling-safe despite technically mutating: promotion only flips
+    // harness-internal presentation state (the deferred tier) behind a
+    // generation counter — no session/file/store side effects another call in
+    // the batch could observe torn. Models routinely batch several searches;
+    // keeping them parallel is the whole point of the meta-tool.
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search the full tool catalog by capability and get the best-matching tools \
          WITH their input schemas, ready to call. Use this to find tools not shown in \

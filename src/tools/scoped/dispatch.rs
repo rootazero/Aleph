@@ -490,6 +490,7 @@ impl ScopedToolService {
             );
             self.record_approval_decision(
                 name,
+                Some(input),
                 Some("auto-denied: unattended run, no human available to approve"),
             )
             .await;
@@ -539,7 +540,7 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
-                self.record_approval_decision(name, Some(reason_kind.agent_hint()))
+                self.record_approval_decision(name, Some(input), Some(reason_kind.agent_hint()))
                     .await;
                 // Surface the ledger's reason to the model (not just the log)
                 // so the circuit breaker actually breaks the loop.
@@ -581,7 +582,10 @@ impl ScopedToolService {
         // pending approval to a tool row by position — and `exec.approvals.pending`
         // is an unordered map, so with two concurrent tool calls the card renders
         // under the wrong tool and the user approves something they never read.
-        let tool_call_id = self.newest_tool_call(name).await.map(|(_, id)| id);
+        let tool_call_id = self
+            .newest_tool_call(name, Some(input))
+            .await
+            .map(|(_, id)| id);
         let asked_at = std::time::Instant::now();
         let outcome =
             crate::approval::with_tool_call_id(tool_call_id, requester.request_approval(action))
@@ -618,6 +622,7 @@ impl ScopedToolService {
             }
             self.record_approval_decision(
                 name,
+                Some(input),
                 Some(&format!("user did not approve ({outcome:?})")),
             )
             .await;
@@ -639,24 +644,43 @@ impl ScopedToolService {
                 session_memory::global().remember(key, &fingerprint);
             }
         }
-        self.record_approval_decision(name, None).await;
+        self.record_approval_decision(name, Some(input), None).await;
         Ok(())
     }
 
     /// Correlation ids of the tool call currently being dispatched for `name`.
     ///
     /// `ToolService` dispatch carries no call identity, so they are recovered
-    /// from the newest `ToolCallRequested` for this tool: the harness emits that
-    /// event immediately before dispatching, and all three confirm gates
-    /// (`requires_confirmation`, permission `Ask`, and the tier's argument
-    /// filter) return `ConcurrencyClaim::global()` from
-    /// [`ScopedToolService::call_concurrency_claim`], so a gated call is never
-    /// batched and the newest request for `name` IS this call. `call_id` is the
-    /// harness `call.id` — the same string clients see as `ToolStart.tool_id`.
+    /// from the session log's `ToolCallRequested` events. Two tiers, both
+    /// newest-first:
     ///
-    /// Only approval decision points call this, so the event-log scan stays off
-    /// the hot path.
-    async fn newest_tool_call(&self, name: &str) -> Option<(TurnId, String)> {
+    /// 1. **Exact (name, input) match.** The harness's within-batch dedup
+    ///    guarantees no two calls in one parallel batch share the same
+    ///    canonical `(name, args)`, so an exact input match is unambiguous
+    ///    even when a gate fired from INSIDE a parallel batch — the case the
+    ///    name-only scan gets wrong. `act_parallel` PASS 0 pre-emits every
+    ///    request event of a group before any dispatch, so for gates that can
+    ///    escape the `Global`-claim rule (a hook's per-call `Ask`, or two
+    ///    same-name calls where only one is gated) name-only correlation
+    ///    stamps the LAST event of the group onto whichever call asked first —
+    ///    the approval card renders the wrong call and the user approves a
+    ///    command they never read.
+    /// 2. **Newest name-only fallback.** Kept for callers with no input at
+    ///    hand and for the harness-guardrail `Sanitize` case, where the
+    ///    executed args differ from the logged (pre-rewrite) ones so the
+    ///    exact tier can't match. For claim-time gates
+    ///    ([`ScopedToolService::call_concurrency_claim`] forces `Global` for
+    ///    confirm/operator-gated names) the gated call is never batched and
+    ///    newest-by-name IS this call, exactly as before.
+    ///
+    /// `call_id` is the harness `call.id` — the same string clients see as
+    /// `ToolStart.tool_id`. Only approval decision points call this, so the
+    /// event-log scan stays off the hot path.
+    async fn newest_tool_call(
+        &self,
+        name: &str,
+        input: Option<&Value>,
+    ) -> Option<(TurnId, String)> {
         use crate::session::events::SessionEvent;
 
         let turn = self.turn_context.as_ref()?;
@@ -672,15 +696,32 @@ impl ScopedToolService {
                 return None;
             }
         };
-        events.iter().rev().find_map(|rec| match &rec.event {
-            SessionEvent::ToolCallRequested {
+        let mut newest_by_name: Option<(TurnId, String)> = None;
+        for rec in events.iter().rev() {
+            let SessionEvent::ToolCallRequested {
                 turn_id,
                 call_id,
                 name: requested,
+                input: requested_input,
                 ..
-            } if requested == name => Some((*turn_id, call_id.clone())),
-            _ => None,
-        })
+            } = &rec.event
+            else {
+                continue;
+            };
+            if requested != name {
+                continue;
+            }
+            // Exact tier: serde_json::Value equality is structural (object
+            // key order does not matter), matching the harness's canonical
+            // dedup signature closely enough for correlation.
+            if input.is_some_and(|i| requested_input == i) {
+                return Some((*turn_id, call_id.clone()));
+            }
+            if newest_by_name.is_none() {
+                newest_by_name = Some((*turn_id, call_id.clone()));
+            }
+        }
+        newest_by_name
     }
 
     /// Persist this gate's decision into the session event log (the SSOT the
@@ -689,7 +730,12 @@ impl ScopedToolService {
     ///
     /// Best-effort: a failed emit is logged, never allowed to overturn a
     /// decision the user has made.
-    async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
+    async fn record_approval_decision(
+        &self,
+        name: &str,
+        input: Option<&Value>,
+        denial_reason: Option<&str>,
+    ) {
         use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
 
         let Some(turn) = self.turn_context.as_ref() else {
@@ -700,7 +746,7 @@ impl ScopedToolService {
         };
         let session_id = &turn.session_key;
 
-        let Some((turn_id, call_id)) = self.newest_tool_call(name).await else {
+        let Some((turn_id, call_id)) = self.newest_tool_call(name, input).await else {
             tracing::debug!(
                 tool = %name,
                 "no ToolCallRequested to correlate — approval decision not persisted"

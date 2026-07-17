@@ -18,7 +18,8 @@
 //! The property that already declares what a tool *does* is idempotency, read
 //! at the enforcement chokepoint through
 //! [`crate::tools::runtime::LoopTool::is_idempotent`]: the maintained pure-read
-//! allowlist [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`] for builtins, the
+//! allowlist ([`crate::tools::retry::is_idempotent_builtin_name`], which
+//! delegates to `READ_ONLY_TOOLS`) for builtins, the
 //! server's own `readOnlyHint` / `idempotentHint` for MCP tools, `false` for
 //! anything that declares nothing. Hence the rule: **a tool that is not
 //! idempotent is a mutating tool**. Unknown tools are non-idempotent, so `Ask`
@@ -78,8 +79,8 @@ const DESTRUCTIVE_FILE_OPS: &[&str] = &["delete", "move", "batch_move", "organiz
 /// trains a user to approve without reading — which is how a confirmation gate
 /// stops being a safety mechanism.
 ///
-/// Deliberately NOT solved by adding `ask_user` to
-/// [`crate::tools::retry::IDEMPOTENT_BUILTIN_TOOLS`]: that list answers "is it
+/// Deliberately NOT solved by declaring `ask_user` idempotent
+/// ([`crate::tools::retry::is_idempotent_builtin_name`]): that predicate answers "is it
 /// safe to auto-retry after a transient failure?", and auto-retrying a question
 /// means prompting the human twice. "Safe to retry" and "needs no approval" are
 /// two different questions; collapsing them into one field is a coupling that
@@ -342,7 +343,7 @@ mod tests {
             "search",
             "memory_search",
             "web_fetch",
-            "list_tools",
+            "file_read",
             "recall_context",
         ] {
             assert_eq!(

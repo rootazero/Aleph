@@ -36,6 +36,13 @@ impl LoopTool for NamedStub {
     fn schema(&self) -> Value {
         json!({ "type": "object" })
     }
+    // Declared parallel-safe so the tier tests keep their contrast: a GATE
+    // (permission Ask / tier argument filter) forcing `Global` must be
+    // distinguishable from the inner claim, which requires the ungated inner
+    // claim to be `Shared`. (The trait default is fail-closed `false`.)
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
     async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
         LoopToolResult::Success { output: json!({}) }
     }
@@ -85,6 +92,12 @@ impl LoopTool for StubTool {
     }
     fn schema(&self) -> Value {
         json!({ "type": "object" })
+    }
+    // Models a declared parallel-safe (read-only) tool; the trait default is
+    // now fail-closed `false`, so safety must be explicit (`UnsafeStubTool`
+    // below models the default/mutating side).
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
     }
     async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
         LoopToolResult::Success {
@@ -863,8 +876,8 @@ fn metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn describe_populates_builtin_budget_metadata() {
-    // `memory_search` is in both BUILTIN_TOOL_BUDGETS_MS (5_000ms) and
-    // IDEMPOTENT_BUILTIN_TOOLS.
+    // `memory_search` is in BUILTIN_TOOL_BUDGETS_MS (5_000ms) and is a
+    // declared pure read (`is_idempotent_builtin_name`).
     let registry = make_registry(&["memory_search"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
     let def = svc.describe("memory_search").await.expect("tool present");
@@ -978,9 +991,9 @@ impl LoopTool for UnsafeStubTool {
 
 #[tokio::test]
 async fn call_concurrency_claim_shared_for_safe_stub_tool() {
-    // `StubTool` doesn't override `is_concurrent_safe`, so the trait
-    // default (true) flows through the registry → ScopedToolService
-    // chain as a Shared claim.
+    // `StubTool` explicitly declares `is_concurrent_safe -> true` (the trait
+    // default is now fail-closed `false`), so its declared safety flows
+    // through the registry → ScopedToolService chain as a Shared claim.
     let registry = make_registry(&["safe_tool"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new());
     assert!(matches!(
@@ -2215,6 +2228,77 @@ async fn auto_tier_destructive_file_ops_never_batches() {
             .await,
         ConcurrencyClaim::global(),
         "a `list` is not gated and must still parallelize"
+    );
+}
+
+/// The config-tier operator gate is the FOURTH member of the claim-time
+/// exclusivity rule: a non-operator caller's `node_invoke` (whose inner claim
+/// is a bounded, batchable `Nodes` scope in production) routes through the
+/// operator approval gate at execute time, so at claim time it must be
+/// whole-world exclusive — two gated calls in one parallel batch would run
+/// their approval cards concurrently and `newest_tool_call`'s name scan would
+/// stamp both with the same id.
+#[tokio::test]
+async fn operator_gated_tool_claims_global_for_non_operator_callers() {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    use crate::tools::service::ToolService;
+
+    let ctx_with_role = |role: Option<&str>| crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main("op-gate-test"),
+        run_id: String::new(),
+        channel_id: "test".to_string(),
+        conversation_id: "conv".to_string(),
+        caller_role: role.map(String::from),
+        channel_tool_permissions: None,
+    };
+
+    // Chat-tier (non-operator) caller: the gate WILL fire at execute time, so
+    // the claim must force Global even though the stub's inner claim is
+    // Shared. `cron_manage` is on `tool_requires_operator`'s list.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(NamedStub::new("cron_manage")));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
+        .with_turn_context(ctx_with_role(Some("guest")));
+    assert_eq!(
+        svc.call_concurrency_claim("cron_manage", &json!({})).await,
+        ConcurrencyClaim::global(),
+        "an operator-gated tool must never join a parallel batch for a \
+         non-operator caller"
+    );
+
+    // Operator caller (and the local no-auth default, role=None): the gate
+    // never fires, so the inner declared claim flows through.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(NamedStub::new("cron_manage")));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
+        .with_turn_context(ctx_with_role(Some("operator")));
+    assert_eq!(
+        svc.call_concurrency_claim("cron_manage", &json!({})).await,
+        ConcurrencyClaim::Shared,
+        "operator callers keep the inner claim — the gate never fires for them"
+    );
+}
+
+/// Claim-time gates must judge the CANONICAL name, mirroring `execute_inner`:
+/// an alias spelling (`file.ops`) of a tier-gated call must get the same
+/// `Global` claim the canonical spelling gets, or the gated call slips into a
+/// parallel batch under its alias while the execute-time gate still fires.
+#[tokio::test]
+async fn claim_gates_judge_the_canonical_name_not_the_alias() {
+    use crate::config::types::policies::ExecTier;
+    use crate::tools::concurrency::ConcurrencyClaim;
+    use crate::tools::service::ToolService;
+
+    let svc = tiered(ExecTier::Auto);
+    assert_eq!(
+        svc.call_concurrency_claim(
+            "file.ops",
+            &json!({"operation": "delete", "path": "/tmp/a"})
+        )
+        .await,
+        ConcurrencyClaim::global(),
+        "the alias spelling of a tier-gated destructive call must claim \
+         Global exactly like the canonical spelling"
     );
 }
 

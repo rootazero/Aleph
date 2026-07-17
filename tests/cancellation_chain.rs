@@ -178,6 +178,7 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         subagent_semaphore: None,
         routing_store: None,
         default_max_iterations: None,
+        parallel_tool_concurrency: None,
     }
 }
 
@@ -213,6 +214,7 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         subagent_semaphore: None,
         routing_store: None,
         default_max_iterations: None,
+        parallel_tool_concurrency: None,
     }
 }
 

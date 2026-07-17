@@ -102,6 +102,11 @@ pub struct SpawnerBase {
     /// either way the child loop is never left uncapped (the main path's
     /// "the harness loop is never left uncapped" invariant, `harness_bridge`).
     pub default_max_iterations: Option<usize>,
+    /// The runner's `[tool_service] parallel_tool_concurrency`, inherited so
+    /// the child's Act-phase cap matches the operator's configured value —
+    /// including 0/1, which DISABLES the parallel fast path. `None` (tests /
+    /// legacy callers) falls back to the config default.
+    pub parallel_tool_concurrency: Option<usize>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -509,11 +514,15 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // independent reads/searches; the Act phase only parallelizes
             // concurrent-safe calls (writes/exec/send still serialize via the
             // resource-scope partitioner in `tools::concurrency`), so this is a
-            // safe throughput win, not a correctness change. Uses the same
-            // `[tool_service]` default the main harness's config knob falls back
-            // to, so the two cannot drift.
+            // safe throughput win, not a correctness change. Prefer the
+            // runner's CONFIGURED `[tool_service] parallel_tool_concurrency`
+            // (threaded via `base`; 0/1 disables the fast path) — the previous
+            // hardcoded config default silently ignored an operator's setting,
+            // so "disable parallel dispatch" only ever applied to the main
+            // harness while subagents kept running batches 8-wide.
             parallel_tool_concurrency: Some(
-                crate::config::types::tools::default_parallel_tool_concurrency(),
+                base.parallel_tool_concurrency
+                    .unwrap_or_else(crate::config::types::tools::default_parallel_tool_concurrency),
             ),
         };
         let harness = Arc::new(AgentHarness::new(deps));

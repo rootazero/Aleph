@@ -346,6 +346,15 @@ impl ToolService for ScopedToolService {
         input: &Value,
     ) -> crate::tools::concurrency::ConcurrencyClaim {
         use crate::tools::concurrency::ConcurrencyClaim;
+        // Canonicalize the emitted name first, mirroring `execute_inner`:
+        // every gate below and the inner claim lookup must judge the SAME
+        // spelling the registry will actually execute. Without this the two
+        // sides diverge on alias forms (`file.ops` vs `file_ops`) — claim-time
+        // gates miss on the literal name while execute-time gates fire on the
+        // canonical one, handing a confirm-gated call a bounded, batchable
+        // claim (the correlation hole the Global rule below exists to close).
+        let canonical = self.inner.resolve(name).map(|t| t.name().to_string());
+        let name: &str = canonical.as_deref().unwrap_or(name);
         // Subagent dispatch, disallowed tools, and confirmation-gated tools are
         // all whole-world exclusive so they can never join a parallel batch.
         // Only when none of those fire do we surface the inner tool's bounded
@@ -358,18 +367,34 @@ impl ToolService for ScopedToolService {
         if !self.is_allowed(name) {
             return ConcurrencyClaim::global();
         }
-        // All THREE confirm gates must force exclusivity, not just the two
-        // name-keyed ones. The approval path recovers the gated call's id by
-        // scanning for the newest `ToolCallRequested` for this tool NAME
+        // EVERY approval gate `execute_inner` can route through must force
+        // exclusivity, not just the three name/argument confirm gates. The
+        // approval path recovers the gated call's id by scanning for the
+        // newest `ToolCallRequested` for this tool NAME
         // (`dispatch::newest_tool_call`), which is only unambiguous when a
-        // confirm-gated call can never share a parallel batch with another call
-        // of the same tool. `tier_asks_for_arguments` is the gate keyed on the
+        // gated call can never share a parallel batch with another call of
+        // the same tool. `tier_asks_for_arguments` is the gate keyed on the
         // CALL's arguments (Auto-tier `file_ops` delete/move/…), and it is
         // exactly the one whose inner claim is bounded (`Exclusive { Paths }`)
         // and therefore batchable — two parallel deletes would otherwise stamp
         // the same `tool_call_id` and the user would approve the command they
         // did not read.
-        if self.inner.requires_confirmation(name)
+        //
+        // The config-tier operator gate is the fourth member: it fires for a
+        // non-operator caller on `tool_requires_operator` names — including
+        // `node_invoke`, whose inner claim is a bounded, batchable `Nodes`
+        // scope. Same predicate source as the gate itself (`self.turn_context`
+        // is what `execute` scopes into the task-local the gate reads).
+        // The hook `Ask` gate stays unpredictable at claim time (a hook
+        // decides per call); its correlation is hardened inside
+        // `newest_tool_call` instead (exact input match).
+        let operator_gated = crate::gateway::method_authz::tool_requires_operator(name)
+            && !self
+                .turn_context
+                .as_ref()
+                .is_none_or(|t| t.caller_is_operator());
+        if operator_gated
+            || self.inner.requires_confirmation(name)
             || self.is_permission_ask(name)
             || self.tier_asks_for_arguments(name, input)
         {

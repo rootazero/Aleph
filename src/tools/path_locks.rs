@@ -49,6 +49,28 @@ pub async fn lock_path(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     cell.lock_owned().await
 }
 
+/// Acquire the write locks for a two-endpoint mutation (move / copy source +
+/// destination) in **sorted order**, so two concurrent operations with
+/// crossed endpoints (A→B racing B→A) cannot ABBA-deadlock — the same
+/// discipline `apply_patch` follows for its move destinations. Equal paths
+/// lock once (the second slot stays `None`); re-acquiring the same async
+/// mutex in one task would deadlock, not panic.
+pub async fn lock_path_pair(
+    a: &Path,
+    b: &Path,
+) -> (
+    tokio::sync::OwnedMutexGuard<()>,
+    Option<tokio::sync::OwnedMutexGuard<()>>,
+) {
+    if a == b {
+        return (lock_path(a).await, None);
+    }
+    let (first, second) = if a < b { (a, b) } else { (b, a) };
+    let g1 = lock_path(first).await;
+    let g2 = lock_path(second).await;
+    (g1, Some(g2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
