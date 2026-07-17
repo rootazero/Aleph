@@ -225,6 +225,31 @@ impl AlephTool for TeamDelegateTool {
             ))
         })?;
 
+        // Tree budget: a team_delegate is a leader-driven delegation. ACP
+        // targets stay out of the token budget entirely (external CLI, no
+        // in-process session accruing SessionStore tokens). For an in-process
+        // member, refuse BEFORE creating the task row when the caller's shared
+        // budget is spent (an F9 compact refusal the model can act on); the
+        // child is enrolled after the row exists (below). The caller session is
+        // the leader's live turn context.
+        let caller_session = crate::tools::turn_context::current_session_key();
+        let is_acp = matches!(target, MemberDispatchTarget::AcpSession { .. });
+        if !is_acp {
+            if let Some(caller) = caller_session.as_deref() {
+                if let Some(reason) =
+                    crate::gateway::goal_budget::tree_budget_refusal(context.session_store(), caller)
+                        .await
+                {
+                    return Ok(TeamDelegateOutput {
+                        task_id: String::new(),
+                        status: DelegateStatus::Failed,
+                        reply: None,
+                        error: Some(reason),
+                    });
+                }
+            }
+        }
+
         // 2. Create the task record. No `managed_by` flag is set — the
         //    autonomous dispatcher must not pick up a task that `team_delegate`
         //    runs itself.
@@ -262,6 +287,24 @@ impl AlephTool for TeamDelegateTool {
             .coord_store
             .acquire_lock(&task.id, &args.agent_id)
             .await;
+
+        // Enroll the child (agent:<owner>:team:<task>) — the exact key the run
+        // executes under (runner.rs) — into the caller's goal tree budget so its
+        // spend counts. Account-only (`false`): the budget was already checked
+        // above, and best-effort enrollment never blocks the delegation.
+        if !is_acp {
+            if let Some(caller) = caller_session.as_deref() {
+                let child_key =
+                    crate::gateway::router::SessionKey::task(target.agent_id(), "team", &task.id);
+                let _ = crate::gateway::goal_budget::check_and_enroll_delegation(
+                    context.session_store(),
+                    caller,
+                    &child_key,
+                    false,
+                )
+                .await;
+            }
+        }
 
         // 3. Run the member agent via the shared execution path. G2 —
         // `team_delegate` is the synchronous leader-driven path (one task

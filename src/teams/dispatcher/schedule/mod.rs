@@ -279,6 +279,31 @@ impl TeamDispatcher {
         // (`timeout_secs`), so a deep research subtask and a quick formatting step
         // no longer share one budget. Absent → the configured global default.
         let timeout_secs = effective_timeout_secs(&task.metadata, self.config.task_timeout_secs);
+
+        // Tree budget (autonomous dispatch): if the task carries an
+        // `origin_session` anchor (stamped by the creating tool while it had a
+        // live turn context) and this is an in-process member (ACP runs accrue
+        // no SessionStore tokens), enroll the child run into the creating
+        // session's goal tree budget. Account-ONLY — there is no model turn here
+        // to receive a refusal, so the leader's own pursuit budget still stops
+        // the tree at its continuation hook; this only makes the autonomous
+        // child's spend visible to that accounting. Best-effort.
+        if isolate {
+            if let Some(origin) =
+                crate::gateway::goal_budget::origin_session_from_metadata(&task.metadata)
+            {
+                let child_key =
+                    crate::gateway::router::SessionKey::task(&owner, "team", &task_id);
+                let _ = crate::gateway::goal_budget::check_and_enroll_delegation(
+                    self.context.session_store(),
+                    &origin,
+                    &child_key,
+                    false,
+                )
+                .await;
+            }
+        }
+
         let outcome = execute_member_task(
             &self.context,
             &target,

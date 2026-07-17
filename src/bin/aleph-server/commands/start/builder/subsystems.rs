@@ -822,6 +822,15 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_workflow_clarify(store, signal);
     }
 
+    // Publish the boot channel-config snapshot now that every
+    // `register_channel_config` above has run — this is the ONLY source
+    // system-initiated continuations (goal wait-barrier wake / boot resume) can
+    // read the per-channel deny layer from (the live map is private to this
+    // router). Set before the router is sealed; the map is immutable hereafter.
+    alephcore::gateway::channel_policy::set_channel_config_snapshot(
+        inbound_router.channel_configs_snapshot(),
+    );
+
     let inbound_router = Arc::new(inbound_router);
 
     let _inbound_router_handle = inbound_router.clone().start().await;

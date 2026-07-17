@@ -5,9 +5,12 @@
 
 use crate::config::types::policies::ExecTier;
 use crate::gateway::channel::UserId;
-use crate::gateway::inbound_router::ChannelPermissionLevel;
+use crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY;
+use crate::gateway::inbound_router::{ChannelConfig, ChannelPermissionLevel};
 use crate::gateway::pair_loop_guard::PairLoopGuardConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Highest execution tier an untrusted (`Chat`) channel may run at.
 ///
@@ -33,6 +36,85 @@ pub fn channel_permission_level_from_role(caller_role: &str) -> Option<ChannelPe
         "operator" => Some(ChannelPermissionLevel::Config),
         _ => None,
     }
+}
+
+/// Process-global snapshot of the boot-assembled `channel_id → ChannelConfig`
+/// map. The live map is owned privately by the inbound router — built once at
+/// boot via `register_channel_config`, immutable after the router is `Arc::new`d
+/// (there is no runtime re-registration). This read-only snapshot is published
+/// once from that map at the end of `initialize_inbound_router`, so a
+/// system-initiated continuation (goal wait-barrier wake / boot resume) firing
+/// long after boot can consult the SAME channel deny layer a live inbound
+/// message gets — which those paths otherwise cannot reach (the config map is in
+/// no global; `AgentInstance::origin_route` returns only channel + conversation,
+/// no permission data). `None` until boot sets it (tests / pre-channel-init) →
+/// callers fail closed to guest + no deny layer.
+static CHANNEL_CONFIG_SNAPSHOT: OnceLock<HashMap<String, ChannelConfig>> = OnceLock::new();
+
+/// Publish the boot channel-config snapshot. Called once from
+/// `initialize_inbound_router` after every `register_channel_config`, before the
+/// router is sealed in `Arc`. Idempotent — a later set (e.g. a second boot in a
+/// test process) is ignored by the `OnceLock`.
+pub fn set_channel_config_snapshot(configs: HashMap<String, ChannelConfig>) {
+    if CHANNEL_CONFIG_SNAPSHOT.set(configs).is_err() {
+        tracing::debug!("channel config snapshot already published; ignoring re-set");
+    }
+}
+
+/// Run-identity metadata for a **system-initiated continuation** (goal
+/// wait-barrier wake / boot resume) whose session origin is a channel. Both are
+/// woken by the daemon with no live human at the keyboard and no completing run
+/// to inherit policy metadata from, so this is deliberately fail-closed on BOTH
+/// axes the live inbound path derives from channel config:
+///
+/// - `caller_role = "guest"` FLOOR — an unattended continuation never silently
+///   runs at `operator`, even on a `Config`-tier channel. (Round-6 stamped this
+///   floor for wakes; generalized here so resume shares it — see the wake
+///   identity doc in `execution_engine::goal_wait`.)
+/// - the channel's own `tool_permissions` DENY layer IS honored
+///   (`CHANNEL_TOOL_PERMISSIONS_KEY`), so a wake/resume never bypasses an
+///   admin's explicit per-channel tool deny. Dropping it was the fail-open gap
+///   this closes — both the wake path (never stamped it) and the resume path
+///   (its config map was never wired) silently ran without it before.
+///
+/// A snapshot miss (unknown/unconfigured channel, or boot not yet complete)
+/// resolves to guest + no deny via `unwrap_or_default` — the same fail-closed
+/// default `channel_run_identity` pins for a live message on an unknown channel.
+#[must_use]
+pub fn system_continuation_identity(channel: &str, conversation: &str) -> HashMap<String, String> {
+    let cfg = CHANNEL_CONFIG_SNAPSHOT
+        .get()
+        .and_then(|m| m.get(channel).cloned())
+        .unwrap_or_default();
+    channel_identity_meta(&cfg, channel, conversation)
+}
+
+/// Pure cfg → identity metadata (guest floor + deny layer), split from the
+/// global lookup so the deny-layer serialization is unit-testable with a
+/// hand-built `ChannelConfig` (the snapshot is a set-once process global).
+fn channel_identity_meta(
+    cfg: &ChannelConfig,
+    channel: &str,
+    conversation: &str,
+) -> HashMap<String, String> {
+    let mut meta = HashMap::new();
+    meta.insert("caller_role".to_string(), "guest".to_string());
+    if let Some(perms) = cfg.tool_permissions.as_ref() {
+        match serde_json::to_string(perms) {
+            Ok(json) => {
+                meta.insert(CHANNEL_TOOL_PERMISSIONS_KEY.to_string(), json);
+            }
+            // The guest floor above still stands; only the deny layer is lost.
+            Err(e) => tracing::error!(
+                channel = %channel,
+                error = %e,
+                "system continuation: channel tool_permissions failed to serialize — deny layer skipped"
+            ),
+        }
+    }
+    meta.insert("channel_id".to_string(), channel.to_string());
+    meta.insert("conversation_id".to_string(), conversation.to_string());
+    meta
 }
 
 /// E.164 formatted phone number
@@ -358,6 +440,50 @@ mod tests {
         );
         // Panel / CLI / cron turns stamp no channel role → no clamp.
         assert_eq!(channel_permission_level_from_role(""), None);
+    }
+
+    #[test]
+    fn system_continuation_identity_is_guest_floor_with_no_deny_by_default() {
+        // A channel with no tool_permissions override → guest floor, channel +
+        // conversation stamped, and NO deny-layer key (the fail-closed default a
+        // snapshot miss also lands on).
+        let cfg = ChannelConfig::default();
+        let meta = channel_identity_meta(&cfg, "telegram", "chat-42");
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("guest"));
+        assert_eq!(meta.get("channel_id").map(String::as_str), Some("telegram"));
+        assert_eq!(
+            meta.get("conversation_id").map(String::as_str),
+            Some("chat-42")
+        );
+        assert!(
+            !meta.contains_key(CHANNEL_TOOL_PERMISSIONS_KEY),
+            "no channel tool_permissions ⇒ no deny layer key"
+        );
+    }
+
+    #[test]
+    fn system_continuation_identity_carries_the_channel_deny_layer() {
+        // A channel that denies a (non-operator) tool: the wake/resume run must
+        // carry that deny layer — the fail-open gap this closes. caller_role
+        // stays the guest floor regardless of the channel's tier.
+        use crate::config::types::policies::ToolPermissionsConfig;
+        use crate::extension::PermissionAction;
+        let mut cfg = ChannelConfig::default();
+        cfg.permission_level = ChannelPermissionLevel::Config; // operator-tier channel…
+        cfg.tool_permissions = Some(ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: HashMap::from([("web_fetch".to_string(), PermissionAction::Deny)]),
+        });
+        let meta = channel_identity_meta(&cfg, "slack", "C123");
+        // …yet an unattended continuation still runs at the guest floor.
+        assert_eq!(meta.get("caller_role").map(String::as_str), Some("guest"));
+        let deny = meta
+            .get(CHANNEL_TOOL_PERMISSIONS_KEY)
+            .expect("deny layer must be stamped");
+        assert!(
+            deny.contains("web_fetch") && deny.contains("deny"),
+            "serialized deny layer should preserve the per-channel override, got: {deny}"
+        );
     }
 
     #[test]

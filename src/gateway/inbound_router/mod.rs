@@ -322,6 +322,16 @@ impl InboundMessageRouter {
         self.channel_configs.insert(channel_id.to_string(), config);
     }
 
+    /// Clone the fully-assembled `channel_id → ChannelConfig` map. Called once
+    /// at the end of boot to publish the process-global snapshot that
+    /// system-initiated continuations (goal wake / resume) read via
+    /// [`crate::gateway::channel_policy::system_continuation_identity`] — the map
+    /// is otherwise private to this router and unreachable from those paths.
+    #[must_use]
+    pub fn channel_configs_snapshot(&self) -> HashMap<String, ChannelConfig> {
+        self.channel_configs.clone()
+    }
+
     /// Start consuming inbound messages
     pub async fn start(self: Arc<Self>) -> Option<tokio::task::JoinHandle<()>> {
         let rx = self.channel_registry.take_inbound_receiver()?;

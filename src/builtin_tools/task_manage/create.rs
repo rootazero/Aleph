@@ -144,8 +144,11 @@ impl AlephTool for TaskCreateTool {
 
         // Compose the metadata channel: dispatcher marker first, then fold in
         // the acceptance-criteria contract (a no-op when none were supplied, so
-        // the row stays byte-identical to the legacy shape).
-        let metadata = with_task_timeout(
+        // the row stays byte-identical to the legacy shape). Finally stamp the
+        // `origin_session` anchor so the autonomous dispatcher — which runs with
+        // no turn context — can enroll this task's child into the creating
+        // session's goal tree budget (a no-op outside a turn context).
+        let metadata = crate::gateway::goal_budget::with_origin_session(with_task_timeout(
             with_max_retries(
                 with_acceptance_criteria(
                     with_managed_marker(args.metadata),
@@ -154,7 +157,7 @@ impl AlephTool for TaskCreateTool {
                 args.max_retries,
             ),
             args.timeout_secs,
-        );
+        ));
 
         let new_task = NewCoordTask {
             team_id: args.team_id,
