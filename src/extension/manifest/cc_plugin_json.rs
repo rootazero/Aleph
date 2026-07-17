@@ -58,6 +58,9 @@ pub struct CcPluginJson {
     /// Path to skills directory
     pub skills: Option<String>,
 
+    /// Path to commands directory (user-triggered `/command`s)
+    pub commands: Option<String>,
+
     /// Path to agents directory
     pub agents: Option<String>,
 
@@ -300,6 +303,14 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");
         capabilities.extend(parsers::parse_skills_dir(
             plugin_dir, skills_rel, &plugin_id,
+        )?);
+
+        // Parse commands (user-triggered /commands → Command-typed skills)
+        let commands_rel = raw.commands.as_deref().unwrap_or("commands");
+        capabilities.extend(parsers::parse_commands_dir(
+            plugin_dir,
+            commands_rel,
+            &plugin_id,
         )?);
 
         // Parse agents

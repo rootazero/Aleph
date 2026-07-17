@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registry::{
-    AgentRegistration, CommandRegistration, HookRegistration, ServiceRegistration,
-    SkillRegistration, ToolRegistration,
+    AgentRegistration, HookRegistration, ServiceRegistration, SkillRegistration, ToolRegistration,
 };
 use crate::extension::types::{McpServerConfig, PluginOrigin};
 
@@ -23,8 +22,6 @@ pub type ToolDeclaration = ToolRegistration;
 pub type HookDeclaration = HookRegistration;
 /// A service declaration is a `ServiceRegistration`
 pub type ServiceDeclaration = ServiceRegistration;
-/// An in-chat command declaration is a `CommandRegistration`
-pub type CommandDeclaration = CommandRegistration;
 /// A skill declaration is a `SkillRegistration`
 pub type SkillDeclaration = SkillRegistration;
 /// An agent declaration is an `AgentRegistration`
@@ -50,9 +47,10 @@ pub enum CapabilityDeclaration {
     Hook(HookDeclaration),
     /// A background service
     Service(ServiceDeclaration),
-    /// An in-chat command (e.g., /mycommand)
-    Command(CommandDeclaration),
-    /// A prompt-based skill
+    /// A prompt-based skill. Plugin `commands/` markdown is also modelled here
+    /// as a [`SkillRegistration`] with `skill_type = SkillType::Command` (a
+    /// user-triggered `/command`), so the whole "skill vs command" distinction
+    /// lives in one store rather than a parallel `CommandRegistration` type.
     Skill(SkillDeclaration),
     /// An agent definition
     Agent(AgentDeclaration),
@@ -68,7 +66,7 @@ impl CapabilityDeclaration {
             // P0: Always allowed, no permission check
             Self::Tool(_) | Self::Hook(_) | Self::Skill(_) => Tier::Core,
             // P1: Always allowed, no permission check
-            Self::Command(_) | Self::Agent(_) => Tier::Important,
+            Self::Agent(_) => Tier::Important,
             // P2: Some are permission-gated (Service needs Background)
             Self::Service(_) | Self::McpServer(_) => Tier::Pluggable,
         }
@@ -81,7 +79,6 @@ impl CapabilityDeclaration {
             Self::Tool(_) => "tool",
             Self::Hook(_) => "hook",
             Self::Service(_) => "service",
-            Self::Command(_) => "command",
             Self::Skill(_) => "skill",
             Self::Agent(_) => "agent",
             Self::McpServer(_) => "mcp_server",
@@ -93,9 +90,7 @@ impl CapabilityDeclaration {
     pub const fn required_permission(&self) -> Option<PluginPermission> {
         match self {
             // P0 + P1: no permission needed
-            Self::Tool(_) | Self::Hook(_) | Self::Skill(_) | Self::Command(_) | Self::Agent(_) => {
-                None
-            }
+            Self::Tool(_) | Self::Hook(_) | Self::Skill(_) | Self::Agent(_) => None,
             // P2: some need permission
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
@@ -115,7 +110,7 @@ impl CapabilityDeclaration {
 pub enum Tier {
     /// Core capabilities (Tool, Hook, Skill) — always registered first
     Core,
-    /// Important capabilities (Command, Agent)
+    /// Important capabilities (Agent)
     Important,
     /// Pluggable capabilities (Service, `McpServer`)
     Pluggable,
@@ -286,12 +281,6 @@ mod tests {
                 plugin_id: "p".to_string(),
                 auto_start: true,
             }),
-            CapabilityDeclaration::Command(CommandRegistration {
-                name: "cmd".to_string(),
-                description: "d".to_string(),
-                handler: "h".to_string(),
-                plugin_id: "p".to_string(),
-            }),
             CapabilityDeclaration::Skill(make_skill()),
             CapabilityDeclaration::Agent(make_agent()),
             CapabilityDeclaration::McpServer(McpServerConfig {
@@ -301,19 +290,11 @@ mod tests {
             }),
         ];
 
-        assert_eq!(capabilities.len(), 7);
+        assert_eq!(capabilities.len(), 6);
         let kind_names: Vec<&str> = capabilities.iter().map(|c| c.kind_name()).collect();
         assert_eq!(
             kind_names,
-            vec![
-                "tool",
-                "hook",
-                "service",
-                "command",
-                "skill",
-                "agent",
-                "mcp_server",
-            ]
+            vec!["tool", "hook", "service", "skill", "agent", "mcp_server",]
         );
     }
 }

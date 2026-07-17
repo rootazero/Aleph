@@ -7,7 +7,8 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
-    IdentityFilesLayer, LanguageLayer, McpInstructionsLayer, MemoryProtocolLayer,
+    IdentityFilesLayer, LanguageLayer, McpInstructionsLayer, McpResourceIndexLayer,
+    MemoryProtocolLayer,
     MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
     ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
     SessionBudgetLayer, SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer,
@@ -195,6 +196,7 @@ impl PromptPipeline {
             Box::new(StrategyLayer),
             Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
+            Box::new(McpResourceIndexLayer),
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
@@ -447,6 +449,7 @@ mod mode_tests {
             "generation_models",
             "skill_instructions",
             "mcp_instructions",
+            "mcp_resources",
             "agent_catalog",
             "chain_context",
             "special_actions",
@@ -579,6 +582,7 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
+        assert!(dynamic_names.contains(&"mcp_resources"));
         assert!(dynamic_names.contains(&"agent_catalog"));
         // Live tool health is per-request state. Classified Stable (by omission)
         // at priority 502, it rode the cached prefix and let a 30s-TTL probe flip
@@ -614,11 +618,14 @@ mod stability_tests {
         // → 15: InboundContextLayer (1700) and SessionResumeLayer (1760), both
         // Dynamic, were deleted as dead injection surfaces (their LayerInput
         // fields were never threaded in production).
+        // → 16: McpResourceIndexLayer (1704, Dynamic) added — indexes connected
+        // servers' MCP resources/prompts so the model reads them via
+        // mcp_read_resource/mcp_get_prompt instead of cat-ing file:// paths.
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            15,
-            "Exactly 15 dynamic layers expected"
+            16,
+            "Exactly 16 dynamic layers expected"
         );
     }
 

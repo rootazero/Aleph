@@ -12,7 +12,6 @@
 //! - [`ToolRegistration`] - Expose callable tools to agents
 //! - [`HookRegistration`] - Intercept system events
 //! - [`ServiceRegistration`] - Background services
-//! - [`CommandRegistration`] - In-chat slash commands
 //! - [`SkillRegistration`] - Prompt-based skills
 //! - [`AgentRegistration`] - Agent definitions
 //!

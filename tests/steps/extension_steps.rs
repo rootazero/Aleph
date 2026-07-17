@@ -10,12 +10,13 @@ use alephcore::extension::{
         parse_aleph_plugin_content, parse_aleph_plugin_toml_content, parse_manifest_from_dir_sync,
         FilesystemAccess, FilesystemPermission,
     },
-    match_path, ChannelRegistration, CliRegistration, CommandRegistration, DiagnosticLevel,
+    match_path, ChannelRegistration, CliRegistration, DiagnosticLevel,
     DirectCommandResult, ExtensionConfig, ExtensionError, ExtensionManager,
     GatewayMethodRegistration, HookEvent, HookRegistration, HttpHandlerRegistration,
     HttpRouteRegistration, PluginDiagnostic, PluginKind, PluginLoader, PluginOrigin,
     PluginPermission, PluginRecord, PluginRegistry, ProviderRegistration, ServiceInfo,
-    ServiceRegistration, ServiceResult, ServiceState, ToolRegistration,
+    ServiceRegistration, ServiceResult, ServiceState, SkillRegistration, SkillType,
+    ToolRegistration,
 };
 
 // Lazy-initialized extension manager for runtime tests
@@ -357,13 +358,16 @@ async fn given_register_service(_w: &mut AlephWorld) {
 async fn given_inchat_command(w: &mut AlephWorld, name: String, plugin_id: String) {
     let ctx = w.extension.get_or_insert_with(ExtensionContext::default);
     let registry = ensure_registry(ctx);
-    let command = CommandRegistration {
+    // In-chat commands are Command-typed skills in the single skill store.
+    let command = SkillRegistration {
         name,
         description: "Test command".to_string(),
-        handler: "handle_command".to_string(),
+        content: "handle_command".to_string(),
         plugin_id,
+        skill_type: SkillType::Command,
+        ..Default::default()
     };
-    registry.register_command(command);
+    registry.register_skill(command);
 }
 
 #[given("I register the in-chat command")]
@@ -1029,7 +1033,9 @@ async fn then_inchat_command_should_exist(w: &mut AlephWorld, name: String) {
         .expect("Extension context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     assert!(
-        registry.get_command(&name).is_some(),
+        registry
+            .get_skill(&name)
+            .is_some_and(|s| s.skill_type == SkillType::Command),
         "In-chat command '{}' should exist",
         name
     );
@@ -1042,7 +1048,11 @@ async fn then_inchat_command_count(w: &mut AlephWorld, expected: usize) {
         .as_ref()
         .expect("Extension context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
-    let count = registry.list_commands().len();
+    let count = registry
+        .list_skills()
+        .iter()
+        .filter(|s| s.skill_type == SkillType::Command)
+        .count();
     assert_eq!(
         count, expected,
         "Expected {} in-chat commands, got {}",

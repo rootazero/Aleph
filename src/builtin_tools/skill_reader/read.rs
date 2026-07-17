@@ -394,8 +394,12 @@ Examples:
 - User asks to "translate to Chinese" → skill.read(skill_id="translate")
 - User asks to "summarize this" → skill.read(skill_id="summarize")
 
-You can also read additional resources within a skill by specifying file_name:
+To read a skill's bundled resources (REFERENCE.md, CHECKLIST.md, or any entry in
+the returned `available_files`), you MUST call this tool again with file_name —
+do NOT `cat` or `file_read` them by absolute path:
 - skill.read(skill_id="code-review", file_name="CHECKLIST.md")
+Reading a resource by its absolute `location` path skips the preprocessing below
+and yields stale content; use `location` ONLY to execute bundled scripts.
 
 Markdown instructions are preprocessed on read: `${ALEPH_SKILL_DIR}` expands to
 the skill's directory (use it to reference bundled scripts/resources). Skills

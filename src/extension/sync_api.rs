@@ -92,12 +92,6 @@ impl SyncExtensionManager {
             .block_on(async { self.inner.read().await.get_all_skills().await })
     }
 
-    /// Get auto-invocable skills (for LLM prompt injection)
-    pub fn get_auto_invocable_skills(&self) -> Vec<ExtensionSkill> {
-        self.runtime
-            .block_on(async { self.inner.read().await.get_auto_invocable_skills().await })
-    }
-
     /// Get a specific skill by qualified name
     pub fn get_skill(&self, qualified_name: &str) -> Option<ExtensionSkill> {
         self.runtime

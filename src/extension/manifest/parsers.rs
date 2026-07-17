@@ -34,15 +34,6 @@ struct SkillFm {
     category: Option<String>,
 }
 
-/// Frontmatter for command .md files, targeting `CommandRegistration` output
-#[derive(Debug, Default, Deserialize)]
-struct CommandFm {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-}
-
 /// Frontmatter for agent .md files, targeting `AgentRegistration` output
 #[derive(Debug, Default, Deserialize)]
 struct AgentFm {
@@ -259,11 +250,18 @@ pub fn parse_skills_dir(
     )
 }
 
-/// Parse a single skill markdown file into a `CapabilityDeclaration::Skill`.
-fn parse_single_skill(
+/// Parse a single markdown file into a `CapabilityDeclaration::Skill`, tagged
+/// with `skill_type`. `skills/` markdown → [`SkillType::Skill`] (model
+/// auto-invocable); `commands/` markdown → [`SkillType::Command`] (a
+/// user-triggered `/command`, excluded from auto-invocation). Both flavours share
+/// this one store — there is no parallel `CommandRegistration` type.
+///
+/// [`SkillType`]: crate::extension::types::SkillType
+fn parse_skill_registration(
     md_path: &Path,
     default_name: &str,
     plugin_id: &str,
+    skill_type: crate::extension::types::SkillType,
 ) -> Result<CapabilityDeclaration> {
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
@@ -277,11 +275,27 @@ fn parse_single_skill(
         allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
+        skill_type,
         ..Default::default()
     }))
 }
 
-/// Parse all commands from a directory, returning `CapabilityDeclaration::Command` values.
+/// Parse a single skill markdown file (`skills/`) into a `Skill` capability.
+fn parse_single_skill(
+    md_path: &Path,
+    default_name: &str,
+    plugin_id: &str,
+) -> Result<CapabilityDeclaration> {
+    parse_skill_registration(
+        md_path,
+        default_name,
+        plugin_id,
+        crate::extension::types::SkillType::Skill,
+    )
+}
+
+/// Parse all commands from a directory into `CapabilityDeclaration::Skill`
+/// values tagged `SkillType::Command` (user-triggered `/command`s).
 ///
 /// Scans `{base}/{rel_path}/*.md` files and `{base}/{rel_path}/*/SKILL.md` directories.
 pub fn parse_commands_dir(
@@ -301,30 +315,21 @@ pub fn parse_commands_dir(
     )
 }
 
-/// Parse a single command markdown file into a `CapabilityDeclaration::Command`.
+/// Parse a single command markdown file (`commands/`) into a
+/// `CapabilityDeclaration::Skill` tagged `SkillType::Command`. Its markdown body
+/// is the command payload; unlike a skill it is not model-auto-invocable
+/// ([`SkillRegistration::is_auto_invocable`] gates on `skill_type == Skill`).
 fn parse_single_command(
     md_path: &Path,
     default_name: &str,
     plugin_id: &str,
 ) -> Result<CapabilityDeclaration> {
-    let content = std::fs::read_to_string(md_path)
-        .with_context(|| format!("Failed to read {}", md_path.display()))?;
-    let (fm, body): (CommandFm, String) = parse_frontmatter(&content)?;
-
-    let name = fm.name.unwrap_or_else(|| default_name.to_string());
-    let description = fm.description.unwrap_or_default();
-
-    // Commands in the capability model use CommandRegistration
-    // which requires a handler. For markdown-based commands the "handler"
-    // is effectively the content itself, so we use a sentinel.
-    Ok(CapabilityDeclaration::Command(
-        crate::extension::registry::CommandRegistration {
-            name,
-            description,
-            handler: body, // markdown body serves as the handler content
-            plugin_id: plugin_id.to_string(),
-        },
-    ))
+    parse_skill_registration(
+        md_path,
+        default_name,
+        plugin_id,
+        crate::extension::types::SkillType::Command,
+    )
 }
 
 /// Parse all agents from a directory, returning `CapabilityDeclaration::Agent` values.
@@ -844,13 +849,19 @@ mod tests {
         let caps = parse_commands_dir(dir.path(), "commands", "p").unwrap();
         assert_eq!(caps.len(), 1);
 
+        // Commands are modelled as Command-typed skills in one store.
         match &caps[0] {
-            CapabilityDeclaration::Command(c) => {
-                assert_eq!(c.name, "deploy");
-                assert_eq!(c.description, "Deploy the app");
-                assert_eq!(c.handler, "Run deployment.");
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.name, "deploy");
+                assert_eq!(s.description, "Deploy the app");
+                assert_eq!(s.content, "Run deployment.");
+                assert_eq!(
+                    s.skill_type,
+                    crate::extension::types::SkillType::Command
+                );
+                assert!(!s.is_auto_invocable(), "commands are not model-auto-invocable");
             }
-            other => panic!("Expected Command, got {:?}", other),
+            other => panic!("Expected Command-typed Skill, got {:?}", other),
         }
     }
 

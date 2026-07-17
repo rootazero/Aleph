@@ -81,6 +81,11 @@ pub struct PromptConfig {
     /// MCP server instructions for prompt injection.
     /// Collected from connected MCP servers via `McpClient::collect_instructions()`.
     pub mcp_instructions: Option<Vec<crate::thinker::prompt_layer::McpServerInstruction>>,
+    /// Pre-rendered `## Available MCP Resources & Prompts` index (owned-`String`
+    /// pattern, like `runtime_capabilities`). Built in the harness bridge from
+    /// `aggregate_resources()`/`aggregate_prompts()` via
+    /// `crate::mcp::format_mcp_resource_index`, injected by `McpResourceIndexLayer`.
+    pub mcp_resource_index: Option<String>,
     /// Active tool names, used by `SkillInstructionsLayer` to filter
     /// `PromptScope::Tool` skills on the production **cached** path.
     ///
@@ -111,6 +116,7 @@ impl Default for PromptConfig {
             skill_prompt_budget: None,
             available_agents: None,
             mcp_instructions: None,
+            mcp_resource_index: None,
             active_tool_names: Vec::new(),
         }
     }

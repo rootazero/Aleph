@@ -292,8 +292,15 @@ impl PluginRecord {
                 CapabilityDeclaration::Tool(t) => tool_names.push(t.name.clone()),
                 CapabilityDeclaration::Hook(_) => hook_count += 1,
                 CapabilityDeclaration::Service(s) => service_ids.push(s.id.clone()),
-                CapabilityDeclaration::Skill(_) => skill_count += 1,
-                CapabilityDeclaration::Command(_) => command_count += 1,
+                // Skills and `commands/`-derived commands share the Skill
+                // variant, split by `skill_type`.
+                CapabilityDeclaration::Skill(s) => {
+                    if s.skill_type == crate::extension::types::SkillType::Command {
+                        command_count += 1;
+                    } else {
+                        skill_count += 1;
+                    }
+                }
                 CapabilityDeclaration::Agent(_) => agent_count += 1,
                 CapabilityDeclaration::McpServer(_) => mcp_server_count += 1,
             }

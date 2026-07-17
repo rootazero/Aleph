@@ -51,6 +51,7 @@ pub mod jsonrpc;
 pub mod manager;
 mod preflight;
 pub mod presets;
+mod prompt_index;
 mod prompts;
 pub mod protocol;
 mod redact;
@@ -74,6 +75,7 @@ pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
 pub use preflight::preflight_remote_url;
+pub use prompt_index::format_mcp_resource_index;
 pub use prompts::{
     McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult,
 };

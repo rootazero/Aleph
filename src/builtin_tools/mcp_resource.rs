@@ -56,7 +56,7 @@ impl AlephToolDyn for McpReadResourceTool {
         let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_read_resource",
-            "Read a resource from a connected MCP server. Use mcp.listResources to discover available resources first.",
+            "Read a resource from a connected MCP server. Pass the exact `uri` listed in the system prompt's 'Available MCP Resources & Prompts' section — it is already server-prefixed (e.g. `server:file:///path`). Do not cat file:// paths.",
             parameters,
             ToolCategory::Mcp,
         )

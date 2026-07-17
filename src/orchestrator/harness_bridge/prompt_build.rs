@@ -378,17 +378,31 @@ impl AgentHarnessRunner {
         let extra_files_phase_ms = extra_files_phase_start.elapsed().as_millis() as u64;
 
         let mcp_phase_start = Instant::now();
-        // Aggregate connected MCP servers' advertised `instructions`. One actor
-        // round-trip per prompt build (negligible next to the file/skill IO
-        // above) keeps the data always-fresh without a shared mutable snapshot.
-        // `None` when no manager is wired, the call fails, or no server supplied
-        // instructions — `McpInstructionsLayer` then renders nothing.
-        let mcp_instructions = match &self.mcp_handle {
+        // Aggregate what connected MCP servers advertise for the prompt: free-text
+        // `instructions` (→ `McpInstructionsLayer`) plus the resource/prompt catalog
+        // (→ `McpResourceIndexLayer`, so the model reads them via
+        // `mcp_read_resource`/`mcp_get_prompt` instead of `cat`-ing `file://`
+        // paths). All three are cheap actor round-trips fanned out concurrently, so
+        // prompt-build latency stays flat regardless of server count. The `aggregate_*`
+        // ids arrive already server-prefixed (`server:uri` / `server:name`) — the exact
+        // form the reader tools parse. `None` when no manager is wired, the calls fail,
+        // or nothing is advertised — the layers then render nothing.
+        let (mcp_instructions, mcp_resource_index) = match &self.mcp_handle {
             Some(handle) => {
-                let items = handle.aggregate_instructions().await.unwrap_or_default();
-                (!items.is_empty()).then_some(items)
+                let (instructions, resources, prompts) = tokio::join!(
+                    handle.aggregate_instructions(),
+                    handle.aggregate_resources(),
+                    handle.aggregate_prompts(),
+                );
+                let instructions = instructions.unwrap_or_default();
+                let instructions = (!instructions.is_empty()).then_some(instructions);
+                let index = crate::mcp::format_mcp_resource_index(
+                    &resources.unwrap_or_default(),
+                    &prompts.unwrap_or_default(),
+                );
+                (instructions, index)
             }
-            None => None,
+            None => (None, None),
         };
         let mcp_phase_ms = mcp_phase_start.elapsed().as_millis() as u64;
 
@@ -413,7 +427,8 @@ impl AgentHarnessRunner {
 
         // Skip prompt assembly entirely when there is nothing to inject:
         // no memory, no AgentDef, no eligible skills, no identity files, no
-        // extra files, no MCP server instructions, and no runtime capabilities.
+        // extra files, no MCP server instructions, no MCP resource index, and no
+        // runtime capabilities.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
@@ -421,6 +436,7 @@ impl AgentHarnessRunner {
             && !has_identity
             && extra_files.is_none()
             && mcp_instructions.is_none()
+            && mcp_resource_index.is_none()
             && runtime_capabilities.is_none()
         {
             return None;
@@ -483,6 +499,7 @@ impl AgentHarnessRunner {
             eligible_skills,
             skill_prompt_budget,
             mcp_instructions,
+            mcp_resource_index,
             runtime_capabilities,
             token_budget,
             active_tool_names,

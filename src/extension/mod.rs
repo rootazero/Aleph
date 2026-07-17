@@ -464,6 +464,18 @@ impl ExtensionManager {
         for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
             skill_dirs.push(d.path);
         }
+        // Plugin-bundled skills (`<plugins_root>/<plugin>/skills/`). Without this a
+        // plugin that ships skills registers into the PluginRegistry but never
+        // reaches the LLM's `<available_skills>` index — the model can't discover
+        // it and falls back to `cat`-ing the plugin directory. Uses the SAME
+        // enumeration `skill_read` consumes (`utils::paths::plugin_skill_dirs`), so
+        // the index and the reader stay consistent: what the model can see, it can
+        // also read.
+        for pdir in crate::utils::paths::plugin_skill_dirs(Some(self.discovery.working_dir())) {
+            if !skill_dirs.contains(&pdir) {
+                skill_dirs.push(pdir);
+            }
+        }
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
         }
