@@ -20,16 +20,6 @@ impl ExtensionManager {
         reg.list_skills().into_iter().cloned().collect()
     }
 
-    /// Get auto-invocable skills (for LLM prompt injection)
-    pub async fn get_auto_invocable_skills(&self) -> Vec<ExtensionSkill> {
-        let reg = self.plugin_registry.read().await;
-        reg.list_skills()
-            .into_iter()
-            .filter(|s| s.is_auto_invocable())
-            .cloned()
-            .collect()
-    }
-
     /// Get all commands
     pub async fn get_all_commands(&self) -> Vec<ExtensionCommand> {
         // Commands are now stored as skills with SkillType::Command in the registry
