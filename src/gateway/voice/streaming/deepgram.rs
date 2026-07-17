@@ -1,7 +1,10 @@
 //! Deepgram `/v1/listen` streaming protocol adapter.
 //! Covers Deepgram cloud AND self-hosted WhisperLiveKit (`/v1/listen` compat).
 
-use super::{StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber, TranscriptDelta};
+use super::{
+    push_joined, StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber,
+    TranscriptDelta,
+};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -20,8 +23,8 @@ impl DeepgramDecoder {
         match msg.get("type").and_then(|t| t.as_str()) {
             Some("UtteranceEnd") => Some(TranscriptDelta {
                 committed: self.committed.clone(),
-                interim: String::new(),
                 utterance_end: true,
+                ..TranscriptDelta::default()
             }),
             Some("Results") | None => {
                 let is_final = msg
@@ -37,22 +40,20 @@ impl DeepgramDecoder {
                     return None;
                 }
                 if is_final {
-                    if self.committed.is_empty() {
-                        self.committed = text.to_string();
-                    } else {
-                        self.committed.push(' ');
-                        self.committed.push_str(text);
-                    }
+                    // ASCII-boundary join: EN finals still join as words, CJK
+                    // finals no longer get the agent-visible stray spaces.
+                    push_joined(&mut self.committed, text);
                     Some(TranscriptDelta {
                         committed: self.committed.clone(),
-                        interim: String::new(),
-                        utterance_end: false,
+                        ..TranscriptDelta::default()
                     })
                 } else {
+                    // Hold back replacement glyphs from an interim that split a
+                    // multibyte char mid-decode (committed is final by contract).
                     Some(TranscriptDelta {
+                        interim: text.chars().filter(|c| *c != '\u{FFFD}').collect(),
                         committed: self.committed.clone(),
-                        interim: text.to_string(),
-                        utterance_end: false,
+                        ..TranscriptDelta::default()
                     })
                 }
             }
@@ -92,6 +93,10 @@ impl StreamingTranscriber for DeepgramStream {
         );
         if !lang.is_empty() {
             url.push_str(&format!("&language={lang}"));
+        }
+        let model = self.target.model.trim();
+        if !model.is_empty() {
+            url.push_str(&format!("&model={model}"));
         }
 
         let mut req = url.into_client_request()?;
@@ -161,9 +166,25 @@ mod tests {
         let d = dec.push(&results(true, "你好")).unwrap();
         assert_eq!(d.committed, "你好");
         assert_eq!(d.interim, "");
-        // second final appends with a space-joined growth
+        // CJK finals concatenate without the space-join that polluted the
+        // agent-visible transcript ("你好 世界" read as odd spacing).
         let d = dec.push(&results(true, "世界")).unwrap();
-        assert_eq!(d.committed, "你好 世界");
+        assert_eq!(d.committed, "你好世界");
+    }
+
+    #[test]
+    fn english_finals_still_join_with_spaces() {
+        let mut dec = DeepgramDecoder::default();
+        let _ = dec.push(&results(true, "Hello there."));
+        let d = dec.push(&results(true, "How are you")).unwrap();
+        assert_eq!(d.committed, "Hello there. How are you");
+    }
+
+    #[test]
+    fn interim_replacement_glyphs_are_held_back() {
+        let mut dec = DeepgramDecoder::default();
+        let d = dec.push(&results(false, "你\u{FFFD}好")).unwrap();
+        assert_eq!(d.interim, "你好");
     }
 
     #[test]

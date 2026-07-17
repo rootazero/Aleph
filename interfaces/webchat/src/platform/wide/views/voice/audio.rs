@@ -307,9 +307,16 @@ impl MicSession {
     /// Take the captured segment and encode it as a base64 WAV for STT. Returns
     /// `None` if no segment was armed or it was empty.
     pub(crate) fn take_segment_wav(&self) -> Option<(String, String)> {
-        let seg = self.cap.borrow_mut().segment.take()?;
+        let mut seg = self.cap.borrow_mut().segment.take()?;
         if seg.is_empty() {
             return None;
+        }
+        // whisper.cpp asserts (hard-crashes) on buffers shorter than 1 s — the
+        // exact `[voice.local]` BYO scenario for a snappy "对/好" — so pad short
+        // segments with trailing silence to a safe 1.1 s.
+        let min_len = (self.sample_rate as f32 * 1.1) as usize;
+        if seg.len() < min_len {
+            seg.resize(min_len, 0.0);
         }
         let wav_bytes = wav::encode_wav_mono(&seg, self.sample_rate);
         Some((wav::base64_encode(&wav_bytes), "audio/wav".to_string()))
@@ -321,12 +328,17 @@ impl MicSession {
         self.cap.borrow_mut().on_frame = Some(Rc::new(cb));
     }
 
-    /// Begin emitting streaming frames from the live tap. Clears any stale
-    /// accumulator so the first frame starts at a chunk boundary.
+    /// Begin emitting streaming frames from the live tap, seeded with the
+    /// pre-roll ring. The seed matters most after a barge-in: the user is
+    /// already mid-word when the fresh backend stream opens, and without the
+    /// ring the utterance onset is clipped — the same "你好 → 好" bug the
+    /// batch path solved by seeding segments. In the quiet re-entry case the
+    /// ring holds ~320 ms of silence, which the backend VAD ignores.
     pub(crate) fn start_streaming(&self) {
         let mut c = self.cap.borrow_mut();
         c.streaming = true;
-        c.frame_accum.clear();
+        let pre: Vec<f32> = c.preroll.iter().copied().collect();
+        c.frame_accum = pre;
     }
 
     /// Stop emitting streaming frames and drop the partial accumulator.
@@ -540,7 +552,8 @@ fn open_script_tap(
 /// Decode a base64 payload (atob) into bytes. `atob` yields a Latin-1 string
 /// whose code points are 0..=255 — `c as u8` is exact, unlike iterating the
 /// Rust `String`'s UTF-8 bytes (which would split code points ≥ 0x80).
-fn base64_to_bytes(b64: &str) -> Option<Vec<u8>> {
+/// `pub(crate)`: shared with the dictation playback path (`voice_playback`).
+pub(crate) fn base64_to_bytes(b64: &str) -> Option<Vec<u8>> {
     let bin = web_sys::window()?.atob(b64).ok()?;
     Some(bin.chars().map(|c| c as u8).collect())
 }
@@ -548,7 +561,8 @@ fn base64_to_bytes(b64: &str) -> Option<Vec<u8>> {
 /// Wrap raw audio bytes in a `blob:` object URL. WKWebView is unreliable playing
 /// a large `data:` URL through `<audio>` (the no-sound bug); a blob URL loads
 /// reliably. Caller revokes the URL when playback ends.
-fn bytes_to_object_url(bytes: &[u8], mime: &str) -> Option<String> {
+/// `pub(crate)`: shared with the dictation playback path (`voice_playback`).
+pub(crate) fn bytes_to_object_url(bytes: &[u8], mime: &str) -> Option<String> {
     let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
     arr.copy_from(bytes);
     let parts = js_sys::Array::new();
@@ -799,14 +813,14 @@ impl TtsPlayer {
                 spawn_local(async move {
                     if !this.play_buffer(dash, &bytes, my_epoch).await {
                         // Decode/setup failed — fall back to an <audio> element.
-                        this.play_element(dash, bytes_to_object_url(&bytes, &mime), true);
+                        this.play_element(dash, bytes_to_object_url(&bytes, &mime), true, my_epoch);
                     }
                 });
             }
             Audio::Bytes(bytes, mime) => {
-                self.play_element(dash, bytes_to_object_url(&bytes, &mime), true);
+                self.play_element(dash, bytes_to_object_url(&bytes, &mime), true, my_epoch);
             }
-            Audio::Url(u) => self.play_element(dash, Some(u), false),
+            Audio::Url(u) => self.play_element(dash, Some(u), false, my_epoch),
         }
     }
 
@@ -888,8 +902,16 @@ impl TtsPlayer {
 
     /// Degraded fallback: play through a detached `<audio>` element. `src` is the
     /// blob URL (when `revoke`) or a remote URL; `None` means URL creation failed
-    /// and we skip to the next clip.
-    fn play_element(self: &Rc<Self>, dash: DashboardState, src: Option<String>, revoke: bool) {
+    /// and we skip to the next clip. `my_epoch` guards every continuation the
+    /// same way the buffer path does — a barge-in/reset mid-flight must not let
+    /// this clip mutate the run that replaced it.
+    fn play_element(
+        self: &Rc<Self>,
+        dash: DashboardState,
+        src: Option<String>,
+        revoke: bool,
+        my_epoch: u64,
+    ) {
         let Some(src) = src else {
             *self.playing.borrow_mut() = false;
             self.pump(dash);
@@ -907,24 +929,51 @@ impl TtsPlayer {
         let this = Rc::clone(self);
         let ended_url = url.clone();
         let on_ended = Closure::once_into_js(move || {
+            // The URL belongs to this clip — revoke unconditionally.
             if let Some(u) = ended_url {
                 let _ = web_sys::Url::revoke_object_url(&u);
+            }
+            // But do not touch the pump state of a run that replaced us.
+            if *this.epoch.borrow() != my_epoch {
+                return;
             }
             *this.playing.borrow_mut() = false;
             *this.current.borrow_mut() = None;
             this.pump(dash);
         });
         audio_el.set_onended(Some(on_ended.unchecked_ref()));
-        // Surface a play() rejection (autoplay policy, decode failure) instead of
-        // swallowing it — a silent reply with no trace is the no-sound bug.
-        if let Ok(promise) = audio_el.play() {
-            spawn_local(async move {
-                if let Err(e) = JsFuture::from(promise).await {
-                    web_sys::console::warn_1(
-                        &format!("voice element playback rejected: {e:?}").into(),
-                    );
-                }
-            });
+        // A rejected play() (autoplay policy, decode failure) means `ended`
+        // never fires — without clearing `playing` here the pump wedges and
+        // every later sentence of the reply is silently dropped.
+        let this = Rc::clone(self);
+        match audio_el.play() {
+            Ok(promise) => {
+                spawn_local(async move {
+                    if let Err(e) = JsFuture::from(promise).await {
+                        web_sys::console::warn_1(
+                            &format!("voice element playback rejected: {e:?}").into(),
+                        );
+                        if *this.epoch.borrow() != my_epoch {
+                            return;
+                        }
+                        // Reclaim the clip's blob URL — `ended` will never fire.
+                        if let Some(Playing::Element { url: Some(u), .. }) =
+                            this.current.borrow_mut().take()
+                        {
+                            let _ = web_sys::Url::revoke_object_url(&u);
+                        }
+                        *this.playing.borrow_mut() = false;
+                        this.pump(dash);
+                    }
+                });
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&format!("voice element play() failed: {e:?}").into());
+                *self.playing.borrow_mut() = false;
+                *self.current.borrow_mut() = None;
+                self.pump(dash);
+                return;
+            }
         }
         *self.current.borrow_mut() = Some(Playing::Element { el: audio_el, url });
     }

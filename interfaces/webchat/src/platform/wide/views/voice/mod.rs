@@ -22,6 +22,7 @@ use leptos::task::spawn_local;
 
 use crate::api::chat::ChatApi;
 use crate::context::{DashboardState, GatewayEvent};
+use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 use audio::{MicError, MicSession, TtsPlayer};
 use caption_state::{apply_delta, apply_formatted, lock, CaptionState, Delta};
@@ -30,6 +31,22 @@ use machine::{on_event, Action, VoiceEvent, VoicePhase};
 use orb::VoiceOrb;
 use sentence::SentenceSplitter;
 use vad::{barge_step, vad_step, BargeConfig, BargeState, VadConfig, VadEvent, VadState};
+
+/// Consecutive streaming failures (dead backend, empty utterances) tolerated
+/// before the session falls back to the batch `voice.transcribe` path.
+const STREAM_STRIKE_LIMIT: u32 = 2;
+
+/// Fire-and-forget server-side cancel of a superseded run. Reuses the existing
+/// `chat.abort` lifecycle RPC (A4) — a barge-in or a follow-up utterance
+/// already silences the old reply locally; this stops the abandoned run from
+/// burning tokens on an answer nobody will hear.
+fn abort_run(dash: DashboardState, run_id: String) {
+    spawn_local(async move {
+        let _ = dash
+            .rpc_call("chat.abort", serde_json::json!({ "run_id": run_id }))
+            .await;
+    });
+}
 
 /// App-level switch for the immersive overlay. Provided in `app.rs`; the
 /// composer mini-orb (Task 8) flips `open` to enter/leave the session.
@@ -78,6 +95,7 @@ pub(crate) fn ImmersiveVoiceView() -> impl IntoView {
 fn VoiceSession() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let sessions = expect_context::<SessionMap>();
     let voice_mode = expect_context::<VoiceMode>();
     // Native shell vs. browser decides how a mic denial is remediated (OS TCC
     // deep-link vs. browser per-site permission). Resolved once at mount.
@@ -112,6 +130,15 @@ fn VoiceSession() -> impl IntoView {
     // Handle for the one `voice.transcribe.delta` subscription, released in
     // `on_cleanup` so closing/reopening the overlay does not leak handlers.
     let voice_sub_id: StoredValue<Option<usize>, LocalStorage> = StoredValue::new_local(None);
+    // The run currently executing for this voice session (set at send, cleared
+    // at finalize). A barge-in or a follow-up utterance takes it and fires
+    // `chat.abort` so the superseded run stops server-side too.
+    let active_run: StoredValue<Option<String>, LocalStorage> = StoredValue::new_local(None);
+    // Streaming health strikes: dead-backend events and empty utterance-ends.
+    // At STREAM_STRIKE_LIMIT the session flips `streaming_off` and every later
+    // utterance rides the (independently working) batch WAV path.
+    let stream_strikes: StoredValue<u32> = StoredValue::new(0);
+    let streaming_off: StoredValue<bool> = StoredValue::new(false);
 
     // The mic and the interval handle outlive their writer (the async mic-open
     // task) and must be reachable from `on_cleanup`, whose closure bound is
@@ -207,6 +234,42 @@ fn VoiceSession() -> impl IntoView {
             if !matches {
                 return;
             }
+            // Terminal / fatal markers from the relay: `{closed: true}` when the
+            // pump exits, or a delta carrying `error` (backend WAIT / ERROR /
+            // DISCONNECT). A *matching* slot means the death was NOT
+            // client-initiated (normal stops clear the slot before the RPC
+            // resolves) — clear it and strike. The armed WAV segment keeps the
+            // current utterance alive on the batch path.
+            let closed = event
+                .data
+                .get("closed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let stream_err = event
+                .data
+                .pointer("/delta/error")
+                .and_then(|e| e.as_str())
+                .map(str::to_string);
+            if closed || stream_err.is_some() {
+                if let Some(e) = stream_err {
+                    web_sys::console::warn_1(&format!("voice stream error: {e}").into());
+                }
+                stream_id.set_value(None);
+                let n = stream_strikes
+                    .try_update_value(|n| {
+                        *n += 1;
+                        *n
+                    })
+                    .unwrap_or(0);
+                if n >= STREAM_STRIKE_LIMIT {
+                    streaming_off.set_value(true);
+                    web_sys::console::warn_1(
+                        &"voice streaming: repeated backend failures — falling back to batch STT"
+                            .into(),
+                    );
+                }
+                return;
+            }
             let Some(delta) = event.data.get("delta") else {
                 return;
             };
@@ -272,6 +335,7 @@ fn VoiceSession() -> impl IntoView {
                 stream_id,
                 stream_gen,
                 caption_state,
+                streaming_off,
             );
 
             let handle = set_interval_with_handle(
@@ -309,6 +373,12 @@ fn VoiceSession() -> impl IntoView {
                             // intentionally never finalized), then drain queue + audio.
                             *speak_gen.borrow_mut() += 1;
                             speak_run.set(None);
+                            // Cancel the superseded run server-side too — the user
+                            // cut it off; letting it keep generating only burns
+                            // tokens on an answer nobody will hear.
+                            if let Some(old) = active_run.try_update_value(Option::take).flatten() {
+                                abort_run(dash, old);
+                            }
                             dispatch(VoiceEvent::BargeIn);
                             session.start_segment();
                         }
@@ -331,22 +401,57 @@ fn VoiceSession() -> impl IntoView {
                             match stream_id.with_value(Clone::clone) {
                                 // Streaming mode: the live transcript is already
                                 // on screen via deltas. Lock it (CSS wave fires),
-                                // send the RAW committed text to the agent with
-                                // zero extra latency (no `voice.transcribe`
-                                // round-trip), and close the backend stream.
+                                // send the raw text to the agent with zero extra
+                                // latency (no `voice.transcribe` round-trip), and
+                                // close the backend stream.
                                 Some(id) => {
-                                    let raw = caption_state.get_untracked().committed;
+                                    // committed + still-floating interim: short
+                                    // utterances often live entirely in the
+                                    // interim when the VAD fires (and
+                                    // faster-whisper never flushes a final after
+                                    // END_OF_AUDIO). Then the whole-utterance
+                                    // hallucination gate — the SAME shared filter
+                                    // the batch STT path applies server-side.
+                                    let st = caption_state.get_untracked();
+                                    let raw = aleph_protocol::voice_text::merge_utterance(
+                                        &st.committed,
+                                        &st.interim,
+                                    );
+                                    let raw = aleph_protocol::voice_text::filter_transcript(&raw);
                                     if raw.trim().is_empty() {
-                                        // Empty utterance-end (a noise blip, or
-                                        // deltas still lagging): keep the SAME
-                                        // stream running and stay listening. Do
-                                        // NOT lock/close here — that would kill
-                                        // the decoder while the phase stays in
-                                        // Listening (no edge for the Effect to
-                                        // re-open it), leaving the next utterance
-                                        // with a dead stream.
+                                        // Empty utterance-end: noise blip, deltas
+                                        // lagging, or a silently dead decoder.
+                                        // Strike, and swap in a FRESH stream —
+                                        // keeping the same one risked feeding a
+                                        // dead decoder forever (the phase stays
+                                        // Listening, so no Effect edge would ever
+                                        // replace it). At STREAM_STRIKE_LIMIT the
+                                        // session falls back to batch.
                                         dispatch(VoiceEvent::TranscribeFailed);
+                                        let n = stream_strikes
+                                            .try_update_value(|n| {
+                                                *n += 1;
+                                                *n
+                                            })
+                                            .unwrap_or(0);
+                                        if n >= STREAM_STRIKE_LIMIT {
+                                            streaming_off.set_value(true);
+                                            web_sys::console::warn_1(
+                                                &"voice streaming: repeated empty utterances — falling back to batch STT".into(),
+                                            );
+                                        }
+                                        session.stop_streaming();
+                                        start_listening_stream(
+                                            Rc::clone(&session),
+                                            dash,
+                                            stream_id,
+                                            stream_gen,
+                                            caption_state,
+                                            streaming_off,
+                                        );
                                     } else {
+                                        // Healthy round — reset the strike count.
+                                        stream_strikes.set_value(0);
                                         // Real utterance:
                                         // 1) lock caption → committed gray→white wave
                                         caption_state.update(lock);
@@ -363,8 +468,8 @@ fn VoiceSession() -> impl IntoView {
                                         let splitter = Rc::clone(&splitter);
                                         let speak_gen = Rc::clone(&speak_gen);
                                         spawn_local(send_utterance(
-                                            raw, dash, chat, dispatch, player, splitter, speak_run,
-                                            speak_gen,
+                                            raw, dash, chat, sessions, dispatch, player, splitter,
+                                            speak_run, speak_gen, active_run,
                                         ));
                                         // 3) close the stream (its delta pump exits)
                                         spawn_local(async move {
@@ -417,19 +522,21 @@ fn VoiceSession() -> impl IntoView {
                                         });
                                     }
                                 }
-                                // Batch fallback (streaming disabled in core):
-                                // unchanged WAV transcribe → send pipeline.
+                                // Batch fallback (streaming disabled in core or
+                                // struck out): unchanged WAV transcribe → send.
                                 None => {
                                     handle_utterance(
                                         Rc::clone(&session),
                                         dash,
                                         chat,
+                                        sessions,
                                         dispatch,
                                         caption,
                                         Rc::clone(&player),
                                         Rc::clone(&splitter),
                                         speak_run,
                                         Rc::clone(&speak_gen),
+                                        active_run,
                                         Rc::clone(&consecutive_errors),
                                     );
                                 }
@@ -462,7 +569,14 @@ fn VoiceSession() -> impl IntoView {
         let entering = prev != Some(VoicePhase::Listening) && cur == VoicePhase::Listening;
         if entering {
             if let Some(session) = mic.with_value(Clone::clone) {
-                start_listening_stream(session, dash, stream_id, stream_gen, caption_state);
+                start_listening_stream(
+                    session,
+                    dash,
+                    stream_id,
+                    stream_gen,
+                    caption_state,
+                    streaming_off,
+                );
             }
         }
         cur
@@ -493,17 +607,33 @@ fn VoiceSession() -> impl IntoView {
                 msgs.iter()
                     .rev()
                     .find(|m| m.id == target)
-                    .map(|m| (m.content.clone(), m.is_streaming))
+                    .map(|m| (m.content.clone(), m.is_streaming, m.error.is_some()))
             });
-            let Some((content, streaming)) = found else {
+            let Some((content, streaming, has_error)) = found else {
                 return;
             };
+            // Terminal-but-empty bubble: the run errored (`fail_run` clears
+            // `is_streaming` and stamps `error`) or completed with nothing to
+            // say. `drive_step` deliberately never finalizes empty content, so
+            // without this arm the phase deadlocked at 正在思考 forever.
+            if !streaming && content.is_empty() {
+                active_run.set_value(None);
+                speak_run.update_untracked(|r| *r = None);
+                dispatch(if has_error {
+                    VoiceEvent::RunFailed
+                } else {
+                    VoiceEvent::PlaybackDrained
+                });
+                return;
+            }
             let (sentences, finalized) =
                 drive_step(&mut splitter.borrow_mut(), &content, streaming);
             for s in sentences {
                 player.enqueue(dash, s);
             }
             if finalized {
+                // The run reached its natural end — nothing left to abort.
+                active_run.set_value(None);
                 player.finalize(dash);
                 // Clear without notifying: we are INSIDE the Effect that reads
                 // `speak_run`, so a tracked write would schedule one redundant
@@ -637,7 +767,14 @@ fn start_listening_stream(
     stream_id: StoredValue<Option<String>, LocalStorage>,
     stream_gen: StoredValue<u64, LocalStorage>,
     caption_state: RwSignal<CaptionState>,
+    streaming_off: StoredValue<bool>,
 ) {
+    // Struck out (repeated backend failures / empty utterances): the session
+    // has fallen back to batch — leave the slot None so `handle_utterance`
+    // owns every later turn.
+    if streaming_off.get_value() {
+        return;
+    }
     // Defensive (guard A): a stale id should never survive (UtteranceEnd clears
     // it), but if one does, stop that backend stream and clear the slot before
     // opening a new one so we never leak a decoder or feed two streams at once.
@@ -716,12 +853,14 @@ fn handle_utterance(
     session: Rc<MicSession>,
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     dispatch: impl Fn(VoiceEvent) + Clone + 'static,
     caption: RwSignal<Caption>,
     player: Rc<TtsPlayer>,
     splitter: Rc<RefCell<SentenceSplitter>>,
     speak_run: RwSignal<Option<String>>,
     speak_gen: Rc<RefCell<u64>>,
+    active_run: StoredValue<Option<String>, LocalStorage>,
     consecutive_errors: Rc<RefCell<u32>>,
 ) {
     spawn_local(async move {
@@ -759,7 +898,8 @@ fn handle_utterance(
         *consecutive_errors.borrow_mut() = 0;
         caption.set(Caption::User(text.clone()));
         send_utterance(
-            text, dash, chat, dispatch, player, splitter, speak_run, speak_gen,
+            text, dash, chat, sessions, dispatch, player, splitter, speak_run, speak_gen,
+            active_run,
         )
         .await;
     });
@@ -775,13 +915,22 @@ async fn send_utterance(
     text: String,
     dash: DashboardState,
     chat: ChatState,
+    sessions: SessionMap,
     dispatch: impl Fn(VoiceEvent) + Clone + 'static,
     player: Rc<TtsPlayer>,
     splitter: Rc<RefCell<SentenceSplitter>>,
     speak_run: RwSignal<Option<String>>,
     speak_gen: Rc<RefCell<u64>>,
+    active_run: StoredValue<Option<String>, LocalStorage>,
 ) {
     dispatch(VoiceEvent::UtteranceSent);
+
+    // A new utterance supersedes any run still executing (the user spoke again
+    // while the previous reply was thinking/streaming) — cancel it server-side
+    // so it stops burning tokens, mirroring the barge-in path.
+    if let Some(old) = active_run.try_update_value(Option::take).flatten() {
+        abort_run(dash, old);
+    }
 
     // Claim this turn's generation. A later utterance or a barge-in bumps the
     // gen; the guarded assignment below then refuses to arm a run that a newer
@@ -796,7 +945,18 @@ async fn send_utterance(
     player.reset();
     *splitter.borrow_mut() = SentenceSplitter::default();
     chat.push_user_message(&text);
+    // Mirror the composer send's full context — agent binding, project root,
+    // model pick, exec tier — so a voice turn behaves exactly like the same
+    // words typed (previously all None: voice turns silently ignored the
+    // session's agent/model/tier selections).
     let sk = chat.session_key.get_untracked();
+    let aid = chat.agent_id.get_untracked();
+    let pr = chat.active_project_root.get_untracked();
+    let mo = chat.selected_model.get_untracked();
+    let tier = chat.session_exec_tier.get_untracked();
+    // Bind to the conversation active at send time (I1), same as the typed
+    // path, so run events route to this conversation's bubble.
+    let send_conv = sessions.active_conv();
     // voice_input=true: core arms VoiceModeLayer (spoken-reply prompt style)
     // and the `[voice]` low-TTFT model pin for this session turn.
     match ChatApi::send(
@@ -804,10 +964,10 @@ async fn send_utterance(
         &text,
         sk.as_deref(),
         vec![],
-        None,
-        None,
-        None,
-        None,
+        aid.as_deref(),
+        pr.as_deref(),
+        mo.as_ref(),
+        tier.as_deref(),
         true,
     )
     .await
@@ -816,6 +976,9 @@ async fn send_utterance(
             // Only arm the pipeline if no newer utterance / barge-in superseded
             // us while send was in flight.
             if *speak_gen.borrow() == my_gen {
+                if let Some(conv) = send_conv {
+                    sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                }
                 chat.session_key.set(Some(resp.session_key.clone()));
                 // Do NOT open the assistant bubble here. The `run_accepted`
                 // stream event already creates exactly one `assistant-{run}`
@@ -827,7 +990,12 @@ async fn send_utterance(
                 // chat.mark_speak_run — the immersive session owns TTS itself;
                 // marking the run would double-speak (the composer voice-loop
                 // reader would also synthesize it).
+                active_run.set_value(Some(resp.run_id.clone()));
                 speak_run.set(Some(resp.run_id));
+            } else {
+                // Superseded mid-send: the accepted run will never be armed —
+                // cancel it so it doesn't run headless.
+                abort_run(dash, resp.run_id);
             }
         }
         Err(_) => {

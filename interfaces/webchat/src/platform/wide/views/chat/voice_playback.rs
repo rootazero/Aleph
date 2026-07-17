@@ -7,6 +7,7 @@
 //! the endpoint (R1/R6); STT/LLM/TTS stay in the core.
 
 use crate::context::DashboardState;
+use crate::views::voice::audio::{base64_to_bytes, bytes_to_object_url};
 use leptos::task::spawn_local;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -30,30 +31,55 @@ pub fn speak(dash: &DashboardState, text: String) {
             .get("mime_type")
             .and_then(|m| m.as_str())
             .unwrap_or("audio/mpeg");
-        // Prefer inline bytes as a data URL; fall back to a remote URL.
-        let src = if let Some(b64) = val.get("audio_base64").and_then(|b| b.as_str()) {
-            format!("data:{mime};base64,{b64}")
-        } else if let Some(url) = val.get("audio_url").and_then(|u| u.as_str()) {
-            url.to_string()
-        } else {
+        // Inline bytes play via a blob object URL — WKWebView is unreliable
+        // with a large `data:` URL through `<audio>` (the no-sound bug the
+        // immersive player already works around); remote URLs pass through.
+        if let Some(bytes) = val
+            .get("audio_base64")
+            .and_then(|b| b.as_str())
+            .and_then(base64_to_bytes)
+        {
+            if let Some(url) = bytes_to_object_url(&bytes, mime) {
+                play(&url, true);
+            }
             return;
-        };
-        play(&src);
+        }
+        if let Some(url) = val.get("audio_url").and_then(|u| u.as_str()) {
+            play(url, false);
+        }
     });
 }
 
 /// Create a detached `HTMLAudioElement` and start playback. A one-shot
-/// `onended` closure keeps the element alive for the duration of playback, then
-/// releases it so it can be garbage-collected (the element is never attached to
-/// the DOM).
-fn play(src: &str) {
+/// `onended` closure keeps the element alive for the duration of playback,
+/// then releases it (and revokes the blob URL when `revoke`) so both can be
+/// garbage-collected. A rejected `play()` is logged and the URL reclaimed —
+/// a silent reply with no trace is the no-sound bug.
+fn play(src: &str, revoke: bool) {
     let Ok(audio) = web_sys::HtmlAudioElement::new_with_src(src) else {
+        if revoke {
+            let _ = web_sys::Url::revoke_object_url(src);
+        }
         return;
     };
     let keep = audio.clone();
-    let on_ended = Closure::once_into_js(move || drop(keep));
+    let ended_url = revoke.then(|| src.to_string());
+    let on_ended = Closure::once_into_js(move || {
+        if let Some(u) = ended_url {
+            let _ = web_sys::Url::revoke_object_url(&u);
+        }
+        drop(keep);
+    });
     audio.set_onended(Some(on_ended.unchecked_ref()));
-    // play() returns a Promise; a rejection (e.g. autoplay policy) just means no
-    // sound — acceptable for a user-initiated voice turn.
-    let _ = audio.play();
+    let rejected_url = revoke.then(|| src.to_string());
+    if let Ok(promise) = audio.play() {
+        spawn_local(async move {
+            if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                web_sys::console::warn_1(&format!("voice playback rejected: {e:?}").into());
+                if let Some(u) = rejected_url {
+                    let _ = web_sys::Url::revoke_object_url(&u);
+                }
+            }
+        });
+    }
 }

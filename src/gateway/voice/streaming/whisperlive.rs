@@ -1,24 +1,88 @@
 //! collabora WhisperLive native protocol adapter (`segments[].completed`).
 
-use super::{StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber, TranscriptDelta};
+use super::{
+    push_joined, StreamConfig, StreamHandles, StreamingTarget, StreamingTranscriber,
+    TranscriptDelta,
+};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+/// Default model requested in the handshake when `[voice.streaming] model` is
+/// unset. WhisperLive loads a model per client request (unless the server is
+/// pinned with `--single_model`), so this must stay a modest default.
+const DEFAULT_MODEL: &str = "small";
+
 #[derive(Default)]
 pub struct WhisperLiveDecoder {
-    /// All completed segment texts seen so far, in order. WhisperLive resends a
-    /// trailing window of completed segments, so we rebuild from the union by
-    /// appending only segments we have not locked yet.
-    committed_segments: Vec<String>,
+    /// Accumulated locked text (ASCII-boundary joined).
+    committed: String,
+    /// `start` timestamp of the last locked segment. WhisperLive resends a
+    /// trailing *window* of completed segments (`send_last_n_segments`), so
+    /// window position is NOT a stable identity — once more segments complete
+    /// than the window holds, positional matching silently drops every new
+    /// segment. Segment `start` times are strictly increasing, so "newer than
+    /// the last locked start" is the correct dedup key.
+    last_locked_start: Option<f64>,
+    /// Fallback identity for the defensive case of a segment without a
+    /// parseable `start`: dedup against the last locked text.
+    last_locked_text: String,
 }
 
 impl WhisperLiveDecoder {
+    /// Lock `text` into `committed` if it is a segment we have not seen.
+    fn lock_segment(&mut self, start: Option<f64>, text: &str) {
+        let is_new = match (start, self.last_locked_start) {
+            (Some(s), Some(prev)) => s > prev + 1e-6,
+            (Some(_), None) => true,
+            // No parseable timestamp (off-spec server): fall back to text
+            // identity so a window resend isn't double-appended.
+            (None, _) => text != self.last_locked_text,
+        };
+        if !is_new {
+            return;
+        }
+        push_joined(&mut self.committed, text);
+        if start.is_some() {
+            self.last_locked_start = start;
+        }
+        self.last_locked_text = text.to_string();
+    }
+
     pub fn push(&mut self, msg: &serde_json::Value) -> Option<TranscriptDelta> {
+        // Server status / control messages. WAIT (admission queue full) and
+        // ERROR are fatal for this session — surface them so the client can
+        // fall back to batch instead of listening to a dead stream. The
+        // SERVER_READY handshake ack and other infos fall through harmlessly.
+        if let Some(status) = msg.get("status").and_then(|s| s.as_str()) {
+            // `message` is a float for WAIT (queue minutes) and a string for
+            // ERROR — render strings unquoted, everything else via JSON.
+            let detail = msg.get("message").map_or_else(String::new, |m| {
+                m.as_str().map_or_else(|| m.to_string(), str::to_string)
+            });
+            let error = match status {
+                "WAIT" => format!("ASR server busy (est. wait {detail} min)"),
+                "ERROR" => format!("ASR server error: {detail}"),
+                _ => return None,
+            };
+            return Some(TranscriptDelta {
+                committed: self.committed.clone(),
+                error: Some(error),
+                ..TranscriptDelta::default()
+            });
+        }
+        if msg.get("message").and_then(|m| m.as_str()) == Some("DISCONNECT") {
+            return Some(TranscriptDelta {
+                committed: self.committed.clone(),
+                error: Some("ASR server closed the session (max connection time)".into()),
+                ..TranscriptDelta::default()
+            });
+        }
+
         let segs = msg.get("segments").and_then(|s| s.as_array())?;
         let mut interim = String::new();
-        let mut completed_this_msg: Vec<String> = Vec::new();
+        let mut any_completed = false;
         for s in segs {
             let text = s
                 .get("text")
@@ -34,28 +98,26 @@ impl WhisperLiveDecoder {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             if completed {
-                completed_this_msg.push(text);
+                any_completed = true;
+                let start = s
+                    .get("start")
+                    .and_then(|v| v.as_str())
+                    .and_then(|v| v.parse::<f64>().ok());
+                self.lock_segment(start, &text);
             } else {
-                interim = text; // last interim wins
+                // Last interim wins; hold back replacement-glyph noise from a
+                // decode that split a multibyte char (committed text is final
+                // by contract and left untouched).
+                interim = text.chars().filter(|c| *c != '\u{FFFD}').collect();
             }
         }
-        // Lock newly-completed segments by position. WhisperLive resends a trailing
-        // window of completed segments; once a position is locked we keep its text
-        // (committed is stable / won't change — see `TranscriptDelta`), so we only
-        // append positions we have not locked yet. Revisions to already-locked
-        // segments are ignored here; live correction happens on `interim` instead.
-        for (i, text) in completed_this_msg.iter().enumerate() {
-            if self.committed_segments.get(i).is_none() {
-                self.committed_segments.push(text.clone());
-            }
-        }
-        if completed_this_msg.is_empty() && interim.is_empty() {
+        if !any_completed && interim.is_empty() {
             return None;
         }
         Some(TranscriptDelta {
-            committed: self.committed_segments.concat(),
+            committed: self.committed.clone(),
             interim,
-            utterance_end: false,
+            ..TranscriptDelta::default()
         })
     }
 }
@@ -83,12 +145,18 @@ impl StreamingTranscriber for WhisperLiveStream {
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (mut sink, mut stream) = ws.split();
         // WhisperLive config handshake (first message). audio_format=int16 so we
-        // can forward s16le frames verbatim.
+        // can forward s16le frames verbatim. NOTE: the protocol has no auth
+        // field — `[voice.streaming] api_key` is meaningless for this dialect.
+        let model = if self.target.model.trim().is_empty() {
+            DEFAULT_MODEL
+        } else {
+            self.target.model.trim()
+        };
         let handshake = serde_json::json!({
             "uid": uuid::Uuid::new_v4().to_string(),
             "language": cfg.language.or_else(|| self.target.language.clone()),
             "task": "transcribe",
-            "model": "small",
+            "model": model,
             "use_vad": true,
             "send_last_n_segments": 10,
             "audio_format": "int16"
@@ -117,7 +185,10 @@ impl StreamingTranscriber for WhisperLiveStream {
                         Some(Ok(Message::Text(t))) => {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) {
                                 if let Some(d) = dec.push(&v) {
-                                    if delta_tx.send(d).await.is_err() {
+                                    let fatal = d.error.is_some();
+                                    if delta_tx.send(d).await.is_err() || fatal {
+                                        // Fatal server status: stop bridging so the
+                                        // relay publishes its terminal closed event.
                                         break;
                                     }
                                 }
@@ -137,8 +208,18 @@ impl StreamingTranscriber for WhisperLiveStream {
 mod tests {
     use super::*;
 
+    fn seg_at(start: f64, text: &str, completed: bool) -> serde_json::Value {
+        serde_json::json!({
+            "start": format!("{start:.3}"),
+            "end": format!("{:.3}", start + 1.0),
+            "text": text,
+            "completed": completed
+        })
+    }
+    /// Segment WITHOUT a `start` timestamp — exercises the text-identity
+    /// fallback for off-spec servers.
     fn seg(text: &str, completed: bool) -> serde_json::Value {
-        serde_json::json!({ "start": "0.0", "end": "1.0", "text": text, "completed": completed })
+        serde_json::json!({ "text": text, "completed": completed })
     }
     fn msg(segs: Vec<serde_json::Value>) -> serde_json::Value {
         serde_json::json!({ "segments": segs })
@@ -150,9 +231,9 @@ mod tests {
         // two completed + one trailing interim
         let d = dec
             .push(&msg(vec![
-                seg("你好", true),
-                seg("世界", true),
-                seg("现", false),
+                seg_at(0.0, "你好", true),
+                seg_at(1.0, "世界", true),
+                seg_at(2.0, "现", false),
             ]))
             .unwrap();
         assert_eq!(d.committed, "你好世界");
@@ -162,17 +243,66 @@ mod tests {
     #[test]
     fn committed_dedup_does_not_double_count_across_messages() {
         let mut dec = WhisperLiveDecoder::default();
-        let _ = dec.push(&msg(vec![seg("你好", true), seg("在", false)]));
+        let _ = dec.push(&msg(vec![
+            seg_at(0.0, "你好", true),
+            seg_at(1.0, "在", false),
+        ]));
         // next message re-sends the same completed segment (send_last_n_segments window)
         let d = dec
             .push(&msg(vec![
-                seg("你好", true),
-                seg("世界", true),
-                seg("吗", false),
+                seg_at(0.0, "你好", true),
+                seg_at(1.0, "世界", true),
+                seg_at(2.0, "吗", false),
             ]))
             .unwrap();
         assert_eq!(d.committed, "你好世界");
         assert_eq!(d.interim, "吗");
+    }
+
+    #[test]
+    fn sliding_window_does_not_drop_new_segments() {
+        // Regression: with `send_last_n_segments = N`, once more than N
+        // segments complete the server resends only the trailing N. The old
+        // positional dedup compared window index against the absolute locked
+        // list and dropped every later segment. Timestamp identity must keep
+        // locking new segments after the window slides.
+        let mut dec = WhisperLiveDecoder::default();
+        // Segments 0..3 complete (window of 3 for brevity).
+        let _ = dec.push(&msg(vec![
+            seg_at(0.0, "一", true),
+            seg_at(1.0, "二", true),
+            seg_at(2.0, "三", true),
+        ]));
+        // Window slid: resends 1..3 plus the NEW segment 4.
+        let d = dec
+            .push(&msg(vec![
+                seg_at(1.0, "二", true),
+                seg_at(2.0, "三", true),
+                seg_at(3.0, "四", true),
+            ]))
+            .unwrap();
+        assert_eq!(d.committed, "一二三四", "segment after the slide must lock");
+        // Another slide with two new segments.
+        let d = dec
+            .push(&msg(vec![
+                seg_at(3.0, "四", true),
+                seg_at(4.0, "五", true),
+                seg_at(5.0, "六", true),
+            ]))
+            .unwrap();
+        assert_eq!(d.committed, "一二三四五六");
+    }
+
+    #[test]
+    fn english_segments_join_with_spaces() {
+        let mut dec = WhisperLiveDecoder::default();
+        let d = dec
+            .push(&msg(vec![
+                seg_at(0.0, "Hello there.", true),
+                seg_at(1.0, "How are you", true),
+            ]))
+            .unwrap();
+        assert_eq!(d.committed, "Hello there. How are you");
     }
 
     #[test]
@@ -183,13 +313,54 @@ mod tests {
     }
 
     #[test]
+    fn wait_status_surfaces_as_error() {
+        let mut dec = WhisperLiveDecoder::default();
+        let wait = serde_json::json!({ "uid": "u", "status": "WAIT", "message": 2.5 });
+        let d = dec.push(&wait).unwrap();
+        assert!(d.error.as_deref().unwrap_or("").contains("busy"));
+    }
+
+    #[test]
+    fn error_status_and_disconnect_surface_as_error() {
+        let mut dec = WhisperLiveDecoder::default();
+        let err = serde_json::json!({ "uid": "u", "status": "ERROR", "message": "boom" });
+        assert!(dec.push(&err).unwrap().error.is_some());
+        let bye = serde_json::json!({ "uid": "u", "message": "DISCONNECT" });
+        assert!(dec.push(&bye).unwrap().error.is_some());
+    }
+
+    #[test]
     fn all_completed_no_interim_still_emits() {
         let mut dec = WhisperLiveDecoder::default();
         let d = dec
-            .push(&msg(vec![seg("你好", true), seg("世界", true)]))
+            .push(&msg(vec![
+                seg_at(0.0, "你好", true),
+                seg_at(1.0, "世界", true),
+            ]))
             .unwrap();
         assert_eq!(d.committed, "你好世界");
         assert_eq!(d.interim, "");
         assert!(!d.utterance_end);
+    }
+
+    #[test]
+    fn missing_start_falls_back_to_text_identity() {
+        let mut dec = WhisperLiveDecoder::default();
+        let _ = dec.push(&msg(vec![seg("你好", true)]));
+        // Resend of the same (start-less) segment must not double-append…
+        let d = dec.push(&msg(vec![seg("你好", true)])).unwrap();
+        assert_eq!(d.committed, "你好");
+        // …while different text still locks.
+        let d = dec.push(&msg(vec![seg("世界", true)])).unwrap();
+        assert_eq!(d.committed, "你好世界");
+    }
+
+    #[test]
+    fn interim_replacement_glyphs_are_held_back() {
+        let mut dec = WhisperLiveDecoder::default();
+        let d = dec
+            .push(&msg(vec![seg_at(0.0, "你\u{FFFD}好\u{FFFD}", false)]))
+            .unwrap();
+        assert_eq!(d.interim, "你好");
     }
 }

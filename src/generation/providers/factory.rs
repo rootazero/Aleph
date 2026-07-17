@@ -109,13 +109,17 @@ pub fn create_provider(
             config.default_model().map(|s| s.to_string()),
             resolved_url,
         )?),
-        "openai_tts" | "tts" => Arc::new(OpenAiTtsProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            config.defaults.voice.clone(),
-            resolved_url,
-        )?),
+        "openai_tts" | "tts" => Arc::new(
+            OpenAiTtsProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                config.defaults.voice.clone(),
+                resolved_url,
+            )?
+            // Honor the (previously dead) `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "openai_whisper" | "whisper" => Arc::new(OpenAiWhisperProvider::new(
             api_key,
             config.base_url.clone(),
@@ -132,15 +136,19 @@ pub fn create_provider(
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
         )?),
-        "azure_speech" | "azure_tts" => Arc::new(AzureSpeechProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config
-                .defaults
-                .voice
-                .clone()
-                .or_else(|| config.default_model().map(|s| s.to_string())),
-        )?),
+        "azure_speech" | "azure_tts" => Arc::new(
+            AzureSpeechProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config
+                    .defaults
+                    .voice
+                    .clone()
+                    .or_else(|| config.default_model().map(|s| s.to_string())),
+            )?
+            // Honor the (previously dead) `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "suno" => Arc::new(SunoProvider::new(
             api_key,
             config.base_url.clone(),

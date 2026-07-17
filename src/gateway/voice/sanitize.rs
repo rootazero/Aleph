@@ -105,10 +105,44 @@ fn clamp_length(text: &str) -> String {
     prefix
 }
 
-/// Sanitize reply text for speech synthesis: drop code fences, strip inline
-/// markdown markers, collapse blank runs, soften bare URLs, and clamp length.
+/// Strip `<think>…</think>` / `<thinking>…</thinking>` blocks. Reasoning-capable
+/// models backing voice replies would otherwise have their chain-of-thought
+/// read aloud verbatim. An unclosed opener strips to the end (a truncated
+/// thinking block is still not speech).
+fn strip_think_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        // Find the earliest opener of either spelling. `<thinking>` is listed
+        // first: at the same index it must win over its own prefix `<think>`
+        // (min_by_key keeps the first of equal keys).
+        let open = ["<thinking>", "<think>"]
+            .iter()
+            .filter_map(|tag| rest.find(tag).map(|i| (i, *tag)))
+            .min_by_key(|(i, _)| *i);
+        let Some((start, tag)) = open else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..start]);
+        let close = if tag == "<think>" {
+            "</think>"
+        } else {
+            "</thinking>"
+        };
+        match rest[start..].find(close) {
+            Some(rel_end) => rest = &rest[start + rel_end + close.len()..],
+            None => return out, // unclosed → drop the tail
+        }
+    }
+}
+
+/// Sanitize reply text for speech synthesis: drop thinking blocks and code
+/// fences, strip inline markdown markers, collapse blank runs, soften bare
+/// URLs, and clamp length.
 #[must_use]
 pub fn sanitize_for_tts(text: &str) -> String {
+    let text = strip_think_blocks(text);
     let mut lines: Vec<String> = Vec::new();
     let mut in_code_fence = false;
     for raw in text.lines() {
@@ -239,6 +273,24 @@ mod tests {
     #[test]
     fn short_text_passes_through() {
         assert_eq!(sanitize_for_tts("Hello there"), "Hello there");
+    }
+
+    #[test]
+    fn think_blocks_are_never_spoken() {
+        assert_eq!(
+            sanitize_for_tts("<think>internal reasoning</think>好的，已经安排。"),
+            "好的，已经安排。"
+        );
+        assert_eq!(
+            sanitize_for_tts("<thinking>step 1… step 2…</thinking>Done."),
+            "Done."
+        );
+        // Unclosed block (truncated stream) drops the tail rather than
+        // reading half a chain-of-thought aloud.
+        assert_eq!(
+            sanitize_for_tts("回答在这。<think>oops truncated"),
+            "回答在这。"
+        );
     }
 
     #[test]

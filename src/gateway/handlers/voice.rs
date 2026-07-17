@@ -107,8 +107,9 @@ pub async fn handle_transcribe(
 /// into clean written text for display. Display-level polish only — it does NOT
 /// gate the Agent (the raw text was already sent earlier in the pipeline).
 ///
-/// Params: `{ text: String, prompt?: String }`. `prompt` overrides the
-/// configured system head for this one call. Success: `{ "formatted": String }`.
+/// Params: `{ text: String }`. Success: `{ "formatted": String }`. (A per-call
+/// `prompt` override existed but had zero callers — the system head comes from
+/// `[voice.format] prompt`.)
 ///
 /// Pure I/O glue (R4/R10): parse → `format_text` → respond. When
 /// `[voice.format] enabled = false`, returns the text unchanged. The formatting
@@ -122,8 +123,6 @@ pub async fn handle_format(
     #[derive(serde::Deserialize)]
     struct Params {
         text: String,
-        #[serde(default)]
-        prompt: Option<String>,
     }
 
     let params: Params = match parse_params(&request) {
@@ -140,17 +139,8 @@ pub async fn handle_format(
         );
     }
 
-    // A per-call `prompt` overrides the configured system head for this request.
-    let effective = match params.prompt {
-        Some(p) if !p.trim().is_empty() => crate::config::types::voice_local::FormatConfig {
-            prompt: p,
-            ..format
-        },
-        _ => format,
-    };
-
     let formatted =
-        crate::gateway::voice::format::format_text(&params.text, &effective, &config, &vault)
+        crate::gateway::voice::format::format_text(&params.text, &format, &config, &vault)
             .await
             // `format_text` degrades to the raw text on any failure, so this is
             // belt-and-suspenders: never surface an error for display polish.
@@ -429,6 +419,7 @@ pub async fn handle_stream_start(
             base_url: s.base_url.clone(),
             api_key: s.api_key.clone(),
             language: s.language.clone(),
+            model: s.model.clone(),
         }
     };
     // `open()` falls back to `target.language` when the per-call language is None.

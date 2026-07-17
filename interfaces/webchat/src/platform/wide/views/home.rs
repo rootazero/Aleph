@@ -37,6 +37,9 @@ fn classify_topic(topic: &str) -> Option<ActivitySeverity> {
         | "agent.reasoning.block"
         | "agent.tool.start"
         | "agent.tool.update"
+        // Live ASR deltas fire many times per second and would both spam the
+        // feed and leak the user's spoken words into it.
+        | "voice.transcribe.delta"
         | "channel.typing" => None,
 
         "agent.run.error" | "channel.error" | "approval.expired" => Some(ActivitySeverity::Danger),

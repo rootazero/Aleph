@@ -60,6 +60,9 @@ pub struct AzureSpeechProvider {
     endpoint: String,
     /// Default voice (Azure calls this the "voice name").
     voice: String,
+    /// Per-request total deadline (the client is built with it; kept for the
+    /// timeout-error mapping).
+    timeout: Duration,
 }
 
 impl std::fmt::Debug for AzureSpeechProvider {
@@ -104,9 +107,10 @@ impl AzureSpeechProvider {
 
         let endpoint = resolve_endpoint(&raw_base);
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
+        // Shared hardened client (`providers::http`): adds the connect-timeout
+        // and stale-keep-alive defenses the openai_tts path already had.
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+        let client = super::http::voice_http_client(timeout)
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self {
@@ -114,7 +118,18 @@ impl AzureSpeechProvider {
             api_key,
             endpoint,
             voice: voice.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            timeout,
         })
+    }
+
+    /// Apply the provider's configured `timeout_seconds` (rebuilds the shared
+    /// hardened client with the new per-request cap). Factory-only; existing
+    /// call sites keep the 60 s default.
+    pub fn with_timeout(mut self, secs: u64) -> GenerationResult<Self> {
+        self.timeout = Duration::from_secs(secs.max(1));
+        self.client = super::http::voice_http_client(self.timeout)
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
+        Ok(self)
     }
 
     /// Subset of commonly used Neural voices. Azure publishes 400+ voices —
@@ -262,7 +277,7 @@ impl GenerationProvider for AzureSpeechProvider {
                 .await
                 .map_err(|e| {
                     if e.is_timeout() {
-                        GenerationError::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                        GenerationError::timeout(self.timeout)
                     } else if e.is_connect() {
                         GenerationError::network(format!("Connection failed: {e}"))
                     } else {
