@@ -131,11 +131,11 @@ impl ToolDiscovery {
     /// Iterates the cache's registered probes rather than the catalog's tool
     /// list: a probe is the only thing that produces a gating decision, so
     /// every registered probe must be evaluated regardless of whether a
-    /// same-named tool happens to live in *this* catalog. This matters for
-    /// probes keyed by the executor's LLM-facing tool name (e.g.
-    /// `image_generate`, `speech_generate`) which differs from the catalog's
-    /// slash-command name (`generate_image`) — the previous catalog-driven
-    /// scan silently skipped them and they never gated.
+    /// same-named tool happens to live in *this* catalog. This matters when a
+    /// probe is keyed by a tool name that is not an entry in *this* catalog
+    /// (e.g. a probe registered on a shared cache consulted by a subagent
+    /// catalog) — the previous catalog-driven scan silently skipped those
+    /// probes and they never gated.
     ///
     /// This is intentionally fire-and-forget: a slow probe never blocks
     /// prompt construction. The `tokio::spawn` is detached because the

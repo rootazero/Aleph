@@ -1,0 +1,52 @@
+{
+  "subsystem": "workflow-interop",
+  "goal": "Claude Code dynamic-workflow (.mjs/.js) format compatibility — reverse-spec Aleph's export/import against the reference engineering files (rust-doctor-workflow/*.js) + the current Workflow-tool agent-opt vocabulary",
+  "date": "2026-07-17",
+  "branch": "worktree-workflow-interop-mjs-compat",
+  "verdict": "SHIP",
+  "method": "Static reverse-spec of the reference .js workflows + the Workflow-tool opt vocabulary, then an adversarial-verification Workflow (4 parallel reviewers) run AS the cargo-check substitute (cargo is intentionally not run this pass).",
+  "referenceMaterial": [
+    "/Volumes/TBU/rust-doctor-workflow/01-full-sweep-67-units.js (pipeline over a const array + dynamic buildPrompt() + agent({label,phase,schema}))",
+    "/Volumes/TBU/rust-doctor-workflow/02-remaining-25-serial-batches.js (for-loop batched parallel() + log/reduce)",
+    "/Volumes/TBU/rust-doctor-workflow/results-*.json (structured StructuredOutput results — the analog of this gapreport)",
+    "Claude Code Workflow tool agent() opts vocabulary: {label,phase,model,effort,schema,isolation,agentType}"
+  ],
+  "formatCompatMap": [
+    { "construct": "export const meta = { name, description, whenToUse, phases:[{title,detail,model}] }", "status": "SUPPORTED", "note": "manifest top-level; phase.model is interchange-only" },
+    { "construct": "phase(title)", "status": "SUPPORTED", "note": "reconstructed from topological layers; reconciled with meta.phases" },
+    { "construct": "sequential await agent() chain", "status": "SUPPORTED", "note": "linear dependsOn chain" },
+    { "construct": "parallel([() => agent(), ...])", "status": "SUPPORTED", "note": "same-layer sibling steps with no mutual dependsOn" },
+    { "construct": "agent() fan-in", "status": "SUPPORTED", "note": "one step dependsOn multiple upstream" },
+    { "construct": "agent(prompt) single/multi-line", "status": "SUPPORTED", "note": "multi-line renders as the [ ... ].join(\"\\n\") idiom, round-trip exact" },
+    { "construct": "agent opts: label / model / phase / schema / isolation / agentType", "status": "SUPPORTED", "note": "interchange-only (except model, which is executable); round-trips via embed header AND bare scan" },
+    { "construct": "agent opts: review / timeoutSecs / maxRetries", "status": "SUPPORTED", "note": "executable core — threads into WorkflowDef + materialised task metadata" },
+    { "construct": "agent opts: effort (low/medium/high/xhigh/max)", "status": "ADDED", "note": "G1 — new interchange-only agent-opt mirroring isolation/agentType; closes the one real vocabulary gap vs the current Workflow-tool opts. Renders bare `effort: \"...\"`, recovered by the bare scanner; NOT in WorkflowDef/executor (R10)." },
+    { "construct": "clarify(question, [choices])", "status": "SUPPORTED", "note": "Aleph extension to the .workflow.js vocabulary; executable core" },
+    { "construct": "file extension .mjs (Claude-Code workflow loader)", "status": "ADDED", "note": "G2 — export now writes <name>.mjs (was Aleph's legacy <name>.workflow.js); import accepts .mjs/.js/.workflow.js/manifest-JSON (reads raw text, extension immaterial). Non-breaking: no directory glob depends on the old extension." },
+    { "construct": "pipeline(items, s1, s2, ...) over a runtime array", "status": "INTENTIONALLY_DROPPED", "note": "runtime item list not statically known; import records it in dropped[], export never emits (R7/R10)" },
+    { "construct": "const UNITS=[...] / const SCHEMA={...} / function buildPrompt(){ ...${x}... } (dynamic prompt)", "status": "INTENTIONALLY_DROPPED", "note": "identifier/interpolation → treated as dynamic → the whole agent() abstains from import (R7 — don't guess)" },
+    { "construct": "for/if loops, budget, log(), nested workflow(), reduce/filter/return", "status": "INTENTIONALLY_DROPPED", "note": "imperative control flow belongs to the Think→Act main loop, not this declarative layer (R7/R10); import records in dropped[]" }
+  ],
+  "changes": [
+    { "id": "G1", "title": "effort agent-opt (interchange-only)", "files": ["src/workflow/interop/manifest.rs", "src/workflow/interop/export.rs", "src/workflow/interop/import.rs", "src/workflow/store.rs"], "detail": "WorkflowManifestStep.effort:Option<String> (camelCase, skip_serializing_if=None); export render_agent_call emits `effort: \"...\"` after model; import AgentOpts.effort + assign_string_opt \"effort\" arm + both scan maps; NOT added to WorkflowDef/compile/executor. New export test proves header-stripped bare-scan symmetry; the full-opts \"sym\" test now also asserts effort." },
+    { "id": "G2", "title": ".mjs write extension", "files": ["src/builtin_tools/workflow_tool.rs"], "detail": "export write path store::write_text(&name, \"mjs\", ...) (was \"workflow.js\"); Export doc + tool description updated; import doc notes it accepts .mjs/.js/.workflow.js/manifest-JSON. store::write_text_at stays a generic ext-agnostic writer (its test intentionally left on \"workflow.js\")." },
+    { "id": "DOCS", "title": "reference docs", "files": ["docs/reference/WORKFLOW_INTEROP.md", "docs/reference/FEATURE_LOCATOR.md"], "detail": "WORKFLOW_INTEROP.md: effort in schema/optional-fields/mapping-table + .mjs extension note. FEATURE_LOCATOR.md: code-anchor + responsibility extension names; status items ⑨ (.mjs) + ⑩ (effort)." }
+  ],
+  "verification": {
+    "note": "cargo NOT run this pass (per task constraint); the Workflow below stands in for cargo check.",
+    "workflow": "aleph-workflow-interop-harden (docs/superpowers/2026-07-17-aleph-workflow-interop-workflow.mjs)",
+    "reviewers": [
+      { "dimension": "compile-correctness", "verdict": "PASS", "issues": 0, "note": "Exhaustively confirmed all 21 WorkflowManifestStep struct literals across the repo now list an effort field — no E0063; WorkflowStepDef literals correctly gained none; new test symbols all in scope." },
+      { "dimension": "export<->import round-trip symmetry", "verdict": "PASS", "issues": 1, "note": "effort round-trips symmetrically on BOTH the embed-header and header-stripped bare-scan paths, no byte-drift for effort-less steps. LOW nit (sym test carried effort but did not assert it) — FIXED (added assert_eq! s.effort)." },
+      { "dimension": "architectural-redline-compliance (R3/R7/R10 + backward-compat)", "verdict": "PASS", "issues": 0, "note": "effort is interchange-only (interop lane only, absent from WorkflowDef/compile/executor); .mjs change non-breaking; no JS engine added; no deterministic routing." },
+      { "dimension": "completeness/entropy + synthesis", "verdict": "SHIP", "issues": 4, "note": "All 5 agents completed (0 errors, 473k tokens, ~8.7min). Synth verdict SHIP. Found 4 LOWs, all FIXED: (1) sym test carried effort but did not assert it; (2) workflow_tool.rs:162, (3) :664, (4) store.rs:113 — stale `.workflow.js` output-filename doc-comments now say `.mjs`. Distinguished from import-prose refs (kept), which correctly still list `.workflow.js` as an accepted input." }
+    ],
+    "note2": "The verification Workflow fully completed (5/5 agents, 0 errors). Every LOW it raised was applied. No CRITICAL/HIGH surfaced on either the effort opt or the .mjs switch."
+  },
+  "redlineCompliance": "R3 (no JS engine — still the hand-written char scanner), R7/R10 (effort interchange-only, imperative control flow still dropped), and backward-compat (.mjs non-breaking; effort skip_serializing_if keeps legacy templates byte-identical) all hold.",
+  "followUps": [
+    "Promote `effort` to an executable per-member override (mirror how per-step `model` threads into task metadata) once the task/dispatcher layer grows a reasoning-effort channel.",
+    "Optional: expose export/import via gateway RPC + CLII (currently tool-only, R4/R6 — deliberately deferred in WORKFLOW_INTEROP.md).",
+    "If the ecosystem standardises on `.js` over `.mjs` for saved workflows, flip the single `store::write_text(&name, \"mjs\", …)` token — import already accepts both."
+  ]
+}

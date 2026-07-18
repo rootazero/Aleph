@@ -15,24 +15,28 @@ async fn test_register_builtin_tools() {
     let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
-    // Should register 12 builtin tools (2 generation + 2 skill + snapshot +
-    // switch + groupchat + session_new [aliases: new, clear] + cron + voice +
-    // goal + help).
-    assert_eq!(registry.count().await, 12);
+    // Should register 8 curated multi-word commands (2 skill + groupchat +
+    // session_new [aliases: new, clear] + cron + voice + goal + help). Media
+    // generation (/image /video /audio /speech) and agent switching (/agent)
+    // are surfaced via SHORTHAND_ALIASES seeding, NOT curated here.
+    assert_eq!(registry.count().await, 8);
 
-    // Builtins should include generation tools
     let builtins = registry.list_builtin_tools().await;
-    assert_eq!(builtins.len(), 12);
+    assert_eq!(builtins.len(), 8);
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"generate_image"));
-    assert!(names.contains(&"generate_speech"));
     assert!(names.contains(&"skill_read"));
     assert!(names.contains(&"skill_list"));
-    assert!(names.contains(&"snapshot_capture"));
     assert!(names.contains(&"goal"));
     assert!(names.contains(&"help"));
+
+    // Round-3 CUT: these dead curated commands (no execute_tool arm / no
+    // backing) must NOT be registered — they only ever errored on invocation.
+    assert!(!names.contains(&"generate_image"));
+    assert!(!names.contains(&"generate_speech"));
+    assert!(!names.contains(&"snapshot_capture"));
+    assert!(!names.contains(&"switch"));
 }
 
 #[tokio::test]
@@ -49,12 +53,12 @@ async fn test_list_root_commands() {
     registry.register_custom_commands(&rules).await;
 
     let roots = registry.list_root_commands().await;
-    // 12 builtin tools + 1 custom = 13 (aliases are not separate tools)
-    assert_eq!(roots.len(), 13);
+    // 8 curated builtins + 1 custom = 9 (aliases are not separate tools)
+    assert_eq!(roots.len(), 9);
 
     // First should be builtins (sorted by priority)
-    assert!(roots.iter().any(|t| t.name == "generate_image"));
-    assert!(roots.iter().any(|t| t.name == "generate_speech"));
+    assert!(roots.iter().any(|t| t.name == "skill_list"));
+    assert!(roots.iter().any(|t| t.name == "help"));
     assert!(roots.iter().any(|t| t.name == "en"));
 }
 
