@@ -58,7 +58,6 @@ use std::pin::Pin;
 // Sub-modules
 pub mod adapter;
 pub mod anthropic;
-pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod bridge;
 pub mod capability_gate;
@@ -81,7 +80,6 @@ pub mod model_behaviors;
 pub mod model_catalog;
 pub mod model_discovery;
 pub mod model_override_provider;
-pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
 pub mod presets;
@@ -106,7 +104,6 @@ pub mod think_level_provider;
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};
 pub use auth_profiles::{
     calculate_billing_cooldown_ms, calculate_cooldown_ms, clear_profile_cooldown,
     mark_profile_failure, mark_profile_good, mark_profile_used, normalize_provider_id,
