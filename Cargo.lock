@@ -244,6 +244,7 @@ dependencies = [
  "futures-util",
  "hex",
  "mdns-sd",
+ "rcgen",
  "serde",
  "serde_json",
  "sha2",

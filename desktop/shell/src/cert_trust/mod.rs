@@ -3,6 +3,7 @@
 //! each engine's TLS-error hook. Never touches the OS trust store; only an exact
 //! pinned-fingerprint match is ever allowed (fail-closed).
 
+pub mod fingerprint;
 pub mod store;
 
 use serde::Serialize;
