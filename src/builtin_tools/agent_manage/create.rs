@@ -226,11 +226,8 @@ impl AlephTool for AgentCreateTool {
         "Create a new agent with its own workspace, memory, and soul. Use when the user \
          wants a specialized agent (trading, coding, health, a companion, etc.).\n\n\
          Before creating, if the request is under-specified, run a short creation interview:\n\
-         1) Recommend ONE soul archetype from the user's purpose and confirm it:\n\
-         - expert: analysis, research, decisions — rigorous, argues the counter-case, tags claims.\n\
-         - maker: writing code, building, automation — action-biased, surgical, verifies.\n\
-         - assistant: general getting-things-done — fast, answer-first (default when unclear).\n\
-         - companion: support, journaling, presence — warm, listens.\n\
+         1) Recommend ONE soul archetype from the user's purpose and confirm it — pick from \
+         the Soul Archetypes catalog in this tool's usage notes below.\n\
          2) Ask up to 2-5 short questions to gather: domain/focus, name, tone tweaks, hard \
          boundaries, signature behaviors.\n\
          3) Call agent_create with the chosen `archetype` and a `personalization` markdown \
@@ -247,6 +244,39 @@ impl AlephTool for AgentCreateTool {
             "agent_create(id='coder', name='Coder', archetype='maker', personalization='Stack: Rust + tokio. Always run cargo check before claiming done.')".to_string(),
             "agent_create(id='iris', name='Iris', archetype='companion', personalization='Evening check-ins. Reflect first; never push advice unasked.')".to_string(),
         ])
+    }
+
+    /// Build the definition, then append the Soul Archetypes catalog to
+    /// `llm_context` from the single source ([`soul_archetypes::creation_catalog`]).
+    ///
+    /// The trait default only injects `examples()`; we extend it so the
+    /// interview list the model reads is generated from [`SoulArchetype::summary`]
+    /// rather than a hand-copied literal that drifts from the templates.
+    fn definition(&self) -> crate::tool_metadata::ToolDefinition {
+        use crate::thinker::soul_archetypes::creation_catalog;
+
+        let mut context = format!("## Soul Archetypes (choose one)\n\n{}", creation_catalog());
+        if let Some(examples) = self.examples() {
+            let examples_text = examples
+                .iter()
+                .enumerate()
+                .map(|(i, ex)| format!("{}. {}", i + 1, ex))
+                .collect::<Vec<_>>()
+                .join("\n");
+            context.push_str(&format!("\n\n## Usage Examples\n\n{examples_text}"));
+        }
+
+        let schema = schemars::schema_for!(AgentCreateArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_default();
+        crate::tool_metadata::ToolDefinition::new(
+            Self::NAME,
+            Self::DESCRIPTION,
+            parameters,
+            self.category(),
+        )
+        .with_confirmation(self.requires_confirmation())
+        .with_strict(self.strict_schema())
+        .with_llm_context(context)
     }
 
     async fn call(&self, mut args: Self::Args) -> Result<Self::Output> {
@@ -368,26 +398,11 @@ impl AlephTool for AgentCreateTool {
             })?;
         }
 
-        let identity_path = agent_state_dir.join("IDENTITY.md");
-        if !identity_path.exists() {
-            let identity_name = args.name.as_deref().unwrap_or(&args.id);
-            let identity_content =
-                format!("- Name: {identity_name}\n- Emoji: \u{1f916}\n- Theme: professional\n");
-            if let Err(e) = tokio::fs::write(&identity_path, identity_content).await {
-                warn!(agent_id = %args.id, path = %identity_path.display(), error = %e,
-                    "Failed to write IDENTITY.md template (non-fatal)");
-            }
-        }
-
-        let tools_path = agent_state_dir.join("TOOLS.md");
-        if !tools_path.exists() {
-            let tools_content =
-                "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
-            if let Err(e) = tokio::fs::write(&tools_path, tools_content).await {
-                warn!(agent_id = %args.id, path = %tools_path.display(), error = %e,
-                    "Failed to write TOOLS.md template (non-fatal)");
-            }
-        }
+        // IDENTITY.md / TOOLS.md are owned by `initialize_agent_identity` above
+        // (via `write_if_missing`, using the rich archetype-seeded templates).
+        // They always exist by this point, so the old `if !exists` fallbacks
+        // here were dead code that could only ever write a thinner, worse copy —
+        // removed. Keep new identity-file templates in `agent_resolver`.
 
         // 7. Create AgentInstance
         let model = args.model.as_deref().unwrap_or("claude-sonnet-4-5");
@@ -600,6 +615,14 @@ mod tests {
 
         assert_eq!(def.name, "agent_create");
         assert!(!def.requires_confirmation);
-        assert!(def.llm_context.is_some());
+
+        // llm_context carries the SSOT archetype catalog (from summary()) AND
+        // the usage examples — both must be wired in.
+        let context = def.llm_context.expect("agent_create must inject llm_context");
+        assert!(context.contains("## Soul Archetypes"));
+        assert!(context.contains("expert:"));
+        assert!(context.contains("companion:"));
+        assert!(context.contains("(default when unclear)"));
+        assert!(context.contains("## Usage Examples"));
     }
 }

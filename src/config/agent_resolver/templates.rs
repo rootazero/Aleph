@@ -110,22 +110,33 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 }
 
 /// Default IDENTITY.md content for a new agent.
-pub(crate) fn default_identity(agent_name: &str) -> String {
+///
+/// Role/Vibe/Emoji are **seeded** from the chosen archetype (a starting point,
+/// not a hard label — the "edit to taste" invitation stays). The archetype is
+/// already known at the one call site (`initialize_agent_identity`), so wiring
+/// it here means a new agent's IDENTITY.md reflects its persona instead of
+/// arriving as empty placeholders. `**Name:**` keeps the machine-readable
+/// format that `read_agent_name_from_workspace` parses.
+pub(crate) fn default_identity(agent_name: &str, archetype: SoulArchetype) -> String {
     format!(
         r#"# IDENTITY.md — Who Am I?
 
-_Fill this in during your first conversation. Make it yours._
+_Seeded from the **{arch}** archetype. Edit any line to make it yours._
 
 - **Name:** {agent_name}
-- **Role:** _(assistant? advisor? creative partner? something else?)_
-- **Vibe:** _(sharp? warm? playful? calm? chaotic?)_
-- **Emoji:** _(your signature — pick one that feels right)_
+- **Role:** {role} _(edit to taste)_
+- **Vibe:** {vibe} _(edit to taste)_
+- **Emoji:** {emoji} _(your signature — swap if you like)_
 - **Language:** _(preferred language for conversation)_
 
 ---
 
 This isn't just metadata. It's the start of figuring out who you are.
-"#
+"#,
+        arch = archetype.as_str(),
+        role = archetype.role_hint(),
+        vibe = archetype.vibe_hint(),
+        emoji = archetype.emoji_hint(),
     )
 }
 
