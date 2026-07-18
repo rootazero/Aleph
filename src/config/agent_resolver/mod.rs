@@ -432,7 +432,7 @@ pub fn initialize_agent_identity(
     write_if_missing(
         path,
         "IDENTITY.md",
-        &templates::default_identity(agent_name),
+        &templates::default_identity(agent_name, archetype),
     )?;
     write_if_missing(path, "MEMORY.md", templates::DEFAULT_MEMORY)?;
     write_if_missing(path, "TOOLS.md", templates::DEFAULT_TOOLS)?;
@@ -636,6 +636,23 @@ mod tests {
         let soul = default_soul("Quant", SoulArchetype::Expert);
         assert!(soul.contains("_You are Quant._"));
         assert!(soul.contains("Accuracy beats approval.")); // expert archetype marker
+    }
+
+    #[test]
+    fn default_identity_seeds_role_and_vibe_from_archetype() {
+        let id = default_identity("Quant", SoulArchetype::Expert);
+        // Name stays machine-parseable (**Name:**), and Role/Vibe are seeded
+        // from the Expert archetype rather than left as empty placeholders.
+        assert!(id.contains("**Name:** Quant"));
+        assert!(id.contains(SoulArchetype::Expert.role_hint()));
+        assert!(id.contains(SoulArchetype::Expert.vibe_hint()));
+        assert!(id.contains("edit to taste")); // still invites customization
+        assert!(!id.contains("(assistant? advisor?")); // old placeholder gone
+
+        // A different archetype seeds different hints.
+        let maker = default_identity("Builder", SoulArchetype::Maker);
+        assert!(maker.contains(SoulArchetype::Maker.vibe_hint()));
+        assert!(!maker.contains(SoulArchetype::Expert.vibe_hint()));
     }
 
     #[test]
