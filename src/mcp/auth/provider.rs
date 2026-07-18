@@ -383,7 +383,15 @@ impl OAuthProvider {
             return Err(AlephError::IoError(format!("Token refresh failed: {body}")));
         }
 
-        let tokens = parse_token_response(response).await?;
+        let mut tokens = parse_token_response(response).await?;
+
+        // RFC 6749 §6: a refresh response MAY omit `refresh_token`, in which
+        // case the client keeps reusing the current one. Without this, saving
+        // `refresh_token: None` would wipe the stored refresh token and force a
+        // full re-authorization on the next expiry.
+        if tokens.refresh_token.is_none() {
+            tokens.refresh_token = Some(refresh_token.to_string());
+        }
 
         // Save new tokens
         self.storage.save_tokens(&self.server_name, &tokens).await?;
