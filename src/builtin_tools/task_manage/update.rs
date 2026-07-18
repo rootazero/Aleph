@@ -80,6 +80,20 @@ impl AlephTool for TaskUpdateTool {
             .as_deref()
             .and_then(CoordTaskStatus::from_stored);
 
+        // An unknown/unsettable status string must be a hard error, not a
+        // silent no-op: `CoordTaskUpdate.status = None` means "leave status
+        // unchanged", so passing e.g. "done" would return success while the
+        // task never transitions — misleading the caller. Mirror the sibling
+        // `teams.update_task` RPC, which rejects unknown status explicitly.
+        if args.status.is_some() && new_status.is_none() {
+            return Err(crate::error::AlephError::other(format!(
+                "Unknown or unsettable status '{}' (expected one of: pending, \
+                 in_progress, waiting_review, completed, failed, cancelled, \
+                 skipped, paused; blocked is derived, not stored)",
+                args.status.as_deref().unwrap_or("")
+            )));
+        }
+
         // Metadata is a shallow merge-patch, not a wholesale replace: the
         // store's `update_task` writes the metadata column verbatim, so a
         // partial patch passed straight through would silently wipe the
