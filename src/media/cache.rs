@@ -118,7 +118,7 @@ impl MediaCache {
             return Err(CacheError::TooLarge { size });
         }
         let dir = ensure_session_dir(session_id).await?;
-        let filename = sanitize_filename(filename.unwrap_or(id));
+        let filename = unique_filename(id, filename);
         let path = dir.join(filename);
         tokio::fs::write(&path, data).await?;
         debug!(path = %path.display(), "cached inline attachment");
@@ -173,7 +173,7 @@ impl MediaCache {
             }
         }
 
-        let filename = sanitize_filename(filename.unwrap_or(id));
+        let filename = unique_filename(id, filename);
         let path = dir.join(&filename);
 
         // Stream response body to file with incremental size check
@@ -448,6 +448,20 @@ async fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error>
         let _ = tokio::fs::write(&marker, "").await;
     }
     Ok(dir)
+}
+
+/// Build a collision-free temp filename by prefixing the (sanitized) attachment
+/// id onto the (sanitized) display name.
+///
+/// `download_media_item` resolves media items in parallel (`join_all`) into one
+/// shared per-session dir. Two items carrying the same `filename` would otherwise
+/// map to the same temp path and write over each other concurrently, corrupting
+/// both. The unique per-item id prefix keeps their paths distinct. Both halves are
+/// sanitized (no path separators), so the joined result stays traversal-safe.
+fn unique_filename(id: &str, name: Option<&str>) -> String {
+    let base = sanitize_filename(name.unwrap_or(id));
+    let prefix = sanitize_filename(id);
+    format!("{prefix}-{base}")
 }
 
 /// Strip directory components from a filename to prevent path traversal.
