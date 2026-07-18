@@ -1,0 +1,4 @@
+ISSUE|src/logging/pii_filter.rs:86|low|Architecture R1 concern: chrono::Local::now() queries platform timezone via OS APIs in core logging|uses chrono::Local in PiiScrubbingFormat::format_event
+ISSUE|src/logging/pii_filter.rs:17|low|PiiScrubbingLayer type name implies active PII scrubbing but on_event is a documented no-op; direct use bypasses protection|on_event body is just `let _ = event;` and defers to create_pii_scrubbing_layer
+ISSUE|src/logging/level_control.rs:90|low|LogLevel::from_u8 silently coerces invalid atomic values to Info in release builds|debug_assert! only runs in debug; invalid u8 falls back to Info silently
+ISSUE|src/logging/level_control.rs:112|low|init_log_level only parses first RUST_LOG directive, ignoring multi-crate filter configs|split(',').next() discards remaining directives

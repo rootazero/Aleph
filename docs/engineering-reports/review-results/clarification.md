@@ -1,0 +1,1 @@
+ISSUE|src/clarification/mod.rs:62|low|Misleading doc comment on ClarificationOption::new says "label and value (same)" but the constructor takes distinct value and label parameters|doc comment reads "Create a new option with label and value (same)"

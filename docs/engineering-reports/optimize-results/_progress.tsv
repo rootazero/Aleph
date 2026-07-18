@@ -1,0 +1,11 @@
+module	status	last_dim	kept	discarded	clippy_delta	lines_delta	started_at	finished_at
+tool_output	done	6	2	0	0	-3	2026-03-29T08:28:01Z	2026-03-29T08:28:01Z
+supervisor	done	6	2	0	0	-4	2026-03-29T08:29:39Z	2026-03-29T08:29:39Z
+arena	done	6	2	0	0	-5	2026-03-29T08:32:28Z	2026-03-29T08:32:28Z
+group_chat	done	6	1	1	0	-12	2026-03-29T08:42:19Z	2026-03-29T08:42:19Z
+acp	done	6	0	0	0	0	2026-03-29T08:43:32Z	2026-03-29T08:43:32Z
+tools	done	6	1	0	-1	0	2026-03-29T08:44:36Z	2026-03-29T08:44:36Z
+teams	done	6	0	0	0	0	2026-03-29T08:45:25Z	2026-03-29T08:45:25Z
+a2a	done	6	0	0	0	0	2026-03-29T08:45:50Z	2026-03-29T08:45:50Z
+agents	done	6	0	0	0	0	2026-03-29T08:46:13Z	2026-03-29T08:46:13Z
+builtin_tools	done	6	1	0	-6	-1	2026-03-29T08:49:27Z	2026-03-29T08:49:27Z

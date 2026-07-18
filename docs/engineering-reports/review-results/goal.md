@@ -1,0 +1,1 @@
+ISSUE|src/goal/types.rs:42|medium|Goal fields are all pub, allowing direct mutation that bypasses the documented immutable-by-construction invariant and updated_at_ms lifecycle semantics|Doc comment claims immutable by construction and with_* methods bump updated_at_ms, but pub status/token_budget/pursuit/etc. fields let callers mutate invariants directly

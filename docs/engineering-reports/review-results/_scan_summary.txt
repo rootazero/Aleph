@@ -1,0 +1,201 @@
+=== Module sizes ===
+     535 165626 src/gateway/
+     218 57973 src/memory/
+     192 59660 src/builtin_tools/
+     107 41195 src/providers/
+      96 24354 src/config/
+      82 20495 src/thinker/
+      74 20833 src/generation/
+      69 23219 src/extension/
+      62 18669 src/tools/
+      49 18085 src/sandbox/
+      46 14481 src/tasks/
+      39 15192 src/agents/
+      38 14891 src/bin/
+      38 10353 src/a2a/
+      36 14304 src/teams/
+      34 9583 src/tool_metadata/
+      34 14368 src/mcp/
+      30 8143 src/exec/
+      30 7062 src/orchestrator/
+      23 14371 src/harness/
+      20 1896 src/components/
+      18 5623 src/acp/
+      18 5134 src/security/
+      17 4311 src/search/
+      16 5382 src/skill/
+      16 3852 src/media/
+      15 6409 src/context/
+      14 7985 src/executor/
+      14 4892 src/browser/
+      14 4832 src/resilience/
+      13 2887 src/secrets/
+      12 3344 src/session/
+      12 2276 src/utils/
+      12 1938 src/pii/
+      11 4474 src/event/
+      11 1524 src/diagnostics/
+      10 4329 src/workflow/
+      10 1955 src/verification/
+       9 2778 src/runtimes/
+       9 1870 src/approval/
+       9 1070 src/guardrails/
+       8 3101 src/group_chat/
+       7 2448 src/routing/
+       7 1862 src/wizard/
+       7 1523 src/vision/
+       6 2363 src/arena/
+       6 1610 src/cluster/
+       5 730 src/logging/
+       4 448 src/cli/
+       4 1364 src/discovery/
+       4 1142 src/tool_output/
+       3 825 src/clawhub/
+       3 706 src/bundled/
+       3 670 src/projects/
+       3 609 src/init_unified/
+       3 594 src/goal/
+       3 532 src/command/
+       2 720 src/clarification/
+       2 561 src/markdown/
+       2 159 src/core/
+       2 1050 src/domain/
+       1 389 src/clipboard/
+       1 308 src/metrics/
+       0  src/graphify-out/
+
+=== Unwrap/expect/panic counts by file (top 50) ===
+ 129 src/gateway/auth_probe_tests.rs
+ 101 src/tasks/cron/service/concurrency.rs
+  95 src/memory/notes/indexer/tests.rs
+  81 src/memory/store/sqlite/schema/tests.rs
+  80 src/providers/protocols/openai_chat/tests.rs
+  79 src/gateway/security/shared_token.rs
+  79 src/builtin_tools/workflow_tool.rs
+  76 src/extension/manifest/parsers.rs
+  67 src/gateway/session_manager/tests.rs
+  64 src/gateway/handlers/teams.rs
+  64 src/config/agent_manager/tests.rs
+  64 src/builtin_tools/desktop/tests.rs
+  61 src/gateway/interfaces/feishu/feishu_inbound/events.rs
+  60 src/agents/swarm/tasks/store/tests.rs
+  59 src/providers/protocols/gemini/tests.rs
+  58 src/teams/integration_tests.rs
+  58 src/memory/notes/ingest/ingestor.rs
+  58 src/bin/aleph-server/cli.rs
+  53 src/teams/snapshots/tests.rs
+  53 src/agents/subagent_tool/tests.rs
+  52 src/secrets/vault.rs
+  51 src/session/store.rs
+  51 src/gateway/handlers/auth/pairing.rs
+  51 src/config/tests/serialization.rs
+  50 src/sandbox/workspace.rs
+  50 src/memory/store/sqlite/notes/tests.rs
+  49 src/gateway/handlers/fs.rs
+  49 src/gateway/execution_engine/run_loop.rs
+  49 src/a2a/tests.rs
+  47 src/tool_metadata/tool_index/tests.rs
+  47 src/providers/profile_manager/tests.rs
+  47 src/generation/registry.rs
+  47 src/generation/providers/tests.rs
+  47 src/gateway/interfaces/nostr/message_ops/tests.rs
+  47 src/gateway/handlers/auth/connect.rs
+  46 src/sandbox/platforms/macos/seatbelt.rs
+  45 src/providers/protocols/openai_responses/tests.rs
+  44 src/memory/store/sqlite/raw_memories.rs
+  44 src/gateway/handlers/graph.rs
+  44 src/discovery/scanner.rs
+  43 src/teams/store.rs
+  43 src/projects/store.rs
+  43 src/memory/scratchpad/manager.rs
+  43 src/memory/notes/note/tests.rs
+  43 src/context/retrieval/content_index.rs
+  43 src/builtin_tools/self_config.rs
+  42 src/teams/messages/store.rs
+  41 src/thinker/soul.rs
+  41 src/teams/sessions/store.rs
+  41 src/builtin_tools/file_ops/edit.rs
+
+=== Unsafe counts by file ===
+  63 src/sandbox/windows_init.rs
+  18 src/builtin_tools/workflow_tool.rs
+  11 src/sandbox/sandbox_init.rs
+  11 src/bin/aleph-server/daemon.rs
+   4 src/sandbox/platforms/windows/job.rs
+   4 src/sandbox/cgroup_v2.rs
+   3 src/sandbox/platforms/linux/bwrap.rs
+   3 src/projects/store.rs
+   3 src/memory/cli/lock.rs
+   3 src/extension/hooks/json_output.rs
+   2 src/tools/scoped/tests.rs
+   2 src/sandbox/proxy/netns_bridge.rs
+   2 src/sandbox/platforms/windows/driver.rs
+   2 src/sandbox/platforms/macos/seatbelt.rs
+   2 src/resilience/database/state_database/mod.rs
+   2 src/memory/store/sqlite/vec.rs
+   2 src/gateway/hot_reload.rs
+   2 src/builtin_tools/desktop/session_lock.rs
+   1 src/utils/instance_lock.rs
+   1 src/tools/result_store.rs
+   1 src/tools/handlers/mcp.rs
+   1 src/resilience/database/migration.rs
+   1 src/orchestrator/harness_bridge.rs
+   1 src/memory/notes/note/helpers.rs
+   1 src/mcp/transport/stdio.rs
+   1 src/harness/deps.rs
+   1 src/gateway/shutdown_forensics.rs
+   1 src/gateway/handlers/teams.rs
+   1 src/gateway/handlers/daemon_control.rs
+   1 src/exec/parser.rs
+
+=== Arc/Mutex/static counts by file (top 50) ===
+ 119 src/gateway/handlers/auth/connect.rs
+  80 src/bin/aleph-server/commands/start/mod.rs
+  59 src/tools/scoped/tests.rs
+  47 src/memory/notes/ingest/ingestor.rs
+  44 src/harness/tests/task10_wiring/extras.rs
+  44 src/gateway/auth_probe_tests.rs
+  42 src/bin/aleph-server/commands/start/builder/agent_init/mod.rs
+  39 src/harness/tests/task10_wiring/mod.rs
+  39 src/gateway/server/mod.rs
+  38 src/agents/subagent_tool/tests.rs
+  36 src/harness/tests/stability.rs
+  31 src/gateway/handlers/auth/mod.rs
+  30 src/harness/tests/guardrails.rs
+  30 src/a2a/service/llm_matcher.rs
+  29 src/sandbox/workspace.rs
+  29 src/harness/tests/act.rs
+  28 src/orchestrator/tests/dispatch.rs
+  28 src/memory/extensions/registry.rs
+  26 src/harness/agent.rs
+  26 src/gateway/handlers/agent.rs
+  24 src/group_chat/executor.rs
+  22 src/providers/registry.rs
+  22 src/providers/failover.rs
+  22 src/a2a/tests.rs
+  21 src/gateway/security/shared_token.rs
+  21 src/bin/aleph-server/commands/start/builder/subsystems.rs
+  20 src/bin/aleph-server/commands/start/orchestrator_init.rs
+  19 src/harness/tests/think.rs
+  19 src/executor/builtin_registry/builder/constructor.rs
+  19 src/builtin_tools/desktop/tests.rs
+  18 src/guardrails/tests/registry.rs
+  18 src/generation/providers/factory.rs
+  18 src/gateway/inbound_router/mod.rs
+  18 src/agents/subagent_spawner/tests.rs
+  17 src/teams/integration_tests.rs
+  17 src/search/registry.rs
+  17 src/memory/note_retrieval/mod.rs
+  17 src/gateway/handlers/providers/tests.rs
+  17 src/gateway/handlers/auth_tools.rs
+  17 src/gateway/execution_engine/tests.rs
+  16 src/gateway/server/probe.rs
+  15 src/thinker/memory_context_provider/constructor.rs
+  15 src/gateway/reply_emitter/emitter/mod.rs
+  15 src/extension/mod.rs
+  14 src/memory/extensions/mcp_adapter.rs
+  14 src/gateway/handlers/rerank_config.rs
+  14 src/gateway/execution_engine/run_loop.rs
+  14 src/event/tests/integration.rs
+  14 src/context/compact/compactor.rs
+  14 src/a2a/adapter/server/bridge.rs

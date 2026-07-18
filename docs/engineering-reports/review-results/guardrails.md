@@ -1,0 +1,4 @@
+ISSUE|src/guardrails/registry.rs:5|low|doc comment claims evaluation stops at first non-Allow decision, but Warn does not stop|comment says "stops at the first non-`Allow` decision" while lines 73-75 continue past Warn
+ISSUE|src/guardrails/registry.rs:73|medium|multiple Warn decisions overwrite each other; only the last warning reason is returned|last_warn reassigned inside loop without aggregation, losing earlier guardrail warnings
+ISSUE|src/guardrails/pii_secrets.rs:162|medium|tool_call surface returns modified JSON string via Sanitize without validating JSON validity|serde_json::to_string plus text-level placeholder replacement can produce unparseable JSON if secret values contain quotes/braces
+ISSUE|src/guardrails/registry.rs:64|low|evaluate_input/evaluate_output/evaluate_tool_call duplicate identical loop/match/warn logic|three methods repeat the same enabled check, iteration, and last_warn handling

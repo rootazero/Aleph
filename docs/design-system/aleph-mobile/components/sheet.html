@@ -1,0 +1,35 @@
+<!-- @dsCard group="Components" name="Bottom sheet" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bottom sheet — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+</head>
+<body>
+  <div class="ds-stage">
+    <div class="phone">
+      <div class="phone-screen" style="position:relative;justify-content:flex-end">
+        <!-- dimmed background content -->
+        <div style="position:absolute;inset:0;padding:16px;color:var(--color-text-tertiary);font-size:.8125rem">Chat surface…</div>
+        <div class="scrim"></div>
+        <!-- sheet -->
+        <div class="sheet" style="position:relative">
+          <div class="sheet-grabber"></div>
+          <div class="list-header">Sessions</div>
+          <div class="list" style="box-shadow:none;margin-bottom:14px">
+            <div class="cell"><span class="cell-body"><div class="cell-title">部署排查</div><div class="cell-sub">2 分钟前</div></span><span class="badge badge-primary">active</span></div>
+            <div class="cell"><span class="cell-body"><div class="cell-title">记忆整理</div><div class="cell-sub">昨天</div></span></div>
+            <div class="cell"><span class="cell-body"><div class="cell-title">iOS 设计</div><div class="cell-sub">3 天前</div></span></div>
+          </div>
+          <button class="btn btn-primary btn-block">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New conversation
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
