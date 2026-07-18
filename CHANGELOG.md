@@ -5,6 +5,149 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.7.18]
+
+A remote-access release that closes the loop on **self-signed TLS**, building
+directly on 26.7.17's in-process gateway TLS. Two halves meet in the middle.
+On the server, the self-signed certificate's SAN now **auto-discovers the
+machine's non-loopback interface IPs** — a `wss://` connection to a LAN or
+public address no longer fails hostname verification, retiring the
+localhost-only SAN gap — with a drift-tracking sidecar that reuses the existing
+cert when the interface set is a subset and regenerates it (never bricks) when
+it drifts or the sidecar is corrupt. On the client, the Panel gains **in-app
+trust-on-first-use (TOFU) certificate trust**: a self-signed gateway cert is
+reviewed and pinned from inside the app via a fingerprint + SAN approval splash
+with a TOFU/change warning, backed by a shared decision core and a pinned trust
+store. The macOS WKWebView cert-challenge adapter is the reference platform —
+proven end-to-end against a real self-signed remote — with the iOS Keychain
+trust store and decision mirror wired alongside.
+
+### Added
+
+- **Self-signed cert SAN auto-discovery.** A new `[gateway.tls] san` field plus
+  automatic discovery of the host's non-loopback interface IPs are assembled
+  into the self-signed certificate's SAN and threaded through the server mirror
+  to `load_or_generate`, so remote `wss://` connects verify cleanly.
+- **SAN-drift sidecar.** The cert's SAN set is tracked in a sidecar: an unchanged
+  or subset SAN reuses the existing cert, a drifted one regenerates it, guarded
+  by an atomic regen marker and a shrink-reuse test.
+- **Panel in-app certificate trust (TOFU).** A shared decision core with a pinned
+  TOFU trust store, SHA-256 fingerprint + SAN/subject parsing, an approval splash
+  page (fingerprint + SAN + TOFU/change warning), and pending-cert state with
+  approve/reject Tauri commands let a self-signed cert be trusted from inside the
+  app.
+- **macOS WKWebView cert-challenge adapter + install dispatch.** The reference
+  platform for in-app trust, driving the challenge through the shared decision
+  core.
+- **iOS Keychain trust store + decision mirror.** Unit-tested Keychain-backed
+  trust for the iOS Panel, mirroring the shared decision state.
+
+### Fixed
+
+- **Panel token wall buried by the boot gate** on a remote unauthorized connect —
+  the token wall now surfaces instead of being hidden behind the boot gate (WASM
+  dist rebuilt).
+- **macOS WKWebView `respondsToSelector` cache** was stale, so the injected
+  challenge handler never fired — the cache is now busted on install.
+- **macOS trust approval navigated by a relative path** and could miss the page —
+  it now navigates to the approval page by absolute URL.
+- **`credentialForTrust` returning nil** could panic at the FFI boundary — it now
+  fails closed.
+- **Corrupt `sans.txt` sidecar** is treated as best-effort and regenerates the
+  cert rather than bricking boot.
+- **Lite supervisor relocation** is suppressed while a trust prompt is pending, so
+  the approval flow isn't interrupted.
+- **Malformed-DER fingerprint parsing** never panics (regression-tested).
+
+## [26.7.17]
+
+A security and hardening release. The headline is **native gateway TLS for
+remote connections** — the gateway now terminates TLS in-process (a provided
+cert or an auto-generated self-signed one), fails closed on plaintext to any
+non-loopback bind, refuses insecure transport to a remote client by default,
+and resolves the real client IP behind a trusted reverse proxy so caps, rate
+limits, audit, and connect-auth all key on the true peer; the Panel forces
+`wss://` to remote hosts. Alongside it: an **MCP discovery convergence** that
+retracts the eager resource/prompt index layer in favor of on-demand discovery
+tools (the model stops `cat`-ing files), **plugin-bundled skills folded into the
+skill mechanism** with the agent catalog revived, deep **file-op path safety**,
+and a broad hardening sweep across the harness, tools, context, cache, loop,
+teams, and memory subsystems — much of it driven by adversarial review and
+cross-implementation gap analysis.
+
+### Added
+
+- **Native in-process gateway TLS.** New off-by-default config
+  (`[gateway] tls` / `trusted_proxy` / `allow_insecure_remote`) turns on
+  `axum-server`-terminated TLS, using a provided certificate or an auto-generated
+  self-signed one, plus reverse-proxy trust for TLS-terminating front ends.
+- **Trusted-proxy real-client-IP resolver.** A spoof-safe resolver reads the
+  true client address behind a trusted proxy, so capacity limits, rate limiting,
+  the audit trail, and connect-auth no longer see the proxy's IP.
+- **MCP resource/prompt discovery tools.** `mcp_list_*` discovery tools let the
+  model find MCP resources and prompts on demand instead of blindly reading
+  files, and route it to native MCP / skill / plugin reads via a `cat`-guard
+  read-steer.
+- **Plugin-bundled skills are visible to the model.** Installed-plugin skills are
+  folded into the skill index and `skill_read`, and the agent catalog is revived.
+- **`call_id`-exact approval correlation + completion-order live tool events.**
+  The tool-concurrency scheduler ties each approval to an exact call and emits
+  live tool events in completion order.
+- **Workflow interop for `.mjs` / dynamic workflows.** Executable-step options
+  and a `.mjs` export path for cross-tool workflow compatibility.
+- **Gateway dead-letter forensic trail.** Undeliverable messages can be
+  inspected and safely redriven.
+
+### Changed
+
+- **Fail-closed remote transport.** The gateway refuses plaintext on a
+  non-loopback bind at boot and refuses insecure transport to a remote client
+  (`allow_insecure_remote = false` by default); the Panel forces `wss://` for
+  remote hosts and refuses plaintext to a remote gateway.
+- **Dropped `aws-lc-rs` for a `ring`-only TLS provider** (`axum-server`
+  `tls-rustls-no-provider`) to keep the Windows build clean and the core light
+  (R3).
+- **MCP discovery converged to one on-demand channel.** `McpResourceIndexLayer`
+  is retracted — the eager index layer (single-prefix ids that didn't round-trip)
+  is gone, and on-demand discovery tools replace the prompt index.
+- **Harness R10 line-budget paydown.** Dead prompt-layer surfaces pruned
+  (net ≈ −3.4k LOC), a proactive context reminder and a reasoning-gate fix wired,
+  ceiling 5035 → 4988.
+- **Deep context-layer hardening.** Sixteen items from an
+  openclaw / hermes / codex / pi gap analysis, plus a context-cache hardening
+  round (content-addressed packing, cross-run fingerprint carryover, watchdog
+  grain, prefix-stability contract).
+- **Loop layer, rounds 5–7.** Wake/resume channel deny layer, tree budget for
+  teams/swarm, Guardian cache/breaker, a goal wait-barrier, and lifecycle welds
+  across strategy tiers.
+- **Teams coordinated-tasks, rounds 4–5.** Snapshot protocol restore, a
+  pause/resume gate, live escalation leader and config, notifier re-arm, and a
+  filter single-source-of-truth.
+- **Memory management deepened (D1–D4).** Ack-inversion fix, session-end wiring,
+  compression fixes, and a batch `remember`, with adversarial-review fixes across
+  the note layer.
+- **File-op path safety.** Symlink-safe delete/move, glob/deny re-checks,
+  collision de-dup, per-path locks, a hardened path deny gate (`%APPDATA%`
+  expansion, system/proc guards), and an `apply_patch` forward cursor that fails
+  honestly on unplaceable additions.
+- **Subsystem hardening rounds.** Agent switching (binding seam, three-registry
+  sync, ghost self-heal), the hook system (Stop-event gate, consent/wiring,
+  fail-closed output), the voice conversation loop, the desktop bridge
+  (§7.1–7.6), permission-hierarchy round 4, event-driven waits for background
+  subagents, and wedged reverse-RPC teardown (slow-consumer eviction).
+- **Provider model presets refreshed** to the latest per vendor, with the catalog
+  realigned.
+
+### Fixed
+
+- **`skill_read` refused symlinked/duplicate skills.** It now resolves them by
+  precedence instead of reporting an ambiguity error.
+- **Gateway remote-auth rotation kick + device resurrection**, with the audit
+  trail wired and dead auth code pruned.
+- **`serde_json` map-insert key type** in `message_history`.
+- **Two pre-existing `alephcore` lib-suite test failures** unblocked the suite.
+- **Workspace-wide clippy / rust-doctor cleanups** to keep `-D warnings` green.
+
 ## [26.7.15]
 
 A hardening and safety release. The headline is a **three-tier execution

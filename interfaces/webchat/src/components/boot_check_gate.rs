@@ -19,6 +19,25 @@ use crate::state::connection::ConnectionPhase;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+/// Pure visibility predicate for the boot gate. The gate blocks the shell only
+/// while we are still booting **and** have not landed on the login wall:
+///   * `has_connected_once` — a first successful connect latched; runtime drops
+///     are ServiceBlockingGate's job, so never gate again.
+///   * `is_connected` — currently connected; nothing to gate.
+///   * `needs_token` — reachable-but-walled (a remote, unauthorized Panel). The
+///     core IS reachable, so a "cannot reach core" trouble screen would be a
+///     lie; the login wall (`TokenWall`, mounted at the shell root) owns the
+///     screen. The gate MUST yield here — otherwise its higher z-index buries
+///     the token box and the user can never authorize.
+#[must_use]
+pub(crate) fn boot_gate_visible(
+    has_connected_once: bool,
+    is_connected: bool,
+    needs_token: bool,
+) -> bool {
+    !has_connected_once && !is_connected && !needs_token
+}
+
 /// Overlay-only — the surrounding shell renders unconditionally, and this
 /// component is mounted as a sibling whose `<Show>` controls visibility.
 /// No children pass-through (that pattern is a React idiom; Leptos parents
@@ -36,15 +55,16 @@ pub fn BootCheckGate() -> impl IntoView {
     let has_connected_once = state.has_connected_once;
     let failure = state.connection_failure;
 
-    // Derived: should the overlay be visible at all? We hide on two signals:
+    // Derived: should the overlay be visible at all? We hide on three signals:
     //   * Connected at least once (handed off to ServiceBlockingGate)
     //   * Currently connected (caught up to ready state)
+    //   * Awaiting a token (reachable-but-walled — TokenWall owns the screen)
     let show_gate = Memo::new(move |_| {
-        if has_connected_once.get() {
-            return false;
-        }
-        // Still booting and never connected — gate the shell.
-        !state.is_connected.get()
+        boot_gate_visible(
+            has_connected_once.get(),
+            state.is_connected.get(),
+            state.needs_token.get(),
+        )
     });
 
     // Inner phase — only consulted when show_gate=true, but recomputed
@@ -147,18 +167,31 @@ pub fn BootCheckGate() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    // The component itself wires Leptos signals to DOM; we test the gating
-    // logic through ConnectionPhase (see state/connection.rs tests). The
-    // visibility predicate is intentionally trivial:
-    //   show_gate ⇔ !has_connected_once && !is_connected
-    // Documenting that here so future changes invalidate this comment
-    // before they invalidate behavior.
+    use super::boot_gate_visible;
 
     #[test]
-    fn show_gate_predicate_is_documented() {
-        // Sentinel test — fails the build if someone deletes the predicate
-        // doc above without updating tests. The actual reactive wiring is
-        // exercised end-to-end by the boot smoke test in tests/ (TBD).
-        let _ = "see comment above";
+    fn booting_and_never_connected_gates_the_shell() {
+        // Cold start, no connect yet, not walled → show the "Connecting…" gate.
+        assert!(boot_gate_visible(false, false, false));
+    }
+
+    #[test]
+    fn connected_once_never_gates_again() {
+        // Latched a first connect → ServiceBlockingGate owns runtime drops.
+        assert!(!boot_gate_visible(true, false, false));
+    }
+
+    #[test]
+    fn currently_connected_never_gates() {
+        assert!(!boot_gate_visible(false, true, false));
+    }
+
+    #[test]
+    fn walled_yields_to_token_wall() {
+        // Regression: a remote unauthorized Panel is reachable-but-walled. The
+        // boot gate (z-9000) must yield so the login wall (TokenWall, z-100) is
+        // visible and clickable; otherwise the token box is buried and the user
+        // can never authorize. This is the "找不到服务器 covers the token box" bug.
+        assert!(!boot_gate_visible(false, false, true));
     }
 }

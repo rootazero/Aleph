@@ -23,7 +23,7 @@ members = [
 [workspace.package]
 # CalVer — keep in sync with the VERSION file (single source of truth).
 # build.rs re-exposes the VERSION file as env!("ALEPH_VERSION") at compile time.
-version = "26.7.15"
+version = "26.7.18"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rootazero/Aleph"
@@ -96,6 +96,11 @@ lru = "0.12"
 
 # mDNS service discovery
 mdns-sd = "0.11"
+
+# Crypto / cert parsing (shared with desktop/shell cert_trust)
+sha2 = "0.10"
+hex = "0.4"
+x509-parser = "0.17"
 
 # UniFFI removed - using Gateway WebSocket architecture
 
@@ -231,6 +236,7 @@ axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rcgen = "0.13"
+if-addrs = "0.13"
 tower = "0.5"
 mime_guess = "2.0"
 mdns-sd = { workspace = true }

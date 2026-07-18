@@ -1003,7 +1003,10 @@ impl DashboardState {
                         self.token_was_rejected.set(was_rejected);
                         self.set_failure(ConnectionFailure::AuthRequired);
                         // Returning Ok keeps the boot/reconnect path from treating
-                        // the wall as a transport failure; TokenWall (z-100) covers it.
+                        // the wall as a transport failure. `needs_token` makes
+                        // BootCheckGate yield (see `boot_gate_visible`), so the
+                        // login wall (TokenWall) owns the screen instead of the
+                        // higher-z-index "cannot reach core" gate burying it.
                         Ok(())
                     }
                     Handshake::Failed(f) => {

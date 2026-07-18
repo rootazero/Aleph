@@ -167,6 +167,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         tls_enabled: full_config.gateway.tls.enabled,
         tls_cert_path: full_config.gateway.tls.cert_path.clone(),
         tls_key_path: full_config.gateway.tls.key_path.clone(),
+        tls_san: full_config.gateway.tls.san.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 

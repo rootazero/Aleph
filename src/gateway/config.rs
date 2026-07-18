@@ -100,6 +100,10 @@ pub struct GatewayTlsConfig {
     pub cert_path: String,
     /// PEM private-key path. Empty + `enabled` ⇒ auto self-signed.
     pub key_path: String,
+    /// Extra SAN entries (hostnames / IPs) added to the auto self-signed cert,
+    /// on top of loopback + auto-discovered interface IPs. Ignored for a
+    /// provided cert. Default empty.
+    pub san: Vec<String>,
 }
 
 /// Trusted reverse-proxy forwarding. When `enabled`, `X-Forwarded-For` /

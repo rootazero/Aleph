@@ -911,9 +911,17 @@ your.domain.com {
 #### Tier ② — Native self-signed TLS (no domain; weaker)
 
 No domain, no proxy — Aleph generates and persists a self-signed cert to
-`~/.aleph/data/tls/` on first boot and logs its SHA-256 fingerprint. Clients get
-a browser cert warning (accept-once, or pin the fingerprint). Encryption is
-real; the trust anchor is manual.
+`~/.aleph/data/tls/` on first boot and logs its SHA-256 fingerprint. Its SAN
+**auto-covers loopback plus every non-loopback interface IP of the box**
+(e.g. a VPS public IP on `eth0`), so connecting by that IP passes TLS hostname
+validation; add hostnames or a NAT'd public IP via `[gateway.tls] san = [...]`.
+Clients still get a browser cert warning (accept-once, or pin the fingerprint) —
+encryption is real, the trust anchor is manual. A newly-appearing address
+regenerates the cert (new fingerprint ⇒ re-trust once); a `sans.txt` sidecar
+tracks coverage so churn stays minimal. Note the SAN enumerates *every* local
+interface IP — including private/LAN and Docker-bridge addresses — so anyone who
+inspects the cert learns the box's interface map; harmless for a personal server,
+but list only what you need via `san` + a loopback bind if that matters.
 
 ```toml
 [gateway]
@@ -921,6 +929,7 @@ host = "0.0.0.0"
 
 [gateway.tls]
 enabled = true          # empty cert/key paths ⇒ auto self-signed
+# san = ["vps.example.com"]   # optional: hostnames or a NAT'd IP not on any local interface
 ```
 
 The Panel hard-codes `wss://` for any non-loopback host and refuses a plaintext

@@ -24,6 +24,10 @@ embedded-core = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+sha2 = { workspace = true }
+hex = { workspace = true }
+x509-parser = { workspace = true }
+serde = { workspace = true }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
@@ -47,6 +51,17 @@ mdns-sd = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.5"
 
+# Self-signed TLS trust hook for the Panel WKWebView (cert_trust::adapter_macos).
+# objc2 stack pinned to EXACTLY what wry 0.55 resolves so the injected challenge
+# handler's types unify with wry's WKNavigationDelegate — a second, incompatible
+# objc2 stack would not compile. security-framework/core-foundation give safe
+# SecTrust/SecCertificate DER extraction; both already resolve in the workspace lock.
+objc2 = "=0.6.4"
+objc2-foundation = "=0.3.2"
+block2 = "=0.6.2"
+core-foundation = "0.10"
+security-framework = "3"
+
 # Panel webview microphone grant (voice-input button). Versions pinned to what
 # wry 0.54 already resolves so the platform-webview handle types unify.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -54,3 +69,8 @@ webkit2gtk = "=2.0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "=0.38.2"
+
+[dev-dependencies]
+# Not in [workspace.dependencies] (only a root [dependencies] entry there);
+# pinned to match the version root/gateway/tls.rs already resolves.
+rcgen = "0.13"

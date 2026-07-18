@@ -218,6 +218,8 @@ pub struct GatewayConfig {
     pub tls_cert_path: String,
     /// Mirrors `GatewayServerConfig::tls.key_path`.
     pub tls_key_path: String,
+    /// Mirrors `GatewayServerConfig::tls.san`.
+    pub tls_san: Vec<String>,
 }
 
 impl Default for GatewayConfig {
@@ -236,6 +238,7 @@ impl Default for GatewayConfig {
             tls_enabled: false,
             tls_cert_path: String::new(),
             tls_key_path: String::new(),
+            tls_san: Vec::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -710,6 +713,7 @@ impl GatewayServer {
                 enabled: self.config.tls_enabled,
                 cert_path: self.config.tls_cert_path.clone(),
                 key_path: self.config.tls_key_path.clone(),
+                san: self.config.tls_san.clone(),
             };
             let tls_dir = crate::utils::paths::get_data_dir()
                 .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
@@ -764,6 +768,7 @@ impl GatewayServer {
                 enabled: self.config.tls_enabled,
                 cert_path: self.config.tls_cert_path.clone(),
                 key_path: self.config.tls_key_path.clone(),
+                san: self.config.tls_san.clone(),
             };
             let tls_dir = crate::utils::paths::get_data_dir()
                 .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?

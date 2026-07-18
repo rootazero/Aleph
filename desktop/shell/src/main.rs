@@ -10,6 +10,7 @@
     windows_subsystem = "windows"
 )]
 
+mod cert_trust;
 mod connection;
 // First-run connection setup (address entry + mDNS discovery) is panel-only:
 // the full app brings its bundled daemon up and never needs a connect-first
@@ -235,6 +236,9 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
+        cert_trust::pending::get_pending_cert,
+        cert_trust::pending::approve_cert,
+        cert_trust::pending::reject_cert,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -244,11 +248,20 @@ fn main() {
         connection::is_lite_shell,
         connect_setup::discover_servers,
         connect_setup::connect_to,
+        cert_trust::pending::get_pending_cert,
+        cert_trust::pending::approve_cert,
+        cert_trust::pending::reject_cert,
     ]);
 
     // Shared update state: the background checker, the tray, and the macOS
     // menu all read it.
     let builder = builder.manage(update::Updater::default());
+
+    // Shared pending-cert slot: the TLS-error hook (later task) writes to it,
+    // the `cert-trust.html` approval page's commands read/resolve it. Managed
+    // in both variants — either shell may connect to a self-signed remote
+    // Gateway.
+    let builder = builder.manage(cert_trust::pending::PendingCert::default());
 
     // Tracks the first Panel reveal (see `RevealGate`). Managed in both variants
     // so the single-instance handler can always read it; the full app's reveal
@@ -419,6 +432,11 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     // Grant the Panel webview microphone access (voice-input button). No-op on
     // macOS where wry auto-grants; installs handlers on Windows/Linux.
     webview_perms::grant_microphone(&window);
+
+    // Install the in-app self-signed TLS trust hook on the Panel webview. No-op
+    // on platforms without an adapter yet; on macOS injects a WKWebView challenge
+    // handler that TOFU-pins self-signed certs (fail-closed).
+    cert_trust::install::install_cert_trust(&window);
 
     // Restore the window's last size and position. On first run there is
     // nothing saved, so it keeps the centered default set above.
@@ -1039,6 +1057,11 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
     loop {
         tokio::time::sleep(LITE_REMOTE_POLL).await;
         let ready = connect_setup::target_reachable(&connection::load_target()).await;
+        if crate::cert_trust::pending::TRUST_PENDING.load(std::sync::atomic::Ordering::SeqCst) {
+            // A trust prompt owns the screen — don't relocate, and don't let a
+            // recovery tick navigate the webview away from the prompt.
+            continue;
+        }
         match supervisor.tick(ready) {
             SupervisorAction::ShowConnectionError => {
                 relocation_ticks += 1;
