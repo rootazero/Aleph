@@ -1,5 +1,22 @@
 import Foundation
 
+/// A pending server-trust approval raised by `PanelWebView`'s TLS-challenge
+/// handler. Carries the display facts plus the one-shot `decide` callback that
+/// resolves the underlying `WKWebView` auth challenge (`true` = trust + pin).
+/// Purely a transport concern (R4) — no business state.
+struct CertPromptRequest: Identifiable {
+    let id = UUID()
+    let host: String
+    let fingerprint: String
+    let subject: String
+    let sans: [String]
+    let reason: String
+    /// The previously-pinned fingerprint when the cert changed (possible MITM);
+    /// `nil` for a first-seen host. Drives the prominent warning banner.
+    let changedFrom: String?
+    let decide: (Bool) -> Void
+}
+
 /// Drives which screen the shell shows: the native pairing screen (transport
 /// config only) or the WASM panel. Holds no business state — that all lives in
 /// the panel (R2/R4).
@@ -11,6 +28,10 @@ final class AppState: ObservableObject {
     }
 
     @Published private(set) var screen: Screen = .pairing(message: nil)
+
+    /// A self-signed-cert approval awaiting the user's decision, or `nil`. Drives
+    /// the `CertTrustSheet` presented over the panel.
+    @Published var pendingCert: CertPromptRequest?
 
     private let store: ConnectionStoring
     private let probe: ReachabilityProbing
@@ -62,6 +83,20 @@ final class AppState: ObservableObject {
     /// Reveal the pairing screen on demand (shake gesture / webview load failure).
     func requestReconfigure(message: String? = nil) {
         screen = .pairing(message: message)
+    }
+
+    /// Raise a server-trust approval sheet (called from the webview's TLS hook).
+    func presentCertPrompt(_ request: CertPromptRequest) {
+        pendingCert = request
+    }
+
+    /// Resolve the pending trust prompt: run its one-shot decision, then dismiss
+    /// the sheet. `true` trusts + pins the cert; `false`/dismiss fails the load
+    /// closed. No-op if nothing is pending.
+    func resolvePendingCert(_ approved: Bool) {
+        guard let request = pendingCert else { return }
+        pendingCert = nil
+        request.decide(approved)
     }
 
     /// Current persisted target as a prefill string for the pairing field.
