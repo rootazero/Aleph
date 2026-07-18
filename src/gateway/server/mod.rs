@@ -710,6 +710,7 @@ impl GatewayServer {
                 enabled: self.config.tls_enabled,
                 cert_path: self.config.tls_cert_path.clone(),
                 key_path: self.config.tls_key_path.clone(),
+                ..Default::default()
             };
             let tls_dir = crate::utils::paths::get_data_dir()
                 .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
@@ -764,6 +765,7 @@ impl GatewayServer {
                 enabled: self.config.tls_enabled,
                 cert_path: self.config.tls_cert_path.clone(),
                 key_path: self.config.tls_key_path.clone(),
+                ..Default::default()
             };
             let tls_dir = crate::utils::paths::get_data_dir()
                 .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
