@@ -94,6 +94,29 @@ impl PimTool {
         let platform = self.platform.as_ref()?;
         let pim = platform.pim()?;
 
+        // Distinguish a missing required argument from an unimplemented action.
+        // Both previously fell through as `None` and surfaced the misleading
+        // "action is not implemented" message. `require!` returns an explicit
+        // arg error (a failed `PimOutput`, consistent with how native errors are
+        // reported below), so `None` now means only "unknown/unsupported action".
+        macro_rules! require {
+            ($opt:expr, $name:literal) => {
+                match $opt {
+                    Some(v) => v,
+                    None => {
+                        return Some(PimOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!(
+                                "PIM action '{}' requires the '{}' argument",
+                                args.action, $name
+                            )),
+                        })
+                    }
+                }
+            };
+        }
+
         let result: std::result::Result<serde_json::Value, aleph_desktop::DesktopError> =
             match args.action.as_str() {
                 // ── Notes ───────────────────────────────────────
@@ -102,13 +125,13 @@ impl PimTool {
                     .await
                     .map(|v| serde_json::to_value(v).unwrap_or_default()),
                 "notes_get" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.notes_read(id)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "notes_create" => {
-                    let title = args.title.as_deref()?;
+                    let title = require!(args.title.as_deref(), "title");
                     let folder = args.folder.as_deref().unwrap_or("Notes");
                     let body = args.body.as_deref().unwrap_or("");
                     pim.notes_create(folder, title, body)
@@ -116,13 +139,13 @@ impl PimTool {
                         .map(|id| serde_json::json!({ "id": id }))
                 }
                 "notes_update" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.notes_update(id, args.title.as_deref(), args.body.as_deref())
                         .await
                         .map(|()| serde_json::json!({ "updated": true }))
                 }
                 "notes_delete" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.notes_delete(id)
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
@@ -134,22 +157,22 @@ impl PimTool {
 
                 // ── Calendar ────────────────────────────────────
                 "calendar_list" => {
-                    let from = args.from?;
-                    let to = args.to?;
+                    let from = require!(args.from, "from");
+                    let to = require!(args.to, "to");
                     pim.calendar_list_events(from, to, args.calendar_id.as_deref())
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "calendar_get" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.calendar_get_event(id)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "calendar_create" => {
-                    let title = args.title.as_deref()?;
-                    let start = args.start?;
-                    let end = args.end?;
+                    let title = require!(args.title.as_deref(), "title");
+                    let start = require!(args.start, "start");
+                    let end = require!(args.end, "end");
                     let event = NewCalendarEvent {
                         title: title.to_string(),
                         calendar_id: args.calendar_id.clone().unwrap_or_default(),
@@ -164,7 +187,7 @@ impl PimTool {
                         .map(|id| serde_json::json!({ "id": id }))
                 }
                 "calendar_update" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     // Partial update must not blank omitted fields. The Swift
                     // handler assigns title/start/end UNCONDITIONALLY (only
                     // location/notes are `if let`-guarded), so an omitted title
@@ -225,7 +248,7 @@ impl PimTool {
                         .map(|()| serde_json::json!({ "updated": true }))
                 }
                 "calendar_delete" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.calendar_delete_event(id)
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
@@ -243,13 +266,13 @@ impl PimTool {
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "reminders_get" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.reminders_get(id)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "reminders_create" => {
-                    let title = args.title.as_deref()?;
+                    let title = require!(args.title.as_deref(), "title");
                     let reminder = NewReminder {
                         title: title.to_string(),
                         list_id: args.list_id.clone().unwrap_or_default(),
@@ -262,13 +285,13 @@ impl PimTool {
                         .map(|id| serde_json::json!({ "id": id }))
                 }
                 "reminders_complete" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.reminders_complete(id)
                         .await
                         .map(|()| serde_json::json!({ "completed": true }))
                 }
                 "reminders_delete" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.reminders_delete(id)
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
@@ -280,13 +303,13 @@ impl PimTool {
 
                 // ── Contacts ────────────────────────────────────
                 "contacts_search" => {
-                    let query = args.query.as_deref()?;
+                    let query = require!(args.query.as_deref(), "query");
                     pim.contacts_search(query)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "contacts_get" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.contacts_get(id)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
@@ -298,7 +321,7 @@ impl PimTool {
 
                 // ── Mail ────────────────────────────────────────
                 "mail_search" => {
-                    let query = args.query.as_deref()?;
+                    let query = require!(args.query.as_deref(), "query");
                     // Clamp at the I/O boundary (P7): an unbounded limit could
                     // force the native bridge to enumerate a huge result set.
                     let limit = args.limit.unwrap_or(20).clamp(1, 200);
@@ -307,7 +330,7 @@ impl PimTool {
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "mail_get" => {
-                    let id = args.id.as_deref()?;
+                    let id = require!(args.id.as_deref(), "id");
                     pim.mail_get(id)
                         .await
                         .map(|v| serde_json::to_value(v).unwrap_or_default())
