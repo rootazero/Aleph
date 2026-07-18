@@ -18,13 +18,23 @@
 //! by the tool-metadata layer both consumers already depend on — removes that
 //! drift: adding a row here surfaces the shortcut in every layer at once.
 //!
-//! Aliases here must target a **fast-path-executable** builtin tool (one present
-//! in `BUILTIN_TOOL_DEFINITIONS` with a `create_tool_boxed` arm). Shortcuts for
-//! commands handled by the router/gateway lifecycle instead of a raw tool
-//! (e.g. `/new`, `/clear` → the session-epoch handler, which is `None` in
-//! `create_tool_boxed`) belong on the curated `UnifiedTool` as a plain
-//! `with_aliases([...])` entry, not here — a SHORTHAND row for them would only
-//! map to a `None` tool and fall through.
+//! Aliases here must target a **fast-path-executable** builtin tool — one the
+//! execution fast path can run via `ToolRegistry::execute_tool`. That is either
+//! a static tool with a `create_tool_boxed` arm (`select_model`, `doctor`, …)
+//! OR a live-registered tool that has an `execute_tool` dispatch arm even though
+//! `create_tool_boxed` returns `None` (a `SessionManager`-dependent tool built
+//! at boot — e.g. `session_compact`). The fast path dispatches through
+//! `execute_tool` (see `execution_engine::slash_command::execute_direct_tool`),
+//! NOT `create_tool_boxed`, so the dispatch arm is what actually matters.
+//!
+//! What does NOT belong here: shortcuts for commands the **router intercepts**
+//! before the fast path and handles via a bespoke lifecycle path rather than the
+//! tool (e.g. `/new`, `/clear` → `handle_new_session`, which regenerates a topic
+//! and terminates continuations). `session_new` is a live tool too, but its
+//! `/new`/`/clear` names stay discovery-only (`with_aliases` on the curated
+//! entry) because the router owns its execution; a SHORTHAND row would race the
+//! router intercept. `session_compact` has no such router path — the tool IS the
+//! whole operation — so it is fast-pathed here.
 
 /// Shorthand slash alias → canonical tool name.
 ///
@@ -48,6 +58,13 @@ pub const SHORTHAND_ALIASES: &[(&str, &str)] = &[
     ("memories", "memory_search"),
     ("agent", "agent_switch"),
     ("agents", "agent_switch"),
+    // ── Session compaction (codex `/compact`, hermes `/compress` parity) ───
+    // `session_compact` is a live `SessionManager`-dependent tool (`None` in
+    // `create_tool_boxed`) but has an `execute_tool` dispatch arm, so the fast
+    // path runs it deterministically on every surface. The TUI/CLI already
+    // reach the same `SessionStore::compact` via the `session.compact` RPC.
+    ("compact", "session_compact"),
+    ("compress", "session_compact"),
 ];
 
 /// Reverse lookup: the aliases pointing at `canonical` (empty if none).
@@ -86,7 +103,17 @@ mod tests {
     fn reverse_lookup_matches_flat_table() {
         assert_eq!(shorthand_aliases_for("select_model"), vec!["model"]);
         assert_eq!(shorthand_aliases_for("agent_switch"), vec!["agent", "agents"]);
+        assert_eq!(
+            shorthand_aliases_for("session_compact"),
+            vec!["compact", "compress"]
+        );
         assert!(shorthand_aliases_for("nonexistent").is_empty());
+    }
+
+    #[test]
+    fn compact_aliases_resolve_to_session_compact() {
+        assert_eq!(resolve_shorthand("compact"), Some("session_compact"));
+        assert_eq!(resolve_shorthand("compress"), Some("session_compact"));
     }
 
     #[test]

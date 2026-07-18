@@ -503,6 +503,35 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })
             }
 
+            // Session compact tool — inject session key from session context
+            "session_compact" => {
+                let arguments = {
+                    let mut args = arguments;
+                    // Prefer the race-free per-turn session key; see session_new above.
+                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
+                        self.session_context_handle
+                            .as_ref()
+                            .and_then(|h| h.try_read().ok())
+                            .map(|ctx| ctx.session_key_str.clone())
+                    });
+                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
+                        obj.insert(
+                            "__session_key".into(),
+                            serde_json::Value::String(session_key),
+                        );
+                    }
+                    args
+                };
+                Box::pin(async move {
+                    let tool = self.session_compact_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "session_compact not available: no SessionManager configured",
+                        )
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+
             // Session set-topic tool — inject session key from session context
             "session_rename" => {
                 let arguments = {

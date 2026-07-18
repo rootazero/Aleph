@@ -46,6 +46,7 @@
 //! println!("Reply: {:?}", result.reply);
 //! ```
 
+pub mod compact_tool;
 pub mod helpers;
 pub mod list_tool;
 pub mod new_tool;
@@ -60,5 +61,6 @@ pub use list_tool::{SessionListRow, SessionsListArgs, SessionsListOutput, Sessio
 
 pub use send_tool::{SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool};
 
+pub use compact_tool::{SessionCompactArgs, SessionCompactOutput, SessionCompactTool};
 pub use new_tool::{SessionNewArgs, SessionNewOutput, SessionNewTool};
 pub use set_topic_tool::{SessionSetTopicArgs, SessionSetTopicOutput, SessionSetTopicTool};
