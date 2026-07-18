@@ -5,6 +5,8 @@
 //! to `~/.aleph/data/tls/`, fingerprint printed for client pinning). No ACME
 //! here — auto-issuance is Caddy's / certbot's job (R3).
 
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -79,6 +81,37 @@ fn generate_self_signed() -> anyhow::Result<(Vec<u8>, Vec<u8>, String)> {
     Ok((cert_pem, key_pem, fp))
 }
 
+/// Base SANs every self-signed cert always carries.
+const BASE_SANS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// True if `s` is a plausible DNS name. rcgen rejects garbage and would fail
+/// cert generation, which must never brick startup, so we pre-filter.
+fn is_plausible_dns_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// Assemble the SAN list for a self-signed cert (pure): base loopback set +
+/// discovered interface IPs + validated operator extras, order-stable deduped.
+pub(crate) fn self_signed_sans(configured: &[String], discovered: &[IpAddr]) -> Vec<String> {
+    let mut sans: Vec<String> = BASE_SANS.iter().map(|s| (*s).to_string()).collect();
+    for ip in discovered {
+        sans.push(ip.to_string());
+    }
+    for raw in configured {
+        let s = raw.trim();
+        if s.parse::<IpAddr>().is_ok() || is_plausible_dns_name(s) {
+            sans.push(s.to_string());
+        } else if !s.is_empty() {
+            tracing::warn!(san = %s, "gateway.tls.san: dropping malformed SAN entry");
+        }
+    }
+    let mut seen = HashSet::new();
+    sans.retain(|s| seen.insert(s.clone()));
+    sans
+}
+
 fn fingerprint(cert_pem: &[u8]) -> String {
     let digest = Sha256::digest(cert_pem);
     digest.iter().map(|b| format!("{b:02x}")).collect()
@@ -114,5 +147,30 @@ mod tests {
         // Second call reuses the persisted cert → identical fingerprint.
         let (_c2, _k2, fp2) = load_or_generate(&cfg, dir.path()).await.unwrap();
         assert_eq!(fp1, fp2);
+    }
+
+    #[test]
+    fn sans_include_base_discovered_and_config() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let discovered = vec![IpAddr::V4(Ipv4Addr::new(172, 245, 43, 211))];
+        let configured = vec!["vps.example.com".to_string(), "10.0.0.5".to_string()];
+        let sans = self_signed_sans(&configured, &discovered);
+        for expect in ["localhost", "127.0.0.1", "::1", "172.245.43.211", "vps.example.com", "10.0.0.5"] {
+            assert!(sans.contains(&expect.to_string()), "missing {expect}");
+        }
+    }
+
+    #[test]
+    fn sans_dedup_and_drop_malformed() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let discovered = vec![
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+        ];
+        let configured = vec!["127.0.0.1".to_string(), "bad name!".to_string(), "   ".to_string()];
+        let sans = self_signed_sans(&configured, &discovered);
+        assert_eq!(sans.iter().filter(|s| *s == "203.0.113.7").count(), 1);
+        assert_eq!(sans.iter().filter(|s| *s == "127.0.0.1").count(), 1);
+        assert!(!sans.iter().any(|s| s.contains('!')));
     }
 }
