@@ -29,7 +29,8 @@ fn general_name_to_string(gn: &x509_parser::extensions::GeneralName<'_>) -> Stri
         GeneralName::IPAddress(bytes) => <[u8; 4]>::try_from(*bytes)
             .map(|octets| std::net::Ipv4Addr::from(octets).to_string())
             .or_else(|_| {
-                <[u8; 16]>::try_from(*bytes).map(|octets| std::net::Ipv6Addr::from(octets).to_string())
+                <[u8; 16]>::try_from(*bytes)
+                    .map(|octets| std::net::Ipv6Addr::from(octets).to_string())
             })
             .unwrap_or_else(|_| gn.to_string()),
         other => other.to_string(),
@@ -94,6 +95,14 @@ mod tests {
     fn parse_cert_info_extracts_ip_san() {
         let info = parse_cert_info(&sample_der(), "self-signed");
         assert!(info.sans.iter().any(|s| s.contains("172.245.43.211")));
+        assert_eq!(info.reason, "self-signed");
+    }
+
+    #[test]
+    fn parse_cert_info_on_malformed_der_is_empty_not_panic() {
+        let info = parse_cert_info(&[0xDE, 0xAD, 0xBE, 0xEF], "self-signed");
+        assert!(info.sans.is_empty());
+        assert!(info.subject.is_empty());
         assert_eq!(info.reason, "self-signed");
     }
 }
