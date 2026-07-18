@@ -240,11 +240,16 @@ dependencies = [
 name = "aleph-desktop-shell"
 version = "26.7.17"
 dependencies = [
+ "block2 0.6.2",
+ "core-foundation 0.10.1",
  "dirs 6.0.0",
  "futures-util",
  "hex",
  "mdns-sd",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "rcgen",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",

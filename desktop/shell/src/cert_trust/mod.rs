@@ -4,8 +4,12 @@
 //! pinned-fingerprint match is ever allowed (fail-closed).
 
 pub mod fingerprint;
+pub mod install;
 pub mod pending;
 pub mod store;
+
+#[cfg(target_os = "macos")]
+pub mod adapter_macos;
 
 use serde::Serialize;
 

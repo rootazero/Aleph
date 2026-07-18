@@ -433,6 +433,11 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     // macOS where wry auto-grants; installs handlers on Windows/Linux.
     webview_perms::grant_microphone(&window);
 
+    // Install the in-app self-signed TLS trust hook on the Panel webview. No-op
+    // on platforms without an adapter yet; on macOS injects a WKWebView challenge
+    // handler that TOFU-pins self-signed certs (fail-closed).
+    cert_trust::install::install_cert_trust(&window);
+
     // Restore the window's last size and position. On first run there is
     // nothing saved, so it keeps the centered default set above.
     if let Err(e) = window.restore_state(window_state_flags()) {
