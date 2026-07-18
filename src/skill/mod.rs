@@ -359,6 +359,41 @@ impl SkillSystem {
         None
     }
 
+    /// Find the on-disk directory whose `SKILL.md` parses to `id`, without
+    /// assuming the directory basename equals the derived id. The flat layout
+    /// stores skills under `<root>/<install-slug>/SKILL.md` while the id comes
+    /// from the `name:` frontmatter, so the two can differ. Scans only the
+    /// immediate subdirectories of each registered root.
+    async fn skill_dir_for_id(&self, id: &SkillId) -> Option<PathBuf> {
+        let id_str = id.as_str();
+        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
+            return None;
+        }
+        let dirs = self.inner.skill_dirs.read().await.clone();
+        for root in &dirs {
+            let entries = match std::fs::read_dir(root) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let sub = entry.path();
+                if !sub.is_dir() {
+                    continue;
+                }
+                let md = sub.join("SKILL.md");
+                if !md.exists() {
+                    continue;
+                }
+                if let Ok(m) = parse_skill_file(&md, guess_source(&sub)) {
+                    if m.id().as_str() == id_str {
+                        return Some(sub);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Locate the on-disk `SKILL.md` for a skill in the flat
     /// `<skills_dir>/<id>/SKILL.md` layout. Returns `None` for nested
     /// (plugin) layouts and malformed ids.
@@ -496,18 +531,18 @@ impl SkillSystem {
         drop(registry);
         if removed {
             if deletable_on_disk {
-                // Locate before `forget` below — the nested-layout fallback in
-                // `owning_dir` consults the very sidecar rows we are about to drop.
-                if let Some(skill_md) = self.locate_skill_file(id).await {
-                    if let Some(skill_dir) = skill_md.parent() {
-                        if let Err(e) = std::fs::remove_dir_all(skill_dir) {
-                            tracing::warn!(
-                                skill_id = %id.as_str(),
-                                path = %skill_dir.display(),
-                                error = %e,
-                                "remove_skill: failed to delete skill directory"
-                            );
-                        }
+                // Resolve the backing directory by matching the parsed id, not by
+                // assuming `dirname == id` — otherwise a skill whose install-slug
+                // directory differs from its frontmatter-derived id survives on
+                // disk and the next rescan resurrects it.
+                if let Some(skill_dir) = self.skill_dir_for_id(id).await {
+                    if let Err(e) = std::fs::remove_dir_all(&skill_dir) {
+                        tracing::warn!(
+                            skill_id = %id.as_str(),
+                            path = %skill_dir.display(),
+                            error = %e,
+                            "remove_skill: failed to delete skill directory"
+                        );
                     }
                 }
             }
