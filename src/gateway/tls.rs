@@ -1,9 +1,11 @@
 //! Native in-process TLS material for the gateway listener.
 //!
 //! Three modes off `[gateway.tls]`: disabled (plaintext), operator-provided
-//! cert/key files, or auto self-signed (generated once via `rcgen`, persisted
-//! to `~/.aleph/data/tls/`, fingerprint printed for client pinning). No ACME
-//! here — auto-issuance is Caddy's / certbot's job (R3).
+//! cert/key files, or auto self-signed. The self-signed cert's SAN covers
+//! loopback, every non-loopback interface IP (auto-discovered), and any
+//! `[gateway.tls] san` extras; it is persisted to `~/.aleph/data/tls/` with a
+//! `sans.txt` sidecar, and regenerated when a newly-desired SAN is not yet
+//! covered. No ACME here — auto-issuance is Caddy's / certbot's job (R3).
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -53,28 +55,36 @@ pub async fn load_or_generate(
         TlsMode::SelfSigned => {
             let cert_file = dir.join("cert.pem");
             let key_file = dir.join("key.pem");
-            if cert_file.exists() && key_file.exists() {
-                let cert = tokio::fs::read(&cert_file).await?;
-                let key = tokio::fs::read(&key_file).await?;
-                let fp = fingerprint(&cert);
-                return Ok((cert, key, fp));
+            let san_file = dir.join("sans.txt");
+
+            let discovered = discover_interface_ips();
+            let desired = self_signed_sans(&cfg.san, &discovered);
+
+            if cert_file.exists() && key_file.exists() && san_file.exists() {
+                let recorded = parse_recorded_sans(&tokio::fs::read_to_string(&san_file).await?);
+                if desired_covered(&recorded, &desired) {
+                    let cert = tokio::fs::read(&cert_file).await?;
+                    let key = tokio::fs::read(&key_file).await?;
+                    let fp = fingerprint(&cert);
+                    return Ok((cert, key, fp));
+                }
             }
-            let (cert, key, fp) = generate_self_signed()?;
+
+            let (cert, key, fp) = generate_self_signed(&desired)?;
             tokio::fs::create_dir_all(dir).await?;
             tokio::fs::write(&cert_file, &cert).await?;
             tokio::fs::write(&key_file, &key).await?;
+            tokio::fs::write(&san_file, desired.join("\n")).await?;
             Ok((cert, key, fp))
         }
     }
 }
 
-/// rcgen 0.13 self-signed for localhost + loopback. Returns PEM cert, PEM key,
-/// and the SHA-256 fingerprint hex of the PEM cert bytes.
-fn generate_self_signed() -> anyhow::Result<(Vec<u8>, Vec<u8>, String)> {
-    let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ])?;
+/// rcgen 0.13 self-signed for the given SANs (each string classified as IP or
+/// DNS by rcgen). Returns PEM cert, PEM key, and the SHA-256 fingerprint hex.
+fn generate_self_signed(sans: &[String]) -> anyhow::Result<(Vec<u8>, Vec<u8>, String)> {
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(sans.to_vec())?;
     let cert_pem = cert.pem().into_bytes();
     let key_pem = key_pair.serialize_pem().into_bytes();
     let fp = fingerprint(&cert_pem);
@@ -90,6 +100,17 @@ fn is_plausible_dns_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 253
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// Parse the newline-delimited SAN sidecar into a set (blank lines ignored).
+fn parse_recorded_sans(content: &str) -> HashSet<String> {
+    content.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// Reuse the persisted cert iff every desired SAN is already recorded (subset,
+/// not equality — removing an interface IP must not thrash the cert).
+fn desired_covered(recorded: &HashSet<String>, desired: &[String]) -> bool {
+    desired.iter().all(|s| recorded.contains(s))
 }
 
 /// True if `ip` is a usable SAN target (not loopback, not link-local).
@@ -214,5 +235,40 @@ mod tests {
         for ip in discover_interface_ips() {
             assert!(!ip.is_loopback());
         }
+    }
+
+    #[test]
+    fn parse_recorded_sans_ignores_blanks() {
+        let set = parse_recorded_sans("localhost\n127.0.0.1\n\n  \n203.0.113.7\n");
+        assert_eq!(set.len(), 3);
+        assert!(set.contains("203.0.113.7"));
+    }
+
+    #[test]
+    fn desired_covered_subset_logic() {
+        let recorded: HashSet<String> =
+            ["localhost", "127.0.0.1", "::1", "203.0.113.7"].iter().map(|s| s.to_string()).collect();
+        assert!(desired_covered(&recorded, &["127.0.0.1".to_string(), "203.0.113.7".to_string()]));
+        assert!(!desired_covered(&recorded, &["203.0.113.7".to_string(), "198.51.100.9".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn regenerates_when_desired_not_covered() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg0 = GatewayTlsConfig { enabled: true, ..Default::default() };
+        let (_c0, _k0, fp0) = load_or_generate(&cfg0, dir.path()).await.unwrap();
+        assert!(dir.path().join("sans.txt").exists());
+
+        let cfg1 = GatewayTlsConfig {
+            enabled: true,
+            san: vec!["203.0.113.77".to_string()],
+            ..Default::default()
+        };
+        let (_c1, _k1, fp1) = load_or_generate(&cfg1, dir.path()).await.unwrap();
+        assert_ne!(fp0, fp1, "adding an uncovered SAN must regenerate the cert");
+
+        let recorded =
+            parse_recorded_sans(&tokio::fs::read_to_string(dir.path().join("sans.txt")).await.unwrap());
+        assert!(recorded.contains("203.0.113.77"));
     }
 }
