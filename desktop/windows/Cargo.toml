@@ -29,6 +29,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
+    # Power Request API (PowerCreateRequest/PowerSetRequest/PowerClearRequest)
+    # backing the sleep inhibitor — process-scoped, handle-based, thread-safe.
+    "Win32_System_Power",
     "Win32_System_SystemInformation",
     "Win32_System_LibraryLoader",
     "Win32_Globalization",
