@@ -301,6 +301,18 @@ impl LoopState {
                 None => parts.push("next wake: unset (uses fallback)".to_string()),
             }
         }
+        // A fixed-cadence loop knows its next fire too: `try_claim_tick` clears
+        // `next_wake_ms` (meaningless for Fixed) but stamps the absolute wake into
+        // `pending_tick_wake_ms` when it enqueues the tick. Surface it so a fixed
+        // watch-loop reports when it next runs, mirroring the model-paced next-wake
+        // line above. Cleared during a firing tick (`confirm_fire`) → omitted then.
+        if matches!(self.cadence, Cadence::Fixed { .. }) {
+            if let Some(wake) = self.pending_tick_wake_ms {
+                if now_ms != 0 && wake > now_ms {
+                    parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
+                }
+            }
+        }
         if let Some(reason) = &self.stop_reason {
             parts.push(format!("reason: {reason}"));
         }
@@ -365,6 +377,16 @@ impl LoopState {
                 }
                 Some(_) => parts.push("next wake: due now".to_string()),
                 None => parts.push("next wake: unset (uses fallback)".to_string()),
+            }
+        }
+        // Fixed-cadence next fire rides the transient tail too — see
+        // `human_summary` for why `pending_tick_wake_ms` (not `next_wake_ms`)
+        // holds the known wake for a fixed loop.
+        if matches!(self.cadence, Cadence::Fixed { .. }) {
+            if let Some(wake) = self.pending_tick_wake_ms {
+                if now_ms != 0 && wake > now_ms {
+                    parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
+                }
             }
         }
         parts
@@ -545,7 +567,9 @@ mod tests {
             "existence, not remaining time"
         );
         assert!(
-            !out.contains("time left") && !out.contains("next wake"),
+            !out.contains("time left")
+                && !out.contains("next wake")
+                && !out.contains("next tick"),
             "no countdown may reach the cached prefix; got: {out}"
         );
         // Byte-identical regardless of when it is rendered — the whole point.
@@ -623,6 +647,34 @@ mod tests {
         let s = stopped.human_summary(2_000);
         assert!(s.contains("Loop stopped"));
         assert!(s.contains("reason: reached the iteration cap"));
+    }
+
+    #[test]
+    fn human_summary_shows_next_tick_for_fixed_with_pending() {
+        // A fixed loop with a tick enqueued (pending_tick_wake_ms set) reports the
+        // known next fire — the gap this arm closes: before it, only model-paced
+        // loops rendered a next-fire countdown. sample() is a Fixed 5m loop.
+        let l = sample().with_pending_tick(Some(10_000));
+        assert!(
+            l.human_summary(4_000).contains("next tick: in 6s"),
+            "{}",
+            l.human_summary(4_000)
+        );
+        // No pending (a firing tick cleared it) → no next-tick line.
+        assert!(!sample().human_summary(4_000).contains("next tick"));
+        // Clock unavailable (0) → no misleading countdown.
+        assert!(!l.human_summary(0).contains("next tick"));
+    }
+
+    #[test]
+    fn live_status_shows_next_tick_for_fixed_with_pending() {
+        let l = sample().with_pending_tick(Some(10_000));
+        assert!(l
+            .live_status(4_000)
+            .iter()
+            .any(|s| s.contains("next tick: in 6s")));
+        // No pending and no deadline → nothing to relocate onto the tail.
+        assert!(sample().live_status(4_000).is_empty());
     }
 
     #[test]
