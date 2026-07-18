@@ -3,6 +3,7 @@
 //! Allows LLM to read resources from connected MCP servers.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use futures::Future;
 use schemars::JsonSchema;
@@ -11,7 +12,7 @@ use serde_json::Value;
 
 use crate::error::Result;
 use crate::mcp::manager::McpManagerHandle;
-use crate::mcp::ResourceContent;
+use crate::mcp::{McpClient, ResourceContent};
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
 
@@ -74,27 +75,16 @@ impl AlephToolDyn for McpReadResourceTool {
         Box::pin(async move {
             let args: McpReadResourceArgs = serde_json::from_value(args)?;
 
-            // Extract server_id from URI prefix (e.g., "server_name:file:///path")
-            // Try each colon position as a potential separator to handle server IDs
-            // that contain colons (e.g., "plugin:foo/bar")
+            // Split the server-qualified uri into (client, resource_uri),
+            // stripping exactly one server-prefix layer via LONGEST-prefix match
+            // (see `resolve_server_qualified` for why shortest-match mis-routed
+            // when one server id is a colon-prefix of another).
             let uri = &args.uri;
-            let (client, resource_uri) = {
-                let mut found = None;
-                for (idx, _) in uri.match_indices(':') {
-                    let candidate = &uri[..idx];
-                    if let Ok(Some(c)) = self.handle.get_client(candidate).await {
-                        found = Some((c, &uri[idx + 1..]));
-                        break;
-                    }
-                }
-                match found {
-                    Some(pair) => pair,
-                    None => {
-                        return Err(crate::error::AlephError::NotFound(format!(
-                            "No MCP server found for URI: {uri}"
-                        )));
-                    }
-                }
+            let Some((client, resource_uri)) = resolve_server_qualified(&self.handle, uri).await
+            else {
+                return Err(crate::error::AlephError::NotFound(format!(
+                    "No MCP server found for URI: {uri}"
+                )));
             };
 
             let content = client.read_resource(resource_uri).await?;
@@ -133,6 +123,42 @@ impl AlephToolDyn for McpReadResourceTool {
 /// thousands; capping keeps the discovery result from blowing the model's
 /// context. When hit, the model is told to narrow with the `server` filter.
 const MAX_RESOURCE_ENTRIES: usize = 500;
+
+/// Server-prefix candidates for a server-qualified id, **longest prefix first**.
+/// Each item is `(candidate_server, remainder)` split at a `:`. Pure (no IO), so
+/// the longest-first ordering is unit-testable independently of a live manager.
+fn server_prefix_candidates(qualified: &str) -> Vec<(&str, &str)> {
+    let mut out: Vec<(&str, &str)> = qualified
+        .match_indices(':')
+        .map(|(idx, _)| (&qualified[..idx], &qualified[idx + 1..]))
+        .collect();
+    out.reverse();
+    out
+}
+
+/// Resolve a server-qualified id (`<server>:<rest>`) to its owning client plus
+/// the remainder, stripping exactly ONE server-prefix layer.
+///
+/// Uses **longest** server-prefix match, mirroring the client's own prefix
+/// resolution. Shortest/first match — the previous inline loop duplicated in
+/// both `mcp_read_resource` and `mcp_get_prompt` — mis-routed when one server id
+/// was a colon-prefix of another: a resource on a server literally named
+/// `gh:sub` also satisfies `get_client("gh")`, so it resolved to server `gh` and
+/// stripped the wrong layer. Iterating colon positions right-to-left tries the
+/// longest candidate first; `get_client` returns `None` for any non-server
+/// prefix (e.g. the `file://` inside a `file:///…` uri), so the first hit is the
+/// longest *registered* server id. Shared by both MCP read tools.
+pub(crate) async fn resolve_server_qualified<'a>(
+    handle: &McpManagerHandle,
+    qualified: &'a str,
+) -> Option<(Arc<McpClient>, &'a str)> {
+    for (candidate, remainder) in server_prefix_candidates(qualified) {
+        if let Ok(Some(client)) = handle.get_client(candidate).await {
+            return Some((client, remainder));
+        }
+    }
+    None
+}
 
 /// Build the opaque, server-qualified id emitted for discovery.
 ///
@@ -439,6 +465,24 @@ mod tests {
         let json = json!({"uri": "server:file:///test.txt"});
         let args: McpReadResourceArgs = serde_json::from_value(json).unwrap();
         assert_eq!(args.uri, "server:file:///test.txt");
+    }
+
+    #[test]
+    fn server_prefix_candidates_are_longest_first() {
+        // Colons at the server boundary AND inside the uri scheme. The doubled
+        // `qualified_id` form `gh:sub:file:///x` must yield candidates
+        // longest-first so a server literally named `gh:sub` is probed BEFORE
+        // the shorter `gh` — otherwise a `gh:sub` resource mis-routes to `gh`.
+        assert_eq!(
+            server_prefix_candidates("gh:sub:file:///x"),
+            vec![
+                ("gh:sub:file", "///x"),
+                ("gh:sub", "file:///x"),
+                ("gh", "sub:file:///x"),
+            ]
+        );
+        // No colon → no server-qualified split → no candidates (caller 404s).
+        assert!(server_prefix_candidates("nocolons").is_empty());
     }
 
     #[test]
