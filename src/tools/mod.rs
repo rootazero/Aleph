@@ -37,7 +37,6 @@ pub mod budget;
 pub mod concurrency;
 pub mod context;
 pub mod error_kind;
-pub mod execution_context;
 pub mod fallback_registry;
 pub mod fs_scope;
 pub mod gather_budget;

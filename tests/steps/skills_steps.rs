@@ -173,7 +173,6 @@ async fn given_watcher_config(w: &mut AlephWorld, debounce_ms: u64) {
     let ctx = w.skills.as_mut().expect("Skills context not initialized");
     ctx.watcher_config = Some(SkillWatcherConfig {
         debounce_duration: Duration::from_millis(debounce_ms),
-        emit_initial_events: false,
     });
 }
 
@@ -891,10 +890,4 @@ async fn then_reload_count_0(w: &mut AlephWorld) {
 async fn then_default_debounce(_w: &mut AlephWorld) {
     let config = SkillWatcherConfig::default();
     assert_eq!(config.debounce_duration, Duration::from_millis(500));
-}
-
-#[then("the default watcher config emit_initial_events should be false")]
-async fn then_default_emit_initial(_w: &mut AlephWorld) {
-    let config = SkillWatcherConfig::default();
-    assert!(!config.emit_initial_events);
 }

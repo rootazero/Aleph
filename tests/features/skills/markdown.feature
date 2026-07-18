@@ -160,7 +160,6 @@ Feature: Markdown Skills System
 
   Scenario: Watcher config defaults
     Then the default watcher config debounce should be 500ms
-    And the default watcher config emit_initial_events should be false
 
   Scenario: Watcher ignores non-skill files
     Given an empty temp directory for skills

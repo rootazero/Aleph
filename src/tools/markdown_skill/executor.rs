@@ -358,7 +358,18 @@ impl MarkdownCliTool {
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             match aleph_meta.security.network {
                 NetworkMode::None => "none".to_string(),
-                NetworkMode::Local => "bridge".to_string(),
+                NetworkMode::Local => {
+                    // Docker's default bridge network NATs to the internet, so
+                    // `network=local` (LAN-only) is NOT actually enforced here.
+                    // Be honest, mirroring the host-mode network=none warning.
+                    warn!(
+                        skill = %self.spec.name,
+                        "skill declares network=local but docker maps it to the \
+                         default bridge network, which NATs to the internet; \
+                         local-only egress is NOT enforced"
+                    );
+                    "bridge".to_string()
+                }
                 NetworkMode::Internet => "bridge".to_string(),
             }
         } else {

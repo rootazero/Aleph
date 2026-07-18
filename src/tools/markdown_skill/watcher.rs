@@ -37,15 +37,12 @@ pub type ReloadCallback = Arc<dyn Fn(Vec<MarkdownCliTool>) -> Result<()> + Send 
 pub struct SkillWatcherConfig {
     /// Debounce duration (default: 500ms)
     pub debounce_duration: Duration,
-    /// Whether to emit initial events for existing files
-    pub emit_initial_events: bool,
 }
 
 impl Default for SkillWatcherConfig {
     fn default() -> Self {
         Self {
             debounce_duration: Duration::from_millis(500),
-            emit_initial_events: false,
         }
     }
 }

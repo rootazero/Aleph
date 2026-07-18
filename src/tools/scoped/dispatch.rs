@@ -191,6 +191,16 @@ impl ScopedToolService {
                             ),
                         );
                         if let Err(denial) = self.confirm_with_memory(req, &action, &input).await {
+                            // An expired card is not a decision — mirror the
+                            // confirm gate below and return the retryable
+                            // ApprovalExpired instead of a hard PermissionDenied
+                            // the harness would ban non-retryably.
+                            if matches!(denial.outcome, ApprovalOutcome::Timeout) {
+                                return Err(ToolError::ApprovalExpired {
+                                    name: name.to_string(),
+                                    waited_ms: denial.waited_ms,
+                                });
+                            }
                             let said = denial.user_reason_clause();
                             return Err(ToolError::PermissionDenied {
                                 name: name.to_string(),
@@ -809,6 +819,15 @@ impl ScopedToolService {
                     let action = ApprovalAction::for_tool_call(name, &input, reason);
                     if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
                     {
+                        // An expired card is not a refusal — mirror the confirm
+                        // gate and return the retryable ApprovalExpired rather
+                        // than a non-retryable Execution error the harness bans.
+                        if matches!(denial.outcome, ApprovalOutcome::Timeout) {
+                            return Err(ToolError::ApprovalExpired {
+                                name: name.to_string(),
+                                waited_ms: denial.waited_ms,
+                            });
+                        }
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         let said = denial.user_reason_clause();
                         return Err(ToolError::Execution {
