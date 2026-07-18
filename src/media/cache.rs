@@ -312,19 +312,33 @@ impl MediaCache {
             || item.url.starts_with("./")
             || item.url.starts_with("~/")
         {
-            // Local file path
-            Attachment {
-                // rust-doctor-disable-next-line excessive-clone
-                id: id.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                mime_type: mime.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                filename: item.filename.clone(),
-                size: None,
-                url: None,
-                // rust-doctor-disable-next-line excessive-clone
-                path: Some(item.url.clone()),
-                data: None,
+            // Local file path. A `media_send` path is model-supplied and
+            // untrusted: only accept one that resolves inside the OS temp dir —
+            // the sole root where legitimate producers write (native
+            // camera_clip/record_audio via NSTemporaryDirectory, and this cache
+            // itself under `<temp_dir>/aleph/media`). Without this a crafted path
+            // like "~/.ssh/id_rsa" or "/etc/passwd" would be read and delivered
+            // outbound (arbitrary-file exfiltration).
+            match Self::safe_local_media_path(&item.url).await {
+                Some(safe) => Attachment {
+                    // rust-doctor-disable-next-line excessive-clone
+                    id: id.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
+                    mime_type: mime.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
+                    filename: item.filename.clone(),
+                    size: None,
+                    url: None,
+                    path: Some(safe),
+                    data: None,
+                },
+                None => {
+                    warn!(
+                        path = %item.url,
+                        "media_send local path escapes the allowed media root; refusing to attach file"
+                    );
+                    return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
+                }
             }
         } else {
             // HTTP/HTTPS URL
@@ -398,6 +412,25 @@ impl MediaCache {
         };
 
         Ok((mime, bytes))
+    }
+
+    /// Validate a model-supplied local media path for outbound delivery.
+    ///
+    /// Returns the canonicalized path (as a String) iff it resolves inside the
+    /// OS temp dir — the only root where legitimate producers write (native
+    /// `camera_clip`/`record_audio` via `NSTemporaryDirectory`, and this cache's
+    /// own `<temp_dir>/aleph/media`). Canonicalization collapses `..` and
+    /// symlinks first, and `PathBuf::starts_with` matches whole components, so an
+    /// escape cannot slip past the prefix check. Returns `None` for any path
+    /// outside that root (or one that cannot be resolved), which the caller
+    /// treats as "do not attach this file".
+    async fn safe_local_media_path(raw: &str) -> Option<String> {
+        let expanded = expand_tilde(raw);
+        let canonical = tokio::fs::canonicalize(&expanded).await.ok()?;
+        let root = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
+        canonical
+            .starts_with(&root)
+            .then(|| canonical.to_string_lossy().into_owned())
     }
 
     /// Create a URL-only fallback Attachment (no local file).
@@ -502,6 +535,49 @@ fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn download_media_item_rejects_local_path_outside_temp_root() {
+        // A model-supplied path outside the OS temp dir must not be attached as a
+        // local file (arbitrary-file exfiltration guard): it falls back to
+        // URL-only, which carries no readable `path` for the channel to upload.
+        let cache = MediaCache::new();
+        let item = MediaItem {
+            url: "/etc/hosts".to_string(),
+            media_type: "file".to_string(),
+            mime_type: None,
+            filename: None,
+        };
+        let att = cache.download_media_item(&item, "sess-guard").await;
+        assert!(
+            att.path.is_none(),
+            "file outside the temp root must not be attached, got {:?}",
+            att.path
+        );
+    }
+
+    #[tokio::test]
+    async fn download_media_item_allows_local_path_inside_temp_root() {
+        // A file a legitimate producer wrote under the OS temp dir (where
+        // camera_clip/record_audio and this cache write) must still attach.
+        let dir = std::env::temp_dir().join("aleph-media-guard-test");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("clip.bin");
+        tokio::fs::write(&path, b"hello").await.unwrap();
+        let cache = MediaCache::new();
+        let item = MediaItem {
+            url: path.to_string_lossy().into_owned(),
+            media_type: "file".to_string(),
+            mime_type: Some("application/octet-stream".to_string()),
+            filename: Some("clip.bin".to_string()),
+        };
+        let att = cache.download_media_item(&item, "sess-guard").await;
+        assert!(
+            att.path.is_some(),
+            "file inside the temp root must be attached"
+        );
+        let _ = tokio::fs::remove_file(&path).await;
+    }
 
     /// Helper to build a minimal Attachment with all sources None.
     fn empty_attachment() -> Attachment {
