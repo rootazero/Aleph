@@ -22,10 +22,6 @@ pub struct CronConfig {
     #[serde(default = "default_check_interval")]
     pub check_interval_secs: u64,
 
-    /// Maximum concurrent job executions
-    #[serde(default = "default_max_concurrent")]
-    pub max_concurrent_jobs: usize,
-
     /// Job execution timeout in seconds
     #[serde(default = "default_job_timeout")]
     pub job_timeout_secs: u64,
@@ -84,10 +80,6 @@ const fn default_check_interval() -> u64 {
     60 // 1 minute
 }
 
-const fn default_max_concurrent() -> usize {
-    5
-}
-
 const fn default_job_timeout() -> u64 {
     // 15 minutes. Coupled to `default_cron_max_iterations = Some(200)`:
     // a 200-iter run averaging ~3s/turn lands around 10 min, so 15 min
@@ -119,7 +111,6 @@ impl Default for CronConfig {
             enabled: true,
             db_path: default_db_path(),
             check_interval_secs: 60,
-            max_concurrent_jobs: 5,
             job_timeout_secs: 900,
             history_retention_days: 30,
             max_concurrent_agents: Some(2),
@@ -147,9 +138,6 @@ impl CronConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.check_interval_secs == 0 {
             return Err("check_interval_secs must be > 0".to_string());
-        }
-        if self.max_concurrent_jobs == 0 {
-            return Err("max_concurrent_jobs must be > 0".to_string());
         }
         if self.job_timeout_secs == 0 {
             return Err("job_timeout_secs must be > 0".to_string());
@@ -727,7 +715,6 @@ mod tests {
         let config = CronConfig::default();
         assert!(config.enabled);
         assert_eq!(config.check_interval_secs, 60);
-        assert_eq!(config.max_concurrent_jobs, 5);
         assert_eq!(config.max_concurrent_agents, Some(2));
         // The 24/7-daemon perseverance contract: scheduled jobs get a
         // generous iter cap AND wall-clock budget so the prompt-driven

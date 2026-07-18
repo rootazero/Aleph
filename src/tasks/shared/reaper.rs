@@ -167,8 +167,8 @@ pub async fn run_reaper_loop(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown.changed() => {
-                if *shutdown.borrow() {
+            res = shutdown.changed() => {
+                if res.is_err() || *shutdown.borrow() {
                     info!("task reaper: shutdown signalled, exiting");
                     return;
                 }

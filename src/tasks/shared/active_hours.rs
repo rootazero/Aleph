@@ -199,9 +199,10 @@ pub fn next_due_after_gate(
     if schedule.is_open_at(fallback_next_due_ms) {
         Some(fallback_next_due_ms)
     } else {
-        schedule
-            .next_open_after(now_ms)
-            .map(|t| t.max(fallback_next_due_ms))
+        // Search from the later of `now` and the fallback so the result is
+        // always an actual opening. Using `next_open_after(now).max(fallback)`
+        // could land on a `fallback` that itself falls in a closed window.
+        schedule.next_open_after(now_ms.max(fallback_next_due_ms))
     }
 }
 

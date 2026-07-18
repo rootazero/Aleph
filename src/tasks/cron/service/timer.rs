@@ -6,12 +6,14 @@
 
 use std::collections::VecDeque;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use futures::FutureExt;
 use tracing::{debug, error, info};
 
 use crate::sync_primitives::Arc;
 
-use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
+use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, SessionTarget};
 use crate::tasks::cron::service::concurrency::{
     phase1_mark_due_jobs, phase3_writeback, PendingAlert,
 };
@@ -125,8 +127,28 @@ pub async fn on_timer_tick<C: Clock>(
     for snapshot in main_jobs {
         let executor = Arc::clone(executor);
         let id = snapshot.id.clone();
+        let marked_at = snapshot.marked_at;
+        let trigger_source = snapshot.trigger_source;
         let handle = tokio::spawn(async move {
-            let result = executor(snapshot).await;
+            // Catch a panic in the executor so the (id, result) contract stays
+            // intact — otherwise phase3 never clears this job's `running_at_ms`
+            // and phase1 skips it forever (until daemon restart).
+            let result = match AssertUnwindSafe(executor(snapshot)).catch_unwind().await {
+                Ok(r) => r,
+                Err(_) => ExecutionResult {
+                    started_at: marked_at,
+                    ended_at: marked_at,
+                    duration_ms: 0,
+                    status: RunStatus::Error,
+                    output: None,
+                    error: Some("cron job task panicked".to_string()),
+                    error_reason: None,
+                    delivery_status: None,
+                    agent_used_messaging_tool: false,
+                    trigger_source,
+                    retry_hint: None,
+                },
+            };
             (id, result)
         });
         main_handles.push(handle);
@@ -208,7 +230,27 @@ pub async fn run_worker_pool(
                 };
 
                 let id = snapshot.id.clone();
-                let result = executor(snapshot).await;
+                let marked_at = snapshot.marked_at;
+                let trigger_source = snapshot.trigger_source;
+                // Catch a panic so the worker survives to drain the rest of the
+                // queue and the panicked job still flows to phase3 (which clears
+                // its `running_at_ms`) instead of being stuck until restart.
+                let result = match AssertUnwindSafe(executor(snapshot)).catch_unwind().await {
+                    Ok(r) => r,
+                    Err(_) => ExecutionResult {
+                        started_at: marked_at,
+                        ended_at: marked_at,
+                        duration_ms: 0,
+                        status: RunStatus::Error,
+                        output: None,
+                        error: Some("cron job task panicked".to_string()),
+                        error_reason: None,
+                        delivery_status: None,
+                        agent_used_messaging_tool: false,
+                        trigger_source,
+                        retry_hint: None,
+                    },
+                };
 
                 let mut r = results.lock().await;
                 r.push((id, result));

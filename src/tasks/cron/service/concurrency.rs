@@ -221,14 +221,18 @@ pub async fn phase3_writeback<C: Clock>(
         // output and an incremented run counter feed `{{last_output}}` /
         // `{{run_count}}` when the job uses a `prompt_template`.
         job.state.run_count = job.state.run_count.saturating_add(1);
-        job.state.last_output = result.output.as_ref().map(|s| {
+        // Only overwrite `last_output` when this run actually produced output.
+        // A Skipped/Error/Timeout run carries `output: None`; nulling the prior
+        // value would wipe the accumulated `{{last_output}}` self-chain context
+        // even though the run never executed.
+        if let Some(s) = result.output.as_ref() {
             const MAX_CHARS: usize = 2_000;
-            if s.chars().count() > MAX_CHARS {
+            job.state.last_output = Some(if s.chars().count() > MAX_CHARS {
                 s.chars().take(MAX_CHARS).collect()
             } else {
                 s.clone()
-            }
-        });
+            });
+        }
 
         // Update consecutive errors
         match result.status {
