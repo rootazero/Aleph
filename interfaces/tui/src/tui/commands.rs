@@ -86,7 +86,9 @@ pub(super) async fn execute_local_command(
         LocalCommand::Usage => execute_usage(state, client).await,
         LocalCommand::Compress => execute_compress(state, client).await,
         LocalCommand::Stop => execute_stop(state, client).await,
-        LocalCommand::Undo => execute_undo(state, client).await,
+        LocalCommand::Undo => {
+            execute_undo(state, client).await;
+        }
         LocalCommand::Retry => execute_retry(state, client).await,
         LocalCommand::Tools { mode } => execute_tools(state, mode),
         LocalCommand::Tier { level } => execute_tier(state, client, level).await,
@@ -314,10 +316,10 @@ struct TruncateReply {
     tokens_removed_estimate: u64,
 }
 
-async fn execute_undo(state: &mut AppState, client: &AlephClient) {
+async fn execute_undo(state: &mut AppState, client: &AlephClient) -> bool {
     if state.current_run.is_some() {
         state.add_system_message("Stop the active run first (/stop), then /undo.".to_string());
-        return;
+        return false;
     }
     // Count non-system messages — we only undo the last user+assistant pair.
     let conversational_count = state
@@ -327,7 +329,7 @@ async fn execute_undo(state: &mut AppState, client: &AlephClient) {
         .count();
     if conversational_count < 2 {
         state.add_system_message("Nothing to undo.".to_string());
-        return;
+        return false;
     }
     let keep_count = conversational_count.saturating_sub(2);
     let params = json!({
@@ -344,8 +346,12 @@ async fn execute_undo(state: &mut AppState, client: &AlephClient) {
                 "Reverted last turn (-{} messages, ~{} tokens).",
                 r.messages_removed, r.tokens_removed_estimate
             ));
+            true
         }
-        Err(e) => state.add_system_message(format!("Undo error: {e}")),
+        Err(e) => {
+            state.add_system_message(format!("Undo error: {e}"));
+            false
+        }
     }
 }
 
@@ -359,8 +365,11 @@ async fn execute_retry(state: &mut AppState, client: &AlephClient) {
         return;
     };
 
-    // Phase 1: undo the last turn
-    execute_undo(state, client).await;
+    // Phase 1: undo the last turn — abort the retry if the revert didn't happen,
+    // otherwise we'd re-send on top of the still-present old turn (duplicated turn).
+    if !execute_undo(state, client).await {
+        return;
+    }
 
     // Phase 2: re-submit the captured user message via the shared send site
     state.add_user_message(last_user.clone());

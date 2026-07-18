@@ -58,10 +58,13 @@ fn is_process_running(_pid: u32) -> bool {
 #[cfg(unix)]
 fn pid_belongs_to_server(pid: u32) -> bool {
     let path = format!("/proc/{pid}/cmdline");
-    std::fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.contains("aleph-server"))
-        .unwrap_or(false)
+    match std::fs::read_to_string(&path) {
+        Ok(s) => s.contains("aleph-server"),
+        // Unreadable cmdline: on procfs-less systems (macOS/BSD) we cannot
+        // verify, so trust the PID file; on Linux (/proc present) a missing
+        // cmdline means a dead/raced PID, so stay strict.
+        Err(_) => !std::path::Path::new("/proc").is_dir(),
+    }
 }
 
 /// Send a signal to a process (Unix only)
