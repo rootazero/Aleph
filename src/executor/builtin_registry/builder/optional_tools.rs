@@ -342,7 +342,9 @@ impl BuiltinToolRegistry {
             .or_else(|| config.session_manager.clone());
 
         if let Some(ref sm) = session_mgr {
-            use crate::builtin_tools::sessions::{SessionNewTool, SessionSetTopicTool};
+            use crate::builtin_tools::sessions::{
+                SessionCompactTool, SessionNewTool, SessionSetTopicTool,
+            };
 
             let tmp_new = SessionNewTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_new);
@@ -353,6 +355,16 @@ impl BuiltinToolRegistry {
                 def.parameters.clone(),
             );
             info!("Registered session.new tool in BuiltinToolRegistry");
+
+            let tmp_compact = SessionCompactTool::new(Arc::clone(sm));
+            let def = AlephTool::definition(&tmp_compact);
+            reg(
+                tools,
+                "session_compact",
+                SessionCompactTool::DESCRIPTION,
+                def.parameters.clone(),
+            );
+            info!("Registered session.compact tool in BuiltinToolRegistry");
 
             let tmp_topic = SessionSetTopicTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_topic);

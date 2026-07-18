@@ -830,6 +830,14 @@ impl InboundMessageRouter {
             return self.handle_stop(&msg, &ctx).await;
         }
 
+        // /help: reply with the curated slash-command listing. Intercepted
+        // before agent dispatch like /stop — a read-only listing must never be
+        // queued behind a running turn. Discovery-only `builtin:help` catalog
+        // entry (registration.rs) makes it appear in menus + "did you mean?".
+        if btw_stripped.trim() == "/help" {
+            return self.handle_help(&msg).await;
+        }
+
         // Unified slash command interception
         if ctx.message.text.trim().starts_with('/') {
             let slash_text = strip_bot_mention(ctx.message.text.trim());
@@ -910,9 +918,9 @@ impl InboundMessageRouter {
                         .next()
                         .unwrap_or("");
                     // Skip namespace check for shorthand aliases — these are resolved
-                    // by slash_command.rs fast-path (e.g. /image → image_generate).
-                    // Shares slash_command::SHORTHAND_ALIASES instead of keeping
-                    // a second hardcoded copy of the alias names here.
+                    // by the fast-path (e.g. /image → image_generate). Reads the
+                    // single alias source (`tool_metadata::aliases`) via
+                    // `is_shorthand_alias` instead of a hardcoded copy here.
                     let is_shorthand =
                         crate::gateway::execution_engine::is_shorthand_alias(namespace);
                     if !namespace.is_empty() && !is_shorthand {

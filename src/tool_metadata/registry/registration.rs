@@ -88,6 +88,12 @@ impl ToolRegistrar {
             ToolSource::Builtin,
         )
         .with_icon("list.bullet.rectangle")
+        // `/skills` is the cross-tool-standard top-level name (codex/openclaw/
+        // hermes/kimi all use it). Discovery-only alias on the curated entry —
+        // skill_list is also in BUILTIN_TOOL_DEFINITIONS but the curated entry
+        // wins (first-registered), so the alias must live here, not in the
+        // definitions loop where it would attach to the renamed loser.
+        .with_aliases(["skills"])
         .with_usage("/skill list")
         .with_localization_key("tool.skill.list")
         .with_sort_order(71);
@@ -142,16 +148,20 @@ impl ToolRegistrar {
             .await;
 
         // New session command (aligned with CLI: `aleph session new`).
-        // `/new` is exposed as a first-class alias (the most common shortcut in
-        // bots) instead of a separate phantom tool — both names resolve to this
-        // single registration via the unified alias mechanism.
+        // `/new` and `/clear` are first-class aliases (the most common shortcuts
+        // in bots / codex-kimi muscle memory) instead of separate phantom tools
+        // — all three names resolve to this single registration via the unified
+        // alias mechanism. These are discovery-only aliases (NOT SHORTHAND):
+        // `session_new` is `None` in `create_tool_boxed`, so the epoch bump runs
+        // in the router's `handle_new_session` (which the resolved canonical name
+        // `session_new` routes into), never as a raw fast-path tool.
         let new_cmd = UnifiedTool::new(
             "builtin:session_new",
             "session_new",
             "Start a new conversation session",
             ToolSource::Builtin,
         )
-        .with_aliases(["new"])
+        .with_aliases(["new", "clear"])
         .with_usage("/session new")
         .with_param_hint("[topic]")
         .with_sort_order(82);
@@ -190,7 +200,50 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(voice_cmd)
             .await;
 
-        info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new [alias: new] + cron_manage + voice)");
+        // Goal command — surface the autonomous-pursuit tool as a slash command.
+        // `goal` is a runtime LoopTool (needs live per-session binding) and is
+        // deliberately NOT in BUILTIN_TOOL_DEFINITIONS, so without this curated
+        // entry it is LLM-callable but not slash-resolvable. It is
+        // continuation-driven (`is_continuation_driven_slash`), so this entry
+        // only adds discovery + resolution; execution falls through to the full
+        // agent loop where the builder-wired live goal tool schedules the first
+        // pursuit (the fast path would register the goal but never tick it).
+        let goal_cmd = UnifiedTool::new(
+            "builtin:goal",
+            "goal",
+            "Set an autonomous goal the agent pursues across turns until done",
+            ToolSource::Builtin,
+        )
+        .with_icon("target")
+        .with_usage("/goal <objective>")
+        .with_param_hint("<objective>")
+        .with_sort_order(85);
+
+        conflict_resolver
+            .register_with_conflict_resolution(goal_cmd)
+            .await;
+
+        // Help command — list available slash commands. The single universal
+        // essential absent from Aleph (openclaw/hermes/kimi all ship `/help`).
+        // Execution is intercepted in the inbound router (`handle_help`), which
+        // formats the live command tree from the `ToolCatalog`; this curated
+        // entry makes `/help` discoverable in completion menus and drives the
+        // "did you mean?" suggester.
+        let help_cmd = UnifiedTool::new(
+            "builtin:help",
+            "help",
+            "List available slash commands and what they do",
+            ToolSource::Builtin,
+        )
+        .with_icon("questionmark.circle")
+        .with_usage("/help")
+        .with_sort_order(1);
+
+        conflict_resolver
+            .register_with_conflict_resolution(help_cmd)
+            .await;
+
+        info!("Registered builtin tools (generate_* + skill_* [alias: skills] + snapshot_capture + switch + groupchat + session_new [aliases: new, clear] + cron_manage + voice + goal + help)");
     }
 
     /// Register skills from `SkillInfo` list (Flat Namespace Mode)

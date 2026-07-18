@@ -15,12 +15,14 @@ async fn test_register_builtin_tools() {
     let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
-    // Should register 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new [alias: new] + cron + voice)
-    assert_eq!(registry.count().await, 10);
+    // Should register 12 builtin tools (2 generation + 2 skill + snapshot +
+    // switch + groupchat + session_new [aliases: new, clear] + cron + voice +
+    // goal + help).
+    assert_eq!(registry.count().await, 12);
 
     // Builtins should include generation tools
     let builtins = registry.list_builtin_tools().await;
-    assert_eq!(builtins.len(), 10);
+    assert_eq!(builtins.len(), 12);
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
@@ -29,6 +31,8 @@ async fn test_register_builtin_tools() {
     assert!(names.contains(&"skill_read"));
     assert!(names.contains(&"skill_list"));
     assert!(names.contains(&"snapshot_capture"));
+    assert!(names.contains(&"goal"));
+    assert!(names.contains(&"help"));
 }
 
 #[tokio::test]
@@ -45,8 +49,8 @@ async fn test_list_root_commands() {
     registry.register_custom_commands(&rules).await;
 
     let roots = registry.list_root_commands().await;
-    // 10 builtin tools + 1 custom = 11 (aliases are not separate tools)
-    assert_eq!(roots.len(), 11);
+    // 12 builtin tools + 1 custom = 13 (aliases are not separate tools)
+    assert_eq!(roots.len(), 13);
 
     // First should be builtins (sorted by priority)
     assert!(roots.iter().any(|t| t.name == "generate_image"));
@@ -1080,4 +1084,102 @@ async fn test_get_tool_definition_prefers_exact_name_match() {
         .expect("translate tool definition");
     assert_eq!(def.id, "custom:0:translate");
     assert_eq!(def.name, "translate");
+}
+
+// ── Slash-command surfacing (round: reference-driven /help + friendly aliases) ──
+
+/// The curated builtins expose the cross-tool-standard shortcuts every
+/// reference CLI (codex/openclaw/hermes/kimi) ships: `/skills`, `/new`,
+/// `/clear`, plus the newly-surfaced `/goal` and `/help`. Each must resolve to
+/// its canonical tool via the alias tier of `find_best_match`.
+#[tokio::test]
+async fn curated_builtins_expose_friendly_slash_aliases() {
+    let registry = ToolCatalog::new();
+    registry.register_builtin_tools().await;
+
+    for (typed, expected_canonical) in [
+        ("/skills", "skill_list"),
+        ("/new", "session_new"),
+        ("/clear", "session_new"),
+        ("/goal", "goal"),
+        ("/help", "help"),
+    ] {
+        let resolved = registry
+            .resolve_command(typed)
+            .await
+            .unwrap_or_else(|| panic!("{typed} should resolve to a builtin command"));
+        assert_eq!(
+            resolved.tool.name, expected_canonical,
+            "{typed} must resolve to {expected_canonical}"
+        );
+    }
+}
+
+/// The `ToolCatalog` builder seeds a bare executor tool's discoverable aliases
+/// from the single `tool_metadata::aliases` source (this simulates the
+/// `tool_catalog_init.rs` definitions loop). A shortcut seeded that way must be
+/// both resolvable (`/model` → select_model) and surfaced as an alias so it
+/// appears in completion menus and "did you mean?" suggestions.
+#[tokio::test]
+async fn seeded_shorthand_alias_resolves_and_is_discoverable() {
+    use crate::tool_metadata::shorthand_aliases_for;
+
+    let registry = ToolCatalog::new();
+    let aliases = shorthand_aliases_for("select_model");
+    assert_eq!(aliases, vec!["model"], "single source must map /model → select_model");
+
+    let tool = UnifiedTool::new(
+        "builtin:select_model",
+        "select_model",
+        "Switch the active model for this session",
+        ToolSource::Builtin,
+    )
+    .with_aliases(aliases);
+    registry.register_with_conflict_resolution(tool).await;
+
+    let resolved = registry
+        .resolve_command("/model gpt-5")
+        .await
+        .expect("/model should resolve to select_model");
+    assert_eq!(resolved.tool.name, "select_model");
+    assert_eq!(resolved.arguments, Some("gpt-5".to_string()));
+
+    // Discoverable: `/model` is scored/suggested from the alias, not the canonical.
+    let suggestions = registry.suggest_commands("modl", 3).await;
+    assert!(
+        suggestions.iter().any(|s| s == "select_model"),
+        "a near-miss of the alias must suggest the canonical command, got {suggestions:?}"
+    );
+}
+
+/// Drift guard: every execution shorthand alias must point at a canonical name
+/// that the catalog can resolve when a tool of that name is registered — i.e.
+/// the alias table and the resolution layer agree. Catches a future edit that
+/// adds a SHORTHAND row whose target no longer matches a real tool name.
+#[tokio::test]
+async fn shorthand_alias_execution_and_discovery_agree() {
+    use crate::tool_metadata::{resolve_shorthand, SHORTHAND_ALIASES};
+
+    for (alias, canonical) in SHORTHAND_ALIASES {
+        // Execution layer maps the alias to this canonical name.
+        assert_eq!(resolve_shorthand(alias), Some(*canonical));
+
+        // Discovery layer: registering a tool named `canonical` with the alias
+        // seeded must make the typed alias resolve back to it.
+        let registry = ToolCatalog::new();
+        let tool = UnifiedTool::new(
+            format!("builtin:{canonical}"),
+            *canonical,
+            "probe",
+            ToolSource::Builtin,
+        )
+        .with_aliases([*alias]);
+        registry.register_with_conflict_resolution(tool).await;
+
+        let resolved = registry
+            .resolve_command(&format!("/{alias}"))
+            .await
+            .unwrap_or_else(|| panic!("/{alias} should resolve to {canonical}"));
+        assert_eq!(resolved.tool.name, *canonical, "/{alias} → {canonical}");
+    }
 }
