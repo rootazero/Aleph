@@ -150,14 +150,14 @@ impl IdentityFiles {
                 continue;
             }
 
-            let (content, truncated) = if raw.len() > effective_limit {
+            let (content, truncated) = if raw.chars().count() > effective_limit {
                 let truncated_content = truncate_with_head_tail(raw, effective_limit, 0.7, 0.2);
                 (truncated_content, true)
             } else {
                 (raw.clone(), false)
             };
 
-            total_chars += content.len();
+            total_chars += content.chars().count();
             files.push(IdentityFile {
                 name,
                 content: Some(content),

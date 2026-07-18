@@ -4,6 +4,7 @@
 //! prompt pipeline, between Soul (50) and Role (100). This lets a workspace add
 //! project-specific context without overriding the base identity.
 
+use super::identity_files::sanitize_identity_content;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
@@ -32,10 +33,16 @@ impl PromptLayer for ProfileLayer {
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // Workspace AGENTS.md → "## Project Context" overlay.
+        // Workspace AGENTS.md → "## Project Context" overlay. It crosses the
+        // same user-editable trust boundary as the other identity files, so it
+        // gets the same injection-pattern + invisible-Unicode scan SoulLayer
+        // applies to SOUL.md and IdentityFilesLayer applies to IDENTITY.md /
+        // TOOLS.md / HEARTBEAT.md — otherwise AGENTS.md would be a one-file
+        // bypass of that hardening.
         if let Some(agents_content) = input.identity_file("AGENTS.md") {
+            let safe = sanitize_identity_content("AGENTS.md", agents_content);
             output.push_str("## Project Context\n\n");
-            output.push_str(agents_content);
+            output.push_str(&safe);
             output.push_str("\n\n");
         }
     }
