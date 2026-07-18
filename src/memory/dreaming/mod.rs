@@ -56,7 +56,7 @@ pub use evolution::{
 pub use mutation_gate::MutationGate;
 pub use selector::{GateDecision, SelectionDecision, StrategySelector};
 pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
-pub use stages::{DreamStage, MemoryCluster};
+pub use stages::DreamStage;
 pub use strategy::DreamStrategy;
 pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
 
