@@ -181,9 +181,23 @@ async fn ensure_capability_recursive(
     }
 
     // Run bootstrap (async dispatcher)
-    let bootstrap_result = bootstrap::install(capability)
-        .await
-        .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {e}")))?;
+    let bootstrap_result = match bootstrap::install(capability).await {
+        Ok(result) => result,
+        Err(e) => {
+            // Reset off `Bootstrapping` so a transient dispatcher error (timeout /
+            // I/O / post-install) leaves a terminal state, matching every
+            // `BootstrapResult` failure branch below. Without this the `?` early
+            // return would strand the entry at `Bootstrapping` indefinitely.
+            ledger
+                .write()
+                .await
+                .update_status(capability, CapabilityStatus::Missing);
+            return Err(AlephError::runtime(
+                capability,
+                format!("Bootstrap failed: {e}"),
+            ));
+        }
+    };
 
     let now = now_secs();
 
