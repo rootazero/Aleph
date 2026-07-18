@@ -502,18 +502,44 @@ impl MemorySearchTool {
                 };
                 (result, cross_ws, recall_triggered)
             } else {
-                // Use NoteFactRetrieval for primary long-term recall.
-                // Resolve agent_id from workspace_filter for note scoping.
-                let agent_id = match &workspace_filter {
-                    AgentEnvFilter::Single(ws) => ws.clone(),
-                    _ => workspace_label.clone(),
-                };
+                // Use NoteFactRetrieval for primary long-term recall, routing
+                // each filter variant to its matching retrieval method. A
+                // `Multiple`/`All` filter must fan out across agents — collapsing
+                // it into the bracketed `workspace_label` (e.g. "[crypto, health]"
+                // / "ALL") and calling single-agent `retrieve` searched a
+                // non-existent agent and returned nothing.
                 debug!(workspace = %workspace_label, "Performing note-based retrieval");
-                let scored = self
-                    .note_retrieval
-                    .retrieve(&args.query, &agent_id, args.max_results)
-                    .await
-                    .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {e}")))?;
+                let scored = match &workspace_filter {
+                    AgentEnvFilter::Single(ws) => self
+                        .note_retrieval
+                        .retrieve(&args.query, ws, args.max_results)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {e}")))?,
+                    AgentEnvFilter::Multiple(wss) => self
+                        .note_retrieval
+                        .retrieve_multi_agent(&args.query, wss, args.max_results)
+                        .await
+                        .map_err(|e| {
+                            ToolError::Execution(format!("Multi-workspace retrieval failed: {e}"))
+                        })?,
+                    AgentEnvFilter::All => {
+                        let memory_dir =
+                            crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+                                std::env::temp_dir()
+                                    .join("aleph")
+                                    .join("memory")
+                                    .join("note")
+                            });
+                        self.note_retrieval
+                            .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
+                            .await
+                            .map_err(|e| {
+                                ToolError::Execution(format!(
+                                    "Cross-workspace retrieval failed: {e}"
+                                ))
+                            })?
+                    }
+                };
                 // Convert Vec<ScoredFact> → RetrievalResult for the comptroller pipeline.
                 let facts = scored
                     .into_iter()
