@@ -61,7 +61,13 @@ pub async fn load_or_generate(
             let desired = self_signed_sans(&cfg.san, &discovered);
 
             if cert_file.exists() && key_file.exists() && san_file.exists() {
-                let recorded = parse_recorded_sans(&tokio::fs::read_to_string(&san_file).await?);
+                // Best-effort: a corrupt / unreadable sidecar yields an empty set,
+                // which fails the subset check and falls through to regeneration
+                // rather than bricking TLS startup.
+                let recorded = tokio::fs::read_to_string(&san_file)
+                    .await
+                    .map(|s| parse_recorded_sans(&s))
+                    .unwrap_or_default();
                 if desired_covered(&recorded, &desired) {
                     let cert = tokio::fs::read(&cert_file).await?;
                     let key = tokio::fs::read(&key_file).await?;
