@@ -79,9 +79,15 @@ pub trait PairingStore: Send + Sync {
     async fn revoke(&self, channel: &str, sender_id: &str) -> Result<(), PairingError>;
 }
 
+/// Default pairing-code TTL (24h), mirroring the documented
+/// `[routing] pairing_code_expiry_secs` default (`0` = never expire).
+const DEFAULT_PAIRING_EXPIRY_SECS: u64 = 86_400;
+
 /// SQLite-based pairing store
 pub struct SqlitePairingStore {
     conn: Arc<Mutex<Connection>>,
+    /// Max age (seconds) a pairing code stays approvable; `0` disables expiry.
+    expiry_secs: u64,
 }
 
 impl SqlitePairingStore {
@@ -91,6 +97,7 @@ impl SqlitePairingStore {
         Self::init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            expiry_secs: DEFAULT_PAIRING_EXPIRY_SECS,
         })
     }
 
@@ -100,7 +107,18 @@ impl SqlitePairingStore {
         Self::init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            expiry_secs: DEFAULT_PAIRING_EXPIRY_SECS,
         })
+    }
+
+    /// Override the pairing-code expiry window (seconds). `0` disables expiry.
+    ///
+    /// Wire this from `RoutingConfig::pairing_code_expiry_secs` so an operator's
+    /// configured TTL reaches the enforcement point in [`Self::approve`].
+    #[must_use]
+    pub fn with_expiry_secs(mut self, expiry_secs: u64) -> Self {
+        self.expiry_secs = expiry_secs;
+        self
     }
 
     fn init_schema(conn: &Connection) -> Result<(), PairingError> {
@@ -205,6 +223,25 @@ impl PairingStore for SqlitePairingStore {
 
         let (sender_id, code, created_at, metadata_json) = request.ok_or(PairingError::NotFound)?;
 
+        // Reject (and consume) an expired code before approving it: a leaked or
+        // stale pairing code must not stay approvable forever. `expiry_secs == 0`
+        // disables expiry, per the `[routing] pairing_code_expiry_secs` "0 = never"
+        // contract.
+        let created_at = DateTime::parse_from_rfc3339(&created_at)
+            .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
+        if self.expiry_secs > 0 {
+            let ttl = chrono::Duration::seconds(i64::try_from(self.expiry_secs).unwrap_or(i64::MAX));
+            if Utc::now().signed_duration_since(created_at) > ttl {
+                // Consume the stale row so a later retry can't approve it either.
+                conn.execute(
+                    "DELETE FROM pairing_requests WHERE channel = ?1 AND code = ?2",
+                    params![channel, code],
+                )?;
+                info!("Rejected expired pairing code for channel {}", channel);
+                return Err(PairingError::Expired);
+            }
+        }
+
         // Approve + consume atomically: a crash between the INSERT and the
         // DELETE would otherwise leave the request pending while the sender is
         // already approved (an orphaned, re-approvable row).
@@ -222,8 +259,6 @@ impl PairingStore for SqlitePairingStore {
 
         let metadata: HashMap<String, String> =
             serde_json::from_str(&metadata_json).unwrap_or_default();
-        let created_at = DateTime::parse_from_rfc3339(&created_at)
-            .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
 
         info!("Approved pairing for {}:{}", channel, sender_id);
 
@@ -471,5 +506,64 @@ mod tests {
         store.revoke("imessage", "+15551234567").await.unwrap();
 
         assert!(!store.is_approved("imessage", "+15551234567").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_approve_rejects_expired_code() {
+        let store = SqlitePairingStore::in_memory()
+            .unwrap()
+            .with_expiry_secs(3600);
+        let (code, _) = store
+            .upsert("imessage", "+15551234567", HashMap::new())
+            .await
+            .unwrap();
+
+        // Backdate the request beyond the TTL.
+        {
+            let conn = store.conn.lock().await;
+            let past = (Utc::now() - chrono::Duration::seconds(7200)).to_rfc3339();
+            conn.execute(
+                "UPDATE pairing_requests SET created_at = ?1 WHERE code = ?2",
+                rusqlite::params![past, code],
+            )
+            .unwrap();
+        }
+
+        // Approval is rejected as expired...
+        assert!(matches!(
+            store.approve("imessage", &code).await,
+            Err(PairingError::Expired)
+        ));
+        // ...the stale row is consumed so a later retry can't approve it...
+        assert!(store
+            .list_pending(Some("imessage"))
+            .await
+            .unwrap()
+            .is_empty());
+        // ...and the sender was NOT approved.
+        assert!(!store.is_approved("imessage", "+15551234567").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_approve_zero_expiry_never_expires() {
+        let store = SqlitePairingStore::in_memory().unwrap().with_expiry_secs(0);
+        let (code, _) = store
+            .upsert("imessage", "+15551234567", HashMap::new())
+            .await
+            .unwrap();
+
+        // Even a very old code approves when expiry is disabled (0 = never).
+        {
+            let conn = store.conn.lock().await;
+            let past = (Utc::now() - chrono::Duration::seconds(999_999)).to_rfc3339();
+            conn.execute(
+                "UPDATE pairing_requests SET created_at = ?1 WHERE code = ?2",
+                rusqlite::params![past, code],
+            )
+            .unwrap();
+        }
+
+        assert!(store.approve("imessage", &code).await.is_ok());
+        assert!(store.is_approved("imessage", "+15551234567").await.unwrap());
     }
 }

@@ -874,7 +874,9 @@ impl InboundMessageRouter {
                         }
                     }
                     if parsed.command_name == "groupchat" {
-                        return self.handle_groupchat_command(&msg).await;
+                        // Use ctx.message (post-STT): a voice /groupchat message
+                        // must dispatch the transcribed text, not the placeholder.
+                        return self.handle_groupchat_command(&ctx.message).await;
                     }
                     if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
@@ -956,7 +958,7 @@ impl InboundMessageRouter {
 
             // Fallback: /groupchat without unified registry
             if slash_text.starts_with("/groupchat") && self.group_chat_orch.is_some() {
-                return self.handle_groupchat_command(&msg).await;
+                return self.handle_groupchat_command(&ctx.message).await;
             }
 
             // Fallback: /new or /session new without unified registry
@@ -968,7 +970,7 @@ impl InboundMessageRouter {
 
         // Group chat: check for active sessions
         if self.group_chat_orch.is_some() {
-            if let Some(handled) = self.try_handle_group_chat(&msg).await {
+            if let Some(handled) = self.try_handle_group_chat(&ctx.message).await {
                 match handled {
                     Ok(()) => return Ok(()),
                     Err(e) => {

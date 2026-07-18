@@ -43,24 +43,29 @@ impl InboundDedupTracker {
 
     /// Remove entries older than `DEDUP_WINDOW`
     fn expire(&mut self) {
-        let cutoff = Instant::now() - DEDUP_WINDOW;
         let before = self.entries.len();
 
-        self.entries.retain(|(key, ts)| {
-            if *ts < cutoff {
-                self.seen.remove(key);
-                false
-            } else {
-                true
-            }
-        });
+        // `Instant - Duration` panics on underflow near the monotonic epoch
+        // (the first ~5 min after boot on some platforms). `checked_sub` yields
+        // `None` there; in that window nothing can be older than `DEDUP_WINDOW`,
+        // so there is simply nothing to time-expire.
+        if let Some(cutoff) = Instant::now().checked_sub(DEDUP_WINDOW) {
+            self.entries.retain(|(key, ts)| {
+                if *ts < cutoff {
+                    self.seen.remove(key);
+                    false
+                } else {
+                    true
+                }
+            });
 
-        if before > self.entries.len() {
-            debug!(
-                "Dedup tracker: expired {} entries, {} remaining",
-                before - self.entries.len(),
-                self.entries.len()
-            );
+            if before > self.entries.len() {
+                debug!(
+                    "Dedup tracker: expired {} entries, {} remaining",
+                    before - self.entries.len(),
+                    self.entries.len()
+                );
+            }
         }
 
         // Safety cap: if somehow we accumulate too many, drop oldest half
