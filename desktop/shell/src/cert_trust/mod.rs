@@ -14,6 +14,9 @@ pub mod adapter_macos;
 #[cfg(target_os = "windows")]
 pub mod adapter_windows;
 
+#[cfg(target_os = "linux")]
+pub mod adapter_linux;
+
 use serde::Serialize;
 
 /// Cert facts shown to the user. Display-only — the decision pins the
