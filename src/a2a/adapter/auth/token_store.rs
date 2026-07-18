@@ -23,6 +23,13 @@ impl TokenStore {
 
     #[must_use]
     pub fn is_valid(&self, token: &str) -> bool {
+        // An empty presented token is never a valid secret. Without this guard a
+        // misconfigured store holding an empty-string token (e.g. a blank entry
+        // in `[a2a.server.security] tokens`) would authenticate an empty bearer
+        // token, since `secret_equal_bytes("", "")` is `true` — an auth bypass.
+        if token.is_empty() {
+            return false;
+        }
         // Compare against every stored token without short-circuiting: a plain
         // `HashSet::contains` (or an early `return true`) would make match
         // timing observable. `secret_equal_bytes` is itself length-leak-safe.
@@ -72,5 +79,17 @@ mod tests {
     fn deduplicates_tokens() {
         let store = TokenStore::new(vec!["abc".to_string(), "abc".to_string()]);
         assert!(store.is_valid("abc"));
+    }
+
+    #[test]
+    fn empty_presented_token_never_valid() {
+        // Even if a blank token was misconfigured into the store, an empty
+        // bearer token must not authenticate (no auth bypass).
+        let store = TokenStore::new(vec![String::new()]);
+        assert!(!store.is_valid(""));
+        // A real token still works.
+        let store = TokenStore::new(vec!["real".to_string()]);
+        assert!(!store.is_valid(""));
+        assert!(store.is_valid("real"));
     }
 }
