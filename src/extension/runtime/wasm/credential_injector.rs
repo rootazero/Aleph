@@ -1,9 +1,21 @@
-//! Credential injection at the host boundary.
+//! Credential injection at the host boundary — **aspirational infra, NOT yet
+//! wired into the live request path.**
 //!
-//! Resolves credentials and injects them into outbound HTTP requests so that
-//! WASM plugins never see secret values. The host looks up the secret by
-//! name, matches the target URL against declared host patterns, and applies
-//! the appropriate injection strategy (Bearer, Basic, Header, Query, `UrlPath`).
+//! Design intent: resolve credentials host-side and inject them into outbound
+//! HTTP requests so that WASM plugins never see secret values — the host looks
+//! up the secret by name, matches the target URL against declared host
+//! patterns, and applies the injection strategy (Bearer, Basic, Header, Query,
+//! `UrlPath`).
+//!
+//! STATUS (do not trust the guarantee above as a live property): this module
+//! has no production consumer. `inject_credential` is exercised only by unit
+//! tests; the sole live outbound path (`host_functions.rs::try_http_fetch`)
+//! builds requests purely from plugin-supplied headers and never calls this,
+//! and `WasmCapabilityKernel` has no secret-value store (it only checks secret
+//! *existence* by pattern). Until a resolver is built and `try_http_fetch`
+//! calls in here, "plugins never see secret values" is a goal, not a fact —
+//! a plugin needing auth must supply it itself. Retained (not deleted) as the
+//! agreed foundation for that future secret-resolver wiring.
 
 use url::Url;
 

@@ -259,8 +259,17 @@ impl SkillSystem {
         entries
     }
 
-    /// Register skills from external sources (plugins, markdown).
-    pub async fn register_external(&self, manifests: Vec<SkillManifest>) {
+    /// Test-only helper: seed pre-built manifests straight into the registry.
+    ///
+    /// Production plugin/markdown skills are NOT registered this way — they flow
+    /// through the dir-based path (`extension/mod.rs::load_all` ->
+    /// `skill_system.init` skill_dirs + `publish_plugin_skill_dirs` ->
+    /// `get_all_skills_dirs`), which `rescan_dirs` rebuilds from scratch (and
+    /// would therefore wipe any manifest inserted here). This helper exists only
+    /// to seed unit tests that exercise `full_status` / `remove_skill` / events
+    /// without touching the filesystem; it is compiled out of production builds.
+    #[cfg(test)]
+    pub(crate) async fn insert_manifests_for_test(&self, manifests: Vec<SkillManifest>) {
         let mut registry = self.inner.registry.write().await;
 
         // Only emit events for manifests that were actually accepted by the registry
@@ -1064,23 +1073,6 @@ Content."#,
     }
 
     #[tokio::test]
-    async fn register_external_skills() {
-        use crate::domain::skill::{PluginId, SkillContent};
-        let system = SkillSystem::new();
-        let manifest = SkillManifest::new(
-            "plugin:test",
-            "Test Plugin Skill",
-            "From a plugin",
-            SkillContent::new("content"),
-            SkillSource::Plugin(PluginId::new("test-plugin")),
-        );
-        system.register_external(vec![manifest]).await;
-        let skills = system.list_skills().await;
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name(), "Test Plugin Skill");
-    }
-
-    #[tokio::test]
     async fn full_status_returns_entries() {
         use crate::domain::skill::SkillContent;
         let system = SkillSystem::new();
@@ -1091,7 +1083,7 @@ Content."#,
             SkillContent::new("content"),
             SkillSource::Bundled,
         );
-        system.register_external(vec![manifest]).await;
+        system.insert_manifests_for_test(vec![manifest]).await;
         let entries = system.full_status().await;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "Test Skill");
@@ -1109,7 +1101,7 @@ Content."#,
             SkillContent::new("c"),
             SkillSource::Global,
         );
-        system.register_external(vec![manifest]).await;
+        system.insert_manifests_for_test(vec![manifest]).await;
         assert_eq!(system.list_skills().await.len(), 1);
 
         let removed = system
@@ -1131,7 +1123,7 @@ Content."#,
             SkillContent::new("c"),
             SkillSource::Bundled,
         );
-        system.register_external(vec![manifest]).await;
+        system.insert_manifests_for_test(vec![manifest]).await;
 
         let result = system.remove_skill(&SkillId::new("test:bundled")).await;
         assert!(result.is_err());
@@ -1156,7 +1148,7 @@ Content."#,
             SkillContent::new("c"),
             SkillSource::Global,
         );
-        system.register_external(vec![manifest]).await;
+        system.insert_manifests_for_test(vec![manifest]).await;
 
         // Should receive an event
         let event = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;

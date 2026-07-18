@@ -127,6 +127,7 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     // safety via `readOnlyHint` through `McpRegistryTool` instead).
     "mcp_read_resource",
     "mcp_list_resources",
+    "mcp_list_resource_templates",
     "mcp_get_prompt",
     "mcp_list_prompts",
     // Desktop accessibility queries (read-only inspection of the UI tree).
@@ -660,6 +661,7 @@ mod tests {
             "note_graph_query",
             "mcp_read_resource",
             "mcp_list_resources",
+            "mcp_list_resource_templates",
             "mcp_get_prompt",
             "mcp_list_prompts",
             // The live progressive-disclosure meta-tool (formerly the ghost

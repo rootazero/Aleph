@@ -21,7 +21,9 @@ use tokio::task::JoinHandle;
 
 use crate::builtin_tools::mcp_login::McpLoginTool;
 use crate::builtin_tools::mcp_prompt::{McpGetPromptTool, McpListPromptsTool};
-use crate::builtin_tools::mcp_resource::{McpListResourcesTool, McpReadResourceTool};
+use crate::builtin_tools::mcp_resource::{
+    McpListResourceTemplatesTool, McpListResourcesTool, McpReadResourceTool,
+};
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
 use crate::tools::handlers::builtin::BuiltinHandler;
@@ -37,6 +39,12 @@ const RESOURCE_TOOL: &str = "mcp_read_resource";
 /// resource but has no way to learn which resources exist (the gap that pushed
 /// it to a raw `cat`).
 const RESOURCE_LIST_TOOL: &str = "mcp_list_resources";
+/// Registry name of the capability-gated resource-*template* discovery builtin.
+/// Gated with the resource cluster: a server may expose resources ONLY by
+/// template (concrete `resource_count == 0`), so the gate also fires on
+/// `resource_template_count > 0` — otherwise a template-only server would strand
+/// the model with no discoverable, readable handle (another `cat` fallback).
+const RESOURCE_TEMPLATE_LIST_TOOL: &str = "mcp_list_resource_templates";
 /// Registry name of the capability-gated prompt-fetching builtin.
 const PROMPT_TOOL: &str = "mcp_get_prompt";
 /// Registry name of the capability-gated prompt-discovery builtin. Gated by the
@@ -219,7 +227,12 @@ async fn reconcile_capability_tools(
             return;
         }
     };
-    let want_resource = servers.iter().any(|s| s.resource_count > 0);
+    // The whole resource cluster (read + concrete-list + template-list) shares
+    // one gate: a template-only server (resource_count == 0) still needs the
+    // reader live to fetch a filled template URI, so templates count toward it.
+    let want_resource = servers
+        .iter()
+        .any(|s| s.resource_count > 0 || s.resource_template_count > 0);
     let want_prompt = servers.iter().any(|s| s.prompt_count > 0);
     // OAuth only applies to remote transports; with stdio-only servers the
     // login tool would be pure noise in the tool surface.
@@ -230,12 +243,22 @@ async fn reconcile_capability_tools(
     if want_resource != *resource_live {
         // The read + discovery tools share the resource capability gate: offering
         // one without the other either strands the model (read with no way to
-        // discover) or dangles a discovery tool over nothing.
+        // discover) or dangles a discovery tool over nothing. The template-list
+        // tool rides the same gate (see `RESOURCE_TEMPLATE_LIST_TOOL`).
         // rust-doctor-disable-next-line excessive-clone
         let read: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
         // rust-doctor-disable-next-line excessive-clone
         let list: Arc<dyn AlephToolDyn> = Arc::new(McpListResourcesTool::new(handle.clone()));
+        // rust-doctor-disable-next-line excessive-clone
+        let templates: Arc<dyn AlephToolDyn> =
+            Arc::new(McpListResourceTemplatesTool::new(handle.clone()));
         set_builtin(registry, RESOURCE_LIST_TOOL, want_resource, list);
+        set_builtin(
+            registry,
+            RESOURCE_TEMPLATE_LIST_TOOL,
+            want_resource,
+            templates,
+        );
         *resource_live = set_builtin(registry, RESOURCE_TOOL, want_resource, read);
     }
     if want_prompt != *prompt_live {

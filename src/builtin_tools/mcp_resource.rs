@@ -282,6 +282,146 @@ impl AlephToolDyn for McpListResourcesTool {
     }
 }
 
+/// Arguments for the `mcp_list_resource_templates` discovery tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpListResourceTemplatesArgs {
+    /// Optional: restrict the listing to a single server by its id (or name).
+    /// Omit to list templates from every connected server.
+    #[serde(default)]
+    pub server: Option<String>,
+}
+
+/// One discovered MCP resource *template* — a parameterized URI the model fills
+/// in, then reads via `mcp_read_resource`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceTemplateEntry {
+    /// Server id this template belongs to. Prefix the filled URI with
+    /// `<server>:` when calling `mcp_read_resource`.
+    pub server: String,
+    /// RFC-6570 URI template, e.g. `file:///{path}`. Substitute the `{...}`
+    /// parameters, then read with `mcp_read_resource(uri = "<server>:<filled>")`.
+    pub uri_template: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Description, when the server supplied one.
+    pub description: Option<String>,
+    /// MIME type of produced resources, when known.
+    pub mime_type: Option<String>,
+}
+
+/// Output from `mcp_list_resource_templates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpListResourceTemplatesOutput {
+    /// Discovered templates (capped at [`MAX_RESOURCE_ENTRIES`]).
+    pub templates: Vec<McpResourceTemplateEntry>,
+    /// Number of entries returned.
+    pub count: usize,
+    /// Set when the cap truncated the list; narrow with the `server` filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Discovery tool for MCP resource *templates* (parameterized URIs). Some
+/// servers expose resources ONLY by template (e.g. `file:///{path}`) and no
+/// concrete resources, so [`McpListResourcesTool`] returns empty for them and
+/// the model would dead-end into a shell `cat`. This surfaces the templates so
+/// the model can fill a parameter and read via [`McpReadResourceTool`]. Unlike
+/// concrete resources there is no [`qualified_id`] doubling — the template is a
+/// raw pattern; the model constructs a single-prefixed `<server>:<filled uri>`,
+/// exactly the form the reader's colon-split parser expects. Mirrors codex's
+/// `list_mcp_resource_templates`. Capability-gated by the MCP tool bridge
+/// alongside the resource read/list tools.
+pub struct McpListResourceTemplatesTool {
+    handle: McpManagerHandle,
+}
+
+impl McpListResourceTemplatesTool {
+    /// Create a new MCP list-resource-templates tool.
+    #[must_use]
+    pub const fn new(handle: McpManagerHandle) -> Self {
+        Self { handle }
+    }
+}
+
+impl AlephToolDyn for McpListResourceTemplatesTool {
+    fn name(&self) -> &str {
+        "mcp_list_resource_templates"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        let schema = schemars::schema_for!(McpListResourceTemplatesArgs);
+        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
+        ToolDefinition::new(
+            "mcp_list_resource_templates",
+            "Discover parameterized resource templates (RFC-6570 URIs like \
+             `file:///{path}`) exposed by connected MCP servers — useful when a \
+             server exposes resources only by template, so `mcp_list_resources` \
+             comes back empty. Substitute the `{...}` parameters, then read the \
+             result with `mcp_read_resource(uri=\"<server>:<filled uri>\")` \
+             (prefix the filled URI with the entry's `server`). Prefer this over \
+             a web search or shell `cat` when a connected server can produce the \
+             content.",
+            parameters,
+            ToolCategory::Mcp,
+        )
+    }
+
+    fn call(
+        &self,
+        args: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + '_>> {
+        Box::pin(async move {
+            let args: McpListResourceTemplatesArgs = serde_json::from_value(args)?;
+            let servers = self.handle.list_servers().await?;
+
+            let mut entries = Vec::new();
+            let mut truncated = false;
+            'servers: for info in servers {
+                if info.resource_template_count == 0 {
+                    continue;
+                }
+                if let Some(ref want) = args.server {
+                    if &info.id != want && &info.name != want {
+                        continue;
+                    }
+                }
+                let Some(client) = self.handle.get_client(&info.id).await? else {
+                    continue;
+                };
+                for t in client.list_resource_templates().await {
+                    if entries.len() >= MAX_RESOURCE_ENTRIES {
+                        truncated = true;
+                        break 'servers;
+                    }
+                    entries.push(McpResourceTemplateEntry {
+                        server: info.id.clone(),
+                        // Raw RFC-6570 pattern, NOT server-qualified: the model
+                        // fills the parameters and prefixes `<server>:` itself
+                        // when calling `mcp_read_resource` (see struct doc).
+                        uri_template: t.uri_template,
+                        name: t.name,
+                        description: t.description,
+                        mime_type: t.mime_type,
+                    });
+                }
+            }
+
+            let count = entries.len();
+            let note = truncated.then(|| {
+                format!(
+                    "Result truncated at {MAX_RESOURCE_ENTRIES} templates; \
+                     re-run with the `server` filter to narrow."
+                )
+            });
+            Ok(serde_json::to_value(McpListResourceTemplatesOutput {
+                templates: entries,
+                count,
+                note,
+            })?)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +471,32 @@ mod tests {
         // Schema advertises the optional field.
         let schema = serde_json::to_string(&schemars::schema_for!(McpListResourcesArgs)).unwrap();
         assert!(schema.contains("server"));
+    }
+
+    #[test]
+    fn list_resource_templates_args_server_optional() {
+        // Empty args → list every server's templates.
+        let args: McpListResourceTemplatesArgs = serde_json::from_value(json!({})).unwrap();
+        assert!(args.server.is_none());
+        // Explicit filter round-trips.
+        let args: McpListResourceTemplatesArgs =
+            serde_json::from_value(json!({"server": "fs"})).unwrap();
+        assert_eq!(args.server.as_deref(), Some("fs"));
+    }
+
+    #[test]
+    fn resource_template_entry_serializes_raw_pattern() {
+        // The template entry carries the RAW uri_template (no server prefix) plus
+        // the `server` field the model uses to build `<server>:<filled>`.
+        let entry = McpResourceTemplateEntry {
+            server: "fs".to_string(),
+            uri_template: "file:///{path}".to_string(),
+            name: "Files".to_string(),
+            description: None,
+            mime_type: None,
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["uri_template"], "file:///{path}");
+        assert_eq!(v["server"], "fs");
     }
 }

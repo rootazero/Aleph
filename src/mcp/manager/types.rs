@@ -195,6 +195,10 @@ pub struct McpServerInfo {
     pub tool_count: usize,
     /// Number of resources provided
     pub resource_count: usize,
+    /// Number of resource templates provided (parameterized URIs). `#[serde(default)]`
+    /// keeps older serialized `McpServerInfo` (pre-templates) deserializable.
+    #[serde(default)]
+    pub resource_template_count: usize,
     /// Number of prompts provided
     pub prompt_count: usize,
     /// Current health status

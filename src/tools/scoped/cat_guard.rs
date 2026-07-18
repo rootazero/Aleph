@@ -66,35 +66,54 @@ pub(crate) fn skill_read_steer(name: &str, input: &Value) -> Option<String> {
                 .get("cmd")
                 .or_else(|| input.get("code"))
                 .and_then(Value::as_str)?;
-            if !plausibly_skill_path(cmd) || !command_reads(cmd) {
+            if !plausibly_skill_path(cmd) {
                 return None;
             }
-            let (kind, id) = first_skill_token(cmd)?;
+            let (kind, id) = shell_skill_read(cmd)?;
             Some(build_steer(kind, &id, true))
         }
         _ => None,
     }
 }
 
-/// True when the command contains a read-verb token, so a `cat`/`head`/… that
-/// actually reads a file trips the steer while `ls`/`cd`/`rm` do not.
-fn command_reads(cmd: &str) -> bool {
-    cmd.split(|c: char| c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | '<'))
-        .any(|tok| READ_VERBS.contains(&tok))
+/// Shell metacharacters that separate one command from the next. Redirections
+/// (`<` / `>`) are deliberately absent — they stay *inside* a command so a
+/// `cat < skills/foo/x.md` keeps `cat` bound to its operand.
+fn is_command_separator(c: char) -> bool {
+    matches!(c, '|' | ';' | '&' | '(' | ')' | '\n')
 }
 
-/// Find the first whitespace-delimited token in a shell command that classifies
-/// as an installed-skill path (quotes stripped).
-fn first_skill_token(cmd: &str) -> Option<(SkillKind, String)> {
-    for tok in cmd.split_whitespace() {
-        let tok = tok.trim_matches(|c| matches!(c, '"' | '\'' | '`'));
-        if plausibly_skill_path(tok) {
-            if let Some(hit) = classify_skill_path(Path::new(tok)) {
-                return Some(hit);
+/// Collect the operand tokens that follow a read verb *within the same command
+/// segment*. Binding the read verb to its own operands is what stops an
+/// unrelated skill path elsewhere on the line from tripping the steer: in
+/// `ls ~/.aleph/skills/foo && cat /etc/hosts` only `/etc/hosts` (cat's operand)
+/// is returned — never the `ls` operand. Pure (no FS / cwd), so it is directly
+/// unit-testable; [`shell_skill_read`] layers skill classification on top.
+fn read_verb_operands(cmd: &str) -> Vec<&str> {
+    let mut operands = Vec::new();
+    for segment in cmd.split(is_command_separator) {
+        let mut after_read_verb = false;
+        for raw in segment.split_whitespace() {
+            let tok = raw.trim_matches(|c| matches!(c, '"' | '\'' | '`' | '<' | '>'));
+            if READ_VERBS.contains(&tok) {
+                after_read_verb = true;
+            } else if after_read_verb {
+                operands.push(tok);
             }
         }
     }
-    None
+    operands
+}
+
+/// Find the first read-verb operand in a shell command that classifies as an
+/// installed-skill path. Replaces the former uncorrelated `command_reads` +
+/// `first_skill_token` global scans, which could pair a `cat` in one segment
+/// with a skill path listed by an unrelated command in another (false steer).
+fn shell_skill_read(cmd: &str) -> Option<(SkillKind, String)> {
+    read_verb_operands(cmd)
+        .into_iter()
+        .filter(|tok| plausibly_skill_path(tok))
+        .find_map(|tok| classify_skill_path(Path::new(tok)))
 }
 
 /// Classify a candidate path as living inside a known skill root. Reuses the
@@ -237,14 +256,54 @@ mod tests {
     }
 
     #[test]
-    fn command_reads_detects_read_verbs_only() {
-        assert!(command_reads("cat .aleph/skills/foo/SKILL.md"));
-        assert!(command_reads("sed -n '1,20p' .aleph/skills/foo/x.md"));
-        assert!(command_reads("head -5 skills/foo/README.md | grep x"));
-        assert!(command_reads("wc -l x && cat skills/foo/SKILL.md"));
-        assert!(!command_reads("ls .aleph/skills"));
-        assert!(!command_reads("cd .aleph/skills && pwd"));
-        assert!(!command_reads("rm -rf .aleph/skills/tmp"));
+    fn read_verb_operands_binds_verb_to_its_own_operands() {
+        assert_eq!(
+            read_verb_operands("cat .aleph/skills/foo/SKILL.md"),
+            vec![".aleph/skills/foo/SKILL.md"]
+        );
+        // Flags between the verb and the path are captured too (a later
+        // `plausibly_skill_path` filter drops the non-path ones).
+        assert_eq!(
+            read_verb_operands("sed -n '1,20p' .aleph/skills/foo/x.md"),
+            vec!["-n", "1,20p", ".aleph/skills/foo/x.md"]
+        );
+        // A read verb after `&&` binds to the *second* command's operand only.
+        assert_eq!(
+            read_verb_operands("wc -l x && cat skills/foo/SKILL.md"),
+            vec!["skills/foo/SKILL.md"]
+        );
+        // Pipe: head's operand captured; grep (not a read verb) contributes none.
+        assert_eq!(
+            read_verb_operands("head -5 skills/foo/README.md | grep x"),
+            vec!["-5", "skills/foo/README.md"]
+        );
+        // No read verb anywhere → no operands (ls/cd/rm on a skill path are fine).
+        assert!(read_verb_operands("ls .aleph/skills").is_empty());
+        assert!(read_verb_operands("cd .aleph/skills && pwd").is_empty());
+        assert!(read_verb_operands("rm -rf .aleph/skills/tmp").is_empty());
+    }
+
+    #[test]
+    fn read_verb_operands_ignores_skill_path_of_unrelated_command() {
+        // Regression for the two-scan false positive: `ls` lists a skill dir,
+        // then an unrelated `cat` reads a non-skill file. The old design tripped
+        // (a read verb existed *and* a skill token existed, uncorrelated). Now
+        // `cat` binds to ITS operand only, so the skill path never appears.
+        assert_eq!(
+            read_verb_operands("ls ~/.aleph/skills/foo && cat /etc/hosts"),
+            vec!["/etc/hosts"]
+        );
+    }
+
+    #[test]
+    fn compound_command_does_not_steer_on_unrelated_skill_listing() {
+        // End-to-end: `/etc/hosts` is filtered out before any FS classification,
+        // so this is deterministic regardless of the machine's real skill dirs.
+        assert!(skill_read_steer(
+            "bash",
+            &json!({"cmd": "ls ~/.aleph/skills/foo && cat /etc/hosts"})
+        )
+        .is_none());
     }
 
     #[test]

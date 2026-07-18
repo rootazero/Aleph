@@ -1,4 +1,7 @@
-//! Core file operations: list, read, write, move, copy, delete, mkdir
+//! Core file operations: list, move, copy, delete, mkdir, search, stats,
+//! batch-move, organize. Reading and writing are deliberately NOT here — they
+//! are the separate `file_read` / `file_write` tools (so `file_read` stays the
+//! single, cat_guard-covered read path; `file_ops` has no read/write arm).
 
 use std::fs;
 use std::path::{Path, PathBuf};

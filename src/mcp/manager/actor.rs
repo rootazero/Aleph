@@ -849,15 +849,16 @@ impl McpManagerActor {
                 .get(id)
                 .map_or(HealthStatus::Stopped, |h| h.status);
 
-            // Get tool/resource/prompt counts from active clients
-            let (tool_count, resource_count, prompt_count) =
+            // Get tool/resource/template/prompt counts from active clients
+            let (tool_count, resource_count, resource_template_count, prompt_count) =
                 if let Some(client) = self.clients.get(id) {
                     let tools = client.list_tools().await.len();
                     let resources = client.list_resources().await.len();
+                    let templates = client.list_resource_templates().await.len();
                     let prompts = client.list_prompts().await.len();
-                    (tools, resources, prompts)
+                    (tools, resources, templates, prompts)
                 } else {
-                    (0, 0, 0)
+                    (0, 0, 0, 0)
                 };
 
             servers.push(McpServerInfo {
@@ -868,6 +869,7 @@ impl McpManagerActor {
                 transport: config.transport,
                 tool_count,
                 resource_count,
+                resource_template_count,
                 prompt_count,
                 health,
             });
@@ -894,6 +896,7 @@ impl McpManagerActor {
                 transport: McpTransportType::Stdio,
                 tool_count: client.list_tools().await.len(),
                 resource_count: client.list_resources().await.len(),
+                resource_template_count: client.list_resource_templates().await.len(),
                 prompt_count: client.list_prompts().await.len(),
                 health,
             });

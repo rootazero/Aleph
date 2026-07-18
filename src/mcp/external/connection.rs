@@ -50,6 +50,8 @@ pub struct McpServerConnection {
     cached_tools: RwLock<Vec<McpTool>>,
     /// Cached resources list
     cached_resources: RwLock<Vec<crate::mcp::types::McpResource>>,
+    /// Cached resource-templates list (parameterized URIs)
+    cached_resource_templates: RwLock<Vec<crate::mcp::types::McpResourceTemplate>>,
     /// Cached prompts list
     cached_prompts: RwLock<Vec<crate::mcp::prompts::McpPrompt>>,
     /// Cached server instructions (from initialize response)
@@ -146,6 +148,7 @@ impl McpServerConnection {
             capabilities: RwLock::new(None),
             cached_tools: RwLock::new(Vec::new()),
             cached_resources: RwLock::new(Vec::new()),
+            cached_resource_templates: RwLock::new(Vec::new()),
             cached_prompts: RwLock::new(Vec::new()),
             cached_instructions: RwLock::new(None),
             state: RwLock::new(ConnectionState::Connecting),
@@ -232,6 +235,9 @@ impl McpServerConnection {
         // Pre-fetch resources and prompts (non-fatal if not supported)
         if let Err(e) = self.refresh_resources().await {
             tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
+        }
+        if let Err(e) = self.refresh_resource_templates().await {
+            tracing::debug!(server = %self.name, error = %e, "Resource templates refresh failed (may not be supported)");
         }
         if let Err(e) = self.refresh_prompts().await {
             tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
@@ -402,6 +408,59 @@ impl McpServerConnection {
         Ok(())
     }
 
+    /// Refresh the cached resource-templates list (`resources/templates/list`).
+    ///
+    /// Templates live under the same `resources` capability as concrete
+    /// resources. Many servers that support resources do not implement the
+    /// templates method; a drain error is non-fatal (the caller logs it at
+    /// debug) and simply leaves the cache empty. The stored `uri_template`
+    /// keeps its raw RFC-6570 form (NO `server:` prefix) — it is a pattern the
+    /// model fills in, then reads as `mcp_read_resource(uri = "<server>:<filled>")`.
+    pub async fn refresh_resource_templates(&self) -> Result<()> {
+        // Templates are advertised under the resources capability.
+        let caps = self.capabilities.read().await;
+        if caps.as_ref().and_then(|c| c.resources.as_ref()).is_none() {
+            tracing::debug!(server = %self.name, "Server does not support resources (skip templates)");
+            return Ok(());
+        }
+        drop(caps);
+
+        let raw_templates = self
+            .drain_paginated("resources/templates/list", |result| {
+                let page: mcp_types::ResourceTemplatesListResult =
+                    serde_json::from_value(result).map_err(|e| {
+                        AlephError::IoError(format!(
+                            "Failed to parse resource templates list from '{}': {}",
+                            self.name, e
+                        ))
+                    })?;
+                Ok((page.resource_templates, page.next_cursor))
+            })
+            .await?;
+
+        // Convert to our McpResourceTemplate format (raw pattern, no prefix).
+        let templates: Vec<crate::mcp::types::McpResourceTemplate> = raw_templates
+            .into_iter()
+            .map(|t| crate::mcp::types::McpResourceTemplate {
+                uri_template: t.uri_template,
+                name: t.name,
+                description: t.description,
+                mime_type: t.mime_type,
+            })
+            .collect();
+
+        tracing::debug!(
+            server = %self.name,
+            resource_template_count = templates.len(),
+            "Cached resource templates list"
+        );
+
+        let mut cached = self.cached_resource_templates.write().await;
+        *cached = templates;
+
+        Ok(())
+    }
+
     /// Refresh the cached prompts list
     pub async fn refresh_prompts(&self) -> Result<()> {
         // Check if server supports prompts
@@ -465,6 +524,12 @@ impl McpServerConnection {
     pub async fn list_resources(&self) -> Vec<crate::mcp::types::McpResource> {
         // rust-doctor-disable-next-line excessive-clone
         self.cached_resources.read().await.clone()
+    }
+
+    /// Get cached resource-templates list
+    pub async fn list_resource_templates(&self) -> Vec<crate::mcp::types::McpResourceTemplate> {
+        // rust-doctor-disable-next-line excessive-clone
+        self.cached_resource_templates.read().await.clone()
     }
 
     /// Get cached prompts list

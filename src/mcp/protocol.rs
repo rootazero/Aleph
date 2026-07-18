@@ -323,6 +323,41 @@ pub struct ResourcesListResult {
     pub next_cursor: Option<String>,
 }
 
+/// Resource *template* definition (`resources/templates/list`). A template
+/// advertises a parameterized URI (RFC 6570, e.g. `file:///{path}`) that the
+/// model fills in and then reads via `resources/read`. Distinct from a concrete
+/// [`ResourceDefinition`], which carries a ready-to-read `uri`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTemplateDefinition {
+    /// URI template (RFC 6570), e.g. `file:///{path}`.
+    pub uri_template: String,
+    /// Human-readable name
+    pub name: String,
+    /// Template description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// MIME type of resources produced by this template
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+/// Resource-templates list response (`resources/templates/list`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceTemplatesListResult {
+    /// Available resource templates (absent field → empty, so a server that
+    /// omits the key parses as "no templates").
+    #[serde(default, rename = "resourceTemplates")]
+    pub resource_templates: Vec<ResourceTemplateDefinition>,
+    /// Opaque pagination cursor — see [`ResourcesListResult::next_cursor`].
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_cursor: Option<String>,
+}
+
 /// Resource read request parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceReadParams {
