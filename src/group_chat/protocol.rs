@@ -344,10 +344,6 @@ pub enum GroupChatError {
         max: usize,
     },
 
-    /// The maximum number of discussion rounds has been reached.
-    #[error("maximum rounds reached: {0}")]
-    MaxRoundsReached(u32),
-
     /// The specified session was not found.
     #[error("session not found: {0}")]
     SessionNotFound(String),

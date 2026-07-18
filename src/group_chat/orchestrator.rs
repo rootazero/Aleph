@@ -205,28 +205,6 @@ impl GroupChatOrchestrator {
         self.db.as_ref()
     }
 
-    /// Check whether a session has exceeded the configured maximum number of rounds.
-    ///
-    /// The caller provides the session's `current_round` (read while holding the
-    /// session lock) so the orchestrator does not need to lock the session itself.
-    ///
-    /// # Errors
-    ///
-    /// - [`GroupChatError::MaxRoundsReached`] if `current_round >= max_rounds`.
-    pub fn check_round_limit(&self, current_round: u32) -> Result<(), GroupChatError> {
-        let max_rounds = u32::try_from(self.config.max_rounds).unwrap_or_else(|_| {
-            tracing::warn!(
-                subsystem = "group_chat",
-                "max_rounds exceeds u32::MAX, clamping to u32::MAX"
-            );
-            u32::MAX
-        });
-        if current_round >= max_rounds {
-            return Err(GroupChatError::MaxRoundsReached(max_rounds));
-        }
-        Ok(())
-    }
-
     /// Returns the configured `max_rounds` value.
     pub fn max_rounds(&self) -> u32 {
         u32::try_from(self.config.max_rounds).unwrap_or_else(|_| {
