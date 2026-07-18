@@ -25,44 +25,24 @@ impl ToolRegistrar {
 
     /// Register builtin tools
     ///
-    /// Registers system builtin tools including generation capabilities.
-    /// These tools have the highest priority in conflict resolution.
+    /// Registers the curated multi-word slash commands (skills, groupchat,
+    /// session_new, cron, voice, goal, help). These have the highest priority
+    /// in conflict resolution. Single-word tool aliases (`/model`, `/image`, …)
+    /// are seeded separately in `tool_catalog_init` from `SHORTHAND_ALIASES`.
     pub async fn register_builtin_tools(&self, conflict_resolver: &ConflictResolver) {
         debug!("Registering builtin tools");
 
-        // Image generation tool
-        let image_generate = UnifiedTool::new(
-            "builtin:generate_image",
-            "generate_image",
-            "Generate images from text descriptions using AI models like DALL-E 3",
-            ToolSource::Builtin,
-        )
-        .with_icon("photo.badge.plus")
-        .with_usage("/generate image A beautiful sunset over mountains")
-        .with_param_hint("<prompt>")
-        .with_localization_key("tool.generate.image")
-        .with_sort_order(60);
-
-        conflict_resolver
-            .register_with_conflict_resolution(image_generate)
-            .await;
-
-        // Speech generation tool
-        let speech_generate = UnifiedTool::new(
-            "builtin:generate_speech",
-            "generate_speech",
-            "Convert text to speech using AI voices",
-            ToolSource::Builtin,
-        )
-        .with_icon("speaker.wave.3")
-        .with_usage("/generate speech Hello, how are you?")
-        .with_param_hint("<text>")
-        .with_localization_key("tool.generate.speech")
-        .with_sort_order(61);
-
-        conflict_resolver
-            .register_with_conflict_resolution(speech_generate)
-            .await;
+        // NOTE: media generation slash commands (/image /video /audio /speech)
+        // are NOT curated here. Their real executable tools are named
+        // `<media>_generate` (image_generate is in BUILTIN_TOOL_DEFINITIONS;
+        // video/audio/speech_generate are provider-gated runtime tools). The
+        // catalog surfaces them via the alias-seeding in `tool_catalog_init`
+        // (defs loop for image_generate + a runtime-only pass for the other
+        // three), all driven by the single `SHORTHAND_ALIASES` source. Two
+        // former curated entries here — `generate_image`/`generate_speech` —
+        // used the reversed word order, matched no `execute_tool` arm, and so
+        // dead-ended on "Unknown tool" while still being advertised in /help;
+        // they were removed (see FEATURE_LOCATOR §3.5 round-3).
 
         // Skill reading tools (for Progressive Disclosure pattern)
         let read_skill = UnifiedTool::new(
@@ -102,35 +82,12 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(list_skills)
             .await;
 
-        let snapshot_capture = UnifiedTool::new(
-            "builtin:snapshot_capture",
-            "snapshot_capture",
-            "Capture a system snapshot with AX tree and optional vision OCR",
-            ToolSource::Builtin,
-        )
-        .with_icon("camera")
-        .with_usage("/snapshot capture")
-        .with_localization_key("tool.snapshot.capture")
-        .with_sort_order(72);
-
-        conflict_resolver
-            .register_with_conflict_resolution(snapshot_capture)
-            .await;
-
-        // Agent switching command
-        let switch_cmd = UnifiedTool::new(
-            "builtin:switch",
-            "switch",
-            "Switch to a different AI agent",
-            ToolSource::Builtin,
-        )
-        .with_usage("/switch <agent>")
-        .with_param_hint("<agent>")
-        .with_sort_order(80);
-
-        conflict_resolver
-            .register_with_conflict_resolution(switch_cmd)
-            .await;
+        // NOTE: no `snapshot_capture` curated entry — it had no `execute_tool`
+        // arm, def, or any backing anywhere, so `/snapshot capture` only ever
+        // errored. Removed (FEATURE_LOCATOR §3.5 round-3). Agent switching is
+        // surfaced by `/agent`+`/agents` → agent_switch (SHORTHAND_ALIASES,
+        // agent_switch is in defs); the former curated `switch` entry had no
+        // `switch` arm and duplicated that working path, so it was removed too.
 
         // Group chat command
         let groupchat_cmd = UnifiedTool::new(
@@ -243,7 +200,7 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(help_cmd)
             .await;
 
-        info!("Registered builtin tools (generate_* + skill_* [alias: skills] + snapshot_capture + switch + groupchat + session_new [aliases: new, clear] + cron_manage + voice + goal + help)");
+        info!("Registered builtin tools (skill_* [alias: skills] + groupchat + session_new [aliases: new, clear] + cron_manage + voice + goal + help)");
     }
 
     /// Register skills from `SkillInfo` list (Flat Namespace Mode)

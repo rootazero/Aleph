@@ -84,8 +84,7 @@ struct CommandTreeNode {
 
 /// Known tool namespaces for hierarchical grouping.
 const TOOL_NAMESPACES: &[&str] = &[
-    "session", "agent", "cron", "skill", "vault", "memory", "image", "generate", "snapshot",
-    "plugin", "team", "task",
+    "session", "agent", "cron", "skill", "vault", "memory", "image", "plugin", "team", "task",
 ];
 
 /// Decompose a canonical command name into an optional `(namespace, action)`
