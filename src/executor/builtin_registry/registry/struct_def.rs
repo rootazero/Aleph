@@ -134,6 +134,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) gateway_context: Arc<tokio::sync::OnceCell<Arc<GatewayContext>>>,
     /// Session new tool (optional - requires `SessionManager`)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
+    /// Session compact tool (optional - requires `SessionManager`)
+    pub(crate) session_compact_tool: Option<crate::builtin_tools::sessions::SessionCompactTool>,
     /// Session set-topic tool (optional - requires `SessionManager`)
     pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
     // session_search is constructed on-the-fly from gateway_context (like session_list/session_send)

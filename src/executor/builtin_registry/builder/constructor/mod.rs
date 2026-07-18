@@ -983,6 +983,12 @@ impl BuiltinToolRegistry {
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .map(crate::builtin_tools::sessions::SessionNewTool::new),
+            session_compact_tool: config
+                .gateway_context
+                .as_ref()
+                .map(|ctx| Arc::clone(ctx.session_store()))
+                .or_else(|| config.session_manager.clone())
+                .map(crate::builtin_tools::sessions::SessionCompactTool::new),
             session_set_topic_tool: config
                 .gateway_context
                 .as_ref()
