@@ -173,137 +173,6 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
-/// Resolve retry delay from HTTP response headers.
-///
-/// Checks `Retry-After`, `x-ratelimit-reset-requests`, and
-/// `x-ratelimit-reset-tokens` headers. Falls back to exponential backoff
-/// if no server guidance is present.
-///
-/// `Retry-After` may be a delay in seconds or an HTTP-date string.
-/// `x-ratelimit-reset-*` may be a Unix timestamp or relative seconds.
-#[must_use]
-pub fn resolve_retry_delay(
-    headers: &reqwest::header::HeaderMap,
-    attempt: u32,
-    base_delay: Duration,
-    max_delay: Duration,
-) -> Duration {
-    let now = std::time::SystemTime::now();
-
-    if let Some(value) = headers.get("retry-after").and_then(|v| v.to_str().ok()) {
-        if let Ok(secs) = value.parse::<u64>() {
-            // Floor at base_delay: a `Retry-After: 0` (some throttles send it)
-            // must not produce a zero sleep that hot-loops the retry budget.
-            return Duration::from_secs(secs).max(base_delay).min(max_delay);
-        }
-        if let Ok(dt) = httpdate::parse_http_date(value) {
-            if let Ok(duration) = dt.duration_since(now) {
-                return duration.min(max_delay);
-            }
-        }
-    }
-
-    if let Some(value) = headers
-        .get("x-ratelimit-reset-requests")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Ok(ts) = value.parse::<u64>() {
-            let delay = if ts > 1_000_000_000 {
-                std::time::UNIX_EPOCH
-                    .checked_add(Duration::from_secs(ts))
-                    .and_then(|t| t.duration_since(now).ok())
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                Duration::from_secs(ts)
-            };
-            if delay > Duration::ZERO {
-                return delay.min(max_delay);
-            }
-        }
-    }
-
-    if let Some(value) = headers
-        .get("x-ratelimit-reset-tokens")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Ok(ts) = value.parse::<u64>() {
-            let delay = if ts > 1_000_000_000 {
-                std::time::UNIX_EPOCH
-                    .checked_add(Duration::from_secs(ts))
-                    .and_then(|t| t.duration_since(now).ok())
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                Duration::from_secs(ts)
-            };
-            if delay > Duration::ZERO {
-                return delay.min(max_delay);
-            }
-        }
-    }
-
-    backoff_delay(base_delay, attempt, max_delay)
-}
-
-/// Classify an HTTP error using status code and response headers.
-///
-/// Returns a `RetryVerdict` with server-guided delay when available.
-/// This is the preferred entry point for HTTP-level error classification.
-#[must_use]
-pub fn classify_http_error(
-    status: u16,
-    headers: &reqwest::header::HeaderMap,
-    error_text: &str,
-) -> RetryVerdict {
-    match status {
-        429 => {
-            let msg = error_text.to_lowercase();
-            let account_patterns = ["account", "organization", "billing", "quota exceeded"];
-            if account_patterns.iter().any(|p| msg.contains(p)) {
-                return RetryVerdict::Fatal;
-            }
-            // D3: 429 with a transient-overload body (kimi-via-anthropic
-            // conflates overload with rate_limit_error; Anthropic's own
-            // "We're receiving too many requests at the moment. Please wait a
-            // moment and try again." is the same server-side throttle) → Retry
-            // with backoff so we ride out a transient spike before giving up
-            // on the provider.
-            if is_transient_overload(&msg) {
-                let delay = resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
-                return RetryVerdict::Retry { delay };
-            }
-            let delay = resolve_retry_delay(headers, 0, Duration::from_millis(300), MAX_DELAY);
-            RetryVerdict::Fallback {
-                reason: format!("rate limited (retry after {}s)", delay.as_secs()),
-            }
-        }
-        529 => {
-            let delay = resolve_retry_delay(headers, 0, Duration::from_secs(2), MAX_DELAY);
-            RetryVerdict::Retry { delay }
-        }
-        413 => RetryVerdict::CompactAndRetry {
-            token_gap: parse_token_gap_str(error_text),
-        },
-        401 | 403 => RetryVerdict::Fallback {
-            reason: "authentication failed — check your API key".into(),
-        },
-        404 => RetryVerdict::Fallback {
-            reason: "model not found".into(),
-        },
-        400 => RetryVerdict::Fatal,
-        _ => {
-            let msg = error_text.to_lowercase();
-            for pattern in &["connection", "reset", "timeout", "eof", "broken pipe"] {
-                if msg.contains(pattern) {
-                    return RetryVerdict::Retry {
-                        delay: Duration::from_millis(300),
-                    };
-                }
-            }
-            RetryVerdict::Fatal
-        }
-    }
-}
-
 /// Classify a 429 rate limit error into Fallback or Fatal.
 ///
 /// - Model-specific rate limits (error mentions a model name or per-model quota)
@@ -603,10 +472,6 @@ mod tests {
             "generic transient 429 should retry, got {:?}",
             classify(raw)
         );
-        assert!(matches!(
-            classify_http_error(429, &reqwest::header::HeaderMap::new(), raw),
-            RetryVerdict::Retry { .. }
-        ));
     }
 
     #[test]
@@ -666,18 +531,6 @@ mod tests {
     fn test_classify_account_429_overloaded_still_fatal() {
         let err = anyhow::anyhow!("429 account quota exceeded; server overloaded");
         assert_eq!(classify_error(&err), RetryVerdict::Fatal);
-    }
-
-    /// D3: classify_http_error mirrors the same precedence change.
-    #[test]
-    fn test_classify_http_429_overloaded_is_retry() {
-        let headers = reqwest::header::HeaderMap::new();
-        let body = "{\"error\":{\"type\":\"rate_limit_error\",\"message\":\"engine is currently overloaded, please try again later\"},\"type\":\"error\"}";
-        let verdict = classify_http_error(429, &headers, body);
-        assert!(
-            matches!(verdict, RetryVerdict::Retry { .. }),
-            "429+overloaded body must yield Retry, got {verdict:?}"
-        );
     }
 
     #[test]
@@ -1070,59 +923,4 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
-    fn test_resolve_retry_after_seconds() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("retry-after", "30".parse().unwrap());
-        let delay = resolve_retry_delay(
-            &headers,
-            0,
-            Duration::from_millis(100),
-            Duration::from_secs(60),
-        );
-        assert_eq!(delay, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn test_resolve_ratelimit_reset_relative() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("x-ratelimit-reset-requests", "45".parse().unwrap());
-        let delay = resolve_retry_delay(
-            &headers,
-            0,
-            Duration::from_millis(100),
-            Duration::from_secs(60),
-        );
-        assert_eq!(delay, Duration::from_secs(45));
-    }
-
-    #[test]
-    fn test_resolve_ratelimit_reset_timestamp() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        let now = std::time::SystemTime::now();
-        let ts = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 60;
-        headers.insert(
-            "x-ratelimit-reset-requests",
-            ts.to_string().parse().unwrap(),
-        );
-        let delay = resolve_retry_delay(
-            &headers,
-            0,
-            Duration::from_millis(100),
-            Duration::from_secs(300),
-        );
-        assert!(delay >= Duration::from_secs(55) && delay <= Duration::from_secs(65));
-    }
-
-    #[test]
-    fn test_resolve_fallback_to_backoff() {
-        let headers = reqwest::header::HeaderMap::new();
-        let delay = resolve_retry_delay(
-            &headers,
-            2,
-            Duration::from_millis(100),
-            Duration::from_secs(60),
-        );
-        assert_eq!(delay, Duration::from_millis(400));
-    }
 }

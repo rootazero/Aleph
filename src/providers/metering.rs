@@ -37,6 +37,55 @@ impl MeteringProvider {
     }
 }
 
+impl MeteringProvider {
+    /// Emit the `ProviderUsage` trace event + cache-monitor feed + usage log for
+    /// one response. Shared by the streaming and non-streaming paths so metering
+    /// is byte-identical on both — the streaming path previously bypassed this
+    /// decorator entirely, so streamed turns produced no `ProviderUsage` at all.
+    fn record_usage(
+        resp: &ProviderResponse,
+        sink: &Option<Arc<dyn TraceSink>>,
+        agent_id: &str,
+        provider_name: &str,
+    ) {
+        let Some(usage) = resp.usage.as_ref() else {
+            return;
+        };
+        tracing::info!(
+            target: "aleph::provider_usage",
+            agent_id = %agent_id,
+            provider = %provider_name,
+            input_tokens = usage.input_tokens,
+            output_tokens = usage.output_tokens,
+            cache_read_tokens = ?usage.cache_read_tokens,
+            cache_creation_tokens = ?usage.cache_creation_tokens,
+            cache_hit_ratio = ?usage.cache_hit_ratio(),
+            thinking_tokens = ?usage.thinking_tokens,
+            "LLM call completed"
+        );
+        // Cache-first observability: feed cache token counts into the
+        // process-wide `CacheMonitor`, keyed by agent id. Three consecutive
+        // misses (counted only once the agent has seen real cache activity) with
+        // more than three total calls triggers a warn — surfaces accidental
+        // stable-prefix changes that would otherwise only show up on the bill.
+        crate::thinker::prompt_builder::cache_monitor::global_cache_monitor().record_cache_usage(
+            agent_id,
+            usage.cache_read_tokens,
+            usage.cache_creation_tokens,
+        );
+        if let Some(sink) = sink {
+            sink.on_trace(&LoopTraceEvent::ProviderUsage {
+                agent_id: agent_id.to_string(),
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                thinking_tokens: usage.thinking_tokens,
+            });
+        }
+    }
+}
+
 impl AiProvider for MeteringProvider {
     fn process<'a>(
         &'a self,
@@ -48,42 +97,27 @@ impl AiProvider for MeteringProvider {
         let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            if let Some(usage) = resp.usage.as_ref() {
-                tracing::info!(
-                    target: "aleph::provider_usage",
-                    agent_id = %agent_id,
-                    provider = %provider_name,
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    cache_read_tokens = ?usage.cache_read_tokens,
-                    cache_creation_tokens = ?usage.cache_creation_tokens,
-                    cache_hit_ratio = ?usage.cache_hit_ratio(),
-                    thinking_tokens = ?usage.thinking_tokens,
-                    "LLM call completed"
-                );
-                // Cache-first observability: feed cache token counts into the
-                // process-wide `CacheMonitor`, keyed by agent id. Three
-                // consecutive misses (counted only once the agent has seen
-                // real cache activity) with more than three total calls
-                // triggers a warn — surfaces accidental stable-prefix changes
-                // that would otherwise only show up on the monthly bill.
-                crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
-                    .record_cache_usage(
-                        &agent_id,
-                        usage.cache_read_tokens,
-                        usage.cache_creation_tokens,
-                    );
-                if let Some(sink) = sink {
-                    sink.on_trace(&LoopTraceEvent::ProviderUsage {
-                        agent_id,
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                        cache_read_tokens: usage.cache_read_tokens,
-                        cache_creation_tokens: usage.cache_creation_tokens,
-                        thinking_tokens: usage.thinking_tokens,
-                    });
-                }
-            }
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name);
+            Ok(resp)
+        })
+    }
+
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+        stream_sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // Delegate the actual streaming to the inner provider, then meter its
+        // assembled response identically to `process`. This is the fix for the
+        // streaming metering gap: the same `ProviderUsage` pipeline now fires on
+        // streamed turns instead of being skipped by the harness downcast.
+        let fut = self.inner.execute_streaming_dyn(payload, stream_sink);
+        let sink = self.sink.clone();
+        let agent_id = self.agent_id.clone();
+        let provider_name = self.inner.name().to_string();
+        Box::pin(async move {
+            let resp = fut.await?;
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name);
             Ok(resp)
         })
     }

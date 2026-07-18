@@ -58,7 +58,6 @@ use std::pin::Pin;
 // Sub-modules
 pub mod adapter;
 pub mod anthropic;
-pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod bridge;
 pub mod capability_gate;
@@ -81,7 +80,6 @@ pub mod model_behaviors;
 pub mod model_catalog;
 pub mod model_discovery;
 pub mod model_override_provider;
-pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
 pub mod presets;
@@ -106,7 +104,6 @@ pub mod think_level_provider;
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};
 pub use auth_profiles::{
     calculate_billing_cooldown_ms, calculate_cooldown_ms, clear_profile_cooldown,
     mark_profile_failure, mark_profile_good, mark_profile_used, normalize_provider_id,
@@ -308,6 +305,27 @@ pub trait AiProvider: Send + Sync {
     /// Used by `AiProviderBridge` to call `stream_raw()`.
     fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
         None
+    }
+
+    /// Streaming twin of [`AiProvider::process`]: forward incremental deltas to
+    /// `sink` while producing the same structured [`ProviderResponse`].
+    ///
+    /// The default routes to `process` (ignoring `sink`, so no live deltas), so a
+    /// decorator that only overrides `process` still runs its per-call logic on
+    /// the streaming path. `HttpProvider` overrides this to actually stream; the
+    /// per-run decorators (`ThinkLevelProvider`, `MeteringProvider`) override it
+    /// to apply their side effect then delegate, exactly as they do for
+    /// `process`. Before this existed, the harness reached the raw inner
+    /// `HttpProvider` via `as_http_provider()` for streaming, silently skipping
+    /// both decorators every streamed turn (dropping the declared `think_level`
+    /// and never emitting `ProviderUsage`).
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: adapter::RequestPayload<'a>,
+        sink: &'a dyn DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        let _ = sink;
+        self.process(payload)
     }
 }
 

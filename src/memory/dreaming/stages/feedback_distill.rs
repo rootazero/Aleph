@@ -456,6 +456,13 @@ pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
         Some(e) => e,
         None => return Vec::new(),
     };
+    // Guard against a `}` that precedes the first `{` (e.g. prose like
+    // "no action}\n...{reconsider"): `&text[start..=end]` becomes `start..end+1`
+    // and panics when start > end. Degrade to empty instead of crashing the
+    // dream daemon. Mirrors the `end <= start` guard in note_review.rs.
+    if end <= start {
+        return Vec::new();
+    }
     let json_str = &text[start..=end];
     serde_json::from_str::<DistillResponse>(json_str)
         .map(|r| r.actions)

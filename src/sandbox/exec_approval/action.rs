@@ -169,7 +169,7 @@ fn canonical_args(tool: &str, input: &Value) -> Value {
 
 /// Advisory, model-controlled fields that must NOT participate in a grant /
 /// denial fingerprint. `justification` is the free-text reason a model attaches
-/// to a **sandbox capability escalation** (`bash_exec` / `code_exec`): it is
+/// to a **sandbox capability escalation** (`bash` / `code_exec`): it is
 /// shown to the human but is not part of the action's identity. Letting it into
 /// the fingerprint would let the model mint a fresh key on every call (defeating
 /// the denial ledger's blind-retry guard) or silently invalidate a session grant
@@ -178,9 +178,12 @@ fn canonical_args(tool: &str, input: &Value) -> Value {
 /// Scoped to those two tools by name: an external / MCP tool Aleph does not
 /// control could carry a `justification` argument that IS identity-bearing (part
 /// of a persisted record), and stripping it there would collapse two genuinely
-/// different calls onto one grant.
+/// different calls onto one grant. The names match the tools' registered
+/// `AlephTool::NAME` (`BashExecTool` is `"bash"`, not `"bash_exec"`), the same
+/// identity `grant_fingerprint` receives via `action.tool_name` at the confirm
+/// gate — a stale `"bash_exec"` here left the guard inert for the bash tool.
 fn is_non_identity_key(tool: &str, key: &str) -> bool {
-    key == "justification" && matches!(tool, "bash_exec" | "code_exec")
+    key == "justification" && matches!(tool, "bash" | "code_exec")
 }
 
 /// The shell command a shell-shaped tool call carries, if any.
@@ -291,17 +294,19 @@ mod tests {
         // advisory (shown to the human, not part of identity). Rewording it must
         // NOT mint a fresh fingerprint, or the model defeats the denial ledger /
         // silently invalidates a session grant by varying the reason text.
+        // Use the tool's real registered NAME (`"bash"`, per BashExecTool::NAME),
+        // which is the identity `grant_fingerprint` receives at the confirm gate.
         let plain = grant_fingerprint(
-            "bash_exec",
+            "bash",
             &json!({"command": "curl example.com", "allow_network": true}),
         );
         let justified = grant_fingerprint(
-            "bash_exec",
+            "bash",
             &json!({"command": "curl example.com", "allow_network": true,
                     "justification": "need to fetch the changelog"}),
         );
         let reworded = grant_fingerprint(
-            "bash_exec",
+            "bash",
             &json!({"command": "curl example.com", "allow_network": true,
                     "justification": "totally different words here"}),
         );
@@ -314,7 +319,7 @@ mod tests {
         // For a tool Aleph does not control, a `justification` argument may be
         // identity-bearing (part of a persisted record). Two calls differing only
         // in that field are genuinely different actions and must NOT collapse onto
-        // one grant — the strip is scoped to bash_exec/code_exec by name.
+        // one grant — the strip is scoped to bash/code_exec by name.
         let a = grant_fingerprint(
             "external_policy_write",
             &json!({"target": "acl", "justification": "grant read"}),

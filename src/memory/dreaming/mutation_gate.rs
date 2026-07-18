@@ -87,14 +87,6 @@ impl MutationGate {
         self.cooldown = self.cooldown.saturating_sub(1);
     }
 
-    pub fn clear_after_cooldown(&mut self) {
-        if self.cooldown == 0 {
-            self.merge_history.clear();
-            self.synthesis_assertions.clear();
-            self.distill_history.clear();
-        }
-    }
-
     #[must_use]
     pub fn evaluate(&self) -> GateDecision {
         if self.cooldown > 0 {
@@ -332,7 +324,6 @@ mod tests {
         ));
         gate.tick_cooldown();
         gate.tick_cooldown();
-        gate.clear_after_cooldown();
         assert!(matches!(gate.evaluate(), GateDecision::Allow));
     }
 

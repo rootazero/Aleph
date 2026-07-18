@@ -46,6 +46,13 @@ pub(crate) const fn is_cjk(c: char) -> bool {
 /// ASCII names need word boundaries (both neighbours non-alphanumeric);
 /// CJK names match as substrings (no word boundaries in CJK text).
 fn body_mentions(body_norm: &str, name_norm: &str, cjk: bool) -> bool {
+    // An empty needle makes `find` return `Some(0)` on every iteration while
+    // `from` never advances (end == start == from), hanging the scan. A name
+    // that normalizes to empty (e.g. an all-ideographic-space alias) carries no
+    // signal, so it mentions nothing.
+    if name_norm.is_empty() {
+        return false;
+    }
     if cjk {
         return body_norm.contains(name_norm);
     }

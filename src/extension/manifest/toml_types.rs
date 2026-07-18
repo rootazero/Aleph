@@ -601,7 +601,6 @@ priority = 50
         assert_eq!(mem.hooks.len(), 1);
         assert_eq!(mem.hooks[0], MemoryHook::OnRetrieve);
         assert_eq!(mem.priority, 50);
-        assert_eq!(mem.on_capture_timeout_action, "block");
         assert!(mem.produce_interval_seconds.is_none());
     }
 

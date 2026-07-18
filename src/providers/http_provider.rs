@@ -626,6 +626,14 @@ impl AiProvider for HttpProvider {
         Box::pin(async move { self.execute(payload, None).await })
     }
 
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+        sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move { self.execute_streaming(payload, sink).await })
+    }
+
     fn supports_native_tools(&self) -> bool {
         self.adapter.supports_native_tools()
     }
