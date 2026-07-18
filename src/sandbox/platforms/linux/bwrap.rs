@@ -540,6 +540,16 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
 
         let mut bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
 
+        // `generate_args` terminates the bwrap option list with `--`. The
+        // dynamic mounts appended below (proxy UDS bind, sandbox-init
+        // ro-bind) are bwrap OPTIONS and must precede that terminator —
+        // otherwise bwrap parses the first one (`--ro-bind`) as the command
+        // to exec. Pop it here; it is re-appended just before the target
+        // command is composed.
+        if bwrap_args.last().map(String::as_str) == Some("--") {
+            bwrap_args.pop();
+        }
+
         // Phase B: when a proxy route spec is present (AllowHosts via the
         // managed proxy), bind-mount the host bridge's UDS directory into the
         // namespace at the same path so the netns-side local bridge can
@@ -587,6 +597,10 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             bwrap_args.push(aleph_exe.to_string_lossy().into_owned());
             bwrap_args.push("/aleph-sandbox-init".into());
         }
+
+        // Re-append the option terminator popped above, so the target
+        // command composed below is not parsed as more bwrap options.
+        bwrap_args.push("--".into());
 
         debug!("running bubblewrap with {} arguments", bwrap_args.len());
 

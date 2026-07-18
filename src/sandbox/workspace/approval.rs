@@ -33,8 +33,23 @@ pub(crate) fn format_capability_summary(program: &str, caps: &SandboxCapabilitie
     if !caps.fs_write.is_empty() {
         parts.push(format!("fs_write={:?}", caps.fs_write));
     }
-    if caps.network != crate::sandbox::capabilities::NetworkPolicy::None {
-        parts.push(format!("network={:?}", caps.network));
+    match &caps.network {
+        crate::sandbox::capabilities::NetworkPolicy::None => {}
+        crate::sandbox::capabilities::NetworkPolicy::AllowHosts { hosts } => {
+            // Sort the hosts so the fingerprint is order-independent — the
+            // network sibling of `normalized()`'s fs_read/fs_write sort, which
+            // does NOT touch the host list. Without this, a reordered AllowHosts
+            // set renders a different summary and mints a fresh denial-ledger
+            // fingerprint, letting the model re-prompt the user for an elevation
+            // already denied this session (blind-retry / fatigue-loop bypass).
+            let mut sorted = hosts.clone();
+            sorted.sort();
+            parts.push(format!(
+                "network={:?}",
+                crate::sandbox::capabilities::NetworkPolicy::AllowHosts { hosts: sorted }
+            ));
+        }
+        other => parts.push(format!("network={other:?}")),
     }
     if caps.spawn_subprocess {
         parts.push("spawn=true".into());

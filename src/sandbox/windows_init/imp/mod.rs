@@ -106,11 +106,6 @@ pub(super) fn launch_with_restricted_token(parsed: &ParsedInitArgs) -> Result<i3
         CloseHandle(restricted);
         CloseHandle(host_token);
     }
-    // rust-doctor-disable-next-line unsafe-block-audit
-    unsafe {
-        CloseHandle(restricted);
-        CloseHandle(host_token);
-    }
     result
 }
 
