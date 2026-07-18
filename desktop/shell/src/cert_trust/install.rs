@@ -110,6 +110,16 @@ fn prompt(
     }
     set_trust_pending(true);
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval("window.location.href='cert-trust.html'");
+        // Absolute engine-level navigation, not a relative `location.href` eval:
+        // the failing remote load leaves no usable document base, so a relative
+        // target would resolve against the wrong origin (blank page).
+        match crate::connection::cert_trust_page_url().parse() {
+            Ok(url) => {
+                if let Err(e) = window.navigate(url) {
+                    tracing::error!("cert-trust: failed to show approval page: {e}");
+                }
+            }
+            Err(e) => tracing::error!("cert-trust: invalid approval-page URL: {e}"),
+        }
     }
 }

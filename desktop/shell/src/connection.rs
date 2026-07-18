@@ -264,6 +264,24 @@ pub(crate) fn connect_page_url() -> &'static str {
     }
 }
 
+/// The bundled cert-trust approval page (`splash/cert-trust.html`) as a
+/// navigable URL, resolved per platform like [`connect_page_url`]. The
+/// TLS-challenge hook navigates here with `window.navigate` (an absolute
+/// engine-level load) rather than a relative `location.href` eval: at challenge
+/// time the failing remote navigation has left no usable document base, so a
+/// relative target resolves against the wrong (or blank) origin.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn cert_trust_page_url() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "http://tauri.localhost/cert-trust.html"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "tauri://localhost/cert-trust.html"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands — the shell's *only* invoke surface, strictly limited to
 // connection configuration (spec §5.2 explicit exception to "no invoke_handler";
@@ -452,6 +470,16 @@ mod tests {
         assert_eq!(url, "http://tauri.localhost/connect.html");
         #[cfg(not(target_os = "windows"))]
         assert_eq!(url, "tauri://localhost/connect.html");
+    }
+
+    #[test]
+    fn cert_trust_page_url_is_platform_correct_and_parses() {
+        let url = cert_trust_page_url();
+        assert!(Url::parse(url).is_ok());
+        #[cfg(target_os = "windows")]
+        assert_eq!(url, "http://tauri.localhost/cert-trust.html");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(url, "tauri://localhost/cert-trust.html");
     }
 
     #[test]
