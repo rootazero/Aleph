@@ -119,6 +119,14 @@ impl MemoryExploreTool {
         let args_summary = format!("知识探索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
+        // Per-run agent id: prefer the turn's task-local (set by the dispatch
+        // chokepoint), fall back to the construction-time field on non-scoped
+        // paths (direct calls, tests). Mirrors `MemorySearchTool::call_impl` — the
+        // tool instance is process-wide and shared across agents, so the field is
+        // only a fallback, not the truth per run.
+        let agent_id =
+            crate::tools::turn_context::current_agent_id().unwrap_or_else(|| self.agent_id.clone());
+
         // Clamp parameters
         let max_hops = args.max_hops.min(4);
         let max_per_hop = args.max_per_hop.min(10);
@@ -142,7 +150,7 @@ impl MemoryExploreTool {
         // Step 2: Vector search for seed notes via NoteStore
         let seed_results = self
             .database
-            .vector_search_notes_with_content(&embedding, &self.agent_id, dim_hint, 3)
+            .vector_search_notes_with_content(&embedding, &agent_id, dim_hint, 3)
             .await
             .map_err(|e| ToolError::Execution(format!("Seed search failed: {e}")))?;
 
@@ -152,7 +160,7 @@ impl MemoryExploreTool {
         let mut seed_facts: Vec<_> = seed_results
             .iter()
             .map(|r| {
-                let mut f = r.to_memory_fact(&self.agent_id);
+                let mut f = r.to_memory_fact(&agent_id);
                 // Raw vec0 L2 distance (lower = closer) → higher-is-better
                 // similarity in (0, 1], so the value the model sees as
                 // `relevance_score` and the BFS similarity gate are correct.
@@ -165,7 +173,7 @@ impl MemoryExploreTool {
         for fact in &mut seed_facts {
             match self
                 .database
-                .get_embedding(&fact.id, &self.agent_id, dim_hint)
+                .get_embedding(&fact.id, &agent_id, dim_hint)
                 .await
             {
                 Ok(Some(emb)) => fact.embedding = Some(emb),
@@ -179,7 +187,7 @@ impl MemoryExploreTool {
         // Build output seed list before exploration (cloned for output)
         let mut seed_output: Vec<ExploredFact> = Vec::with_capacity(seed_facts.len());
         for f in &seed_facts {
-            let relations = self.edge_labels(&f.id).await;
+            let relations = self.edge_labels(&f.id, &agent_id).await;
             seed_output.push(ExploredFact {
                 id: f.id.clone(),
                 content: f.content.clone(),
@@ -195,7 +203,7 @@ impl MemoryExploreTool {
             max_facts_per_hop: max_per_hop,
             similarity_threshold: 0.7,
         };
-        let ripple = RippleTask::new(self.database.clone(), config, &self.agent_id);
+        let ripple = RippleTask::new(self.database.clone(), config, &agent_id);
 
         let result = ripple
             .explore(seed_facts)
@@ -206,7 +214,7 @@ impl MemoryExploreTool {
         let mut expanded_output: Vec<ExploredFact> =
             Vec::with_capacity(result.expanded_facts.len());
         for f in &result.expanded_facts {
-            let relations = self.edge_labels(&f.id).await;
+            let relations = self.edge_labels(&f.id, &agent_id).await;
             expanded_output.push(ExploredFact {
                 id: f.id.clone(),
                 content: f.content.clone(),
@@ -243,10 +251,10 @@ impl MemoryExploreTool {
 
     /// Look up typed outgoing edges for a note path and format them as
     /// "`type→to_note`" labels. Best-effort: a lookup error yields no labels.
-    async fn edge_labels(&self, note_path: &str) -> Vec<String> {
+    async fn edge_labels(&self, note_path: &str, agent_id: &str) -> Vec<String> {
         match self
             .database
-            .get_typed_relations(note_path, &self.agent_id)
+            .get_typed_relations(note_path, agent_id)
             .await
         {
             Ok(edges) => edges

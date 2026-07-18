@@ -136,11 +136,19 @@ impl AlephTool for TaskCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let priority = args
-            .priority
-            .as_deref()
-            .and_then(Priority::from_stored)
-            .unwrap_or_default();
+        // An unknown priority string must be a hard error, not a silent default
+        // to Normal: silently discarding the caller's intent misleads the model.
+        // Mirror the sibling `teams.create_task` RPC and the `task_update` status
+        // handling, which reject unknown values explicitly. Omitting `priority`
+        // still defaults to Normal (unchanged).
+        let priority = match args.priority.as_deref() {
+            None => Priority::default(),
+            Some(p) => Priority::from_stored(p).ok_or_else(|| {
+                crate::error::AlephError::other(format!(
+                    "unknown priority '{p}' (expected low|normal|high|critical)"
+                ))
+            })?,
+        };
 
         // Compose the metadata channel: dispatcher marker first, then fold in
         // the acceptance-criteria contract (a no-op when none were supplied, so

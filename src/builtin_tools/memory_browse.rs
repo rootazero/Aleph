@@ -82,8 +82,17 @@ impl MemoryBrowseTool {
         }
     }
 
+    /// Per-run agent id: prefer the turn's task-local (set by the dispatch
+    /// chokepoint), fall back to the construction-time field on non-scoped
+    /// paths (direct calls, tests). Mirrors `MemorySearchTool::call_impl` — a
+    /// process-wide single tool instance is shared across agents, so the
+    /// construction-time `agent_id` is only a fallback, not the truth per run.
+    fn active_agent_id(&self) -> String {
+        crate::tools::turn_context::current_agent_id().unwrap_or_else(|| self.agent_id.clone())
+    }
+
     pub(crate) async fn handle_list(&self, category: Option<&str>) -> Result<MemoryBrowseOutput> {
-        let base = self.memory_dir.join(&self.agent_id);
+        let base = self.memory_dir.join(self.active_agent_id());
         let target = match category {
             None => base,
             Some(cat) => {
@@ -157,7 +166,7 @@ impl MemoryBrowseTool {
 
         let file = self
             .memory_dir
-            .join(&self.agent_id)
+            .join(self.active_agent_id())
             .join(category)
             .join(format!("{filename}.md"));
 

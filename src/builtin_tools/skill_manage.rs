@@ -388,6 +388,18 @@ impl SkillManageTool {
                 "name must contain at least one alphanumeric character",
             ));
         }
+        // The id is derived from the model-supplied `name` and is used below to
+        // build the on-disk skill directory (`root.join(id)`). `parse_skill_content`
+        // only slugifies spaces/hyphens — it does NOT strip path separators or
+        // `..`, so a crafted name like "../../evil" would escape the skills root.
+        // Reject traversal here (mirrors `require_skill_id`, which guards the
+        // other actions' caller-supplied ids).
+        if id.as_str().contains("..") || id.as_str().contains('/') || id.as_str().contains('\\') {
+            return Err(AlephError::tool(
+                "name resolves to a skill id containing path separators or '..'; \
+                 use a plain name (letters, digits, spaces, hyphens)",
+            ));
+        }
         let caution = Self::vet_skill_md(&full)?;
 
         if self.system.get_skill(&id).await.is_some() {

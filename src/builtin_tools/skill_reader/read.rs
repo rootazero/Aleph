@@ -291,6 +291,23 @@ impl ReadSkillTool {
             return Err(ToolError::NotFound(error_msg));
         }
 
+        // Symlink-safe containment: the lexical check above does not resolve
+        // symlinks, so a `Normal`-component path that traverses a symlink could
+        // still escape the skill dir. Canonicalize both and re-check. Both the
+        // skill dir and the resolved target share the same real root, so the
+        // supported symlinked-skill-dir twins keep working while a symlink that
+        // points outside the skill is rejected. Fail closed if either path
+        // cannot be resolved (the file already passed exists()/is_file()).
+        let real_base = fs::canonicalize(&skill_dir)
+            .map_err(|e| ToolError::Execution(format!("Failed to resolve skill dir: {e}")))?;
+        let real_target = fs::canonicalize(&file_path)
+            .map_err(|e| ToolError::Execution(format!("Failed to resolve file path: {e}")))?;
+        if !real_target.starts_with(&real_base) {
+            return Err(ToolError::InvalidArgs(
+                "file_name escapes the skill directory".into(),
+            ));
+        }
+
         // Check file size
         let metadata = fs::metadata(&file_path)
             .map_err(|e| ToolError::Execution(format!("Failed to read file metadata: {e}")))?;

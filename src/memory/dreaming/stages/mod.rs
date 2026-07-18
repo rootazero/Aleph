@@ -19,7 +19,6 @@ pub mod note_synthesis;
 pub mod note_weave;
 pub mod skill_distill;
 pub mod skill_lifecycle;
-pub mod types;
 pub mod workflow_proposal;
 
 pub use co_recall_edges::CoRecallEdgesStage;
@@ -79,9 +78,6 @@ pub trait DreamStage: Send + Sync {
     /// Execute the stage, consuming and returning the context.
     async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError>;
 }
-
-// Re-export types still needed by other modules
-pub use types::{MemoryCluster, MetadataGroupKey};
 
 /// Shared recall-evidence gate for destructive distill actions (Supersede).
 ///

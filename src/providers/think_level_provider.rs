@@ -64,6 +64,17 @@ impl AiProvider for ThinkLevelProvider {
         self.inner.process(payload)
     }
 
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        mut payload: RequestPayload<'a>,
+        sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // Same stamp as `process` — without this, streamed turns lost the
+        // declared depth entirely (harness reached the inner provider directly).
+        payload.think_level = Some(self.level);
+        self.inner.execute_streaming_dyn(payload, sink)
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }

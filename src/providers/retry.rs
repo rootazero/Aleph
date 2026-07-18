@@ -163,7 +163,7 @@ pub fn calculate_delay(
 pub fn parse_retry_after(value: &str) -> Option<u64> {
     // Try parsing as seconds first
     if let Ok(secs) = value.parse::<u64>() {
-        return Some(secs * 1000);
+        return Some(secs.saturating_mul(1000));
     }
 
     // Try parsing as HTTP date

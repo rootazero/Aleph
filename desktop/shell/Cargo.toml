@@ -69,6 +69,10 @@ webkit2gtk = "=2.0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "=0.38.2"
+# `PWSTR` + the `Interface::cast` trait for the cert_trust::adapter_windows
+# WebView2 hook. Version tracks webview2-com 0.38.2's own `windows`/`windows-core`
+# 0.61 pin so the COM interface + string types unify (already in the workspace lock).
+windows-core = "0.61"
 
 [dev-dependencies]
 # Not in [workspace.dependencies] (only a root [dependencies] entry there);

@@ -332,8 +332,10 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
     /// Apply the cross-encoder reranker to a candidate set, blending its scores
     /// with the original retrieval scores via `blend_scores`. Falls back to the
-    /// original ordering on any reranker error (graceful degradation). The result
-    /// is keyed by note path (unique), so blending never confuses two facts.
+    /// original ordering on any reranker error (graceful degradation). Candidates
+    /// are carried through by positional index (not note path): in the multi-agent
+    /// path two agents can hold notes at the same relative path, so keying by path
+    /// would collapse them and silently drop one.
     async fn apply_rerank(
         &self,
         query: &str,
@@ -364,18 +366,26 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             }
         };
 
-        let originals: Vec<(String, f32)> =
-            // rust-doctor-disable-next-line excessive-clone
-            facts.iter().map(|f| (f.fact.id.clone(), f.score)).collect();
+        // Carry-through key is the positional index, NOT fact.id: across agents
+        // two notes can share the same relative path (fact.id), and keying the
+        // rebuild map by it would collapse them, silently dropping one. The index
+        // is unique per candidate and positionally aligned with `reranked`.
+        let originals: Vec<(String, f32)> = facts
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i.to_string(), f.score))
+            .collect();
         let blended = blend_scores(&originals, &reranked, self.rerank_weight);
 
         // Rebuild ScoredFacts in blended order, carrying the new scores.
-        let mut by_path: HashMap<String, ScoredFact> =
-            // rust-doctor-disable-next-line excessive-clone
-            facts.into_iter().map(|f| (f.fact.id.clone(), f)).collect();
-        let mut out = Vec::with_capacity(by_path.len());
-        for (path, score) in blended {
-            if let Some(mut fact) = by_path.remove(&path) {
+        let mut by_key: HashMap<String, ScoredFact> = facts
+            .into_iter()
+            .enumerate()
+            .map(|(i, f)| (i.to_string(), f))
+            .collect();
+        let mut out = Vec::with_capacity(by_key.len());
+        for (key, score) in blended {
+            if let Some(mut fact) = by_key.remove(&key) {
                 fact.score = score;
                 out.push(fact);
             }
@@ -1196,6 +1206,28 @@ mod tests {
             .await;
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/c", "p/a", "p/b"]);
+    }
+
+    #[tokio::test]
+    async fn apply_rerank_keeps_same_path_notes_across_agents() {
+        // Regression: in the multi-agent path two agents can each hold a note at
+        // the same relative path (fact.id, e.g. "general/index"). Keying the
+        // rebuild map by fact.id collapsed them into one HashMap slot, silently
+        // dropping a note. Positional-index keying must keep both.
+        let (retrieval, _dir) = create_retrieval().await;
+        let mut a = scored("general/index", "alpha notes", 0.9);
+        a.fact.agent = "agent-a".to_string();
+        let mut b = scored("general/index", "beta notes", 0.8);
+        b.fact.agent = "agent-b".to_string();
+        // Full rerank weight; boost the second candidate so both must survive
+        // AND reorder (proving neither the drop nor a score swap happens).
+        let retrieval = with_mock(retrieval, vec![(1, 0.99), (0, 0.1)], false, 1.0);
+        let out = retrieval
+            .apply_rerank("q", vec![a, b], &mut TraceSink::Off)
+            .await;
+        assert_eq!(out.len(), 2, "both same-path notes must survive rerank");
+        let agents: Vec<&str> = out.iter().map(|f| f.fact.agent.as_str()).collect();
+        assert_eq!(agents, vec!["agent-b", "agent-a"]);
     }
 
     #[tokio::test]

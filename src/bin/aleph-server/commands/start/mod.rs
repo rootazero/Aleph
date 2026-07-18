@@ -133,9 +133,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     tokio::spawn(runtime_startup_warmup());
-    validate_bind_address(args).await?;
 
     let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
+    // Probe the address the server will ACTUALLY bind (config host/port after
+    // CLI overrides), not the hardcoded 127.0.0.1:18790 defaults. Otherwise a
+    // config-file `[gateway] host`/`port` override with no matching CLI flag is
+    // validated against the wrong address, so the pre-flight probe misses the
+    // real collision (or refuses to start over an irrelevant one).
+    validate_bind_address(&final_bind, final_port, args.force).await?;
 
     let addr = {
         let ip: std::net::IpAddr = final_bind

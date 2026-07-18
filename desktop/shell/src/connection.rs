@@ -270,7 +270,10 @@ pub(crate) fn connect_page_url() -> &'static str {
 /// engine-level load) rather than a relative `location.href` eval: at challenge
 /// time the failing remote navigation has left no usable document base, so a
 /// relative target resolves against the wrong (or blank) origin.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    allow(dead_code)
+)]
 pub(crate) fn cert_trust_page_url() -> &'static str {
     #[cfg(target_os = "windows")]
     {

@@ -195,21 +195,23 @@ impl CompressionService {
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
         use crate::memory::store::raw_memory::RawMemoryStore;
 
-        let mut agent_ids = self.database.unprocessed_agent_ids().await?;
-        if agent_ids.is_empty() {
-            agent_ids.push(crate::memory::DEFAULT_AGENT.to_string());
-        }
-
-        // Consume the turn budget UP FRONT, not after the loop. The loop below
-        // propagates with `?`, so a single transient DB error used to return
-        // before the reset — leaving `pending_turns` pinned above the threshold
-        // forever. Because `record_turn_and_maybe_compress` fires on the exactly-once
-        // CROSSING (`old < threshold && new >= threshold`), a counter stuck above
-        // the threshold can never cross again: the turn-threshold trigger died
+        // Consume the turn budget UP FRONT — before the first fallible DB call,
+        // not after the loop. Every fallible step below (starting with the
+        // `unprocessed_agent_ids` fetch just after this) propagates with `?`, so a
+        // single transient DB error used to return before the reset — leaving
+        // `pending_turns` pinned above the threshold forever. Because
+        // `record_turn_and_maybe_compress` fires on the exactly-once CROSSING
+        // (`old < threshold && new >= threshold`), a counter stuck above the
+        // threshold can never cross again: the turn-threshold trigger died
         // permanently until some other path's compress() happened to succeed.
         // The trigger has already fired by the time we get here, so the budget is
         // spent whether or not this run completes.
         self.scheduler.reset_turns();
+
+        let mut agent_ids = self.database.unprocessed_agent_ids().await?;
+        if agent_ids.is_empty() {
+            agent_ids.push(crate::memory::DEFAULT_AGENT.to_string());
+        }
 
         let mut total = CompressionResult::empty();
         for agent_id in &agent_ids {

@@ -31,8 +31,27 @@ pub fn install_cert_trust(window: &WebviewWindow) {
         }
     }
 
-    // Linux (WebKitGTK) and Windows (WebView2) adapters land in Tasks 8/9.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = window.with_webview(|pview| {
+            // Windows `PlatformWebview::controller()` is the ICoreWebView2Controller.
+            super::adapter_windows::install(&pview);
+        }) {
+            tracing::warn!("cert-trust: could not reach Windows webview for install: {e}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = window.with_webview(|pview| {
+            // Linux `PlatformWebview::inner()` is the `webkit2gtk::WebView`.
+            super::adapter_linux::install(&pview);
+        }) {
+            tracing::warn!("cert-trust: could not reach Linux webview for install: {e}");
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     let _ = window;
 }
 
@@ -40,7 +59,10 @@ pub fn install_cert_trust(window: &WebviewWindow) {
 /// leaf DER + `host:port` from its engine's TLS hook and calls this; the shared
 /// logic (fingerprint → parse → decide → prompt) lives here so every adapter
 /// reuses it. Only the cert/host arrival and the "allow" grant are per-platform.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    allow(dead_code)
+)]
 pub(crate) enum HookAction {
     /// The presented cert matches the pinned fingerprint — grant the connection.
     Allow,
@@ -52,7 +74,10 @@ pub(crate) enum HookAction {
 /// `host` is the `host:port` store key. On an unknown/changed cert this stashes
 /// the pending record and navigates the webview to the approval page, returning
 /// [`HookAction::Reject`]. Fail-closed: a missing store path rejects.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    allow(dead_code)
+)]
 pub(crate) fn resolve(app: &AppHandle, host: &str, leaf_der: &[u8], reason: &str) -> HookAction {
     use crate::cert_trust::{
         decide,
@@ -87,7 +112,10 @@ pub(crate) fn resolve(app: &AppHandle, host: &str, leaf_der: &[u8], reason: &str
 
 /// Stash the pending cert into managed state, latch the supervisor off its
 /// relocation tick, and navigate the main webview to the approval page.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    allow(dead_code)
+)]
 fn prompt(
     app: &AppHandle,
     host: &str,

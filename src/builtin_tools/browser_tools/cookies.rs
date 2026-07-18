@@ -151,9 +151,15 @@ impl AlephTool for BrowserCookiesTool {
         match backend.cookies(&op).await {
             Ok(text) => {
                 let is_read = matches!(args.action, CookieAction::List | CookieAction::Get);
+                // Cookie listings are untrusted external content (site-controlled
+                // names/values): route them through the same egress chokepoint as
+                // page text / console / network so they inherit injection-boundary
+                // fencing, credential redaction, and size bounding. Every other
+                // browser content-read tool already does this via `redact_and_wrap`
+                // (mod.rs); cookies were the lone bypass.
                 Ok(BrowserCookiesOutput {
                     success: true,
-                    cookies: is_read.then_some(text),
+                    cookies: is_read.then(|| super::redact_and_wrap(&self.manager, &text)),
                     message: Some(format!(
                         "Cookie {:?} succeeded in profile '{}'",
                         args.action, args.profile

@@ -194,7 +194,8 @@ impl WebFetchTool {
         }
         let fetch_request =
             SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
-                .with_headers(headers);
+                .with_headers(headers)
+                .with_max_body_bytes(Self::MAX_RESPONSE_BYTES);
 
         let fetch_response = safe_fetch(&args.url, ssrf_policy, fetch_request)
             .await

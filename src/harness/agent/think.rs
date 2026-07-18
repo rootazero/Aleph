@@ -1219,17 +1219,15 @@ impl AgentHarness {
         parent_cancel: &CancellationToken,
         started: std::time::Instant,
     ) -> Result<Result<ProviderResponse, crate::error::AlephError>, HarnessError> {
-        let Some(http) = self.deps.llm.as_http_provider() else {
-            // No HTTP delta seam — keep the existing one-shot path.
-            return self
-                .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-                .await;
-        };
         let sink = CallbackSink {
             callback: crate::sync_primitives::Mutex::new(callback),
         };
+        // Polymorphic streaming: the decorator stack applies its per-call logic
+        // and forwards deltas down to `HttpProvider`; non-HTTP providers fall
+        // back to `process` via the trait default (no live deltas). Replaces an
+        // `as_http_provider()` downcast that skipped every decorator on streams.
         self.race_llm_call(
-            http.execute_streaming(payload, &sink),
+            self.deps.llm.execute_streaming_dyn(payload, &sink),
             parent_cancel,
             started,
         )
