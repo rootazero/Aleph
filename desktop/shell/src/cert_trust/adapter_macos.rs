@@ -200,15 +200,20 @@ unsafe extern "C-unwind" fn did_receive_challenge(
 
     match resolve(app, &host_key, &leaf_der, REASON) {
         HookAction::Allow => {
-            // SAFETY: `+[NSURLCredential credentialForTrust:]` builds an
-            // autoreleased credential from the SecTrustRef; objc2 retains it per
-            // the `none` method family. `cred` outlives the synchronous block call.
-            let cred: objc2::rc::Retained<NSURLCredential> =
+            // SAFETY: `+[NSURLCredential credentialForTrust:]` builds an autoreleased
+            // credential from the SecTrustRef; objc2 retains it per the `none` method
+            // family. An `Option` return avoids objc2's non-nil-return panic (which would
+            // unwind across the FFI boundary and leave the completion block uncalled);
+            // a nil credential fails closed to default handling instead.
+            let cred: Option<objc2::rc::Retained<NSURLCredential>> =
                 unsafe { msg_send![NSURLCredential::class(), credentialForTrust: trust_ref] };
-            complete(
-                NSURLSessionAuthChallengeDisposition::UseCredential,
-                objc2::rc::Retained::as_ptr(&cred).cast_mut(),
-            );
+            match cred {
+                Some(cred) => complete(
+                    NSURLSessionAuthChallengeDisposition::UseCredential,
+                    objc2::rc::Retained::as_ptr(&cred).cast_mut(),
+                ),
+                None => default(),
+            }
         }
         HookAction::Reject => {
             // The approval prompt is now showing; fail THIS load. On approval the
