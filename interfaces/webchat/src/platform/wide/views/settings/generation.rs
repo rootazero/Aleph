@@ -93,6 +93,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.output_dir = output_dir.get();
+        config.set(cfg.clone());
 
         spawn_local(async move {
             match GenerationConfigApi::update(&state, cfg).await {
@@ -186,6 +187,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
         let mut cfg = config.get();
         cfg.auto_paste_threshold_mb = auto_paste_threshold.get();
         cfg.background_task_threshold_seconds = background_task_threshold.get();
+        config.set(cfg.clone());
 
         spawn_local(async move {
             match GenerationConfigApi::update(&state, cfg).await {
@@ -309,6 +311,7 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.smart_routing_enabled = smart_routing.get();
+        config.set(cfg.clone());
 
         spawn_local(async move {
             match GenerationConfigApi::update(&state, cfg).await {

@@ -59,6 +59,10 @@ impl SentenceSplitter {
         if common < self.consumed {
             self.consumed = common;
             self.pending.clear();
+            // Reset fence state too: a stale `in_code_fence` would make push()
+            // swallow the re-processed tail as code body and finish_with() skip
+            // it, dropping the authoritative reply from TTS. Err toward speaking.
+            self.in_code_fence = false;
         }
     }
 

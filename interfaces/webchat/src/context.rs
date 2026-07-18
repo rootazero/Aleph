@@ -987,10 +987,20 @@ impl DashboardState {
 
                         let state_for_subscribe = *self;
                         spawn_local(async move {
-                            if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
-                                web_sys::console::error_1(
-                                    &format!("Failed to subscribe to config events: {e}").into(),
-                                );
+                            // Per-socket topic subscriptions must be re-established on
+                            // every (re)connect: a reconnect opens a fresh conn_id whose
+                            // gateway filter starts empty, and subscribing config.** alone
+                            // would drop alerts.**/approval.** (bell + approval cards go
+                            // silent after the first reconnect). subscribe_topic is
+                            // idempotent on the gateway, so the one-time client-side
+                            // handlers stay registered.
+                            for topic in ["config.**", "alerts.**", "approval.**"] {
+                                if let Err(e) = state_for_subscribe.subscribe_topic(topic).await {
+                                    web_sys::console::error_1(
+                                        &format!("Failed to subscribe to {topic} events: {e}")
+                                            .into(),
+                                    );
+                                }
                             }
                         });
                         Ok(())

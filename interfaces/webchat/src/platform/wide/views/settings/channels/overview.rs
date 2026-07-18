@@ -27,29 +27,34 @@ pub fn ChannelsOverview() -> impl IntoView {
     let statuses = RwSignal::new(HashMap::<String, String>::new());
     let instance_counts = RwSignal::new(HashMap::<String, usize>::new());
 
-    // Fetch channel statuses on mount
-    spawn_local(async move {
-        match state.rpc_call("channels.list", json!({})).await {
-            Ok(val) => {
-                if let Some(channels) = val.get("channels").and_then(|c| c.as_array()) {
-                    let mut map = HashMap::new();
-                    let mut count_map = HashMap::<String, usize>::new();
-                    for ch in channels {
-                        if let Some(ch_type) = ch.get("channel_type").and_then(|v| v.as_str()) {
-                            *count_map.entry(ch_type.to_string()).or_insert(0) += 1;
-                            if let Some(status) = ch.get("status").and_then(|v| v.as_str()) {
-                                map.insert(ch_type.to_string(), status.to_string());
+    // Fetch channel statuses when connected (refires on reconnect)
+    Effect::new(move || {
+        if !state.is_connected.get() {
+            return;
+        }
+        spawn_local(async move {
+            match state.rpc_call("channels.list", json!({})).await {
+                Ok(val) => {
+                    if let Some(channels) = val.get("channels").and_then(|c| c.as_array()) {
+                        let mut map = HashMap::new();
+                        let mut count_map = HashMap::<String, usize>::new();
+                        for ch in channels {
+                            if let Some(ch_type) = ch.get("channel_type").and_then(|v| v.as_str()) {
+                                *count_map.entry(ch_type.to_string()).or_insert(0) += 1;
+                                if let Some(status) = ch.get("status").and_then(|v| v.as_str()) {
+                                    map.insert(ch_type.to_string(), status.to_string());
+                                }
                             }
                         }
+                        statuses.set(map);
+                        instance_counts.set(count_map);
                     }
-                    statuses.set(map);
-                    instance_counts.set(count_map);
+                }
+                Err(_) => {
+                    // Cards will show "Disconnected" by default — no user-facing error needed.
                 }
             }
-            Err(_) => {
-                // Cards will show "Disconnected" by default — no user-facing error needed.
-            }
-        }
+        });
     });
 
     view! {

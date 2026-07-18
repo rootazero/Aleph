@@ -53,27 +53,33 @@ pub fn PhoneModelRoute() -> impl IntoView {
     let saved = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
 
-    // Load on mount — identical logic to route.rs.
-    {
-        spawn_local(async move {
-            match RouteConfigApi::get(&state).await {
-                Ok(view) => {
-                    mode.set(view.mode);
-                    allow_escalation.set(view.allow_cloud_escalation);
-                    local_provider.set(view.local_provider.unwrap_or_default());
-                    cloud_provider.set(view.cloud_provider.unwrap_or_default());
-                    providers.set(view.providers);
-                    load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
-                    rate_limits.set(view.rate_limits);
-                    loading.set(false);
+    // Load once the socket connects; recovers after cold-boot / reconnect
+    // (rpc_call returns "Not connected" until the WS handshake completes, so a
+    // bare mount-time spawn strands a permanent error). Logic mirrors route.rs.
+    Effect::new(move || {
+        if state.is_connected.get() {
+            spawn_local(async move {
+                loading.set(true);
+                error.set(None);
+                match RouteConfigApi::get(&state).await {
+                    Ok(view) => {
+                        mode.set(view.mode);
+                        allow_escalation.set(view.allow_cloud_escalation);
+                        local_provider.set(view.local_provider.unwrap_or_default());
+                        cloud_provider.set(view.cloud_provider.unwrap_or_default());
+                        providers.set(view.providers);
+                        load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
+                        rate_limits.set(view.rate_limits);
+                        loading.set(false);
+                    }
+                    Err(e) => {
+                        error.set(Some(e));
+                        loading.set(false);
+                    }
                 }
-                Err(e) => {
-                    error.set(Some(e));
-                    loading.set(false);
-                }
-            }
-        });
-    }
+            });
+        }
+    });
 
     // Save closure — identical logic to route.rs.
     let save = move |_| {

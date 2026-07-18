@@ -33,7 +33,7 @@ pub(super) fn ProviderDetailPanel(
     let rerank_cfg = config.get().unwrap_or_default();
     let is_current_provider = rerank_cfg.provider.as_str() == provider_key;
 
-    let enabled = RwSignal::new(true);
+    let enabled = RwSignal::new(if is_current_provider { rerank_cfg.enabled } else { true });
     let api_base = RwSignal::new(if is_current_provider {
         rerank_cfg.api_base.clone()
     } else {

@@ -42,14 +42,14 @@ pub(super) fn extract_base_url(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     // Find the position of /v{digit}/ pattern
     let bytes = url.as_bytes();
-    for i in 0..bytes.len().saturating_sub(3) {
+    for i in 0..bytes.len().saturating_sub(2) {
         if bytes[i] == b'/' && bytes[i + 1] == b'v' && bytes[i + 2].is_ascii_digit() {
-            // Check if it's followed by / or another digit + /
+            // Check if it's followed by / or another digit + / (or end-of-string)
             let mut j = i + 3;
             while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
             }
-            if j < bytes.len() && bytes[j] == b'/' {
+            if j == bytes.len() || bytes[j] == b'/' {
                 return url[..i].to_string();
             }
         }

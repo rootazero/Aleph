@@ -81,8 +81,14 @@ pub fn PhoneEmbeddings() -> impl IntoView {
         }
     };
 
-    // Initial load.
-    reload();
+    // Initial load — connect-gated so a cold-boot deep-link / route-restore
+    // doesn't fire before the WS handshake (which returns "Not connected" and
+    // strands a permanent error banner). Re-runs when is_connected flips true.
+    Effect::new(move || {
+        if state.is_connected.get() {
+            reload();
+        }
+    });
 
     view! {
         <PhoneShell title="Embeddings" back="/settings">

@@ -1107,6 +1107,12 @@ impl ChatState {
         // collapse choices / Todo panel don't leak into the restored session.
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
+        // Team mode is ephemeral (not in the snapshot, re-entered via compose) —
+        // reset so the outgoing tab's team view/routing never leaks into the
+        // restored single-agent session across a tab swap or close.
+        self.team_id.set(None);
+        self.team_members.set(Vec::new());
+        self.team_tasks.set(Vec::new());
     }
 }
 

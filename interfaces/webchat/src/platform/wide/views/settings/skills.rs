@@ -933,7 +933,7 @@ fn SkillDetailDialog(
                     </div>
 
                     // Remove button (for non-bundled skills)
-                    {if skill_for_settings.source != "Bundled" {
+                    {if skill_for_settings.source_label != "Bundled" {
                         view! {
                             <div class="pt-2 border-t border-border">
                                 <button

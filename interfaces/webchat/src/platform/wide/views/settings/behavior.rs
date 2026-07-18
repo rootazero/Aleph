@@ -109,6 +109,7 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.output_mode = output_mode.get();
+        config.set(cfg.clone());
         let is_instant = cfg.output_mode == "instant";
 
         spawn_local(async move {
@@ -223,6 +224,7 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
         let mut cfg = config.get();
         cfg.typing_speed = typing_speed.get();
+        config.set(cfg.clone());
         let new_cps = cfg.typing_speed;
 
         spawn_local(async move {

@@ -131,9 +131,11 @@ pub fn SecurityView() -> impl IntoView {
             // per-key `custom_rules` insert. We must run the whole-table rewrite
             // FIRST and the per-key custom_rules write LAST, otherwise the search
             // save clobbers the custom rules we just persisted.
+            let mut pii_failed = false;
             match SearchConfigApi::update(&state, search_cfg).await {
                 Ok(_) => {}
                 Err(e) => {
+                    pii_failed = true;
                     error.set(Some(format!("Failed to save PII config: {e}")));
                 }
             }
@@ -141,7 +143,9 @@ pub fn SecurityView() -> impl IntoView {
             if let Some(cfg) = security_cfg {
                 match SecurityConfigApi::update(&state, cfg).await {
                     Ok(restart) => {
-                        error.set(None);
+                        if !pii_failed {
+                            error.set(None);
+                        }
                         needs_restart.set(restart);
                     }
                     Err(e) => {

@@ -54,36 +54,45 @@ pub fn AgentTrace() -> impl IntoView {
 
     // --- Live mode: subscribe to agent_trace events --------------------------
     let step_counter = StoredValue::new(std::sync::Arc::new(std::sync::Mutex::new(0u64)));
+    // Track the live handler id so a reconnect re-installs exactly one (mirrors
+    // home.rs). Without this, each reconnect stacks another handler and every
+    // run.agent_trace event pushes a duplicate row (2x, 3x, ...); the leaked
+    // handlers also outlive an unmount.
+    let live_sub_id = StoredValue::new(None::<usize>);
 
     // Subscribe to gateway events for live trace
     Effect::new(move || {
-        if !state.is_connected.get() {
-            return;
-        }
-        let labels = TraceLabels::default();
-        let counter = step_counter.get_value();
+        if state.is_connected.get() {
+            let labels = TraceLabels::default();
+            let counter = step_counter.get_value();
 
-        state.subscribe_events(move |event: GatewayEvent| {
-            if event.topic != "run.agent_trace" || mode.get() != TraceMode::Live {
-                return;
-            }
-            // Try to parse the agent_trace event from data
-            if let Ok(trace_event) = serde_json::from_value::<AgentTraceEvent>(
-                event.data.get("event").cloned().unwrap_or(event.data),
-            ) {
-                let step = {
-                    let mut c = counter
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let s = *c;
-                    *c += 1;
-                    s
-                };
-                if let Some(node) = trace_node_from_event(&trace_event, step, &labels) {
-                    nodes.update(|list| list.push(node));
+            let sub_id = state.subscribe_events(move |event: GatewayEvent| {
+                if event.topic != "run.agent_trace" || mode.get() != TraceMode::Live {
+                    return;
                 }
-            }
-        });
+                // Try to parse the agent_trace event from data
+                if let Ok(trace_event) = serde_json::from_value::<AgentTraceEvent>(
+                    event.data.get("event").cloned().unwrap_or(event.data),
+                ) {
+                    let step = {
+                        let mut c = counter
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let s = *c;
+                        *c += 1;
+                        s
+                    };
+                    if let Some(node) = trace_node_from_event(&trace_event, step, &labels) {
+                        nodes.update(|list| list.push(node));
+                    }
+                }
+            });
+            live_sub_id.set_value(Some(sub_id));
+        } else if let Some(id) = live_sub_id.get_value() {
+            // Drop the prior subscriber so a future connect re-installs cleanly.
+            state.unsubscribe_events(id);
+            live_sub_id.set_value(None);
+        }
     });
 
     // --- Replay loader -------------------------------------------------------

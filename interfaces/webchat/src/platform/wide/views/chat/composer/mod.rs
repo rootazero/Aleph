@@ -976,11 +976,29 @@ pub(super) fn InputArea() -> impl IntoView {
                             input_text.set(val.clone());
                             update_palette(&val);
                             // Read the caret from the underlying textarea DOM node.
-                            let caret = ev
+                            // `selection_start` is a UTF-16 code-unit index; convert it
+                            // to a UTF-8 byte offset so it lands on a char boundary (a
+                            // direct cast would slice mid-codepoint after multibyte text).
+                            let sel = ev
                                 .target()
                                 .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
-                                .and_then(|ta| ta.selection_start().ok().flatten())
-                                .unwrap_or(val.len() as u32) as usize;
+                                .and_then(|ta| ta.selection_start().ok().flatten());
+                            let caret = match sel {
+                                Some(u16_off) => {
+                                    let mut units = 0u32;
+                                    val.char_indices()
+                                        .find_map(|(b, c)| {
+                                            if units >= u16_off {
+                                                Some(b)
+                                            } else {
+                                                units += c.len_utf16() as u32;
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(val.len())
+                                }
+                                None => val.len(),
+                            };
                             let at = update_mention_palette(
                                 &val,
                                 caret,
