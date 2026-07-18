@@ -41,9 +41,55 @@ use sandbox::SandboxRateLimitSection;
 use secrets::SecretProtectionSection;
 use shell::ShellSecuritySection;
 
+/// Fast-path heuristic: reject regex constructs that JavaScript's `RegExp`
+/// accepts but Rust's `regex` (the engine the server actually compiles these
+/// patterns with) rejects, so the user gets instant feedback instead of a
+/// green save that silently fails to compile server-side. The authoritative
+/// check runs on the server at save time — this only spares a round-trip for
+/// the common cases. Scans outside character classes and honors backslash
+/// escapes; named groups `(?<name>...)` are Rust-valid and pass.
+fn unsupported_by_rust_regex(pattern: &str) -> Option<&'static str> {
+    let b = pattern.as_bytes();
+    let mut i = 0;
+    let mut in_class = false;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => {
+                // Backreference \1..\9 (a real escape, not an escaped backslash).
+                if !in_class {
+                    if let Some(&n) = b.get(i + 1) {
+                        if n.is_ascii_digit() && n != b'0' {
+                            return Some("backreferences (e.g. \\1) are not supported");
+                        }
+                    }
+                }
+                i += 2; // skip the escaped pair
+                continue;
+            }
+            b'[' => in_class = true,
+            b']' => in_class = false,
+            b'(' if !in_class && b.get(i + 1) == Some(&b'?') => match b.get(i + 2) {
+                Some(&b'=') | Some(&b'!') => {
+                    return Some("lookahead (e.g. (?=...)) is not supported");
+                }
+                Some(&b'<') if matches!(b.get(i + 3), Some(&b'=') | Some(&b'!')) => {
+                    return Some("lookbehind (e.g. (?<=...)) is not supported");
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 pub(super) fn validate_regex(pattern: &str) -> Result<(), String> {
     if pattern.is_empty() {
         return Ok(());
+    }
+    if let Some(reason) = unsupported_by_rust_regex(pattern) {
+        return Err(reason.to_string());
     }
     // Build the JS argument with JSON.stringify so the pattern is treated as a
     // literal string rather than JS source, preventing code injection.

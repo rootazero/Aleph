@@ -205,6 +205,53 @@ pub async fn handle_get(
     JsonRpcResponse::success(request.id, result)
 }
 
+/// Compile every user-supplied custom regex against the *same* bounded-regex
+/// engine the runtime uses (`safe_regex::bounded_builder`). A pattern that
+/// parses in the panel's JS `RegExp` but not in Rust's `regex` (lookaround,
+/// backreferences, or one exceeding the size cap) would otherwise persist and
+/// then silently fail to compile later — the custom PII rule gets skipped
+/// (`pii::rules::build_rules`), the *whole* advisory shell layer is disabled
+/// (`SecurityKernel::from_config`), or the leak pattern is dropped
+/// (`SecretLeakDetector::with_custom_patterns`) — leaving the user believing a
+/// security rule is active when it never runs. Reject it at save time instead.
+///
+/// Returns every offending pattern (not just the first) so they can be fixed in
+/// one pass. Empty patterns are ignored to match the runtime, which skips them.
+fn validate_custom_patterns(config: &SecurityConfig) -> Result<(), Vec<String>> {
+    let shell = &config.shell_security;
+    let mut candidates: Vec<(&str, &str, &str)> = Vec::new();
+    for p in &shell.custom_blocked {
+        let label = p.reason.as_deref().unwrap_or(p.pattern.as_str());
+        candidates.push(("blocked command pattern", label, p.pattern.as_str()));
+    }
+    for p in &shell.custom_danger {
+        let label = p.reason.as_deref().unwrap_or(p.pattern.as_str());
+        candidates.push(("danger command pattern", label, p.pattern.as_str()));
+    }
+    for r in &config.custom_pii_rules {
+        candidates.push(("custom PII rule", r.name.as_str(), r.pattern.as_str()));
+    }
+    for p in &config.secrets_protection.custom_leak_patterns {
+        candidates.push(("secret leak pattern", p.name.as_str(), p.pattern.as_str()));
+    }
+
+    let mut errors = Vec::new();
+    for (kind, label, pattern) in candidates {
+        if pattern.is_empty() {
+            continue;
+        }
+        if let Err(e) = crate::security::safe_regex::bounded_builder(pattern).build() {
+            errors.push(format!("{kind} \"{label}\": {e}"));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 /// Handle `security_config.update` request
 pub async fn handle_update(
     request: JsonRpcRequest,
@@ -227,6 +274,17 @@ pub async fn handle_update(
             )
         }
     };
+
+    // Reject any custom regex that would silently fail to compile at runtime,
+    // rather than persist a rule the user believes is active. This is the
+    // authoritative gate (a scripted client bypasses the panel entirely).
+    if let Err(invalid) = validate_custom_patterns(&security_config) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Invalid regex pattern(s): {}", invalid.join("; ")),
+        );
+    }
 
     // Check current host to determine if restart is needed
     let current_host = toml_io::read_gateway_host_from_config(&config_patcher);
@@ -357,4 +415,52 @@ pub async fn handle_update(
             "needs_restart": needs_restart,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_from(json: serde_json::Value) -> SecurityConfig {
+        serde_json::from_value(json).expect("valid SecurityConfig json")
+    }
+
+    #[test]
+    fn accepts_valid_custom_patterns() {
+        let cfg = cfg_from(serde_json::json!({
+            "custom_pii_rules": [{"name": "tok", "pattern": r"IT-[A-Z0-9]{4}"}],
+            "shell_security": {
+                "enable_custom_patterns": true,
+                "custom_blocked": [{"pattern": "^danger", "reason": "blocked"}],
+            },
+            "secrets_protection": {
+                "custom_leak_patterns": [{"name": "k", "pattern": r"sk-\w+"}],
+            },
+        }));
+        assert!(validate_custom_patterns(&cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_every_invalid_pattern_across_surfaces() {
+        let cfg = cfg_from(serde_json::json!({
+            "custom_pii_rules": [{"name": "bad_pii", "pattern": "[unclosed"}],
+            "shell_security": {
+                "enable_custom_patterns": true,
+                "custom_blocked": [{"pattern": "(unbalanced"}],
+            },
+            "secrets_protection": {
+                "custom_leak_patterns": [{"name": "bad_leak", "pattern": "a{2,1}"}],
+            },
+        }));
+        let errs = validate_custom_patterns(&cfg).expect_err("should reject");
+        assert_eq!(errs.len(), 3, "one error per invalid pattern: {errs:?}");
+    }
+
+    #[test]
+    fn empty_pattern_is_skipped_like_the_runtime() {
+        let cfg = cfg_from(serde_json::json!({
+            "custom_pii_rules": [{"name": "blank", "pattern": ""}],
+        }));
+        assert!(validate_custom_patterns(&cfg).is_ok());
+    }
 }
