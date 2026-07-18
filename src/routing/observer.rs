@@ -74,7 +74,7 @@ impl OutcomeObserver {
 
     /// Fire-and-forget body, a free async fn so `on_trace` can `tokio::spawn`
     /// it with owned clones (the 'static bound forbids borrowing `self`).
-    pub(crate) async fn record_to_store(
+    async fn record_to_store(
         store: Arc<RoutingExperienceStore>,
         agent_id: String,
         model_id: String,
