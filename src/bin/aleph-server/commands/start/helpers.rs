@@ -12,10 +12,19 @@ use crate::daemon::{expand_path, remove_pid_file};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
-/// Validate that the bind address is available, or return an error if not.
-pub(super) async fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = resolve_socket_addr(args)?;
-    if !args.force {
+/// Validate that the resolved bind address (config host/port after CLI
+/// overrides) is available, or return an error if not. Callers pass the same
+/// `final_bind`/`final_port` the server will bind, so the probe matches reality.
+pub(super) async fn validate_bind_address(
+    bind: &str,
+    port: u16,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ip: std::net::IpAddr = bind
+        .parse()
+        .map_err(|e| format!("Invalid bind address '{bind}': {e}"))?;
+    let addr = SocketAddr::new(ip, port);
+    if !force {
         if let Err(e) = tokio::net::TcpListener::bind(addr).await {
             return Err(format!(
                 "Error: Cannot bind to {addr}: {e}\nHint: Use --force to attempt to start anyway, or choose a different port with --port"
@@ -24,15 +33,6 @@ pub(super) async fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std
         }
     }
     Ok(())
-}
-
-fn resolve_socket_addr(args: &Args) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-    let bind = args.bind.as_deref().unwrap_or("127.0.0.1");
-    let port = args.port.unwrap_or(18790);
-    let ip: std::net::IpAddr = bind
-        .parse()
-        .map_err(|e| format!("Invalid bind address '{bind}': {e}"))?;
-    Ok(SocketAddr::new(ip, port))
 }
 
 /// Format a bind address + port into a bracketed string safe for IPv6.
