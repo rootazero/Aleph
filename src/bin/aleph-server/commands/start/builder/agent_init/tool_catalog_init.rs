@@ -37,7 +37,8 @@ pub(super) async fn init_tool_catalog(
 
     let tool_catalog = Arc::new(ToolCatalog::new());
 
-    // Register builtin tools (generate_image, generate_speech, read_skill, list_skills, snapshot)
+    // Register curated multi-word slash commands (skill_read/skill_list,
+    // groupchat, session_new, cron_manage, voice, goal, help).
     tool_catalog.register_builtin_tools().await;
 
     // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
@@ -64,6 +65,36 @@ pub(super) async fn init_tool_catalog(
             tool = tool.with_aliases(aliases);
         }
         tool_catalog.register_with_conflict_resolution(tool).await;
+    }
+
+    // Runtime-only shorthand targets: provider-gated generation tools
+    // (video/audio/speech_generate) that are NOT in BUILTIN_TOOL_DEFINITIONS,
+    // so the defs loop above never sees them. Seed a discovery entry per target
+    // — driven by the same single alias source — so /video /audio /speech
+    // surface on channels and in /help exactly like /image (whose
+    // image_generate IS in defs). Without this the aliases resolve only on the
+    // Panel/CLI fast path and stay invisible everywhere else.
+    {
+        use alephcore::tool_metadata::{
+            shorthand_aliases_for, ToolSource as DToolSource, UnifiedTool as DUnifiedTool,
+            RUNTIME_ONLY_ALIAS_TARGETS,
+        };
+        for &(target, description) in RUNTIME_ONLY_ALIAS_TARGETS {
+            let aliases = shorthand_aliases_for(target);
+            // Defensive: only seed when a shorthand row actually points here.
+            // The executability guard test asserts this holds for every entry.
+            if aliases.is_empty() {
+                continue;
+            }
+            let tool = DUnifiedTool::new(
+                format!("builtin:{target}"),
+                target,
+                description,
+                DToolSource::Builtin,
+            )
+            .with_aliases(aliases);
+            tool_catalog.register_with_conflict_resolution(tool).await;
+        }
     }
 
     // ── Capability health probes (hermes-style runtime gating) ──────────

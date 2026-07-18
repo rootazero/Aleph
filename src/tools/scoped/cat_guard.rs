@@ -30,10 +30,17 @@ enum SkillKind {
     PluginSkill,
 }
 
-/// Shell read verbs whose presence marks a command as *reading* a file, so
+/// Shell verbs whose presence marks a command as *reading a file's content*, so
 /// `ls .aleph/skills` / `cd` / `rm` on a skill path do not trip the steer.
+/// Covers three families a model reaches for to inspect a skill file instead of
+/// calling `skill_read`: whole-file dumps (`cat`/`head`/`tail`/…), content
+/// searches (`grep`/`rg` — reading the file to match a section), and byte/field
+/// extractors (`strings`/`xxd`/`od`/`hexdump`/`cut`). Each still binds to its own
+/// operand via [`read_verb_operands`], and a non-skill operand is filtered out
+/// before any classification, so search/extract verbs never over-steer.
 const READ_VERBS: &[&str] = &[
-    "cat", "head", "tail", "less", "more", "bat", "view", "nl", "sed", "awk",
+    "cat", "head", "tail", "less", "more", "bat", "view", "nl", "sed", "awk", "grep", "rg",
+    "strings", "xxd", "od", "hexdump", "cut",
 ];
 
 /// Cheap substring pre-filter: only pay for skill-dir enumeration + path
@@ -272,15 +279,43 @@ mod tests {
             read_verb_operands("wc -l x && cat skills/foo/SKILL.md"),
             vec!["skills/foo/SKILL.md"]
         );
-        // Pipe: head's operand captured; grep (not a read verb) contributes none.
+        // Pipe: head's operand (the skill file) is captured. `grep` is itself a
+        // read verb now, so its pattern operand `x` is also captured here — but
+        // `x` is not a skill path, so `plausibly_skill_path` drops it before any
+        // classification, leaving only the real skill file to steer on.
         assert_eq!(
             read_verb_operands("head -5 skills/foo/README.md | grep x"),
-            vec!["-5", "skills/foo/README.md"]
+            vec!["-5", "skills/foo/README.md", "x"]
         );
         // No read verb anywhere → no operands (ls/cd/rm on a skill path are fine).
         assert!(read_verb_operands("ls .aleph/skills").is_empty());
         assert!(read_verb_operands("cd .aleph/skills && pwd").is_empty());
         assert!(read_verb_operands("rm -rf .aleph/skills/tmp").is_empty());
+    }
+
+    #[test]
+    fn read_verb_operands_covers_search_and_extract_verbs() {
+        // `grep`/`rg` read a file's content to match a section — the operand
+        // after the verb is the path (the pattern before it is not captured; a
+        // pattern that lands after the verb is dropped later by
+        // `plausibly_skill_path`, which rejects anything without a skill token).
+        assert_eq!(
+            read_verb_operands("grep pattern .aleph/skills/foo/SKILL.md"),
+            vec!["pattern", ".aleph/skills/foo/SKILL.md"]
+        );
+        assert_eq!(
+            read_verb_operands("rg needle .aleph/skills/foo/"),
+            vec!["needle", ".aleph/skills/foo/"]
+        );
+        // Byte/field extractors read content too.
+        assert_eq!(
+            read_verb_operands("strings .aleph/skills/foo/run.bin"),
+            vec![".aleph/skills/foo/run.bin"]
+        );
+        assert_eq!(
+            read_verb_operands("xxd .claude/skills/bar/data"),
+            vec![".claude/skills/bar/data"]
+        );
     }
 
     #[test]
@@ -364,6 +399,9 @@ mod tests {
         assert!(
             skill_read_steer("bash", &json!({"cmd": "ls ~/.aleph/skills"})).is_none()
         );
+        // A search verb on a non-skill file → no steer (deterministic: the
+        // operand fails `plausibly_skill_path` before any FS classification).
+        assert!(skill_read_steer("bash", &json!({"cmd": "grep foo /etc/passwd"})).is_none());
     }
 
     #[test]
