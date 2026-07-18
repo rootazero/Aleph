@@ -171,6 +171,16 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| AlephError::tool("node file.read missing content_b64"))?;
                 let node_sha = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+                // Pre-decode guard: bound the node's returned payload before we
+                // allocate the decoded bytes, mirroring the node-side file.write
+                // cap (`node_file_cmd`). A compromised/buggy node must not force
+                // an unbounded decode allocation on the center.
+                let max_b64_len = MAX_FILE_BYTES * 4 / 3 + 4;
+                if content_b64.len() > max_b64_len {
+                    return Err(AlephError::tool(format!(
+                        "node returned base64 payload exceeds {MAX_FILE_BYTES} byte cap"
+                    )));
+                }
                 let bytes = B64
                     .decode(content_b64)
                     .map_err(|e| AlephError::tool(format!("invalid base64 from node: {e}")))?;
