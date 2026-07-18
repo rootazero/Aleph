@@ -79,6 +79,7 @@ impl HarnessRunner for AgentHarnessRunner {
         max_iterations_override: Option<u32>,
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
+        exec_tier: Option<crate::config::types::policies::ExecTier>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -363,6 +364,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 workspace_override.as_deref(),
                 routing_text,
                 has_session_summaries,
+                exec_tier,
             )
             .await
         {
@@ -1008,6 +1010,9 @@ impl HarnessRunner for AgentHarnessRunner {
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
+                    // No resolved tier on the estimate path — an approval line
+                    // here would pollute the cached per-(agent, model) overhead.
+                    None,
                 )
                 .await
                 .map(|(s, _parts, _recall)| s)

@@ -454,6 +454,14 @@ pub struct FlowRequest {
     /// `None` = send no thinking directive, leaving each provider on its own
     /// default (the behaviour of every release before this field existed).
     pub think_level: Option<crate::agents::thinking::ThinkLevel>,
+    /// This turn's resolved execution-permission tier (Ask / Auto / Full),
+    /// already resolved by the gateway with request/session/global precedence
+    /// and the channel clamp applied. Forwarded into `HarnessRunner::run`, which
+    /// threads it into the `ResolvedContext` so `SecurityLayer` surfaces the
+    /// approval regime to the model (codex `<approval_policy>` parity). `None`
+    /// for internal / subagent dispatch that carries no resolved tier — their
+    /// prompt stays byte-identical.
+    pub exec_tier: Option<crate::config::types::policies::ExecTier>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -555,6 +563,10 @@ pub trait HarnessRunner: Send + Sync {
         // Declared reasoning depth for this run. `None` = omit the thinking
         // directive entirely and leave the provider on its own default.
         think_level: Option<crate::agents::thinking::ThinkLevel>,
+        // This turn's resolved exec tier (Ask / Auto / Full). Surfaced to the
+        // model as the `Approval mode:` line. `None` = no tier resolved
+        // (internal / subagent dispatch), approval line stays absent.
+        exec_tier: Option<crate::config::types::policies::ExecTier>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -807,6 +819,7 @@ impl Orchestrator {
         // rust-doctor-disable-next-line excessive-clone
         let transient_context = req.transient_context.clone();
         let think_level = req.think_level;
+        let exec_tier = req.exec_tier;
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -847,6 +860,7 @@ impl Orchestrator {
                         max_iterations_override,
                         transient_context,
                         think_level,
+                        exec_tier,
                     ),
                 ),
             )

@@ -147,11 +147,12 @@
 - **打磨话术**：「触发时机按 model token_budget 自动浮动（`pressure.rs`）；**要给某模型单独调阈值**用 `[[context_budget.model_thresholds]]`（matcher = model id / provider key 子串），连线在 `build_context_budget_config`。这是配置项不是代码改动。」
 
 ### 2.3 Context 模式 (Context Mode / codex 风格)
-- **口语关键词**：context-mode、codex 上下文、环境感知、执行计划注入
-- **代码锚点**：`src/thinker/context.rs`（ResolvedContext 四片段：execution_plan / standing_goal / voice_mode_active / sandbox_summary）、`src/thinker/layers/execution_plan.rs`（@priority1755）、`src/thinker/layers/standing_goal.rs`（@priority1754）
-- **职责**：把 session 动态执行状态（活跃 plan / standing goal / voice 模式 / sandbox 摘要）作为结构化块注入提示词。
-- **状态**：✅ 已实现。**注意**：代码里**没有名为 "context-mode" 的枚举**，而是 ResolvedContext 的四个字段按需组装。
-- **打磨话术**：「‘context mode’落在 `ResolvedContext` 四片段 + 对应 layer，不是某个开关枚举。」
+- **口语关键词**：context-mode、codex 上下文、环境感知、执行计划注入、审批档位注入、approval mode 提示
+- **代码锚点**：`src/thinker/context.rs`（ResolvedContext 动态片段：execution_plan / standing_goal / voice / sandbox_summary / **approval_tier**）、`src/thinker/layers/execution_plan.rs`（@priority1755）、`src/thinker/layers/standing_goal.rs`（@priority1754）、`src/thinker/layers/security.rs`（@priority600，渲染 sandbox_summary **+ approval_tier**）、`src/config/types/policies/exec_tier.rs::approval_prompt_line`（审批档位的 model-facing 单行 SSOT，紧邻 `rule_for` 语义）
+- **职责**：把 session 动态执行状态（活跃 plan / standing goal / voice 模式 / sandbox 摘要 / **审批档位**）作为结构化块注入提示词。
+- **状态**：✅ 已实现。**注意**：代码里**没有名为 "context-mode" 的枚举**，而是 ResolvedContext 的若干字段按需组装。
+- **🟢 审批档位注入（2026-07-19，codex `<approval_policy>` 对齐）**：此前 `SecurityLayer` 只暴露 sandbox 那半边操作信封（能写哪 / 能不能联网），却对**审批机制**半边完全失明——模型不知道自己身处 **Ask**（每个变更工具都会打断用户确认，应先规划再批量执行）、**Auto**（仅破坏性尾部打断）还是 **Full**（无人兜底，应自我审查破坏性动作）。而 exec tier 恰是 Aleph **唯一面向用户的权限旋钮**（`src/config/types/policies/exec_tier.rs`，§5.12 / SECURITY.md），本身就定性为 codex 风格。修复＝把每轮已解析的 `ExecTier`（含 request pill 覆盖 + session 存储 + channel clamp，即工具闸**将实际执行**的那个档位）沿 `think_level` **同款通道**下传：`run_loop/inner.rs`（`FlowRequest.exec_tier = Some(exec_tier)`，与喂给 `ScopedToolService` 的是**同一值**）→ `dispatch.rs`（`FlowRequest` 字段 + `HarnessRunner::run` 签名）→ `runner_impl.rs::run` → `prompt_build.rs::{build_system_prompt, resolve_prompt_context}`（填 `ResolvedContext.approval_tier`）→ `SecurityLayer` 渲染「Approval mode: …」一行。内部 / 子代理 dispatch 传 `None`（无审批行，prompt 字节等价）；token 估算旁路（`runner_impl.rs` NoopSandbox 路径）传 `None` 保持缓存稳定。R9 干净：copy 是 `ExecTier` 拥有的常量（与它描述的 `rule_for` 规则单源同处，防漂移），非规则重判。缓存友好：档位每 session 稳定，只在用户翻 pill 时 re-key（真状态变化）。
+- **打磨话术**：「‘context mode’落在 `ResolvedContext` 若干片段 + 对应 layer，不是某个开关枚举。‘模型知不知道自己是 Ask/Auto/Full’＝看 `SecurityLayer` 的 `Approval mode:` 行（源 `ResolvedContext.approval_tier`，文案 SSOT 在 `ExecTier::approval_prompt_line`）——sandbox 半边讲‘能碰什么’，审批半边讲‘碰了会不会停下来问人’，两半合起来才是 codex 的 environment envelope。要改档位描述改 `exec_tier.rs`，别在 layer 里另写文案。」
 
 ### 2.4 语音作为 Context 注入 (Voice-as-Context)
 - **口语关键词**：voice 作为 context 层、语音模式提示词、TTS 口语风格
