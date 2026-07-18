@@ -576,7 +576,6 @@ mod tests {
             hooks: vec![MemoryHook::OnRetrieve],
             priority: 100,
             produce_interval_seconds: None,
-            on_capture_timeout_action: "block".to_string(),
         });
         m
     }

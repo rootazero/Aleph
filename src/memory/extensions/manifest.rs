@@ -26,20 +26,10 @@ pub struct MemoryManifestSection {
     /// invocations. If None, defaults to scheduler's tick interval.
     #[serde(default)]
     pub produce_interval_seconds: Option<u64>,
-
-    /// When the plugin's `on_capture` call times out, what default to use
-    /// for its decision. "block" is the fail-safe default; "allow" is for
-    /// plugins that prefer a more permissive posture.
-    #[serde(default = "default_on_capture_timeout_action")]
-    pub on_capture_timeout_action: String,
 }
 
 const fn default_priority() -> i32 {
     100
-}
-
-fn default_on_capture_timeout_action() -> String {
-    "block".to_string()
 }
 
 #[cfg(test)]
@@ -52,13 +42,11 @@ mod tests {
 hooks = ["on_retrieve", "produce"]
 priority = 50
 produce_interval_seconds = 300
-on_capture_timeout_action = "allow"
 "#;
         let m: MemoryManifestSection = toml::from_str(toml).unwrap();
         assert_eq!(m.hooks, vec![MemoryHook::OnRetrieve, MemoryHook::Produce]);
         assert_eq!(m.priority, 50);
         assert_eq!(m.produce_interval_seconds, Some(300));
-        assert_eq!(m.on_capture_timeout_action, "allow");
     }
 
     #[test]
@@ -66,7 +54,6 @@ on_capture_timeout_action = "allow"
         let toml = r#"hooks = ["on_capture"]"#;
         let m: MemoryManifestSection = toml::from_str(toml).unwrap();
         assert_eq!(m.priority, 100);
-        assert_eq!(m.on_capture_timeout_action, "block");
         assert!(m.produce_interval_seconds.is_none());
     }
 
