@@ -328,6 +328,34 @@ impl InboundMessageRouter {
         Ok(())
     }
 
+    /// Handle /help: reply with the curated slash-command listing.
+    ///
+    /// Text channels (Telegram/Slack/Discord) have no completion menu, so
+    /// `/help` is intercepted here and answered directly from the live
+    /// `ToolCatalog` (the same source the completion menu and "did you mean?"
+    /// suggester read). Panel/CLI surface discovery via `commands.list` + the
+    /// completion UI, so this is the channel-side counterpart. Intercepted
+    /// before agent dispatch like `/stop` — a read-only listing must never be
+    /// queued behind a running turn.
+    pub(super) async fn handle_help(&self, msg: &InboundMessage) -> Result<(), RoutingError> {
+        let Some(parser) = self.command_parser.as_ref() else {
+            // No unified catalog wired (simulated mode) — nothing to list.
+            return Ok(());
+        };
+
+        let text = crate::gateway::handlers::commands::render_command_help(
+            parser.tool_registry(),
+            None,
+        )
+        .await;
+
+        let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);
+        if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+            error!("[Router] Failed to send /help reply: {}", e);
+        }
+        Ok(())
+    }
+
     /// Generate a topic summary for the current session using LLM
     pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
         let sm = self.session_store.as_ref()?;

@@ -205,6 +205,67 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
     result
 }
 
+/// Render a human-readable `/help` listing of user-facing slash commands.
+///
+/// Powers the inbound router's `/help` handler on text channels (Telegram /
+/// Slack / Discord), where there is no completion menu. Panel/CLI already
+/// surface discovery via the `commands.list` RPC + completion UI.
+///
+/// Scannability over exhaustiveness: the ~130 bare executor tools (registered
+/// nameless in the definitions loop, no `usage`, no alias) are folded into a
+/// one-line namespace hint rather than dumped. A command is "user-facing" if it
+/// carries a curated `usage` hint (builtins / skills / plugins / custom
+/// commands) or a friendly alias seeded from `tool_metadata::aliases`
+/// (`/model`→select_model, …). `channel` scopes visibility when known.
+pub(crate) async fn render_command_help(
+    catalog: &ToolCatalog,
+    channel: Option<ChannelType>,
+) -> String {
+    let tools = match channel {
+        Some(ch) => catalog.list_for_channel(ch).await,
+        None => catalog.list_all_for_ui().await,
+    };
+
+    let mut curated: Vec<&UnifiedTool> = tools
+        .iter()
+        .filter(|t| t.usage.is_some() || !t.aliases.is_empty())
+        .collect();
+    curated.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name)));
+
+    let mut out = String::from("Available commands:");
+    for t in &curated {
+        let invocation = t
+            .usage
+            .clone()
+            .unwrap_or_else(|| format!("/{}", t.name));
+        let aliases = if t.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" (/{})", t.aliases.join(", /"))
+        };
+        out.push_str(&format!("\n{invocation}{aliases} — {}", t.description));
+    }
+
+    // Namespaced families (session/agent/memory/…) collapse to one hint line so
+    // their many sub-commands don't flood the listing. A family is present when
+    // at least one active tool carries its `<ns>_` prefix.
+    let namespaces: Vec<String> = TOOL_NAMESPACES
+        .iter()
+        .filter(|ns| {
+            tools.iter().any(|t| {
+                t.name.starts_with(*ns) && t.name.get(ns.len()..=ns.len()) == Some("_")
+            })
+        })
+        .map(|ns| format!("/{ns}"))
+        .collect();
+    if !namespaces.is_empty() {
+        out.push_str("\n\nType a namespace for its sub-commands: ");
+        out.push_str(&namespaces.join(", "));
+    }
+
+    out
+}
+
 /// Capitalize first letter of a string
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -980,5 +1041,68 @@ mod tests {
         assert_eq!(cmd["args"], "my topic");
         assert_eq!(cmd["internal_id"], "builtin:session_new");
         assert_eq!(cmd["source_type"], "builtin");
+    }
+
+    /// `/help` rendering must (1) list curated commands with their usage, (2)
+    /// surface a friendly alias seeded from `tool_metadata::aliases`, (3) fold
+    /// namespaced families into one hint line, and (4) omit the bare executor
+    /// tools that carry neither a usage hint nor an alias — otherwise the
+    /// listing drowns in ~130 raw tool names.
+    #[tokio::test]
+    async fn render_command_help_curates_and_folds() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = ToolCatalog::new();
+        registry.register_builtin_tools().await;
+
+        // A bare executor tool with a seeded friendly alias (as the catalog
+        // builder's definitions loop would produce for select_model).
+        registry
+            .register_with_conflict_resolution(
+                UnifiedTool::new(
+                    "builtin:select_model",
+                    "select_model",
+                    "Switch the active model",
+                    ToolSource::Builtin,
+                )
+                .with_aliases(["model"]),
+            )
+            .await;
+        // A namespaced tool — must fold into the /session hint, not list raw.
+        registry
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "builtin:session_list",
+                "session_list",
+                "List sessions",
+                ToolSource::Builtin,
+            ))
+            .await;
+        // A bare tool with no usage and no alias — must be omitted.
+        registry
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "builtin:web_fetch",
+                "web_fetch",
+                "Fetch a URL",
+                ToolSource::Builtin,
+            ))
+            .await;
+
+        let help = render_command_help(&registry, None).await;
+
+        assert!(help.contains("/help"), "curated /help must appear:\n{help}");
+        assert!(
+            help.contains("/model"),
+            "seeded alias /model must be surfaced:\n{help}"
+        );
+        assert!(
+            help.contains("/session"),
+            "namespaced family must fold into a /session hint:\n{help}"
+        );
+        assert!(
+            !help.contains("web_fetch"),
+            "bare no-usage no-alias tool must be omitted:\n{help}"
+        );
+        // The namespace fold line, not a raw per-tool dump.
+        assert!(help.contains("namespace"), "fold hint line missing:\n{help}");
     }
 }
