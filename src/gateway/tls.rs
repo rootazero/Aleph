@@ -78,6 +78,11 @@ pub async fn load_or_generate(
 
             let (cert, key, fp) = generate_self_signed(&desired)?;
             tokio::fs::create_dir_all(dir).await?;
+            // `sans.txt` is the reuse commit marker: remove it BEFORE overwriting
+            // cert/key so a crash mid-rewrite (cert written, key not yet) leaves no
+            // marker — the next boot regenerates a fresh matching pair instead of
+            // reusing a torn cert/key that would fail `from_pem`. Written last. (P7)
+            let _ = tokio::fs::remove_file(&san_file).await;
             tokio::fs::write(&cert_file, &cert).await?;
             tokio::fs::write(&key_file, &key).await?;
             tokio::fs::write(&san_file, desired.join("\n")).await?;
@@ -100,8 +105,9 @@ fn generate_self_signed(sans: &[String]) -> anyhow::Result<(Vec<u8>, Vec<u8>, St
 /// Base SANs every self-signed cert always carries.
 const BASE_SANS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-/// True if `s` is a plausible DNS name. rcgen rejects garbage and would fail
-/// cert generation, which must never brick startup, so we pre-filter.
+/// True if `s` is a plausible DNS name. rcgen accepts arbitrary ASCII as a
+/// `DnsName`, so this only trims obvious junk (empty / non-DNS chars) to avoid
+/// shipping meaningless SANs; it never bricks startup.
 fn is_plausible_dns_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 253
@@ -198,6 +204,23 @@ mod tests {
         // Second call reuses the persisted cert → identical fingerprint.
         let (_c2, _k2, fp2) = load_or_generate(&cfg, dir.path()).await.unwrap();
         assert_eq!(fp1, fp2);
+    }
+
+    #[tokio::test]
+    async fn shrinking_desired_set_reuses_without_regen() {
+        let dir = tempfile::tempdir().unwrap();
+        // Wide config records an extra SAN in sans.txt.
+        let cfg_wide = GatewayTlsConfig {
+            enabled: true,
+            san: vec!["203.0.113.88".to_string()],
+            ..Default::default()
+        };
+        let (_c0, _k0, fp0) = load_or_generate(&cfg_wide, dir.path()).await.unwrap();
+        // Narrow config drops that SAN → desired shrinks but stays ⊆ recorded →
+        // reuse, no regen, fingerprint unchanged (no thrash).
+        let cfg_narrow = GatewayTlsConfig { enabled: true, ..Default::default() };
+        let (_c1, _k1, fp1) = load_or_generate(&cfg_narrow, dir.path()).await.unwrap();
+        assert_eq!(fp0, fp1, "a shrunk desired set must reuse the cert, not regenerate");
     }
 
     #[test]

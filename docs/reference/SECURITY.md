@@ -918,7 +918,10 @@ validation; add hostnames or a NAT'd public IP via `[gateway.tls] san = [...]`.
 Clients still get a browser cert warning (accept-once, or pin the fingerprint) —
 encryption is real, the trust anchor is manual. A newly-appearing address
 regenerates the cert (new fingerprint ⇒ re-trust once); a `sans.txt` sidecar
-tracks coverage so churn stays minimal.
+tracks coverage so churn stays minimal. Note the SAN enumerates *every* local
+interface IP — including private/LAN and Docker-bridge addresses — so anyone who
+inspects the cert learns the box's interface map; harmless for a personal server,
+but list only what you need via `san` + a loopback bind if that matters.
 
 ```toml
 [gateway]
