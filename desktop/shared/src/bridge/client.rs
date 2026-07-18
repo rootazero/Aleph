@@ -101,6 +101,10 @@ pub struct SwiftBridge {
     /// Single source of truth for respawn pacing (backoff + restart window).
     gate: Arc<Mutex<SpawnGate>>,
     disabled: Arc<AtomicBool>,
+    /// Monotonic helper generation. Bumped once per successful spawn so a stale
+    /// reader task can tell whether a newer helper has superseded it before it
+    /// runs its EOF cleanup (which would otherwise clobber the live helper).
+    generation: Arc<AtomicU64>,
 }
 
 struct BridgeProcess {
@@ -119,6 +123,7 @@ impl SwiftBridge {
             id_seq: AtomicU64::new(1),
             gate: Arc::new(Mutex::new(SpawnGate::new(5, Duration::from_mins(10)))),
             disabled: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -184,6 +189,11 @@ impl SwiftBridge {
         let state_for_reader = Arc::clone(&self.state);
         let gate_for_reader = Arc::clone(&self.gate);
         let disabled_for_reader = Arc::clone(&self.disabled);
+        let generation_for_reader = Arc::clone(&self.generation);
+        // Claim this reader's generation now that cmd.spawn() has succeeded, so
+        // every live reader owns a unique, monotonically increasing gen aligned
+        // with the helper `ensure_running` is about to install.
+        let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Reader task: stdout → InflightTable. On EOF, drain inflight,
         // reset state, and record a restart in the window.
@@ -218,26 +228,33 @@ impl SwiftBridge {
             // stdout closed — helper crashed or exited.
             tracing::warn!(target: "bridge", "reader loop exited (helper stdout closed)");
 
-            // 1. Drain all pending callers.
-            inflight.fail_all("helper stdout closed").await;
+            // Only the newest reader owns the state slot and the shared inflight
+            // table. If a newer helper was installed while this reader's EOF was
+            // pending (e.g. the write-failure retry path already respawned),
+            // `generation` has advanced past `my_gen` — skip cleanup so we don't
+            // drain the live helper's in-flight ids or null its state slot.
+            if generation_for_reader.load(Ordering::SeqCst) == my_gen {
+                // 1. Drain all pending callers.
+                inflight.fail_all("helper stdout closed").await;
 
-            // 2. Reset the state slot so the next call triggers a respawn.
-            {
-                let mut guard = state_for_reader.lock().await;
-                *guard = None;
-            }
+                // 2. Reset the state slot so the next call triggers a respawn.
+                {
+                    let mut guard = state_for_reader.lock().await;
+                    *guard = None;
+                }
 
-            // 3. Record the crash in the spawn gate: arm the backoff window so
-            //    the next call paces its respawn, and trip disabled if the
-            //    restart threshold is exceeded.
-            {
-                let mut gate = gate_for_reader.lock().await;
-                if gate.record_failure() {
-                    disabled_for_reader.store(true, Ordering::SeqCst);
-                    tracing::error!(
-                        target: "bridge",
-                        "bridge disabled: too many crashes within the restart window"
-                    );
+                // 3. Record the crash in the spawn gate: arm the backoff window
+                //    so the next call paces its respawn, and trip disabled if the
+                //    restart threshold is exceeded.
+                {
+                    let mut gate = gate_for_reader.lock().await;
+                    if gate.record_failure() {
+                        disabled_for_reader.store(true, Ordering::SeqCst);
+                        tracing::error!(
+                            target: "bridge",
+                            "bridge disabled: too many crashes within the restart window"
+                        );
+                    }
                 }
             }
         });

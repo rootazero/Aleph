@@ -939,6 +939,12 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
     // supervisor — no second loop is ever spawned.
     let mut target = connection::load_target();
     let mut supervisor = Supervisor::for_target(&target, up);
+    // Latch: show the connect page once per outage. Without it the
+    // ShowConnectionError arm re-navigates every tick (~5s), wiping any address
+    // the user is typing (an R5 violation — mirrors the lite loop's `relocated`
+    // guard). Cleared on any healthy/recovery tick and on a runtime target
+    // switch so a future outage re-shows it.
+    let mut connect_page_shown = false;
     loop {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
 
@@ -964,10 +970,15 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
             tracing::info!("connection target changed — re-arming supervisor");
             supervisor = Supervisor::for_target(&current, ready);
             target = current;
+            // A runtime switch (e.g. back to a working target) must not stay
+            // latched against re-showing the connect page on a later outage.
+            connect_page_shown = false;
         }
 
         match supervisor.tick(ready) {
-            SupervisorAction::Idle => {}
+            SupervisorAction::Idle => {
+                connect_page_shown = false;
+            }
             SupervisorAction::Relaunch => {
                 tracing::warn!("daemon unreachable — attempting relaunch");
                 daemon::relaunch_if_down().await;
@@ -985,6 +996,7 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
             }
             SupervisorAction::ReloadPanel => {
                 tracing::info!("Gateway recovered — reloading the Panel");
+                connect_page_shown = false;
                 match &target {
                     // In-window reload after the local daemon recovers — the
                     // Panel already holds its session state from the first reveal.
@@ -998,11 +1010,14 @@ async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
                 }
             }
             SupervisorAction::ShowConnectionError => {
-                tracing::warn!("remote Gateway unreachable — showing connection page");
-                show_connection_page(
-                    &handle,
-                    "Remote Gateway unreachable. Retry or go back to local.",
-                );
+                if !connect_page_shown {
+                    tracing::warn!("remote Gateway unreachable — showing connection page");
+                    show_connection_page(
+                        &handle,
+                        "Remote Gateway unreachable. Retry or go back to local.",
+                    );
+                    connect_page_shown = true;
+                }
             }
         }
     }
