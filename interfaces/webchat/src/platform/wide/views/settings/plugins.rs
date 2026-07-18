@@ -52,7 +52,6 @@ pub fn PluginsView() -> impl IntoView {
     let plugins = RwSignal::new(Vec::<PluginInfo>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
-    let auto_update = RwSignal::new(false);
     let show_install_dialog = RwSignal::new(false);
 
     // Load plugins when connected
@@ -101,32 +100,6 @@ pub fn PluginsView() -> impl IntoView {
                         {err}
                     </div>
                 })}
-
-                // Settings Section
-                <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.plugins.settings_section)}</h2>
-                    <div class="p-4 bg-surface-raised border border-border rounded">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.plugins.auto_update)}</div>
-                                <div class="text-xs text-text-secondary mt-1">
-                                    {t!(i18n, settings.plugins.auto_update_desc)}
-                                </div>
-                            </div>
-                            <label class="relative inline-flex items-center cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    class="sr-only peer"
-                                    checked=move || auto_update.get()
-                                    on:change=move |ev| {
-                                        auto_update.set(event_target_checked(&ev));
-                                    }
-                                />
-                                <div class="w-11 h-6 bg-surface-sunken peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-                            </label>
-                        </div>
-                    </div>
-                </div>
 
                 // Installed Plugins Section
                 <div class="space-y-4">
