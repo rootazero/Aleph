@@ -48,10 +48,9 @@ type ChallengeCompletion = Block<dyn Fn(NSURLSessionAuthChallengeDisposition, *m
 /// `webview` is the `WKWebView` pointer from Tauri's `PlatformWebview::inner()`.
 pub(crate) fn install(webview: *mut c_void) {
     static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        if let Err(e) = try_inject(webview) {
-            tracing::warn!("cert-trust: WKWebView challenge hook not installed: {e}");
-        }
+    ONCE.call_once(|| match try_inject(webview) {
+        Ok(()) => tracing::info!("cert-trust: WKWebView challenge hook installed"),
+        Err(e) => tracing::warn!("cert-trust: WKWebView challenge hook not installed: {e}"),
     });
 }
 
@@ -92,7 +91,21 @@ fn try_inject(webview: *mut c_void) -> Result<(), &'static str> {
                     *mut AnyObject,
                 ),
         );
-        objc2::ffi::class_addMethod(class_ptr, sel, imp, types.as_ptr())
+        let ok = objc2::ffi::class_addMethod(class_ptr, sel, imp, types.as_ptr());
+        if ok.as_bool() {
+            // WKWebView caches which optional navigation-delegate methods exist
+            // when `-setNavigationDelegate:` is first called — during webview
+            // construction, before this injection. Re-assign the same delegate so
+            // WebKit re-runs `respondsToSelector:` and starts routing the auth
+            // challenge to the method we just added; without this, the handler is
+            // present on the class but never invoked (self-signed load silently
+            // fails). wry owns a strong reference to the delegate, so it stays
+            // alive across the momentary nil assignment.
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![wk, setNavigationDelegate: nil];
+            let _: () = msg_send![wk, setNavigationDelegate: delegate];
+        }
+        ok
     };
 
     if added.as_bool() {
@@ -194,11 +207,20 @@ unsafe extern "C-unwind" fn did_receive_challenge(
     let host_key = format!("{host}:{port}");
 
     let Some(app) = CERT_TRUST_APP.get() else {
+        tracing::warn!("cert-trust: no AppHandle — failing {host_key} closed");
         default();
         return;
     };
 
-    match resolve(app, &host_key, &leaf_der, REASON) {
+    let action = resolve(app, &host_key, &leaf_der, REASON);
+    tracing::info!(
+        "cert-trust: TLS challenge {host_key} -> {}",
+        match action {
+            HookAction::Allow => "ALLOW (pinned)",
+            HookAction::Reject => "PROMPT (unknown/changed)",
+        }
+    );
+    match action {
         HookAction::Allow => {
             // SAFETY: `+[NSURLCredential credentialForTrust:]` builds an autoreleased
             // credential from the SecTrustRef; objc2 retains it per the `none` method
