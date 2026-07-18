@@ -5,6 +5,60 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.7.18]
+
+A remote-access release that closes the loop on **self-signed TLS**, building
+directly on 26.7.17's in-process gateway TLS. Two halves meet in the middle.
+On the server, the self-signed certificate's SAN now **auto-discovers the
+machine's non-loopback interface IPs** — a `wss://` connection to a LAN or
+public address no longer fails hostname verification, retiring the
+localhost-only SAN gap — with a drift-tracking sidecar that reuses the existing
+cert when the interface set is a subset and regenerates it (never bricks) when
+it drifts or the sidecar is corrupt. On the client, the Panel gains **in-app
+trust-on-first-use (TOFU) certificate trust**: a self-signed gateway cert is
+reviewed and pinned from inside the app via a fingerprint + SAN approval splash
+with a TOFU/change warning, backed by a shared decision core and a pinned trust
+store. The macOS WKWebView cert-challenge adapter is the reference platform —
+proven end-to-end against a real self-signed remote — with the iOS Keychain
+trust store and decision mirror wired alongside.
+
+### Added
+
+- **Self-signed cert SAN auto-discovery.** A new `[gateway.tls] san` field plus
+  automatic discovery of the host's non-loopback interface IPs are assembled
+  into the self-signed certificate's SAN and threaded through the server mirror
+  to `load_or_generate`, so remote `wss://` connects verify cleanly.
+- **SAN-drift sidecar.** The cert's SAN set is tracked in a sidecar: an unchanged
+  or subset SAN reuses the existing cert, a drifted one regenerates it, guarded
+  by an atomic regen marker and a shrink-reuse test.
+- **Panel in-app certificate trust (TOFU).** A shared decision core with a pinned
+  TOFU trust store, SHA-256 fingerprint + SAN/subject parsing, an approval splash
+  page (fingerprint + SAN + TOFU/change warning), and pending-cert state with
+  approve/reject Tauri commands let a self-signed cert be trusted from inside the
+  app.
+- **macOS WKWebView cert-challenge adapter + install dispatch.** The reference
+  platform for in-app trust, driving the challenge through the shared decision
+  core.
+- **iOS Keychain trust store + decision mirror.** Unit-tested Keychain-backed
+  trust for the iOS Panel, mirroring the shared decision state.
+
+### Fixed
+
+- **Panel token wall buried by the boot gate** on a remote unauthorized connect —
+  the token wall now surfaces instead of being hidden behind the boot gate (WASM
+  dist rebuilt).
+- **macOS WKWebView `respondsToSelector` cache** was stale, so the injected
+  challenge handler never fired — the cache is now busted on install.
+- **macOS trust approval navigated by a relative path** and could miss the page —
+  it now navigates to the approval page by absolute URL.
+- **`credentialForTrust` returning nil** could panic at the FFI boundary — it now
+  fails closed.
+- **Corrupt `sans.txt` sidecar** is treated as best-effort and regenerates the
+  cert rather than bricking boot.
+- **Lite supervisor relocation** is suppressed while a trust prompt is pending, so
+  the approval flow isn't interrupted.
+- **Malformed-DER fingerprint parsing** never panics (regression-tested).
+
 ## [26.7.17]
 
 A security and hardening release. The headline is **native gateway TLS for
