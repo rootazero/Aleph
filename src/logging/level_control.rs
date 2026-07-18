@@ -3,8 +3,7 @@
 /// This module provides runtime control over the global log level.
 /// It uses an atomic variable to track the current level and allows
 /// dynamic modification without restarting the application.
-use crate::sync_primitives::Ordering;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Once;
 use tracing::Level;
 
@@ -12,9 +11,8 @@ use tracing::Level;
 ///
 /// Note: This type is defined in aleph.udl for `UniFFI` code generation.
 /// The Rust definition must match the UDL enum exactly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]
-#[derive(Default)]
 pub enum LogLevel {
     Error,
     Warn,
@@ -79,7 +77,7 @@ impl LogLevel {
     }
 
     /// Convert from u8
-    fn from_u8(value: u8) -> Self {
+    const fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
             1 => Self::Warn,
@@ -88,7 +86,7 @@ impl LogLevel {
             4 => Self::Trace,
             _ => {
                 debug_assert!(false, "Invalid LogLevel u8 value: {value}");
-                Self::Info // Default fallback
+                Self::Info
             }
         }
     }
@@ -100,8 +98,8 @@ static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info.to_u8());
 /// Initialization guard for log level
 static INIT: Once = Once::new();
 
-/// Initialize the log level from environment or default
-pub fn init_log_level() {
+/// Initialize the log level from environment or default.
+pub(crate) fn init_log_level() {
     INIT.call_once(|| {
         // Try to read from RUST_LOG environment variable
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
