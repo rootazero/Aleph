@@ -236,6 +236,9 @@ fn main() {
         connection::set_connection_target,
         connection::clear_connection_target,
         connection::is_lite_shell,
+        cert_trust::pending::get_pending_cert,
+        cert_trust::pending::approve_cert,
+        cert_trust::pending::reject_cert,
     ]);
     #[cfg(not(feature = "embedded-core"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -245,11 +248,20 @@ fn main() {
         connection::is_lite_shell,
         connect_setup::discover_servers,
         connect_setup::connect_to,
+        cert_trust::pending::get_pending_cert,
+        cert_trust::pending::approve_cert,
+        cert_trust::pending::reject_cert,
     ]);
 
     // Shared update state: the background checker, the tray, and the macOS
     // menu all read it.
     let builder = builder.manage(update::Updater::default());
+
+    // Shared pending-cert slot: the TLS-error hook (later task) writes to it,
+    // the `cert-trust.html` approval page's commands read/resolve it. Managed
+    // in both variants — either shell may connect to a self-signed remote
+    // Gateway.
+    let builder = builder.manage(cert_trust::pending::PendingCert::default());
 
     // Tracks the first Panel reveal (see `RevealGate`). Managed in both variants
     // so the single-instance handler can always read it; the full app's reveal

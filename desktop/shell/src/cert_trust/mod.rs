@@ -4,6 +4,7 @@
 //! pinned-fingerprint match is ever allowed (fail-closed).
 
 pub mod fingerprint;
+pub mod pending;
 pub mod store;
 
 use serde::Serialize;
