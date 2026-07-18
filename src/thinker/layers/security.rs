@@ -40,9 +40,14 @@ impl PromptLayer for SecurityLayer {
         let disabled_tools = &ctx.disabled_tools;
         let security_notes = &ctx.environment_contract.security_notes;
         let sandbox_summary = ctx.sandbox_summary.as_ref();
+        let approval_tier = ctx.approval_tier;
 
         // Only add section if there's something to report
-        if security_notes.is_empty() && disabled_tools.is_empty() && sandbox_summary.is_none() {
+        if security_notes.is_empty()
+            && disabled_tools.is_empty()
+            && sandbox_summary.is_none()
+            && approval_tier.is_none()
+        {
             return;
         }
 
@@ -57,6 +62,15 @@ impl PromptLayer for SecurityLayer {
                 output.push_str(&format!("- {line}\n"));
             }
             output.push('\n');
+        }
+
+        // Approval regime (codex `<approval_policy>` parity): the complement of
+        // the sandbox posture above — sandbox says what the agent may touch,
+        // this says whether a mutating touch pauses for the human. The copy is a
+        // constant owned by `ExecTier` (single source with the rule it
+        // describes), so it needs no prompt sanitization.
+        if let Some(tier) = approval_tier {
+            output.push_str(&format!("- {}\n\n", tier.approval_prompt_line()));
         }
 
         // Security notes
@@ -185,6 +199,86 @@ mod tests {
         assert!(out.contains("workspace-write"));
         assert!(out.contains("/ws/abc"));
         assert!(out.contains("512 MiB"));
+    }
+
+    #[test]
+    fn renders_approval_tier_when_attached() {
+        use crate::config::types::policies::ExecTier;
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.approval_tier = Some(ExecTier::Ask);
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Security & Constraints"));
+        assert!(out.contains("Approval mode: ask"));
+    }
+
+    #[test]
+    fn approval_tier_alone_triggers_the_section() {
+        use crate::config::types::policies::ExecTier;
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        // Strip the permissive note and leave no sandbox / disabled tools, so
+        // the tier is the SOLE reason the section renders — the new guard arm.
+        ctx.environment_contract.security_notes.clear();
+        ctx.approval_tier = Some(ExecTier::Full);
+        assert!(ctx.sandbox_summary.is_none());
+        assert!(ctx.disabled_tools.is_empty());
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Security & Constraints"));
+        assert!(out.contains("Approval mode: full"));
+    }
+
+    #[test]
+    fn no_approval_tier_leaves_the_line_absent() {
+        // A context that never set `approval_tier` (internal / subagent
+        // dispatch) must not emit an approval line — byte-identical to before.
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        assert!(ctx.approval_tier.is_none());
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::context(&config, &ctx);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(!out.contains("Approval mode"));
     }
 
     #[test]

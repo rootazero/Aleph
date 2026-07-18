@@ -221,6 +221,7 @@ impl AgentHarnessRunner {
         workspace: Option<&std::path::Path>,
         routing_text: Option<String>,
         has_session_summaries: bool,
+        exec_tier: Option<crate::config::types::policies::ExecTier>,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -612,6 +613,7 @@ impl AgentHarnessRunner {
             provider,
             sandbox,
             self.tool_catalog.as_ref(),
+            exec_tier,
         )
         .await;
         builder = builder.with_resolved_context(resolved_context);
@@ -705,6 +707,7 @@ async fn resolve_prompt_context(
     provider: &dyn AiProvider,
     sandbox: &dyn Sandbox,
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
+    exec_tier: Option<crate::config::types::policies::ExecTier>,
 ) -> crate::thinker::context::ResolvedContext {
     let default_manifest;
     let manifest_ref = match channel_manifest {
@@ -793,6 +796,12 @@ async fn resolve_prompt_context(
         Some(false) => crate::thinker::context::VoiceContext::Spoken,
         Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
     };
+    // Approval regime (codex `<approval_policy>` parity): the turn's resolved
+    // exec tier, already computed by the gateway with request/session/global
+    // precedence and the channel clamp applied. Threaded through here rather
+    // than re-derived so the prompt shows the exact tier the tool gate enforces.
+    // `None` on internal / subagent dispatch leaves the approval line absent.
+    resolved_context.approval_tier = exec_tier;
     resolved_context
 }
 

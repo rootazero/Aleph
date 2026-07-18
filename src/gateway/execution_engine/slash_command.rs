@@ -394,7 +394,7 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
         "agent_create" => serde_json::json!({
             "input": args_str,
         }),
-        "session_set_topic" => serde_json::json!({
+        "session_rename" => serde_json::json!({
             "topic": args_str,
         }),
         // URL-based tools

@@ -133,16 +133,3 @@ examples/*
 !examples/plugins/
 !examples/protocols/
 !examples/protocols/**
-
-# ==============================================================================
-# Docs
-# ==============================================================================
-# Untrack everything except the README-referenced reference/ docs and the
-# guides/ directory — docs/guides/*.md are compile-time build assets
-# (src/config embeds them via include_str!), so they must stay tracked.
-# Engineering artifacts (audit / logic-review reports, result dumps) live under
-# docs/engineering-reports/ and stay untracked.
-/docs/*
-!/docs/reference/
-!/docs/guides/
-!/docs/images
