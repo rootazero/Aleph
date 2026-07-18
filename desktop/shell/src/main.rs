@@ -10,6 +10,7 @@
     windows_subsystem = "windows"
 )]
 
+mod cert_trust;
 mod connection;
 // First-run connection setup (address entry + mDNS discovery) is panel-only:
 // the full app brings its bundled daemon up and never needs a connect-first

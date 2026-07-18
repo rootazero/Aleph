@@ -24,6 +24,10 @@ embedded-core = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+sha2 = { workspace = true }
+hex = { workspace = true }
+x509-parser = { workspace = true }
+serde = { workspace = true }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
