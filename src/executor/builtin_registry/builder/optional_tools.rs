@@ -186,19 +186,24 @@ impl BuiltinToolRegistry {
         // Generation tools
         let generation_registry = config.generation_registry.clone();
         if let Some(ref registry) = generation_registry {
-            if image_generate_tool.is_some() {
-                reg(
-                    tools,
-                    "image_generate",
-                    ImageGenerateTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::ImageGenerateArgs>("image_generate"),
-                );
-                info!("Registered image.generate tool in BuiltinToolRegistry");
-            }
-
             {
                 let reg_inner = registry.read().unwrap_or_else(|e| e.into_inner());
                 use crate::generation::GenerationType;
+
+                // image_generate must verify a backing Image provider exists,
+                // exactly like Video/Audio/Speech below — otherwise the LLM is
+                // advertised a tool with no provider to serve it.
+                if image_generate_tool.is_some()
+                    && reg_inner.first_for_type(GenerationType::Image).is_some()
+                {
+                    reg(
+                        tools,
+                        "image_generate",
+                        ImageGenerateTool::DESCRIPTION,
+                        schema::<crate::builtin_tools::ImageGenerateArgs>("image_generate"),
+                    );
+                    info!("Registered image.generate tool in BuiltinToolRegistry");
+                }
 
                 if reg_inner.first_for_type(GenerationType::Video).is_some() {
                     reg(

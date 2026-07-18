@@ -476,15 +476,22 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_new" => {
                 let arguments = {
                     let mut args = arguments;
-                    if let Some(ref h) = self.session_context_handle {
-                        if let Ok(ctx) = h.try_read() {
-                            if let Some(obj) = args.as_object_mut() {
-                                obj.insert(
-                                    "__session_key".into(),
-                                    serde_json::Value::String(ctx.session_key_str.clone()),
-                                );
-                            }
-                        }
+                    // Prefer the race-free per-turn session key; the process-global
+                    // session_context_handle is rewritten at every run start, so a
+                    // concurrent run of another agent can swap it mid-turn and this
+                    // tool would close/create the WRONG session (same rule
+                    // recall_context and memory_search scope=current_session follow).
+                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
+                        self.session_context_handle
+                            .as_ref()
+                            .and_then(|h| h.try_read().ok())
+                            .map(|ctx| ctx.session_key_str.clone())
+                    });
+                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
+                        obj.insert(
+                            "__session_key".into(),
+                            serde_json::Value::String(session_key),
+                        );
                     }
                     args
                 };
@@ -500,15 +507,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_rename" => {
                 let arguments = {
                     let mut args = arguments;
-                    if let Some(ref h) = self.session_context_handle {
-                        if let Ok(ctx) = h.try_read() {
-                            if let Some(obj) = args.as_object_mut() {
-                                obj.insert(
-                                    "__session_key".into(),
-                                    serde_json::Value::String(ctx.session_key_str.clone()),
-                                );
-                            }
-                        }
+                    // Prefer the race-free per-turn session key; see session_new above.
+                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
+                        self.session_context_handle
+                            .as_ref()
+                            .and_then(|h| h.try_read().ok())
+                            .map(|ctx| ctx.session_key_str.clone())
+                    });
+                    if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
+                        obj.insert(
+                            "__session_key".into(),
+                            serde_json::Value::String(session_key),
+                        );
                     }
                     args
                 };
@@ -534,18 +544,35 @@ impl ToolRegistry for BuiltinToolRegistry {
                             serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
                         );
                     }
-                    if let Some(ref h) = self.session_context_handle {
-                        if let Ok(ctx) = h.try_read() {
-                            if let Some(obj) = args.as_object_mut() {
-                                obj.insert(
-                                    "__channel".into(),
-                                    serde_json::Value::String(ctx.channel.clone()),
-                                );
-                                obj.insert(
-                                    "__conversation_id".into(),
-                                    serde_json::Value::String(ctx.conversation_id.clone()),
-                                );
+                    // Prefer the race-free per-turn context for delivery routing;
+                    // the process-global session_context_handle is rewritten at
+                    // every run start, so a concurrent run of another agent can
+                    // swap it mid-turn and the created job would deliver into the
+                    // WRONG conversation. Fall back to the mirror only outside a
+                    // scoped turn (non-gateway paths, tests).
+                    let (channel, conversation_id) =
+                        match crate::tools::turn_context::current_turn_context() {
+                            Some(t) => {
+                                (Some(t.channel_id.clone()), Some(t.conversation_id.clone()))
                             }
+                            None => self
+                                .session_context_handle
+                                .as_ref()
+                                .and_then(|h| h.try_read().ok())
+                                .map(|ctx| {
+                                    (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
+                                })
+                                .unwrap_or((None, None)),
+                        };
+                    if let Some(obj) = args.as_object_mut() {
+                        if let Some(channel) = channel {
+                            obj.insert("__channel".into(), serde_json::Value::String(channel));
+                        }
+                        if let Some(conversation_id) = conversation_id {
+                            obj.insert(
+                                "__conversation_id".into(),
+                                serde_json::Value::String(conversation_id),
+                            );
                         }
                     }
                     args
@@ -610,15 +637,21 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
-                    if let Some(ref h) = self.session_context_handle {
-                        if let Ok(ctx) = h.try_read() {
-                            if let Some(obj) = args.as_object_mut() {
-                                obj.insert(
-                                    "__channel".into(),
-                                    serde_json::Value::String(ctx.channel.clone()),
-                                );
-                            }
-                        }
+                    // Prefer the race-free per-turn channel; the process-global
+                    // session_context_handle is rewritten at every run start, so a
+                    // concurrent run of another agent can swap it mid-turn and
+                    // agent_switch would rebind the WRONG channel's active agent.
+                    // Fall back to the mirror only outside a scoped turn.
+                    let channel = match crate::tools::turn_context::current_turn_context() {
+                        Some(t) => Some(t.channel_id.clone()),
+                        None => self
+                            .session_context_handle
+                            .as_ref()
+                            .and_then(|h| h.try_read().ok())
+                            .map(|ctx| ctx.channel.clone()),
+                    };
+                    if let (Some(channel), Some(obj)) = (channel, args.as_object_mut()) {
+                        obj.insert("__channel".into(), serde_json::Value::String(channel));
                     }
                     args
                 };
