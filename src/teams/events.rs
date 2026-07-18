@@ -221,18 +221,14 @@ impl SqliteEventLogStore {
 // Helper row reader
 // ---------------------------------------------------------------------------
 
-fn read_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamEvent> {
+fn read_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<TeamEvent>> {
     let event_type_str: String = row.get(2)?;
-    let event_type = TeamEventType::from_stored(&event_type_str).ok_or_else(|| {
-        rusqlite::Error::FromSqlConversionFailure(
-            2,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unknown TeamEventType: {event_type_str}"),
-            )),
-        )
-    })?;
+    // Skip rows with an unrecognized event_type instead of failing the whole
+    // query, mirroring the lenient artifact readers. Genuine corruption (bad
+    // payload JSON / timestamp) below still surfaces as a hard error.
+    let Some(event_type) = TeamEventType::from_stored(&event_type_str) else {
+        return Ok(None);
+    };
 
     let payload_str: String = row.get(4)?;
     let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(|e| {
@@ -253,14 +249,14 @@ fn read_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamEvent> {
             rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
-    Ok(TeamEvent {
+    Ok(Some(TeamEvent {
         id: row.get(0)?,
         team_id: row.get(1)?,
         event_type,
         agent_id: row.get(3)?,
         payload,
         timestamp,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +357,10 @@ impl EventLogStore for SqliteEventLogStore {
             .query_map(params_refs.as_slice(), read_event_row)
             .map_err(db_err)?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_err)?;
+            .map_err(db_err)?
+            .into_iter()
+            .flatten()
+            .collect();
 
         Ok(events)
     }

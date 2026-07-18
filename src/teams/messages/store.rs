@@ -522,7 +522,7 @@ impl MessageStore for SqliteMessageStore {
             let sql = format!(
                 "SELECT id, team_id, from_agent, msg_type, subject, content, \
                  reply_to, thread_id, created_at, expires_at \
-                 FROM team_messages WHERE id IN ({placeholders})"
+                 FROM team_messages WHERE id IN ({placeholders}) ORDER BY created_at ASC"
             );
             let params: Vec<&dyn rusqlite::types::ToSql> = ids
                 .iter()

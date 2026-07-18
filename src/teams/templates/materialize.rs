@@ -270,7 +270,13 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
     // Build adjacency + in-degree maps keyed by task.key.
     let mut in_deg: HashMap<&str, usize> = HashMap::with_capacity(tpl.tasks.len());
     for t in &tpl.tasks {
-        in_deg.insert(t.key.as_str(), t.depends_on.len());
+        in_deg.insert(
+            t.key.as_str(),
+            t.depends_on
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+        );
     }
     let by_key: HashMap<&str, &super::types::TemplateTask> =
         tpl.tasks.iter().map(|t| (t.key.as_str(), t)).collect();
