@@ -421,15 +421,14 @@ impl AgentHarnessRunner {
         // discovered agents only reactively (by guessing an id and reading the
         // error). The delegatable set is the builtin sub-agents (explore / coder /
         // researcher / plan / verify) ∪ the registry's registered sub-agents
-        // (user / project defs, folded in by `register_from_dirs` — which scans
-        // only builtin + user + project dirs; plugin-shipped agents are parsed by
-        // the extension loader but NOT yet bridged into this registry, so they do
-        // not appear here — deferred hook, see `extension/mod.rs::load_all`);
-        // registry entries win id collisions (a user override of a builtin). This
-        // mirrors `AgentRegistry::resolve`'s builtin+disk merge, so the catalog
-        // matches what `delegate` can actually spawn even when builtins are not
-        // eagerly registered in this particular registry. Session-stable, so it
-        // sits in the cached stable prefix without re-keying.
+        // (user / project defs, folded in by `register_from_dirs`) ∪ the
+        // plugin-shipped sub-agents published by `ExtensionManager::load_all`
+        // (bridged via `crate::agents::plugin_subagents`). Precedence: registry
+        // entries win id collisions over builtins (a user override), and plugin
+        // agents fold in insert-if-absent so they never shadow a
+        // builtin/user/project id — mirroring `AgentRegistry::resolve`'s three
+        // passes so the catalog matches exactly what `delegate` can spawn.
+        // Session-stable, so it sits in the cached stable prefix without re-keying.
         let available_agents = {
             use crate::agents::AgentMode;
             let mut by_id: std::collections::BTreeMap<String, crate::agents::AgentDef> =
@@ -440,6 +439,10 @@ impl AgentHarnessRunner {
                     .collect();
             for a in self.agent_registry.list_subagents() {
                 by_id.insert(a.id.clone(), a);
+            }
+            // Plugin sub-agents last, insert-if-absent (lowest precedence).
+            for a in crate::agents::plugin_subagents() {
+                by_id.entry(a.id.clone()).or_insert(a);
             }
             (!by_id.is_empty()).then(|| {
                 by_id

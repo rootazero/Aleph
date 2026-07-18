@@ -201,6 +201,58 @@ pub struct ExtensionManager {
     reload_count: AtomicU64,
 }
 
+/// Convert a plugin-shipped agent registration into an [`crate::agents::AgentDef`]
+/// for the agent registry's delegation + `<available_agents>` catalog, or `None`
+/// when it is not a delegatable sub-agent.
+///
+/// Mirrors the disk-agent loader (`crate::agents::loader`): the markdown
+/// `content` (system-prompt body) is intentionally dropped — `AgentDef` is
+/// frontmatter / section-key based and disk agents discard their body the same
+/// way, so a plugin sub-agent runs through the standard sub-agent prompt flow.
+/// The declared `tools` map (name → allowed) becomes allow / deny lists; absent,
+/// the constructor default (`["*"]`) is kept, matching a disk agent with no tool
+/// frontmatter (a subagent is spawned by an already-privileged primary and the
+/// recursion guard blocks re-spawning, so wildcard-by-default is safe here too).
+fn plugin_agent_to_def(
+    reg: &crate::extension::AgentRegistration,
+) -> Option<crate::agents::AgentDef> {
+    if !reg.is_subagent() {
+        return None;
+    }
+    let id = reg.name.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let mut def = crate::agents::AgentDef::new(id, crate::agents::AgentMode::SubAgent);
+    if let Some(desc) = &reg.description {
+        def = def.with_description(desc.clone());
+    }
+    if let Some(tools) = &reg.tools {
+        let allowed: Vec<String> = tools
+            .iter()
+            .filter_map(|(t, &ok)| ok.then(|| t.clone()))
+            .collect();
+        let denied: Vec<String> = tools
+            .iter()
+            .filter_map(|(t, &ok)| (!ok).then(|| t.clone()))
+            .collect();
+        if !allowed.is_empty() {
+            def = def.with_allowed_tools(allowed);
+        }
+        if !denied.is_empty() {
+            def = def.with_denied_tools(denied);
+        }
+    }
+    if let Some(steps) = reg.steps {
+        def = def.with_max_iterations(steps);
+    }
+    if let Some(model) = &reg.model {
+        def = def.with_model_hint(model.clone());
+    }
+    def.source = crate::agents::AgentSource::Plugin;
+    Some(def)
+}
+
 impl ExtensionManager {
     // ── Constructors ──────────────────────────────────────────────────────────
 
@@ -493,6 +545,24 @@ impl ExtensionManager {
         // locations (e.g. `plugins/cache/<market>/<id>/skills`).
         crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
 
+        // Plugin-shipped sub-agents: convert each plugin's registered agent into
+        // an `AgentDef` and publish them for the agent registry. Mirrors the
+        // plugin-skills publish above — the agents were parsed into the plugin
+        // registry but, until bridged here, were invisible to the model: absent
+        // from the `<available_agents>` catalog AND un-delegatable (the subagent
+        // tool's `AgentRegistry::resolve` missed them). Read lazily per-request
+        // by resolve (delegation) and the harness prompt builder (catalog), so
+        // there is no boot-ordering coupling. Lowest precedence — a builtin /
+        // user / project agent of the same id always wins.
+        let plugin_subagent_defs: Vec<crate::agents::AgentDef> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_agents()
+                .into_iter()
+                .filter_map(plugin_agent_to_def)
+                .collect()
+        };
+        crate::agents::publish_plugin_subagents(plugin_subagent_defs);
 
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
@@ -1032,6 +1102,52 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_agent_to_def_maps_subagent_and_drops_body() {
+        use crate::extension::types::AgentMode as ExtMode;
+        use crate::extension::AgentRegistration;
+
+        let mut reg = AgentRegistration {
+            name: "deployer".into(),
+            description: Some("Ship the app".into()),
+            content: "SYSTEM PROMPT BODY — must be dropped like disk agents".into(),
+            mode: ExtMode::Subagent,
+            ..Default::default()
+        };
+        reg.steps = Some(12);
+        reg.model = Some("fast".into());
+        reg.tools = Some(std::collections::HashMap::from([
+            ("bash".to_string(), true),
+            ("file_write".to_string(), false),
+        ]));
+
+        let def = plugin_agent_to_def(&reg).expect("subagent converts");
+        assert_eq!(def.id, "deployer");
+        assert_eq!(def.description, "Ship the app");
+        assert_eq!(def.source, crate::agents::AgentSource::Plugin);
+        assert_eq!(def.mode, crate::agents::AgentMode::SubAgent);
+        assert_eq!(def.max_iterations, Some(12));
+        assert_eq!(def.model_hint.as_deref(), Some("fast"));
+        assert!(def.is_tool_allowed("bash"), "declared-allowed tool");
+        assert!(!def.is_tool_allowed("file_write"), "declared-denied tool");
+
+        // A primary-only plugin agent is not a delegatable sub-agent.
+        let primary = AgentRegistration {
+            name: "ui".into(),
+            mode: ExtMode::Primary,
+            ..Default::default()
+        };
+        assert!(plugin_agent_to_def(&primary).is_none());
+
+        // A blank name has no id to delegate to → rejected.
+        let blank = AgentRegistration {
+            name: "   ".into(),
+            mode: ExtMode::Subagent,
+            ..Default::default()
+        };
+        assert!(plugin_agent_to_def(&blank).is_none());
+    }
 
     #[tokio::test]
     async fn sync_mcp_plugin_servers_is_noop_without_handle() {

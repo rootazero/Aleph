@@ -12,6 +12,13 @@ pub enum AgentSource {
     Builtin,
     User,
     Project,
+    /// Shipped by an installed plugin (`<plugin>/agents/*`), bridged into the
+    /// registry via the process-global published by
+    /// `ExtensionManager::load_all`. Lowest precedence: a Builtin / User /
+    /// Project agent of the same id shadows a plugin's (resolve consults the
+    /// plugin set only on a registry miss; the catalog folds it in
+    /// insert-if-absent).
+    Plugin,
 }
 
 /// Mode of an agent
@@ -465,6 +472,7 @@ mod tests {
             AgentSource::Builtin,
             AgentSource::User,
             AgentSource::Project,
+            AgentSource::Plugin,
         ] {
             let json = serde_json::to_string(&variant).unwrap();
             let back: AgentSource = serde_json::from_str(&json).unwrap();
