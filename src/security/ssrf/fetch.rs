@@ -24,6 +24,11 @@ pub struct SafeFetchRequest {
     pub headers: HeaderMap,
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
+    /// Optional response-body byte cap. `None` reads the body unbounded (legacy
+    /// behavior); `Some(n)` streams and aborts once `n` bytes are exceeded so a
+    /// hostile/oversized upstream cannot OOM the process before a downstream
+    /// size check runs.
+    pub max_body_bytes: Option<usize>,
 }
 
 impl SafeFetchRequest {
@@ -35,6 +40,7 @@ impl SafeFetchRequest {
             headers: HeaderMap::new(),
             body: None,
             timeout,
+            max_body_bytes: None,
         }
     }
 
@@ -46,6 +52,7 @@ impl SafeFetchRequest {
             headers: HeaderMap::new(),
             body: Some(body),
             timeout,
+            max_body_bytes: None,
         }
     }
 
@@ -53,6 +60,16 @@ impl SafeFetchRequest {
     #[must_use]
     pub fn with_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
+        self
+    }
+
+    /// Caps how many response-body bytes are read. A declared `Content-Length`
+    /// over the cap fails fast; otherwise the body is streamed and aborted once
+    /// the cap is exceeded — bounding memory against a hostile/oversized
+    /// upstream. `None` (default) preserves the unbounded read.
+    #[must_use]
+    pub fn with_max_body_bytes(mut self, max: usize) -> Self {
+        self.max_body_bytes = Some(max);
         self
     }
 
@@ -315,11 +332,7 @@ pub async fn safe_fetch(
     // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
     let final_url = current_url.to_string();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
-        .to_vec();
+    let body = read_body_capped(response, request.max_body_bytes).await?;
 
     Ok(SafeFetchResponse {
         status,
@@ -334,6 +347,7 @@ async fn bypass_fetch(
     url: &str,
     request: SafeFetchRequest,
 ) -> Result<SafeFetchResponse, SsrfError> {
+    let max_body_bytes = request.max_body_bytes;
     let parsed = Url::parse(url).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
     validate_scheme(&parsed)?;
 
@@ -357,11 +371,7 @@ async fn bypass_fetch(
     // rust-doctor-disable-next-line excessive-clone
     let headers = response.headers().clone();
     let final_url = response.url().to_string();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
-        .to_vec();
+    let body = read_body_capped(response, max_body_bytes).await?;
 
     Ok(SafeFetchResponse {
         status,
@@ -369,6 +379,45 @@ async fn bypass_fetch(
         body,
         final_url,
     })
+}
+
+/// Read a response body, enforcing an optional byte cap. When `max` is `Some`,
+/// a declared `Content-Length` over the cap fails fast and the body is streamed
+/// chunk-by-chunk so a chunked / length-lying response cannot buffer past the
+/// cap (prevents OOM from a hostile or oversized upstream). `None` preserves the
+/// prior unbounded `.bytes()` behavior for callers that opt out.
+async fn read_body_capped(
+    mut response: reqwest::Response,
+    max: Option<usize>,
+) -> Result<Vec<u8>, SsrfError> {
+    let Some(limit) = max else {
+        return Ok(response
+            .bytes()
+            .await
+            .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
+            .to_vec());
+    };
+    if let Some(len) = response.content_length() {
+        if len > limit as u64 {
+            return Err(SsrfError::FetchFailed(format!(
+                "response body too large: {len} bytes (max {limit})"
+            )));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
+    {
+        if buf.len() + chunk.len() > limit {
+            return Err(SsrfError::FetchFailed(format!(
+                "response body exceeded {limit} bytes"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]
