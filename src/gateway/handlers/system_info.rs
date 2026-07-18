@@ -32,7 +32,8 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
         let mut disk_used: u64 = 0;
         for disk in disks.list() {
             disk_total += disk.total_space();
-            disk_used += disk.total_space() - disk.available_space();
+            // saturating: some virtual/network FS report available > total
+            disk_used += disk.total_space().saturating_sub(disk.available_space());
         }
 
         let uptime = System::uptime();

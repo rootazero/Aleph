@@ -567,8 +567,15 @@ impl AgentInstance {
     /// Check if a tool is allowed for this agent
     #[must_use]
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
-        // Check blacklist first
-        if self.config.tool_blacklist.contains(&tool_name.to_string()) {
+        // Check blacklist first (supports glob prefix like "bash_*", same as the
+        // whitelist below — a bare Vec::contains would never match a glob entry).
+        if self.config.tool_blacklist.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                tool_name.starts_with(prefix)
+            } else {
+                pattern == tool_name
+            }
+        }) {
             return false;
         }
 

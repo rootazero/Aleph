@@ -271,7 +271,14 @@ impl MessageCoalescer {
             base.attachments.extend(msg.attachments);
             base.metadata.extend(msg.metadata);
 
-            if msg.id.as_str() > max_id.as_str() {
+            // Compare numerically when both ids are integers (e.g. Telegram
+            // message ids are unpadded decimals, where lexicographic "99" > "100"
+            // is wrong); fall back to lexicographic for non-numeric channel ids.
+            let is_newer = match (msg.id.as_str().parse::<u64>(), max_id.parse::<u64>()) {
+                (Ok(a), Ok(b)) => a > b,
+                _ => msg.id.as_str() > max_id.as_str(),
+            };
+            if is_newer {
                 max_id = msg.id.as_str().to_owned();
             }
         }

@@ -372,9 +372,11 @@ impl EventHandler for Handler {
 
         let has_prefix = msg.content.starts_with(&self.config.command_prefix);
 
-        // Only process if mentioned or has prefix (for guilds)
-        // Always process DMs
-        if !is_dm && !mentioned && !has_prefix && self.config.respond_to_mentions {
+        // Only process if mentioned or has prefix (for guilds); always process DMs.
+        // A prefix always triggers; a mention triggers only when respond_to_mentions
+        // is on. `respond_to_mentions = false` must restrict to prefix-only, NOT
+        // disable the guard (which would make the bot answer every guild message).
+        if !is_dm && !has_prefix && !(mentioned && self.config.respond_to_mentions) {
             return;
         }
 
@@ -535,9 +537,12 @@ impl EventHandler for Handler {
 
         let text = format!("/{} {}", command.data.name, args_text);
 
-        // Build conversation ID
-        let conversation_id = if let Some(guild_id) = command.guild_id {
-            ConversationId::new(guild_id.to_string())
+        // Build conversation ID. Key guild slash-commands by channel (like the
+        // message() handler's msg.channel_id) — keying by guild would route a
+        // /command to a different conversation than plain text in the same channel
+        // and collapse every channel in the guild into one shared conversation.
+        let conversation_id = if command.guild_id.is_some() {
+            ConversationId::new(command.channel_id.to_string())
         } else {
             ConversationId::new(format!("dm:{}", command.user.id))
         };

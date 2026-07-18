@@ -149,8 +149,15 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         };
     }
 
+    // Scope to an agent namespace even when agent_id is omitted — matching the
+    // FTS branch above. Passing None drops the SQL `WHERE agent_id` clause and
+    // returns every agent's raw memories, violating workspace isolation.
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
     match db.get_raw_memories_dashboard(
-        params.agent_id.as_deref(),
+        Some(agent_id),
         params.limit as usize,
         params.offset as usize,
     ) {
