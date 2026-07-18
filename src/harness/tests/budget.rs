@@ -267,7 +267,16 @@ const BUDGETED: [&str; 12] = [
 /// Measured, not hand-counted: this test is the measurement. The number here is
 /// whatever `the_harness_line_budget_does_not_grow` prints when it fails, and
 /// nothing else — that is the whole point of the file.
-const CEILING: usize = 5072;
+///
+/// 5072 → 5070 (−2): `stream_llm_call` dropped its `as_http_provider()` downcast
+/// + one-shot fallback branch for a single polymorphic `execute_streaming_dyn`
+/// call. That downcast reached the raw inner `HttpProvider`, skipping the
+/// `ThinkLevelProvider`/`MeteringProvider` decorators on every streamed turn
+/// (declared `think_level` dropped; no `ProviderUsage` emitted). The streaming
+/// side effects moved OUT of the loop into the decorators in `src/providers/`
+/// (trait default + three overrides) — cognition/policy stays outside the
+/// harness (R10). Down-only ratchet: paid down, no 3-question answer required.
+const CEILING: usize = 5070;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

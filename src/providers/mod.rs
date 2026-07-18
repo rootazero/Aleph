@@ -309,6 +309,27 @@ pub trait AiProvider: Send + Sync {
     fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
         None
     }
+
+    /// Streaming twin of [`AiProvider::process`]: forward incremental deltas to
+    /// `sink` while producing the same structured [`ProviderResponse`].
+    ///
+    /// The default routes to `process` (ignoring `sink`, so no live deltas), so a
+    /// decorator that only overrides `process` still runs its per-call logic on
+    /// the streaming path. `HttpProvider` overrides this to actually stream; the
+    /// per-run decorators (`ThinkLevelProvider`, `MeteringProvider`) override it
+    /// to apply their side effect then delegate, exactly as they do for
+    /// `process`. Before this existed, the harness reached the raw inner
+    /// `HttpProvider` via `as_http_provider()` for streaming, silently skipping
+    /// both decorators every streamed turn (dropping the declared `think_level`
+    /// and never emitting `ProviderUsage`).
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: adapter::RequestPayload<'a>,
+        sink: &'a dyn DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        let _ = sink;
+        self.process(payload)
+    }
 }
 
 #[cfg(test)]
