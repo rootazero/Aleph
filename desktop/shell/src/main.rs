@@ -1052,6 +1052,11 @@ async fn supervise_remote_lite(handle: tauri::AppHandle) {
     loop {
         tokio::time::sleep(LITE_REMOTE_POLL).await;
         let ready = connect_setup::target_reachable(&connection::load_target()).await;
+        if crate::cert_trust::pending::TRUST_PENDING.load(std::sync::atomic::Ordering::SeqCst) {
+            // A trust prompt owns the screen — don't relocate, and don't let a
+            // recovery tick navigate the webview away from the prompt.
+            continue;
+        }
         match supervisor.tick(ready) {
             SupervisorAction::ShowConnectionError => {
                 relocation_ticks += 1;

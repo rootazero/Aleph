@@ -3,11 +3,20 @@
 //! and navigates the webview to the trust page; the page reads it via
 //! `get_pending_cert` and resolves it via `approve_cert` / `reject_cert`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
 
 use crate::cert_trust::{store::TrustStore, CertInfo};
+
+/// True while a cert-trust prompt owns the webview. The lite supervisor reads
+/// this to skip its relocation tick so the user isn't pulled off the prompt.
+pub static TRUST_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub fn set_trust_pending(v: bool) {
+    TRUST_PENDING.store(v, Ordering::SeqCst);
+}
 
 /// Where the pinned store persists (namespaced like the other shell markers).
 #[must_use]
@@ -80,6 +89,7 @@ pub fn approve_cert(
     store
         .insert_and_save(&record.host, &record.fp, &path)
         .map_err(|e| format!("persist trust: {e}"))?;
+    set_trust_pending(false);
     // Reload the remote target now that the cert is pinned.
     crate::reroute_for_target(&app, crate::connection::load_target());
     Ok(())
@@ -92,4 +102,5 @@ pub fn reject_cert(state: tauri::State<'_, PendingCert>) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = None;
+    set_trust_pending(false);
 }
