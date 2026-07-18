@@ -252,6 +252,15 @@ pub struct CompactResult {
     pub deleted: usize,
 }
 
+/// Default retention for the user-facing `/compact` command and the
+/// `session.compact` RPC: keep this many most-recent messages, dropping the
+/// older ones. The transcript is a working buffer — the memory layer's
+/// hierarchical summaries (`SessionCompactor::post_turn_compress`) already
+/// distilled the dropped turns into recallable notes, so this trim is not a
+/// context loss. Single-sourced so the `session_compact` tool and the
+/// `session.compact` RPC handler can never diverge on the retention count.
+pub const SESSION_COMPACT_KEEP_LAST_N: usize = 50;
+
 /// Outcome of `SessionStore::truncate_messages`.
 #[derive(Debug, Clone, Default)]
 pub struct TruncateResult {

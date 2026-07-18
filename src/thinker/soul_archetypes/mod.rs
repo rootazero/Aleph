@@ -26,6 +26,18 @@ pub enum SoulArchetype {
 }
 
 impl SoulArchetype {
+    /// Every archetype, in creation-interview presentation order (the default,
+    /// [`SoulArchetype::Assistant`], sits third — recommended when the purpose
+    /// is unclear). Single source for enumeration: [`creation_catalog`] and the
+    /// tests derive from this, so adding a variant can never leave a hand-kept
+    /// `[Expert, Companion, …]` array silently behind.
+    pub const ALL: [SoulArchetype; 4] = [
+        SoulArchetype::Expert,
+        SoulArchetype::Maker,
+        SoulArchetype::Assistant,
+        SoulArchetype::Companion,
+    ];
+
     /// Verbatim archetype template (embedded at compile time).
     #[must_use]
     pub fn template(self) -> &'static str {
@@ -64,6 +76,64 @@ impl SoulArchetype {
             }
         }
     }
+
+    /// Suggested `IDENTITY.md` **Role** seed. A starting point derived from the
+    /// chosen archetype (the user edits it), not a hard label.
+    #[must_use]
+    pub fn role_hint(self) -> &'static str {
+        match self {
+            Self::Expert => "advisor / analyst",
+            Self::Companion => "companion / listener",
+            Self::Assistant => "assistant",
+            Self::Maker => "builder / engineer",
+        }
+    }
+
+    /// Suggested `IDENTITY.md` **Vibe** seed derived from the archetype.
+    #[must_use]
+    pub fn vibe_hint(self) -> &'static str {
+        match self {
+            Self::Expert => "sharp, rigorous, argues the counter-case",
+            Self::Companion => "warm, present, unhurried",
+            Self::Assistant => "fast, direct, low-friction",
+            Self::Maker => "action-biased, surgical, verifies",
+        }
+    }
+
+    /// Suggested signature **Emoji** seed derived from the archetype.
+    #[must_use]
+    pub fn emoji_hint(self) -> &'static str {
+        match self {
+            Self::Expert => "\u{1f3af}",    // 🎯
+            Self::Companion => "\u{1f331}", // 🌱
+            Self::Assistant => "\u{26a1}",  // ⚡
+            Self::Maker => "\u{1f527}",     // 🔧
+        }
+    }
+}
+
+/// One-line-per-archetype catalog for the `agent_create` interview, built from
+/// the single source [`SoulArchetype::summary`] over [`SoulArchetype::ALL`].
+///
+/// This is what wires `summary()` into what the model actually reads: the
+/// `agent_create` tool injects it into `llm_context`, so the interview list can
+/// never drift from the templates it selects (previously the blurbs were a
+/// hand-copied — and already stale — literal inside the tool description).
+#[must_use]
+pub fn creation_catalog() -> String {
+    let default = SoulArchetype::default();
+    SoulArchetype::ALL
+        .iter()
+        .map(|a| {
+            let default_tag = if *a == default {
+                " (default when unclear)"
+            } else {
+                ""
+            };
+            format!("- {}: {}{}", a.as_str(), a.summary(), default_tag)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Compose a full SOUL.md from Base + Archetype + optional personalization.
@@ -106,20 +176,44 @@ mod tests {
 
     #[test]
     fn templates_are_nonempty_and_distinct() {
-        let all = [
-            SoulArchetype::Expert,
-            SoulArchetype::Companion,
-            SoulArchetype::Assistant,
-            SoulArchetype::Maker,
-        ];
-        for a in all {
+        for a in SoulArchetype::ALL {
             assert!(!a.template().trim().is_empty());
             assert!(!a.summary().trim().is_empty());
+            assert!(!a.role_hint().trim().is_empty());
+            assert!(!a.vibe_hint().trim().is_empty());
+            assert!(!a.emoji_hint().trim().is_empty());
         }
         assert_ne!(
             SoulArchetype::Expert.template(),
             SoulArchetype::Maker.template()
         );
+    }
+
+    #[test]
+    fn all_covers_every_variant_exactly_once() {
+        // Round-trip through the wire ids: ALL must enumerate all 4 distinct
+        // archetypes (guards against a variant added without extending ALL).
+        let mut ids: Vec<&str> = SoulArchetype::ALL.iter().map(|a| a.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids, ["assistant", "companion", "expert", "maker"]);
+    }
+
+    #[test]
+    fn creation_catalog_is_built_from_summaries_and_flags_default() {
+        let catalog = creation_catalog();
+        // Every archetype's id + its single-source summary is present.
+        for a in SoulArchetype::ALL {
+            assert!(catalog.contains(a.as_str()), "missing id: {}", a.as_str());
+            assert!(
+                catalog.contains(a.summary()),
+                "catalog drifted from summary() for {}",
+                a.as_str()
+            );
+        }
+        // The default (Assistant) is the only line flagged as the fallback.
+        assert_eq!(catalog.matches("(default when unclear)").count(), 1);
+        assert!(catalog.contains("assistant: general getting-things-done"));
     }
 
     #[test]

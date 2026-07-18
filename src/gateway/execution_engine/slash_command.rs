@@ -16,23 +16,12 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 use super::engine::ExecutionEngine;
 
-/// Shorthand slash aliases → canonical tool names.
-///
-/// Single source for both the fast-path resolver below and the inbound
-/// router's namespace check (`inbound_router::mod`), which previously kept a
-/// hardcoded mirror of these names that could silently drift.
-pub(crate) const SHORTHAND_ALIASES: &[(&str, &str)] = &[
-    ("rename", "session_set_topic"),
-    ("video", "video_generate"),
-    ("image", "image_generate"),
-    ("audio", "audio_generate"),
-    ("speech", "speech_generate"),
-];
-
-/// Returns `true` if `name` is a shorthand slash alias (e.g. `image`).
-pub(crate) fn is_shorthand_alias(name: &str) -> bool {
-    SHORTHAND_ALIASES.iter().any(|(alias, _)| *alias == name)
-}
+// Shorthand slash aliases now live in the tool-metadata layer
+// (`crate::tool_metadata::aliases`) as the single source shared by the
+// execution fast path (here), the inbound router's namespace check, and the
+// `ToolCatalog` discovery seed. Re-exported here so existing
+// `gateway::execution_engine::{is_shorthand_alias}` call sites keep resolving.
+pub(crate) use crate::tool_metadata::aliases::{is_shorthand_alias, resolve_shorthand};
 
 /// Continuation-driven slash tools (`/loop`, `/goal`) that must NOT take the
 /// L0 direct-tool fast path on ANY surface.
@@ -75,11 +64,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Map common shorthand commands to their actual tool names
-        let cmd_name = SHORTHAND_ALIASES
-            .iter()
-            .find(|(alias, _)| *alias == cmd_name)
-            .map(|(_, canonical)| (*canonical).to_string())
-            .unwrap_or(cmd_name);
+        let cmd_name = resolve_shorthand(&cmd_name).map_or(cmd_name, ToString::to_string);
 
         // Continuation-driven tools must NOT take the L0 fast path: it
         // returns before the post-run continuation hook, so a loop started

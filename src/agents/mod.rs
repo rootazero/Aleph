@@ -46,7 +46,7 @@ pub mod sub_agents;
 pub mod swarm;
 
 pub use forwarding_trace_sink::ForwardingTraceSink;
-pub use registry::{builtin_agents, AgentRegistry};
+pub use registry::{builtin_agents, plugin_subagents, publish_plugin_subagents, AgentRegistry};
 pub use run_context::{current_agent_id, with_agent_id};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
 pub use types::{

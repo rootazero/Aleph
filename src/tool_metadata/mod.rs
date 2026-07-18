@@ -10,6 +10,10 @@
 mod constants;
 pub use constants::*;
 
+// === Slash-command aliases (single source for execution + discovery) ===
+pub mod aliases;
+pub use aliases::{is_shorthand_alias, resolve_shorthand, shorthand_aliases_for, SHORTHAND_ALIASES};
+
 // === Tool Management ===
 mod registry;
 mod types;

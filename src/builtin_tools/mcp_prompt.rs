@@ -84,26 +84,17 @@ impl AlephToolDyn for McpGetPromptTool {
         Box::pin(async move {
             let args: McpGetPromptArgs = serde_json::from_value(args)?;
 
-            // Extract server_id from prompt name prefix (e.g., "server_name:prompt_name")
-            // Try each colon position to handle server IDs with colons (e.g., "plugin:foo/bar")
+            // Split the server-qualified name into (client, prompt_name) via the
+            // shared LONGEST server-prefix matcher (see
+            // `super::mcp_resource::resolve_server_qualified`) — previously this
+            // duplicated the read-resource tool's shortest-match colon loop.
             let name = &args.name;
-            let (client, prompt_name) = {
-                let mut found = None;
-                for (idx, _) in name.match_indices(':') {
-                    let candidate = &name[..idx];
-                    if let Ok(Some(c)) = self.handle.get_client(candidate).await {
-                        found = Some((c, &name[idx + 1..]));
-                        break;
-                    }
-                }
-                match found {
-                    Some(pair) => pair,
-                    None => {
-                        return Err(crate::error::AlephError::NotFound(format!(
-                            "No MCP server found for prompt: {name}"
-                        )));
-                    }
-                }
+            let Some((client, prompt_name)) =
+                super::mcp_resource::resolve_server_qualified(&self.handle, name).await
+            else {
+                return Err(crate::error::AlephError::NotFound(format!(
+                    "No MCP server found for prompt: {name}"
+                )));
             };
 
             let result = client.get_prompt(prompt_name, args.arguments).await?;

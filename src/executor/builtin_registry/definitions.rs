@@ -349,6 +349,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
+        name: "session_compact",
+        description: "Compact the current conversation, dropping the oldest messages",
+        requires_config: true, // Requires SessionManager (via gateway_context)
+    },
+    BuiltinToolDefinition {
         name: "session_rename",
         description: "Rename the current session's topic/title",
         requires_config: true, // Requires SessionManager (via gateway_context)
@@ -929,6 +934,8 @@ pub fn create_tool_boxed(
         "session_list" | "session_send" => None,
         // Session new tool requires SessionManager (from gateway_context) at runtime
         "session_new" => None,
+        // Session compact tool requires SessionManager (from gateway_context) at runtime
+        "session_compact" => None,
         // Session set-topic tool requires SessionManager (from gateway_context) at runtime
         "session_rename" => None,
         // Session search tool requires SessionManager at runtime

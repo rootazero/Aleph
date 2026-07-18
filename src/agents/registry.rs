@@ -6,6 +6,38 @@ use tracing::warn;
 
 use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 
+/// Plugin-shipped sub-agent definitions, published by
+/// `ExtensionManager::load_all` after every (re)load and consumed lazily by
+/// [`AgentRegistry::resolve`] (delegation) and the harness prompt builder
+/// (`<available_agents>` catalog). Mirrors `utils::paths::PLUGIN_SKILL_DIRS`:
+/// the extension manager owns the authoritative plugin definitions but runs
+/// long after the registry's callers are constructed, so a process-global
+/// publish is used instead of threading the list through every boot seam. Empty
+/// until the first `load_all` — plugins aren't loaded before then and resolve /
+/// catalog only run per-request afterwards. Lowest precedence: read only on a
+/// registry miss (resolve) or insert-if-absent (catalog), so a builtin / user /
+/// project agent of the same id always wins.
+static PLUGIN_SUBAGENTS: std::sync::RwLock<Vec<AgentDef>> = std::sync::RwLock::new(Vec::new());
+
+/// Publish the installed plugins' sub-agent definitions for delegation +
+/// catalog surfacing. Replaces the previous set wholesale (called after every
+/// extension (re)load so the set stays in sync with what is installed).
+pub fn publish_plugin_subagents(agents: Vec<AgentDef>) {
+    let mut guard = PLUGIN_SUBAGENTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = agents;
+}
+
+/// Snapshot the currently-published plugin sub-agent definitions.
+#[must_use]
+pub fn plugin_subagents() -> Vec<AgentDef> {
+    PLUGIN_SUBAGENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 /// Registry for managing agent definitions
 pub struct AgentRegistry {
     agents: RwLock<HashMap<String, AgentDef>>,
@@ -149,6 +181,12 @@ impl AgentRegistry {
     ///   2. On miss, canonicalize the selector ([`normalize_agent_alias`]:
     ///      trim + lowercase + alias table) and retry the lookup once.
     ///
+    /// On a full registry + alias miss, a third pass consults the
+    /// process-global plugin sub-agents ([`plugin_subagents`], published by
+    /// `ExtensionManager::load_all`) by exact id — so a plugin-shipped agent is
+    /// delegatable, but only when no builtin / user / project agent claims the
+    /// id (plugin is lowest precedence).
+    ///
     /// A genuinely unknown selector still returns `None`, so callers keep
     /// surfacing their "Unknown `agent_type`. Available: …" error. This closes
     /// the brittleness where a model picking `general-purpose`, `Explore`, or
@@ -161,11 +199,21 @@ impl AgentRegistry {
         if let Some(def) = self.lookup_with_overlay(id, project_root) {
             return Some(def);
         }
-        let canonical = normalize_agent_alias(id)?;
-        if canonical == id {
-            return None;
+        // Builtin-vocabulary alias retry (e.g. `planner` → `plan`). The alias
+        // table only covers builtin ids, so this never re-routes a plugin/user
+        // id — and it is tried before the plugin fallback so a plugin cannot
+        // hijack a builtin synonym.
+        if let Some(canonical) = normalize_agent_alias(id) {
+            if canonical != id {
+                if let Some(def) = self.lookup_with_overlay(canonical, project_root) {
+                    return Some(def);
+                }
+            }
         }
-        self.lookup_with_overlay(canonical, project_root)
+        // Plugin-shipped sub-agents (lowest precedence): reached only after the
+        // registry and alias table both miss, so a plugin agent adds a new
+        // delegatable id but never shadows a builtin/user/project one.
+        plugin_subagents().into_iter().find(|a| a.id == id)
     }
 
     /// Remove an agent by ID
@@ -630,6 +678,43 @@ mod tests {
                 .description,
             "project-tuned explore"
         );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_plugin_subagents_but_registry_wins() {
+        use crate::agents::types::AgentSource;
+        // Publish a unique plugin sub-agent plus one that collides with the
+        // builtin `explore`. Process-global, but unique ids keep this from
+        // perturbing parallel tests, and `explore` always resolves to the
+        // builtin (registry wins) regardless of what is published.
+        let mut plugin_explore = AgentDef::new("explore", AgentMode::SubAgent);
+        plugin_explore.description = "PLUGIN explore (must be shadowed)".into();
+        plugin_explore.source = AgentSource::Plugin;
+        publish_plugin_subagents(vec![
+            AgentDef::new("plugin-delegate-xyz", AgentMode::SubAgent),
+            plugin_explore,
+        ]);
+
+        let registry = AgentRegistry::with_builtins();
+
+        // A new plugin-only id is delegatable via the third-pass fallback.
+        assert_eq!(
+            registry.resolve("plugin-delegate-xyz", None).unwrap().id,
+            "plugin-delegate-xyz"
+        );
+
+        // A plugin agent NEVER shadows a builtin of the same id.
+        assert_eq!(
+            registry.resolve("explore", None).unwrap().description,
+            "Read-only codebase exploration specialist",
+            "builtin explore must win over a plugin `explore`"
+        );
+
+        // Genuinely-unknown still None even with plugins published.
+        assert!(registry.resolve("no-such-agent-at-all", None).is_none());
+
+        // Hygiene: clear the process-global for other tests.
+        publish_plugin_subagents(Vec::new());
     }
 
     #[test]

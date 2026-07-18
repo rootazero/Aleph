@@ -326,7 +326,9 @@ pub async fn handle_compact_db(
     match manager
         .compact(
             &key,
-            crate::gateway::session_store::types::CompactStrategy::KeepLastN { n: 50 },
+            crate::gateway::session_store::types::CompactStrategy::KeepLastN {
+                n: crate::gateway::session_store::types::SESSION_COMPACT_KEEP_LAST_N,
+            },
         )
         .await
     {

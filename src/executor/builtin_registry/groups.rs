@@ -226,7 +226,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "session_mgmt",
         name: "会话管理",
-        tools: &["session_new", "session_rename"],
+        tools: &["session_new", "session_compact", "session_rename"],
     },
     ToolCategory {
         id: "automation",
