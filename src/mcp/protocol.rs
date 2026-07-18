@@ -90,9 +90,6 @@ pub struct ToolCapability {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceCapability {
-    /// Subscribe support
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subscribe: Option<bool>,
     /// List changed notifications
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
