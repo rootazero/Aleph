@@ -1,122 +1,95 @@
-//! Pending self-signed cert awaiting a user decision — the bridge between a
-//! native TLS-error hook (per-engine callback, later task) and the
-//! `cert-trust.html` approval page (later task). One pending slot: the shell
-//! hosts a single webview against a single Gateway target at a time, so only
-//! one connection attempt is ever blocked on a trust decision.
+//! Shared pending-cert state bridging a platform adapter's TLS-error hook and
+//! the `cert-trust.html` approval UI. The adapter stashes the pending cert here
+//! and navigates the webview to the trust page; the page reads it via
+//! `get_pending_cert` and resolves it via `approve_cert` / `reject_cert`.
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::Serialize;
 
-use super::store::TrustStore;
-use super::{CertInfo, Decision};
+use crate::cert_trust::{store::TrustStore, CertInfo};
 
-/// A cert decision awaiting the user's approve/reject choice.
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingCertInfo {
-    pub host: String,
-    pub fp: String,
-    pub old_fp: Option<String>,
-    pub info: CertInfo,
-}
-
-impl PendingCertInfo {
-    /// Build from a non-`Allow` decision; `Allow` has nothing to prompt for.
-    fn from_decision(host: &str, decision: &Decision) -> Option<Self> {
-        match decision {
-            Decision::Allow => None,
-            Decision::PromptUnknown { fp, info } => Some(Self {
-                host: host.to_string(),
-                fp: fp.clone(),
-                old_fp: None,
-                info: info.clone(),
-            }),
-            Decision::WarnChanged {
-                old_fp,
-                new_fp,
-                info,
-            } => Some(Self {
-                host: host.to_string(),
-                fp: new_fp.clone(),
-                old_fp: Some(old_fp.clone()),
-                info: info.clone(),
-            }),
-        }
-    }
-}
-
-/// Shared pending-cert slot, managed by Tauri so the TLS-error hook (writer)
-/// and the approval page's commands (readers) agree on the one outstanding
-/// decision.
-#[derive(Default)]
-pub struct PendingCert {
-    slot: Mutex<Option<PendingCertInfo>>,
-}
-
-impl PendingCert {
-    /// Stash a decision as pending; a no-op for `Decision::Allow`. Called by
-    /// the (later-task) TLS-error hook once it has run [`super::decide`].
-    pub fn set(&self, host: &str, decision: &Decision) {
-        if let Some(pending) = PendingCertInfo::from_decision(host, decision) {
-            *self
-                .slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pending);
-        }
-    }
-}
-
-/// Where pinned-fingerprint decisions persist: mirrors the other
-/// `.desktop-shell[-panel]-*` markers, namespaced per shell variant so the
-/// full app and lite shell never share trust state.
-fn store_path() -> Option<PathBuf> {
+/// Where the pinned store persists (namespaced like the other shell markers).
+#[must_use]
+pub fn store_path() -> Option<std::path::PathBuf> {
     crate::connection::marker_path("trusted-certs")
 }
 
-// ---------------------------------------------------------------------------
-// Tauri commands — consumed by `cert-trust.html` (later task) to display the
-// pending cert and record the user's choice.
-// ---------------------------------------------------------------------------
-
-/// Return the cert currently awaiting approval, if any.
-#[tauri::command]
-pub fn get_pending_cert(state: tauri::State<'_, PendingCert>) -> Option<PendingCertInfo> {
-    state
-        .slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+#[derive(Clone)]
+pub struct PendingRecord {
+    pub host: String,
+    pub fp: String,
+    pub info: CertInfo,
+    pub changed_from: Option<String>, // Some(old_fp) => WarnChanged
 }
 
-/// Pin the pending cert's fingerprint and re-route to the connection target.
+#[derive(Default)]
+pub struct PendingCert(pub Mutex<Option<PendingRecord>>);
+
+#[derive(Serialize)]
+pub struct PendingCertView {
+    host: String,
+    fingerprint: String,
+    sans: Vec<String>,
+    subject: String,
+    reason: String,
+    changed_from: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_pending_cert(state: tauri::State<'_, PendingCert>) -> Option<PendingCertView> {
+    let guard = state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.as_ref().map(|r| PendingCertView {
+        host: r.host.clone(),
+        fingerprint: r.fp.clone(),
+        sans: r.info.sans.clone(),
+        subject: r.info.subject.clone(),
+        reason: r.info.reason.clone(),
+        changed_from: r.changed_from.clone(),
+    })
+}
+
+/// Pin the pending cert for `host` and reload the remote target. `host` must
+/// match the pending record (guards against a stale page approving a different
+/// cert than the one being shown).
 #[tauri::command]
 pub fn approve_cert(
     app: tauri::AppHandle,
     state: tauri::State<'_, PendingCert>,
+    host: String,
 ) -> Result<(), String> {
-    let pending = state
-        .slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    let Some(pending) = pending else {
-        return Err("no certificate is pending approval".to_string());
+    let record = {
+        let mut guard = state
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match guard.take() {
+            Some(r) if r.host == host => r,
+            Some(other) => {
+                *guard = Some(other);
+                return Err("pending cert host mismatch".into());
+            }
+            None => return Err("no pending cert".into()),
+        }
     };
-    let path = store_path().ok_or_else(|| "home directory not found".to_string())?;
+    let path = store_path().ok_or("home dir not found")?;
     let mut store = TrustStore::load(&path);
     store
-        .insert_and_save(&pending.host, &pending.fp, &path)
-        .map_err(|e| e.to_string())?;
+        .insert_and_save(&record.host, &record.fp, &path)
+        .map_err(|e| format!("persist trust: {e}"))?;
+    // Reload the remote target now that the cert is pinned.
     crate::reroute_for_target(&app, crate::connection::load_target());
     Ok(())
 }
 
-/// Discard the pending cert without pinning it; the connection stays blocked.
 #[tauri::command]
 pub fn reject_cert(state: tauri::State<'_, PendingCert>) {
-    *state
-        .slot
+    let mut guard = state
+        .0
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = None;
 }
