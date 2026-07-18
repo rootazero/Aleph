@@ -751,56 +751,6 @@ impl McpServerConnection {
         }
     }
 
-    /// Subscribe to resource updates
-    pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
-        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
-
-        let params = serde_json::json!({ "uri": resource_uri });
-        let request =
-            JsonRpcRequest::with_params(self.id_gen.next(), "resources/subscribe", params);
-
-        tracing::debug!(
-            server = %self.name,
-            uri = %resource_uri,
-            "Subscribing to resource"
-        );
-
-        let response = self.transport.send_request(&request).await?;
-        response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "resources/subscribe '{}' on '{}' failed: {}",
-                resource_uri, self.name, e
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    /// Unsubscribe from resource updates
-    pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
-        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
-
-        let params = serde_json::json!({ "uri": resource_uri });
-        let request =
-            JsonRpcRequest::with_params(self.id_gen.next(), "resources/unsubscribe", params);
-
-        tracing::debug!(
-            server = %self.name,
-            uri = %resource_uri,
-            "Unsubscribing from resource"
-        );
-
-        let response = self.transport.send_request(&request).await?;
-        response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "resources/unsubscribe '{}' on '{}' failed: {}",
-                resource_uri, self.name, e
-            ))
-        })?;
-
-        Ok(())
-    }
-
     /// Get a prompt by name with optional arguments
     pub async fn get_prompt(
         &self,

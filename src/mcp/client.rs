@@ -331,26 +331,6 @@ impl McpClient {
         Err(AlephError::NotFound(format!("Resource not found: {uri}")))
     }
 
-    /// Subscribe to resource updates from a specific server
-    pub async fn subscribe_resource(&self, server: &str, uri: &str) -> Result<()> {
-        let servers = self.external_servers.read().await;
-        if let Some(connection) = servers.get(server) {
-            connection.subscribe_resource(uri).await
-        } else {
-            Err(AlephError::NotFound(format!("Server not found: {server}")))
-        }
-    }
-
-    /// Unsubscribe from resource updates on a specific server
-    pub async fn unsubscribe_resource(&self, server: &str, uri: &str) -> Result<()> {
-        let servers = self.external_servers.read().await;
-        if let Some(connection) = servers.get(server) {
-            connection.unsubscribe_resource(uri).await
-        } else {
-            Err(AlephError::NotFound(format!("Server not found: {server}")))
-        }
-    }
-
     /// Get a prompt by name with optional arguments
     ///
     /// The name should include the server prefix (e.g., "`server_name:prompt_name`")
