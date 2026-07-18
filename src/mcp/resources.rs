@@ -161,38 +161,6 @@ impl McpResourceManager {
 
         Ok(all_resources)
     }
-
-    /// Subscribe to resource updates from a server
-    ///
-    /// # Arguments
-    ///
-    /// * `server` - The server name
-    /// * `uri` - The resource URI to subscribe to
-    pub async fn subscribe(&self, server: &str, uri: &str) -> Result<()> {
-        let full_uri = if uri.starts_with(&format!("{server}:")) {
-            uri.to_string()
-        } else {
-            format!("{server}:{uri}")
-        };
-
-        self.client.subscribe_resource(server, &full_uri).await
-    }
-
-    /// Unsubscribe from resource updates
-    ///
-    /// # Arguments
-    ///
-    /// * `server` - The server name
-    /// * `uri` - The resource URI to unsubscribe from
-    pub async fn unsubscribe(&self, server: &str, uri: &str) -> Result<()> {
-        let full_uri = if uri.starts_with(&format!("{server}:")) {
-            uri.to_string()
-        } else {
-            format!("{server}:{uri}")
-        };
-
-        self.client.unsubscribe_resource(server, &full_uri).await
-    }
 }
 
 #[cfg(test)]
