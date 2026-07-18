@@ -222,6 +222,22 @@ impl McpClient {
         resources
     }
 
+    /// List all resource templates from external servers
+    pub async fn list_resource_templates(&self) -> Vec<crate::mcp::types::McpResourceTemplate> {
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            let mut conns: Vec<_> = servers.values().cloned().collect();
+            conns.sort_by(|a, b| a.name().cmp(b.name()));
+            conns
+        };
+
+        let mut templates = Vec::new();
+        for connection in &connections {
+            templates.extend(connection.list_resource_templates().await);
+        }
+        templates
+    }
+
     /// List all available prompts from external servers
     pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
         let connections: Vec<_> = {
@@ -746,6 +762,9 @@ impl McpClient {
             }
             if let Err(e) = connection.refresh_resources().await {
                 tracing::debug!(server = %connection.name(), error = %e, "MCP refresh resources failed");
+            }
+            if let Err(e) = connection.refresh_resource_templates().await {
+                tracing::debug!(server = %connection.name(), error = %e, "MCP refresh resource templates failed");
             }
             if let Err(e) = connection.refresh_prompts().await {
                 tracing::debug!(server = %connection.name(), error = %e, "MCP refresh prompts failed");

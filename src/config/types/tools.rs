@@ -179,13 +179,25 @@ pub fn default_core_tools() -> Vec<String> {
         "search", "web_fetch", "memory_search", "remember",
         "skill_read", "skill_list", "scratchpad", "note_manage",
         "system", "get_tool_schema", "moa",
-        // MCP native read mechanism — kept core (never schema-collapsed) so a
-        // model that sees the `<available MCP resources>` index can call
-        // `mcp_read_resource`/`mcp_get_prompt` in one step instead of a
-        // `get_tool_schema` round-trip, which is friction that otherwise pushes
-        // it toward `cat`-ing `file://` paths. Symmetric with `skill_read` above.
-        // No-op when no MCP server is connected (the names have no live tool).
+        // MCP native discovery+read mechanism — all four kept core (never
+        // schema-collapsed) so discovery and read are each one step, mirroring
+        // `skill_list`+`skill_read` above. There is deliberately NO
+        // `<available MCP resources>` prompt index: the eager index layer was
+        // removed 2026-07-17 because its single-`server:`-prefix ids did not
+        // round-trip the two-strip read path. The model instead discovers
+        // resources/prompts on demand via `mcp_list_resources`/`mcp_list_prompts`,
+        // which return verbatim, round-trip-safe ids to feed straight into
+        // `mcp_read_resource`/`mcp_get_prompt`. Keeping the *listing* half core
+        // matters most — post-index-removal it is the only way to learn which
+        // URIs/prompt-names exist, so collapsing it behind a `get_tool_schema`
+        // round-trip is exactly the friction that pushes the model toward
+        // `cat`-ing `file://` paths. No-op when no MCP server is connected.
         "mcp_read_resource", "mcp_get_prompt",
+        "mcp_list_resources", "mcp_list_prompts",
+        // Resource *templates* discovery (parameterized URIs). Kept core for
+        // the same reason as `mcp_list_resources`: for a server exposing only
+        // templates it is the sole way to learn what can be read.
+        "mcp_list_resource_templates",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -753,7 +765,12 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "moa"));
         assert!(c.core.iter().any(|t| t == "mcp_read_resource"));
         assert!(c.core.iter().any(|t| t == "mcp_get_prompt"));
-        assert_eq!(c.core.len(), 22);
+        // Discovery half kept core too — symmetric with skill_list/skill_read
+        // (post index-removal, listing is the only way to learn MCP URIs/prompts).
+        assert!(c.core.iter().any(|t| t == "mcp_list_resources"));
+        assert!(c.core.iter().any(|t| t == "mcp_list_prompts"));
+        assert!(c.core.iter().any(|t| t == "mcp_list_resource_templates"));
+        assert_eq!(c.core.len(), 25);
         assert!(!c.truncate_tool_descriptions);
     }
 

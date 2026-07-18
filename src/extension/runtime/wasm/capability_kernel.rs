@@ -3,9 +3,13 @@
 //! Every host function call passes through this kernel for:
 //! - Capability checking (default-deny)
 //! - Leak detection (bidirectional)
-//! - Credential injection (host-side)
 //! - Audit logging
 //! - Resource counting
+//!
+//! NOT (yet) done here: host-side credential injection. The kernel only checks
+//! secret *existence* by pattern (`check_secret_pattern`) — it holds no
+//! secret-value store, so it cannot supply values to `credential_injector`
+//! (which stays test-only until a resolver is wired). See that module's header.
 
 use crate::sync_primitives::{AtomicU32, Mutex, Ordering};
 

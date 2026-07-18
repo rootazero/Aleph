@@ -162,6 +162,23 @@ pub struct McpResource {
     pub mime_type: Option<String>,
 }
 
+/// MCP resource *template* — a parameterized URI (RFC 6570) the model fills in,
+/// then reads via `mcp_read_resource`. Unlike [`McpResource`], `uri_template` is
+/// stored WITHOUT a `server:` prefix: it is a pattern, not a concrete cached id.
+/// The discovery tool tells the model to read the filled URI as
+/// `mcp_read_resource(uri = "<server>:<filled uri>")`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceTemplate {
+    /// URI template (RFC 6570), e.g. `file:///{path}`.
+    pub uri_template: String,
+    /// Human-readable name
+    pub name: String,
+    /// Template description
+    pub description: Option<String>,
+    /// MIME type of produced resources, if known
+    pub mime_type: Option<String>,
+}
+
 // ===== Remote Server Configuration =====
 
 /// Transport preference for remote MCP servers

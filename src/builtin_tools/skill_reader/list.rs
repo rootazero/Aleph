@@ -43,9 +43,6 @@ pub struct SkillSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
 
-    /// Trigger keywords (if any)
-    pub triggers: Vec<String>,
-
     /// Files available in this skill
     pub files: Vec<String>,
 
@@ -156,7 +153,6 @@ impl ListSkillsTool {
             // Elided from the listing on purpose — see `SkillSummary::location`.
             // The model reads by `id`; the path is only surfaced by `skill_read`.
             location: None,
-            triggers: Vec::new(), // v2 doesn't use triggers
             files,
             source: Some(source),
         })
@@ -218,11 +214,7 @@ impl ListSkillsTool {
                                         || summary
                                             .description
                                             .to_lowercase()
-                                            .contains(&filter_lower)
-                                        || summary
-                                            .triggers
-                                            .iter()
-                                            .any(|t| t.to_lowercase().contains(&filter_lower));
+                                            .contains(&filter_lower);
 
                                     if !matches {
                                         continue;
@@ -284,7 +276,8 @@ impl AlephTool for ListSkillsTool {
     const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
 
 Use this tool to discover what skills are available before using skill.read.
-Each skill has an ID, name, description, and optional trigger keywords.
+Each skill has an ID, name, and description. Read a skill by its ID with
+skill.read(skill_id) — the id is the handle, do not cat SKILL.md.
 
 Skills are discovered from multiple locations:
 - Project level: .aleph/skills/, .claude/skills/ (traverse up to git root)

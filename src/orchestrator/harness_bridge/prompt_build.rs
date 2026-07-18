@@ -421,7 +421,10 @@ impl AgentHarnessRunner {
         // discovered agents only reactively (by guessing an id and reading the
         // error). The delegatable set is the builtin sub-agents (explore / coder /
         // researcher / plan / verify) ∪ the registry's registered sub-agents
-        // (user / project / plugin defs, folded in by `register_from_dirs`);
+        // (user / project defs, folded in by `register_from_dirs` — which scans
+        // only builtin + user + project dirs; plugin-shipped agents are parsed by
+        // the extension loader but NOT yet bridged into this registry, so they do
+        // not appear here — deferred hook, see `extension/mod.rs::load_all`);
         // registry entries win id collisions (a user override of a builtin). This
         // mirrors `AgentRegistry::resolve`'s builtin+disk merge, so the catalog
         // matches what `delegate` can actually spawn even when builtins are not

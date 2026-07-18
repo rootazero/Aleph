@@ -60,6 +60,7 @@ mod tests {
             transport: McpTransportType::Stdio,
             tool_count: 12,
             resource_count: 0,
+            resource_template_count: 0,
             prompt_count: 0,
             health: HealthStatus::Healthy,
         };
@@ -80,6 +81,7 @@ mod tests {
             transport: McpTransportType::Stdio,
             tool_count: 0,
             resource_count: 0,
+            resource_template_count: 0,
             prompt_count: 0,
             health: HealthStatus::Stopped,
         };
