@@ -92,6 +92,30 @@ fn is_plausible_dns_name(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
+/// True if `ip` is a usable SAN target (not loopback, not link-local).
+fn is_usable_san_ip(ip: &IpAddr) -> bool {
+    if ip.is_loopback() {
+        return false;
+    }
+    match ip {
+        IpAddr::V4(v4) => !v4.is_link_local(),
+        // fe80::/10 link-local (is_unicast_link_local is unstable on MSRV 1.95).
+        IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
+    }
+}
+
+/// Enumerate this host's usable non-loopback interface IPs. Best-effort: any
+/// failure yields an empty vec (the cert still gets loopback + configured SANs).
+pub(crate) fn discover_interface_ips() -> Vec<IpAddr> {
+    match if_addrs::get_if_addrs() {
+        Ok(ifaces) => ifaces.into_iter().map(|i| i.ip()).filter(is_usable_san_ip).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "gateway.tls: interface discovery failed; SAN limited to loopback + config");
+            Vec::new()
+        }
+    }
+}
+
 /// Assemble the SAN list for a self-signed cert (pure): base loopback set +
 /// discovered interface IPs + validated operator extras, order-stable deduped.
 pub(crate) fn self_signed_sans(configured: &[String], discovered: &[IpAddr]) -> Vec<String> {
@@ -172,5 +196,23 @@ mod tests {
         assert_eq!(sans.iter().filter(|s| *s == "203.0.113.7").count(), 1);
         assert_eq!(sans.iter().filter(|s| *s == "127.0.0.1").count(), 1);
         assert!(!sans.iter().any(|s| s.contains('!')));
+    }
+
+    #[test]
+    fn usable_san_ip_filters_loopback_and_link_local() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        assert!(!is_usable_san_ip(&IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!is_usable_san_ip(&IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
+        assert!(!is_usable_san_ip(&IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(!is_usable_san_ip(&IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_usable_san_ip(&IpAddr::V4(Ipv4Addr::new(172, 245, 43, 211))));
+        assert!(is_usable_san_ip(&IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))));
+    }
+
+    #[test]
+    fn discover_interface_ips_has_no_loopback_and_no_panic() {
+        for ip in discover_interface_ips() {
+            assert!(!ip.is_loopback());
+        }
     }
 }

@@ -231,6 +231,7 @@ axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rcgen = "0.13"
+if-addrs = "0.13"
 tower = "0.5"
 mime_guess = "2.0"
 mdns-sd = { workspace = true }

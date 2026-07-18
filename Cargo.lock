@@ -409,6 +409,7 @@ dependencies = [
  "http-body-util",
  "httpdate",
  "idna",
+ "if-addrs",
  "image",
  "include_dir",
  "inquire",
