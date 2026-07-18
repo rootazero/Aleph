@@ -306,6 +306,31 @@ impl OAuthStorage {
         }
     }
 
+    /// Load current storage state while the `cache` write lock is held.
+    ///
+    /// Trusts the in-memory snapshot only when the on-disk file has not advanced
+    /// past the mtime recorded when we cached it; otherwise re-reads from disk so
+    /// a concurrent writer's update (another `OAuthStorage` instance sharing the
+    /// same file, or another process) is merged rather than clobbered by a stale
+    /// snapshot. Mirrors the staleness check in [`Self::load`] — the read path
+    /// already guarded against out-of-process rewrites, while every write path
+    /// trusted its cache unconditionally and could revert a concurrent update.
+    ///
+    /// Takes `cached` by ref because the caller already holds the `cache` write
+    /// guard; `cached_mtime` is a separate lock, so this does not re-enter it.
+    async fn load_for_write(&self, cached: Option<&StorageFile>) -> Result<StorageFile> {
+        if let Some(storage) = cached {
+            let disk_mtime = self.file_mtime().await;
+            let cached_mtime = *self.cached_mtime.read().await;
+            if disk_mtime.is_none() || disk_mtime == cached_mtime {
+                // rust-doctor-disable-next-line excessive-clone
+                return Ok(storage.clone());
+            }
+            tracing::debug!("OAuth storage changed on disk before write; reloading to merge");
+        }
+        self.load_from_file().await
+    }
+
     /// Get tokens for a server
     pub async fn get_tokens(&self, server: &str) -> Result<Option<OAuthTokens>> {
         let storage = self.load().await?;
@@ -321,11 +346,7 @@ impl OAuthStorage {
         let mut cache = self.cache.write().await;
 
         // Load current state (from cache or file)
-        let mut storage = match cache.as_ref() {
-            // rust-doctor-disable-next-line excessive-clone
-            Some(s) => s.clone(),
-            None => self.load_from_file().await?,
-        };
+        let mut storage = self.load_for_write(cache.as_ref()).await?;
 
         let entry = storage
             .entries
@@ -352,11 +373,7 @@ impl OAuthStorage {
     /// Save client info for a server
     pub async fn save_client_info(&self, server: &str, client_info: &ClientInfo) -> Result<()> {
         let mut cache = self.cache.write().await;
-        let mut storage = match cache.as_ref() {
-            // rust-doctor-disable-next-line excessive-clone
-            Some(s) => s.clone(),
-            None => self.load_from_file().await?,
-        };
+        let mut storage = self.load_for_write(cache.as_ref()).await?;
 
         let entry = storage
             .entries
@@ -379,11 +396,7 @@ impl OAuthStorage {
     /// Save a full OAuth entry
     pub async fn save_entry(&self, server: &str, entry: &OAuthEntry) -> Result<()> {
         let mut cache = self.cache.write().await;
-        let mut storage = match cache.as_ref() {
-            // rust-doctor-disable-next-line excessive-clone
-            Some(s) => s.clone(),
-            None => self.load_from_file().await?,
-        };
+        let mut storage = self.load_for_write(cache.as_ref()).await?;
         // rust-doctor-disable-next-line excessive-clone
         storage.entries.insert(server.to_string(), entry.clone());
         self.save_to_file(&storage).await?;
@@ -394,11 +407,7 @@ impl OAuthStorage {
     /// Remove all credentials for a server
     pub async fn remove(&self, server: &str) -> Result<()> {
         let mut cache = self.cache.write().await;
-        let mut storage = match cache.as_ref() {
-            // rust-doctor-disable-next-line excessive-clone
-            Some(s) => s.clone(),
-            None => self.load_from_file().await?,
-        };
+        let mut storage = self.load_for_write(cache.as_ref()).await?;
         storage.entries.remove(server);
         self.save_to_file(&storage).await?;
         *cache = Some(storage);
@@ -488,6 +497,39 @@ mod tests {
                 .access_token,
             "v2"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_instance_write_does_not_clobber_other_entry() {
+        // Regression: two OAuthStorage handles on the same file (e.g. a remote-MCP
+        // connect refresh and a concurrent mcp_login, each constructing its own
+        // instance with a private cache lock). Instance A caches a stale snapshot,
+        // B writes a new server's tokens, then A writes a third server. A's write
+        // must merge B's entry back from disk, not revert it (lost update).
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mcp-auth.json");
+        let tok = |s: &str| OAuthTokens {
+            access_token: s.to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+        };
+
+        let a = OAuthStorage::new(path.clone());
+        a.save_tokens("srv-a", &tok("a")).await.unwrap(); // a caches {srv-a} @ t0
+
+        // Newer mtime so A's stale cache is detectable on its next write.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let b = OAuthStorage::new(path.clone());
+        b.save_tokens("srv-b", &tok("b")).await.unwrap(); // disk {srv-a, srv-b} @ t1
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        a.save_tokens("srv-c", &tok("c")).await.unwrap(); // must merge, not clobber srv-b
+
+        let reader = OAuthStorage::new(path.clone());
+        let mut servers = reader.list_servers().await.unwrap();
+        servers.sort();
+        assert_eq!(servers, vec!["srv-a", "srv-b", "srv-c"]);
     }
 
     #[tokio::test]
