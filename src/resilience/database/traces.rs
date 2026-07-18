@@ -384,8 +384,8 @@ impl StateDatabase {
     ///
     /// Scans `task_traces` for rows where `event_kind = 'provider_usage'` and
     /// `event_json -> agent_id` is in `agent_ids`. Optional `since` / `until`
-    /// bounds restrict to a timestamp window (epoch ms, same units written by
-    /// `TaskTrace::new`).
+    /// bounds restrict to a timestamp window (epoch seconds, same units written
+    /// by `TaskTrace::new`).
     ///
     /// Returns one row per agent that actually had usage in the window;
     /// agents with zero usage are omitted (callers fill zeros at the
