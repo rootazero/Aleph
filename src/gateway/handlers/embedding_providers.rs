@@ -168,20 +168,10 @@ pub async fn handle_add(
     let mut provider_config = params.config;
     apply_embedding_preset_defaults(&mut provider_config);
 
-    // Store API key in vault
-    if let Some(ref api_key) = provider_config.api_key {
-        if !api_key.is_empty() {
-            if let Err(e) = vault.store_secret(&vault_key(&provider_config.id), api_key) {
-                error!(error = %e, "Failed to store embedding API key in vault");
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to store API key: {e}"),
-                );
-            }
-        }
-    }
-    provider_config.api_key = None;
+    // Take the API key but don't persist it until we've confirmed this is a NEW
+    // provider — writing to the vault before the duplicate-id check would clobber
+    // an existing provider's stored key on a failed "add".
+    let api_key = provider_config.api_key.take().filter(|k| !k.is_empty());
 
     {
         let mut cfg = config.write().await;
@@ -199,6 +189,18 @@ pub async fn handle_add(
                 INVALID_PARAMS,
                 format!("Embedding provider '{}' already exists", provider_config.id),
             );
+        }
+
+        // id confirmed new — now persist the API key to the vault.
+        if let Some(ref api_key) = api_key {
+            if let Err(e) = vault.store_secret(&vault_key(&provider_config.id), api_key) {
+                error!(error = %e, "Failed to store embedding API key in vault");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to store API key: {e}"),
+                );
+            }
         }
 
         // Add provider
@@ -254,20 +256,6 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
-    // Store new API key in vault if provided
-    if let Some(ref api_key) = params.config.api_key {
-        if !api_key.is_empty() {
-            if let Err(e) = vault.store_secret(&vault_key(&params.id), api_key) {
-                error!(error = %e, "Failed to store embedding API key in vault");
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to store API key: {e}"),
-                );
-            }
-        }
-    }
-
     {
         let mut cfg = config.write().await;
 
@@ -281,6 +269,22 @@ pub async fn handle_update(
 
         match provider {
             Some(existing) => {
+                // Persist the new API key (if provided) only after confirming the
+                // provider exists — writing to the vault before this check would
+                // leave an orphaned secret for a non-existent id.
+                if let Some(api_key) =
+                    params.config.api_key.as_ref().filter(|k| !k.is_empty())
+                {
+                    if let Err(e) = vault.store_secret(&vault_key(&params.id), api_key) {
+                        error!(error = %e, "Failed to store embedding API key in vault");
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INTERNAL_ERROR,
+                            format!("Failed to store API key: {e}"),
+                        );
+                    }
+                }
+
                 let mut new_config = params.config;
                 new_config.verified = false;
                 new_config.api_key = None; // Never persist to config

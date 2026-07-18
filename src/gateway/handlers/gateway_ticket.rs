@@ -38,7 +38,11 @@ pub async fn handle_ticket_create(
         .as_ref()
         .and_then(|p| p.get("ttl_seconds").and_then(serde_json::Value::as_u64));
 
-    let ttl_ms = ttl_seconds.map(|s| s as i64 * 1000);
+    // Clamp caller-supplied ttl to a sane bounded range before the *1000 (raw
+    // `s as i64 * 1000` overflows i64 for huge values) — and pass the SAME clamped
+    // value used for expires_at into the manager so the reported expiry matches
+    // what is stored (the manager applies a 60s floor of its own).
+    let ttl_ms = ttl_seconds.map(|s| s.clamp(60, 86_400) as i64 * 1000);
 
     // Opportunistic hygiene — clear expired tickets / tokens on this chokepoint
     // so there is no dedicated prune daemon. Best-effort, never fails the call.
