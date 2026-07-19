@@ -267,7 +267,15 @@ impl CompactionCircuitBreaker {
 
 /// Sliding window detector for unproductive turns.
 ///
-/// Uses a bounded `VecDeque` to avoid unbounded memory growth in long loops.
+/// ⚠️ **R10 NOTE**: this detector encodes a heuristic — "if the last N turns
+/// produced no productive output, stop the loop" — that competes with the
+/// agent loop's own judgement. Per Aleph redlines (R10: "intelligence lives
+/// in the prompt, not middleware"), the loop should surface the metrics to
+/// the model and let it decide whether to continue. The detector is kept
+/// for back-compat with the wired-up `StopDiminishing` directive path; new
+/// callers should prefer feeding the metrics into the agent prompt instead
+/// of hard-stopping here. Follow-up: collapse into a metrics-reporting
+/// helper and route the decision through the harness.
 #[derive(Debug)]
 struct DiminishingReturnsDetector {
     window_size: usize,
