@@ -216,7 +216,13 @@ impl SessionService for InProcessActorSessionService {
                     tracing::warn!(session_id = ?id, error = %e, "Wake shutdown reply dropped")
                 }
                 Err(_) => {
-                    tracing::warn!(session_id = ?id, "Wake shutdown timed out after {:?}", SHUTDOWN_GRACE)
+                    // The old actor may still be processing a command (the
+                    // SQLite sequence counter is per-actor, so two live actors
+                    // for the same session could clobber each other's inserts).
+                    // Refuse to spawn a replacement and surface the timeout so
+                    // the caller can decide whether to retry.
+                    tracing::warn!(session_id = ?id, "Wake shutdown timed out after {:?}", SHUTDOWN_GRACE);
+                    return Err(SessionError::ShutdownTimeout);
                 }
             }
         }
@@ -268,7 +274,11 @@ impl SessionService for InProcessActorSessionService {
                     tracing::warn!(session_id = ?id, error = %e, "Detach shutdown reply dropped")
                 }
                 Err(_) => {
-                    tracing::warn!(session_id = ?id, "Detach shutdown timed out after {:?}", SHUTDOWN_GRACE)
+                    // Caller asked for the actor to stop; returning Ok here
+                    // would let it perform direct store writes while the old
+                    // actor may still be appending events. Surface the timeout.
+                    tracing::warn!(session_id = ?id, "Detach shutdown timed out after {:?}", SHUTDOWN_GRACE);
+                    return Err(SessionError::ShutdownTimeout);
                 }
             }
         }
