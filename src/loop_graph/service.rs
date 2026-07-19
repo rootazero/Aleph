@@ -55,28 +55,33 @@ fn debounce_pass(watcher_job_id: &str) -> bool {
     }
 }
 
-/// Poke every cron watcher paired (via `watches`) to `goal:<session>`.
-/// Call sites: the goal continuation hook's victory-claim moments
-/// (gate-less terminal complete, and gate-pass commit). Best-effort and
-/// bounded: no graph / no store / no cron handle / no watchers → no-op.
-pub async fn notify_goal_settled(session: &str) {
+/// Cron job ids of every `watches` watcher pointed at `node_id`. Pure lookup
+/// (unit-testable); empty on store errors.
+fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) -> Vec<String> {
+    store
+        .list_edges(DEFAULT_AGENT)
+        .map(|edges| {
+            edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Watches && e.to_id == node_id)
+                .filter_map(|e| e.from_id.strip_prefix("cron:").map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Poke every cron watcher paired (via `watches`) to `node_id`. Best-effort
+/// and bounded: no graph / no store / no cron handle / no watchers → no-op.
+async fn notify_node_settled(node_id: &str) {
     let Some(store) = crate::loop_graph::global() else {
         return;
     };
-    let node_id = format!("goal:{session}");
-    let Ok(edges) = store.list_edges(DEFAULT_AGENT) else {
-        return;
-    };
-    let watcher_jobs: Vec<String> = edges
-        .iter()
-        .filter(|e| e.kind == EdgeKind::Watches && e.to_id == node_id)
-        .filter_map(|e| e.from_id.strip_prefix("cron:").map(str::to_string))
-        .collect();
+    let watcher_jobs = watcher_jobs_for(&store, node_id);
     if watcher_jobs.is_empty() {
         return;
     }
     let Some(cron) = CRON_TRIGGER.get() else {
-        info!(session = %session, "loop_graph: watchers paired but no cron trigger handle");
+        info!(node = %node_id, "loop_graph: watchers paired but no cron trigger handle");
         return;
     };
     for job_id in watcher_jobs {
@@ -86,15 +91,27 @@ pub async fn notify_goal_settled(session: &str) {
         let service = cron.lock().await;
         match service.run_job(&job_id).await {
             Ok(()) => {
-                info!(session = %session, watcher = %job_id,
+                info!(node = %node_id, watcher = %job_id,
                     "loop_graph: victory claim — watcher cron poked");
             }
             Err(e) => {
-                warn!(session = %session, watcher = %job_id, error = %e,
+                warn!(node = %node_id, watcher = %job_id, error = %e,
                     "loop_graph: failed to poke watcher cron");
             }
         }
     }
+}
+
+/// Goal victory-claim entry. Call sites: the goal continuation hook's
+/// gate-less terminal complete and gate-pass commit moments.
+pub async fn notify_goal_settled(session: &str) {
+    notify_node_settled(&format!("goal:{session}")).await;
+}
+
+/// Team victory-claim entry — a disband is the team's "we're done" moment.
+/// Call site: `team_disband` success path.
+pub async fn notify_team_settled(team_id: &str) {
+    notify_node_settled(&format!("team:{team_id}")).await;
 }
 
 /// The id of the loop owning `goal:<session>`'s reference via an
@@ -248,6 +265,52 @@ mod tests {
             ))
             .unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn watcher_jobs_resolve_for_goal_and_team_nodes() {
+        let (_dir, store) = seeded_store();
+        store
+            .upsert_node(&GraphNode::new(
+                DEFAULT_AGENT,
+                "team:release-crew",
+                NodeKind::Team,
+                "发版小队",
+                Origin::Llm,
+            ))
+            .unwrap();
+        store
+            .upsert_node(
+                &GraphNode::new(
+                    DEFAULT_AGENT,
+                    "cron:team-watch",
+                    NodeKind::LoopCron,
+                    "小队看守",
+                    Origin::Llm,
+                )
+                .with_cadence("nightly"),
+            )
+            .unwrap();
+        store
+            .upsert_edge(&GraphEdge::new(
+                DEFAULT_AGENT,
+                "cron:team-watch",
+                "team:release-crew",
+                EdgeKind::Watches,
+                Origin::Llm,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            watcher_jobs_for(&store, "team:release-crew"),
+            vec!["team-watch".to_string()],
+            "watches edge on a team node must surface its cron watcher"
+        );
+        assert!(
+            watcher_jobs_for(&store, "goal:sess-1").is_empty(),
+            "owns_reference edge is not a watcher"
+        );
+        assert!(watcher_jobs_for(&store, "team:nonexistent").is_empty());
     }
 
     #[test]

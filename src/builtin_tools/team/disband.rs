@@ -96,6 +96,11 @@ impl AlephTool for TeamDisbandTool {
 
         info!(team_id = %args.team_id, "team_disband: team disbanded");
 
+        // Victory-claim trigger: a disband is the team's "we're done" moment —
+        // poke any watcher paired to `team:<id>` in the governance graph
+        // (best-effort; a no-op when the team was never explicitly paired).
+        crate::loop_graph::service::notify_team_settled(&args.team_id).await;
+
         // Post-disband cleanup: expire messages, cancel sessions, prune events.
         // Failures are logged but do not fail the disband operation.
         if let Some(ref ms) = self.msg_store {
