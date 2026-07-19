@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+const DEFAULT_REMOTE_TIMEOUT_SECS: u64 = 300;
+
 use crate::error::{AlephError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::sampling::SamplingHandler;
@@ -496,7 +498,7 @@ impl McpClient {
         // handshake. Lenient: only an unambiguous HTML response is rejected.
         crate::mcp::preflight_remote_url(&config.url, &config.headers).await?;
 
-        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(300));
+        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_REMOTE_TIMEOUT_SECS));
 
         let transport: Arc<dyn McpTransport> = match config.transport {
             TransportPreference::Http => {
