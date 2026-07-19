@@ -112,6 +112,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "media",
             "goal",
             "loop",
+            "loop_graph",
             "strategy",
         ],
     },

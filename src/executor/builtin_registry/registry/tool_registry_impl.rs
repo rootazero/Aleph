@@ -252,6 +252,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.scratchpad_tool.call_json(arguments).await })
             }
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
+            "loop_graph" => {
+                Box::pin(async move { self.loop_graph_tool.call_json(arguments).await })
+            }
             "loop" => Box::pin(async move { self.loop_tool.call_json(arguments).await }),
             "strategy" => Box::pin(async move { self.strategy_tool.call_json(arguments).await }),
 
