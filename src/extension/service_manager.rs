@@ -162,7 +162,12 @@ impl ServiceManager {
 
         match result {
             Ok(value) => {
-                // Try to parse as ServiceResult for detailed info
+                // Try to parse as ServiceResult for detailed info. If the plugin
+                // returned a malformed payload, mark the service as Failed rather
+                // than silently downgrading to success — a plugin that returns
+                // an error in a non-ServiceResult shape is itself a bug the
+                // operator should see, and the previous "ok()" fallback masked
+                // broken plugins as Running.
                 let service_result: ServiceResult = match serde_json::from_value(value.clone()) {
                     Ok(r) => r,
                     Err(e) => {
@@ -170,7 +175,7 @@ impl ServiceManager {
                             "Failed to parse service start result as ServiceResult: {}",
                             e
                         );
-                        ServiceResult::ok()
+                        ServiceResult::error(format!("malformed plugin result: {e}"))
                     }
                 };
 
@@ -260,7 +265,8 @@ impl ServiceManager {
 
         match result {
             Ok(value) => {
-                // Try to parse as ServiceResult for detailed info
+                // Try to parse as ServiceResult for detailed info. Malformed
+                // payload is itself an error, not a successful stop.
                 let service_result: ServiceResult = match serde_json::from_value(value.clone()) {
                     Ok(r) => r,
                     Err(e) => {
@@ -268,7 +274,7 @@ impl ServiceManager {
                             "Failed to parse service stop result as ServiceResult: {}",
                             e
                         );
-                        ServiceResult::ok()
+                        ServiceResult::error(format!("malformed plugin result: {e}"))
                     }
                 };
 
