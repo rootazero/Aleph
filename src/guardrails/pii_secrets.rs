@@ -98,7 +98,7 @@ impl PiiSecretsGuardrail {
             },
             Err(SecurityGuardError::SecretResolutionFailed(e)) => GuardrailDecision::Block {
                 reason: format!("Secret resolution failed: {e}"),
-                class: ErrorClass::Fixable,
+                class: ErrorClass::Unexpected,
             },
             Err(e) => {
                 tracing::error!(error = %e, "RuntimeSecurityGuard error; failing closed");
