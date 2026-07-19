@@ -4,9 +4,7 @@
 //! against the SSRF blocklist. Returns a single pinned `SocketAddr` for use
 //! with reqwest's `.resolve()` to prevent DNS rebinding attacks.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Mutex;
 
 use super::ip::is_ip_blocked_by_policy;
 use super::policy::SsrfPolicy;
@@ -14,6 +12,9 @@ use super::SsrfError;
 
 #[cfg(test)]
 pub(crate) mod test_hook {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
     use super::*;
 
     static RESOLVER: Mutex<Option<HashMap<String, Vec<IpAddr>>>> = Mutex::new(None);

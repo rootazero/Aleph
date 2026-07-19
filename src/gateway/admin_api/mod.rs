@@ -1,5 +1,12 @@
 //! `/v1/admin/*` namespace — IPC entry points for CLI commands while
 //! the server holds the singleton lock.
+//!
+//! Mounted on the gateway router under `/v1/admin`; bearer-auth is
+//! enforced uniformly via `admin_auth_middleware` against the vault's
+//! current shared token (same secret the OpenAI-compat `/v1/*`
+//! routes accept, validated with `crate::security::secret_equal`).
+//! Spec C scope covers secrets and agents (memory writes go through
+//! the existing `remember` tool).
 
 pub mod agents;
 pub mod secrets;
@@ -7,10 +14,10 @@ pub mod secrets;
 use crate::sync_primitives::Arc;
 
 use axum::extract::{Request, State};
-use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
-use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::Router;
+use axum::http::StatusCode;
+use axum::middleware::{from_fn_with_state, Next};
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 
 use crate::config::agent_manager::AgentManager;
 use crate::gateway::openai_api::auth::extract_bearer_token;
@@ -23,32 +30,46 @@ pub struct AdminApiState {
 }
 
 pub fn router(state: AdminApiState) -> Router {
-    let shared_token = state.shared_token.clone();
     Router::new()
         .nest("/secrets", secrets::router())
         .nest("/agents", agents::router())
-        .route_layer(middleware::from_fn_with_state(
-            shared_token,
-            require_shared_token,
-        ))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(from_fn_with_state(state, admin_auth_middleware))
 }
 
-async fn require_shared_token(
-    State(shared_token): State<Arc<SharedTokenManager>>,
-    headers: HeaderMap,
+async fn admin_auth_middleware(
+    State(state): State<AdminApiState>,
     request: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
-    let provided = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(extract_bearer_token);
-    let expected = shared_token.get_current_token();
-    if !crate::security::secret_equal(provided, expected.as_deref()) {
-        return Err(StatusCode::UNAUTHORIZED);
+) -> Response {
+    let header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let provided = match extract_bearer_token(header) {
+        Some(t) => t,
+        None => return admin_unauthorized("Missing or invalid Authorization header"),
+    };
+
+    let expected = state.shared_token.get_current_token();
+    if !crate::security::secret_equal(Some(provided), expected.as_deref()) {
+        return admin_unauthorized("Invalid API key");
     }
-    Ok(next.run(request).await)
+
+    next.run(request).await
+}
+
+fn admin_unauthorized(message: &str) -> Response {
+    let body = serde_json::json!({
+        "error": {
+            "message": message,
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+        }
+    });
+    (StatusCode::UNAUTHORIZED, Json(body)).into_response()
 }
 
 #[cfg(test)]

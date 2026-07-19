@@ -490,14 +490,6 @@ pub(super) async fn register_builtin_definitions(
             def.description,
             DToolSource::Builtin,
         );
-        // Seed discoverable slash aliases from the single alias source
-        // (`tool_metadata::aliases`) — the same table the execution fast path
-        // maps against. Only tools present here (not separately curated in
-        // `register_builtin_tools`) are the winning catalog entry, so seeding in
-        // this loop is correct for `/model`→select_model, `/status`→doctor,
-        // `/config`→self_config, `/memories`→memory_search, `/agent(s)`→
-        // agent_switch. Curated-and-in-defs names (skill_list) carry their alias
-        // on the curated entry instead, since that one wins.
         let aliases = shorthand_aliases_for(def.name);
         if !aliases.is_empty() {
             tool = tool.with_aliases(aliases);
