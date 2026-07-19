@@ -333,10 +333,22 @@ pub enum TeamEventType {
     TaskCompleted,
     TaskFailed,
     ArtifactSubmitted,
-    ReviewScoreSubmitted,
     SessionStarted,
     SessionConcluded,
+    SessionDeadlocked,
     DigestGenerated,
+    ShutdownRequested,
+    ShutdownResolved,
+    PlanSubmitted,
+    PlanResolved,
+
+    // Team lifecycle events (EventBus integration)
+    TeamCreated,
+    MemberAdded,
+    MemberRemoved,
+    TaskAssigned,
+    TaskUpdated,
+    TeamDisbanded,
 }
 ```
 
@@ -630,7 +642,7 @@ the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 ### Team — Roles
 | Tool | Description |
 |------|-------------|
-| `review_score` | Submit structured review with configurable validation (Critic tool) |
+| `task_review` | Leader approves/rejects a submitted task deliverable — approve completes the task and unblocks dependents, reject sends it back for in-place redo; supports optional `grounding` evidence, required when the task carries `require_grounding: true` |
 
 ## Module Structure
 
@@ -682,7 +694,7 @@ Key design decisions for Team mode:
 - **Escalation**: Suggestion to leader, not auto-action (R8)
 - **Session orchestration**: Leader agent via tools, not code-level orchestrator (R8)
 - **Context management**: Tools return full content; agent loop handles truncation
-- **Critic validation**: Configurable thresholds from `TeamRoleConfig` — tool constraint (empowerment), not reasoning replacement
+- **Review gating**: `task_review` requires `grounding` evidence for an approval only when the task's metadata sets `require_grounding: true` — a plain metadata flag, not a role config type. Roles themselves stay prompt-level only (leader orchestration preamble + per-member handoff context) — there is no code-level role config type
 - **Tool count**: 9 new tools (consolidated `inbox_read` + thread, `session_turn` + conclude) — fewer tools improve LLM tool selection accuracy
 
 See also:
