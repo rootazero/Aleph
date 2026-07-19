@@ -220,6 +220,12 @@ pub struct ResolvedContext {
     /// the harness bridge; `None` (no active goal) emits nothing.
     #[serde(skip, default)]
     pub standing_goal: Option<String>,
+    /// Governance-topology context for a session that is a registered node
+    /// in the loop graph. Rendered by `GraphTopologyLayer` (priority 1753)
+    /// as `<loop_graph_context>`. Populated from `LoopGraphStore` in
+    /// `harness_bridge::prompt_build`; `None` (the common case) leaves the
+    /// prompt byte-identical.
+    pub graph_topology: Option<String>,
     /// Active timer-loop summary (watch prompt + status), rendered by
     /// `TimerLoopLayer` (priority 1753) as `<timer_loop>`. Populated from
     /// the loop registry in the harness bridge; `None` (no active loop)
@@ -333,6 +339,7 @@ impl ContextAggregator {
             sandbox_summary: None,
             execution_plan: None,
             standing_goal: None,
+            graph_topology: None,
             timer_loop: None,
             strategy: None,
             strategy_guardrails: None,

@@ -123,6 +123,9 @@ pub(super) async fn post_run(
             // to the hook (a gate veto must be able to reopen WITH the plan).
             if crate::goal::pursuit::gateless_terminal_complete(&peek, gate_configured) {
                 clear_goal_welded_strategy(&session);
+                // Victory claimed with no gate to verify it — exactly the
+                // moment a paired watcher should look for the cheap win.
+                crate::loop_graph::service::notify_goal_settled(&session).await;
             }
         }
         ContinuationDecision::Fire {
@@ -269,6 +272,7 @@ async fn arbitrate_gate(
                 info!(session = %session,
                     "goal pursuit: objective gate passed, goal verified complete");
                 clear_goal_welded_strategy(session);
+                crate::loop_graph::service::notify_goal_settled(session).await;
             }
             Ok(false) => info!(session = %session,
                 "goal pursuit: goal changed while the gate ran; discarding the gate pass"),

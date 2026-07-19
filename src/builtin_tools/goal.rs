@@ -544,6 +544,22 @@ token_budget. \
                         validate_gate_command(cmd)?;
                     }
                 }
+                // owns_reference write-protection (loop_graph §6.2): `set` on a
+                // session that already has a goal REPLACES its objective — a
+                // reference change. A governed loop is read-only on its own
+                // reference; structural field ownership, not judgment (R7-clean,
+                // same class as the exec-tier metadata rules).
+                if self.store.get(&session)?.is_some() {
+                    if let Some(owner) = crate::loop_graph::service::governing_owner(&session) {
+                        return Err(AlephError::tool(format!(
+                            "此会话的 goal objective 由 {owner} 治理（owns_reference edge）。\
+                             变更理由请写成提案 note（note_manage，tag: reference-proposal），\
+                             由治理环在其周期裁决；或经用户确认先解除托管：\
+                             loop_graph(action='unlink', from_id='{owner}', \
+                             to_id='goal:{session}', edge='owns_reference')。"
+                        )));
+                    }
+                }
                 // `tokens_at_start` is seeded to 0 here: the tool has no live
                 // per-session token counter at call time. The autonomous driver
                 // captures the real baseline lazily on the first continuation
@@ -784,6 +800,18 @@ token_budget. \
                 // undone something, which is how a model ends up assuring the user
                 // their (never-created) goal is gone.
                 let existed = self.store.get(&session)?;
+                // owns_reference write-protection: clearing a governed goal
+                // deletes the very reference the governing loop owns.
+                if existed.is_some() {
+                    if let Some(owner) = crate::loop_graph::service::governing_owner(&session) {
+                        return Err(AlephError::tool(format!(
+                            "此会话的 goal 由 {owner} 治理（owns_reference edge），clear 会删除\
+                             被治理的参照。请写提案 note（tag: reference-proposal）交治理环裁决，\
+                             或经用户确认先 loop_graph(action='unlink', from_id='{owner}', \
+                             to_id='goal:{session}', edge='owns_reference') 再 clear。"
+                        )));
+                    }
+                }
                 self.store.delete(&session)?;
                 // Clear the goal-welded Strategy in lockstep with the
                 // authoritative goal deletion (spec §6 lifecycle). Best-effort:

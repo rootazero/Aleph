@@ -774,6 +774,13 @@ async fn resolve_prompt_context(
     );
     resolved_context.execution_plan = exec_plan;
     resolved_context.standing_goal = standing;
+    // Governance-topology context: a mechanical session-keyed lookup against
+    // the loop-graph store (mirrors the standing-goal read; two indexed
+    // SELECTs when the graph exists, one when it is empty, zero when the
+    // subsystem never booted). Deterministic bytes — unchanged graph leaves
+    // the prompt byte-identical (cache-safe).
+    resolved_context.graph_topology =
+        crate::loop_graph::service::render_session_topology(session_key_str);
     resolved_context.timer_loop = timer_loop;
     // Render the welded Strategy into its two prompt surfaces: the full
     // `<strategy>` body for the Stable `StrategyLayer` (cacheable head) and
