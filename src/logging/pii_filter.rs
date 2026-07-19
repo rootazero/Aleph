@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_pii_scrubbing_layer_basic() {
         // Note: This test is primarily for compilation
-        // Actual scrubbing behavior is tested in utils::pii tests
+        // Actual scrubbing behavior is tested in aleph_logging::pii tests
         let _layer = PiiScrubbingLayer;
     }
 
