@@ -592,29 +592,31 @@ impl AiProvider for FailoverProvider {
         &'a self,
         payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-        // Own every borrowed field so the payload can be rebuilt per attempt.
-        let messages = payload.messages.to_vec();
-        let system_prompt = payload.system_prompt.map(str::to_string);
+        // The big fields (conversation, system prompt, tool defs) are `&'a`
+        // borrows of the caller's data — copy the references so a failover
+        // request never deep-clones the whole conversation. Only the small
+        // owned fields (tool_choice / model / metadata) are taken by value so
+        // each per-attempt rebuild can restamp `model`; they are cloned per
+        // attempt below (all tiny — an enum tag, a model name, a header map).
+        let messages = payload.messages;
+        let system_prompt = payload.system_prompt;
         // Preserve the prompt-cache split (`cache: true` prefix) across the
         // failover rebuild — dropping it here silently negated caching for any
         // caller behind a Failover wrapper (the Guardian judge, the main loop).
-        let system_blocks = payload.system_blocks.map(<[_]>::to_vec);
-        let tools = payload.tools.map(<[_]>::to_vec);
+        let system_blocks = payload.system_blocks;
+        let tools = payload.tools;
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
-        // rust-doctor-disable-next-line excessive-clone
-        let tool_choice = payload.tool_choice.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let req_model = payload.model.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let metadata = payload.metadata.clone();
+        let tool_choice = payload.tool_choice;
+        let req_model = payload.model;
+        let metadata = payload.metadata;
         // C floor: derive the request's structural capability requirements once
         // (image blocks → vision, tools array → tool-calling, text size →
         // context window). Prompt-blind; shapes the candidate model set below.
         let reqs = RequestRequirements::from_request(
-            &messages,
-            tools.as_ref().is_some_and(|t| !t.is_empty()),
+            messages,
+            tools.is_some_and(|t| !t.is_empty()),
         );
 
         Box::pin(async move {
@@ -721,10 +723,10 @@ impl AiProvider for FailoverProvider {
                     let mut attempt: u32 = 0;
                     loop {
                         let inner = RequestPayload {
-                            messages: &messages,
-                            system_prompt: system_prompt.as_deref(),
-                            system_blocks: system_blocks.as_deref(),
-                            tools: tools.as_deref(),
+                            messages,
+                            system_prompt,
+                            system_blocks,
+                            tools,
                             think_level,
                             temperature,
                             max_tokens,
