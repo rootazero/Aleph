@@ -143,6 +143,7 @@ impl LoopGraphTool {
             NodeKind::LoopCron => "cron:",
             NodeKind::LoopHeartbeat => "heartbeat:",
             NodeKind::Daemon => "daemon:",
+            NodeKind::Team => "team:",
             NodeKind::Anchor => "anchor:",
             NodeKind::Frozen => "frozen:",
             NodeKind::Root => "root:",
@@ -230,7 +231,7 @@ impl LoopGraphTool {
                         out.push_str(&format!("\n    {}", truncate(b, 120)));
                     }
                 }
-                NodeKind::LoopHeartbeat | NodeKind::Daemon => {}
+                NodeKind::LoopHeartbeat | NodeKind::Daemon | NodeKind::Team => {}
             }
             out.push('\n');
         }

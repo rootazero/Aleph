@@ -20,6 +20,10 @@ pub enum NodeKind {
     LoopHeartbeat,
     /// A well-known background daemon (`daemon:<name>`, e.g. `daemon:dreaming`).
     Daemon,
+    /// An explicitly governed multi-agent team (`team:<team_id>`). Teams enter
+    /// the graph only by explicit pairing — never automatically; fast-loop
+    /// coord tasks never become nodes.
+    Team,
     /// An irrefutable measurement (`anchor:<slug>`) — body declares `{probe, truth}`.
     Anchor,
     /// A rule no optimizing loop may tune (`frozen:<slug>`) — body points at
@@ -38,6 +42,7 @@ impl NodeKind {
             Self::LoopCron => "loop_cron",
             Self::LoopHeartbeat => "loop_heartbeat",
             Self::Daemon => "daemon",
+            Self::Team => "team",
             Self::Anchor => "anchor",
             Self::Frozen => "frozen",
             Self::Root => "root",
@@ -51,6 +56,7 @@ impl NodeKind {
             "loop_cron" => Some(Self::LoopCron),
             "loop_heartbeat" => Some(Self::LoopHeartbeat),
             "daemon" => Some(Self::Daemon),
+            "team" => Some(Self::Team),
             "anchor" => Some(Self::Anchor),
             "frozen" => Some(Self::Frozen),
             "root" => Some(Self::Root),
@@ -64,7 +70,7 @@ impl NodeKind {
     pub const fn is_optimization_loop(self) -> bool {
         matches!(
             self,
-            Self::LoopGoal | Self::LoopCron | Self::LoopHeartbeat | Self::Daemon
+            Self::LoopGoal | Self::LoopCron | Self::LoopHeartbeat | Self::Daemon | Self::Team
         )
     }
 }
@@ -271,6 +277,7 @@ mod tests {
             NodeKind::LoopCron,
             NodeKind::LoopHeartbeat,
             NodeKind::Daemon,
+            NodeKind::Team,
             NodeKind::Anchor,
             NodeKind::Frozen,
             NodeKind::Root,
@@ -294,6 +301,7 @@ mod tests {
     #[test]
     fn optimization_loop_classification() {
         assert!(NodeKind::Daemon.is_optimization_loop());
+        assert!(NodeKind::Team.is_optimization_loop());
         assert!(!NodeKind::Anchor.is_optimization_loop());
         assert!(!NodeKind::Root.is_optimization_loop());
     }
