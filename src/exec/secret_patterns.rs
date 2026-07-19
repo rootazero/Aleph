@@ -5,18 +5,18 @@
 
 use regex::Regex;
 
-pub struct SecretPattern {
+pub(crate) struct SecretPattern {
     pub regex: Regex,
     pub replacement: &'static str,
 }
 
-pub struct LeakPatternDef {
+pub(crate) struct LeakPatternDef {
     pub name: &'static str,
     pub regex: Regex,
     pub action: super::leak_detector::LeakAction,
 }
 
-pub struct LeakDetectorAssets {
+pub(crate) struct LeakDetectorAssets {
     pub prefixes: Vec<&'static str>,
     pub patterns: Vec<LeakPatternDef>,
 }
