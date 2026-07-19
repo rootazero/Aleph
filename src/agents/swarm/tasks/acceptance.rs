@@ -65,6 +65,38 @@ pub fn with_lead_review_required(metadata: Value, required: bool) -> Value {
     value
 }
 
+/// Metadata key requiring the reviewer to attach grounding evidence — a real
+/// measurement (exit_code / numeric / line_count, the same closed truth
+/// vocabulary as loop_graph anchors) — before an approve verdict is accepted.
+pub const REQUIRE_GROUNDING_METADATA_KEY: &str = "require_grounding";
+
+/// Whether this task's approval requires reviewer grounding evidence.
+/// Tolerant like [`lead_review_required`]: missing / non-bool reads `false`.
+pub fn require_grounding(metadata: &Value) -> bool {
+    metadata
+        .get(REQUIRE_GROUNDING_METADATA_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Return a new metadata value with the require-grounding flag merged in.
+/// Mirrors [`with_lead_review_required`]: non-object input promoted,
+/// `required = false` is a pass-through, original untouched.
+#[must_use]
+pub fn with_require_grounding(metadata: Value, required: bool) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if !required {
+        return value;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(REQUIRE_GROUNDING_METADATA_KEY.to_string(), Value::Bool(true));
+    }
+    value
+}
+
 /// Metadata key recording when the dispatcher last surfaced this task as
 /// stalled in `WaitingReview` (epoch seconds). Stamped by
 /// `warn_stale_reviews`; doubles as the **durable** once-per-park dedup — a
@@ -263,6 +295,28 @@ mod tests {
         let merged = with_lead_review_required(json!("scalar"), true);
         assert!(merged.is_object());
         assert!(lead_review_required(&merged));
+    }
+
+    #[test]
+    fn require_grounding_reads_false_when_absent_or_wrong_shape() {
+        assert!(!require_grounding(&json!({})));
+        assert!(!require_grounding(
+            &json!({ REQUIRE_GROUNDING_METADATA_KEY: "yes" })
+        ));
+        assert!(!require_grounding(&json!(42)));
+    }
+
+    #[test]
+    fn require_grounding_roundtrips_preserves_siblings_and_false_is_passthrough() {
+        let original = json!({ "managed_by": "dispatcher" });
+        let merged = with_require_grounding(original.clone(), true);
+        assert!(original.get(REQUIRE_GROUNDING_METADATA_KEY).is_none()); // immutable
+        assert_eq!(merged["managed_by"], json!("dispatcher"));
+        assert!(require_grounding(&merged));
+
+        let untouched = with_require_grounding(json!({ "k": 1 }), false);
+        assert!(untouched.get(REQUIRE_GROUNDING_METADATA_KEY).is_none());
+        assert!(with_require_grounding(json!("scalar"), true).is_object());
     }
 
     #[test]
