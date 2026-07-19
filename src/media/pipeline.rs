@@ -63,7 +63,7 @@ impl MediaPipeline {
     ) -> Result<MediaOutput, MediaError> {
         // 1. Policy check (file size if path)
         if let MediaInput::FilePath { path } = input {
-            if path.exists() {
+            if tokio::fs::try_exists(path).await.unwrap_or(false) {
                 if let Ok(metadata) = tokio::fs::metadata(path).await {
                     self.policy.check_size(media_type, metadata.len())?;
                 }
