@@ -94,8 +94,15 @@ impl RuntimeSecurityGuard {
     }
 
     /// Create a new guard with the given configuration.
+    ///
+    /// `config.audit_enabled` is forced to `false` here because the audit
+    /// receiver is consumed by [`new_with_audit`] and would be dropped
+    /// immediately, closing the mpsc channel and silently discarding every
+    /// entry. Callers that want the audit pipeline must construct the guard via
+    /// [`new_with_audit`] and own the returned receiver.
     #[must_use]
-    pub fn new(config: SecurityGuardConfig) -> Self {
+    pub fn new(mut config: SecurityGuardConfig) -> Self {
+        config.audit_enabled = false;
         let (guard, _rx) = Self::new_with_audit(config);
         guard
     }
@@ -301,7 +308,13 @@ impl RuntimeSecurityGuard {
         }
 
         // 4. Placeholder Replacement
-        for (raw, value) in &resolved_map {
+        // Sort longest-first so that e.g. `{{secret:api_key}}` is replaced
+        // before `{{secret:api}}` and the shorter placeholder does not eat
+        // the prefix of the longer one. HashMap iteration is non-deterministic,
+        // so this matters.
+        let mut ordered: Vec<(&String, &String)> = resolved_map.iter().collect();
+        ordered.sort_by_key(|(raw, _)| std::cmp::Reverse(raw.len()));
+        for (raw, value) in &ordered {
             current_text = current_text.replace(raw, value);
         }
 

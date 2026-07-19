@@ -108,7 +108,13 @@ fn is_hex_ip_literal(s: &str) -> bool {
 }
 
 fn is_decimal_ip_literal(s: &str) -> bool {
-    !s.contains('.') && s.len() > 3 && s.chars().all(|c| c.is_ascii_digit())
+    if s.contains('.') || s.len() <= 3 || !s.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // Must parse as u32 (max IPv4 decimal form is 4294967295) — otherwise a
+    // numeric string >10 digits cannot be an IPv4 literal and is just an
+    // unusual all-digit hostname (which the OS DNS layer handles normally).
+    s.parse::<u32>().is_ok()
 }
 
 fn is_octal_or_short_ipv4(s: &str) -> bool {
@@ -117,23 +123,30 @@ fn is_octal_or_short_ipv4(s: &str) -> bool {
         return false;
     }
 
-    // Octal: any component starts with a leading zero (e.g., 0177.0.0.1)
-    for part in &parts {
-        if part.len() > 1
-            && part.starts_with('0')
-            && part.chars().all(|c| c.is_ascii_digit())
-        {
-            return true;
-        }
+    let all_numeric = || {
+        parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    };
+
+    // Octal-encoded IPv4 (e.g., 0177.0.0.1): exactly 4 parts, all numeric,
+    // and at least one part is a multi-digit leading-zero value (the actual
+    // octal marker — leading zeros are valid in octal notation and can have
+    // arbitrary length, e.g. "0177" ≡ octal 177 = 127). 2-3 part hostnames
+    // with one leading-zero part (e.g., "0123.com") are legitimate domain
+    // names — fall through to the short-form check below. Plain decimal IPv4
+    // like "8.8.8.8" has no leading-zero parts and is correctly rejected here
+    // so the caller can route it through normal IPv4 validation.
+    let has_octal_part = parts
+        .iter()
+        .any(|p| p.len() > 1 && p.starts_with('0'));
+    if parts.len() == 4 && all_numeric() && has_octal_part {
+        return true;
     }
 
     // Short-form IPv4: fewer than 4 dot-separated parts but looks numeric
     // e.g., "127.1" → resolves to 127.0.0.1 on many systems
-    if parts.len() < 4
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
-    {
+    if parts.len() < 4 && all_numeric() {
         return true;
     }
 

@@ -51,37 +51,55 @@ impl ContentSource {
     fn as_label(&self) -> String {
         match self {
             Self::WebFetch { url } => {
-                format!("web_fetch url=\"{}\"", url.replace('\"', "&quot;"))
+                format!("web_fetch url=\"{}\"", sanitize_label_attr(url))
             }
             Self::McpTool { server, tool } => {
                 format!(
                     "mcp_tool server=\"{}\" tool=\"{}\"",
-                    server.replace('\"', "&quot;"),
-                    tool.replace('\"', "&quot;")
+                    sanitize_label_attr(server),
+                    sanitize_label_attr(tool),
                 )
             }
             Self::Webhook { sender } => {
-                format!("webhook sender=\"{}\"", sender.replace('\"', "&quot;"))
+                format!("webhook sender=\"{}\"", sanitize_label_attr(sender))
             }
             Self::Email { from, subject } => {
                 format!(
                     "email from=\"{}\" subject=\"{}\"",
-                    from.replace('\"', "&quot;"),
-                    subject.replace('\"', "&quot;")
+                    sanitize_label_attr(from),
+                    sanitize_label_attr(subject),
                 )
             }
             Self::BrowserContent => "browser_content".to_string(),
             Self::UserUpload { filename } => {
-                format!(
-                    "user_upload filename=\"{}\"",
-                    filename.replace('\"', "&quot;")
-                )
+                format!("user_upload filename=\"{}\"", sanitize_label_attr(filename))
             }
             Self::ToolError { tool } => {
-                format!("tool_error tool=\"{}\"", tool.replace('\"', "&quot;"))
+                format!("tool_error tool=\"{}\"", sanitize_label_attr(tool))
             }
         }
     }
+}
+
+/// Escape a string for safe interpolation inside a wrapper-attribute value
+/// (e.g. `source="…"`).
+///
+/// Two threats:
+///
+/// 1. **Fence spoofing** — the labels are emitted into the wrapper header
+///    *before* the body fence-escape step in `wrap_external_content_with_report`.
+///    A user-controlled value that contains `<<<END_EXTERNAL_UNTRUSTED_CONTENT`
+///    would otherwise reach the model verbatim, letting it close the boundary
+///    prematurely.
+/// 2. **Quote-break** — a stray `"` lets an attacker escape the attribute and
+///    inject arbitrary header tokens. The model-side LLM that reads the source
+///    attribute is not a browser, but boundary parsers that match on quotes
+///    will still break.
+fn sanitize_label_attr(value: &str) -> String {
+    value
+        .replace('"', "&quot;")
+        .replace("<<<EXTERNAL_", "<<<ESCAPED_EXTERNAL_")
+        .replace("<<<END_EXTERNAL_", "<<<ESCAPED_END_EXTERNAL_")
 }
 
 /// A detected injection pattern within content.
