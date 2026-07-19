@@ -502,8 +502,14 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
-        let channel = channel_arc.read().await;
-        channel.edit(conversation_id, message_id, new_text).await
+        // Scope the read guard so it is dropped BEFORE the await on
+        // `channel.edit`, avoiding holding the registry read lock across
+        // adapter I/O (which previously blocked stop_channel / health).
+        let edit_fut = {
+            let channel = channel_arc.read().await;
+            channel.edit(conversation_id, message_id, new_text)
+        };
+        edit_fut.await
     }
 
     /// React to a message through a specific channel
@@ -518,8 +524,13 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
-        let channel = channel_arc.read().await;
-        channel.react(conversation_id, message_id, reaction).await
+        // Drop the read guard before awaiting the adapter call so a slow
+        // channel does not block stop_channel / health probes.
+        let react_fut = {
+            let channel = channel_arc.read().await;
+            channel.react(conversation_id, message_id, reaction)
+        };
+        react_fut.await
     }
 
     /// Send typing indicator through a specific channel
@@ -531,8 +542,11 @@ impl ChannelRegistry {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
-        let channel = channel_arc.read().await;
-        channel.send_typing(conversation_id).await
+        let typing_fut = {
+            let channel = channel_arc.read().await;
+            channel.send_typing(conversation_id)
+        };
+        typing_fut.await
     }
 
     /// Take the inbound message receiver
