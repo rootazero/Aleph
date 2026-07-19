@@ -306,6 +306,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | AGENT_LOOP_CONTEXT_BUDGET.md | [docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md](docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md) |
 | AGENT_LOOP_TOOL_EXECUTION.md | [docs/reference/AGENT_LOOP_TOOL_EXECUTION.md](docs/reference/AGENT_LOOP_TOOL_EXECUTION.md) |
 | AGENT_LOOP_RECOVERY.md | [docs/reference/AGENT_LOOP_RECOVERY.md](docs/reference/AGENT_LOOP_RECOVERY.md) |
+| **GRAPH_LAYER.md** | [docs/reference/GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) — 循环治理图（loop-graph governance）：`src/loop_graph/` 六词闭集治理边 + 锚点/冻结/根参照 + 审计环，四种单循环失败（Goodhart/参照盲区/环冲突/测量衰减）的拓扑解法；spec 见 docs/superpowers/specs/2026-07-19 |
 | MULTI_AGENT_SYSTEM.md | [docs/reference/MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
 | GATEWAY.md | [docs/reference/GATEWAY.md](docs/reference/GATEWAY.md) |
 | CLUSTER.md | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — Aleph 集群（单中心非对称节点联邦）：reverse RPC + `node_invoke`/`node_file` + 命令 allowlist + 审批回中心 + 断线 fail-fast |
