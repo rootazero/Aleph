@@ -10,7 +10,11 @@ use std::hash::{Hash, Hasher};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use super::injection::InjectedSecret;
+use super::injection::{InjectedSecret, INJECTED_HASH_KEY0, INJECTED_HASH_KEY1};
+
+const REDACTED_LEAK: &str = "***LEAKED_REDACTED***";
+const REDACTED_INJECTED: &str = "***INJECTED_REDACTED***";
+const REDACTED_HASH_MATCH: &str = "***HASH_MATCHED_REDACTED***";
 
 /// Result of a leak scan.
 #[derive(Debug, Clone)]
@@ -248,7 +252,7 @@ impl LeakDetector {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
                 redacted = pattern
-                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .replace_all(&redacted, REDACTED_LEAK)
                     .to_string();
             }
         }
@@ -259,7 +263,7 @@ impl LeakDetector {
                 found_labels.push(&pattern.name);
                 redacted = pattern
                     .regex
-                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .replace_all(&redacted, REDACTED_LEAK)
                     .to_string();
             }
         }
@@ -297,7 +301,7 @@ impl LeakDetector {
         // Check exact injected value matches
         for injected_value in &self.injected_values {
             if content.contains(injected_value.as_str()) {
-                let redacted = content.replace(injected_value.as_str(), "***INJECTED_REDACTED***");
+                let redacted = content.replace(injected_value.as_str(), REDACTED_INJECTED);
                 return LeakDecision::Block {
                     reason: "Inbound response echoed an injected secret value".to_string(),
                     redacted_content: redacted,
@@ -308,18 +312,15 @@ impl LeakDetector {
         // Check hash-based detection for content fragments
         for word in content.split_whitespace() {
             if word.len() >= 8 {
-                // Use same keys as InjectedSecret::from_value
-                let mut hasher = siphasher::sip::SipHasher::new_with_keys(
-                    0x517c_c1b7_2722_0a95,
-                    0x6c62_272e_07bb_0142,
-                );
+                let mut hasher =
+                    siphasher::sip::SipHasher::new_with_keys(INJECTED_HASH_KEY0, INJECTED_HASH_KEY1);
                 word.hash(&mut hasher);
                 let hash = hasher.finish();
                 if self.injected_hashes.contains(&hash) {
                     return LeakDecision::Block {
                         reason: "Inbound response contains hash-matched injected secret"
                             .to_string(),
-                        redacted_content: content.replace(word, "***HASH_MATCHED_REDACTED***"),
+                        redacted_content: content.replace(word, REDACTED_HASH_MATCH),
                     };
                 }
             }
@@ -499,7 +500,7 @@ mod tests {
             redacted_content, ..
         } = detector.scan_outbound(content)
         {
-            assert!(redacted_content.contains("***LEAKED_REDACTED***"));
+            assert!(redacted_content.contains(REDACTED_LEAK));
             assert!(!redacted_content.contains("abcdefgh"));
         } else {
             panic!("Expected Block");
