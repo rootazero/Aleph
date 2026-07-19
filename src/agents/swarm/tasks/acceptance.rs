@@ -92,7 +92,10 @@ pub fn with_require_grounding(metadata: Value, required: bool) -> Value {
         return value;
     }
     if let Some(obj) = value.as_object_mut() {
-        obj.insert(REQUIRE_GROUNDING_METADATA_KEY.to_string(), Value::Bool(true));
+        obj.insert(
+            REQUIRE_GROUNDING_METADATA_KEY.to_string(),
+            Value::Bool(true),
+        );
     }
     value
 }
