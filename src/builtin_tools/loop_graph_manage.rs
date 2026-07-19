@@ -17,6 +17,7 @@ use crate::loop_graph::templates::{AUDIT_DEFAULT_CRON_EXPR, AUDIT_TEMPLATE};
 use crate::loop_graph::{EdgeKind, GraphEdge, GraphNode, LoopGraphStore, NodeKind, Origin};
 use crate::sync_primitives::Arc;
 use crate::tasks::cron::{CronJob, ScheduleKind, SharedCronService};
+use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
 /// Action to perform on the governance graph.
@@ -55,8 +56,8 @@ pub struct LoopGraphArgs {
 
     // ── node / drop_node ───────────────────────────────────────────
     /// Node id, prefixed by kind: `goal:<session_id>` | `cron:<job_id>` |
-    /// `heartbeat:<task_id>` | `daemon:<name>` | `anchor:<slug>` |
-    /// `frozen:<slug>` | `root:<slug>`
+    /// `heartbeat:<task_id>` | `daemon:<name>` | `team:<team_id>` |
+    /// `anchor:<slug>` | `frozen:<slug>` | `root:<slug>`
     #[serde(default)]
     pub id: Option<String>,
     /// Node kind (required for `node`)
@@ -122,11 +123,16 @@ pub struct LoopGraphOutput {
 pub struct LoopGraphTool {
     store: Arc<LoopGraphStore>,
     cron: Option<SharedCronService>,
+    teams: Option<Arc<dyn TeamStore>>,
 }
 
 impl LoopGraphTool {
     pub const fn new(store: Arc<LoopGraphStore>) -> Self {
-        Self { store, cron: None }
+        Self {
+            store,
+            cron: None,
+            teams: None,
+        }
     }
 
     /// Attach the cron service handle (unlocks `enable_audit` and cron live
@@ -134,6 +140,14 @@ impl LoopGraphTool {
     #[must_use]
     pub fn with_cron_service(mut self, cron: Option<SharedCronService>) -> Self {
         self.cron = cron;
+        self
+    }
+
+    /// Attach the team store handle (unlocks `team:<id>` live joins in
+    /// `status`). Absent = team nodes render without a live line.
+    #[must_use]
+    pub fn with_team_store(mut self, teams: Option<Arc<dyn TeamStore>>) -> Self {
+        self.teams = teams;
         self
     }
 
@@ -231,7 +245,22 @@ impl LoopGraphTool {
                         out.push_str(&format!("\n    {}", truncate(b, 120)));
                     }
                 }
-                NodeKind::LoopHeartbeat | NodeKind::Daemon | NodeKind::Team => {}
+                NodeKind::Team => {
+                    if let Some(ts) = &self.teams {
+                        let team_id = n.id.trim_start_matches("team:");
+                        match ts.get_team(team_id).await {
+                            Ok(Some(t)) => out.push_str(&format!(
+                                "\n    live: status={} leader={} name={}",
+                                t.status.as_str(),
+                                t.leader_id,
+                                truncate(&t.name, 40)
+                            )),
+                            _ => out
+                                .push_str("\n    live: ⚠ target missing（team 记录已消失）"),
+                        }
+                    }
+                }
+                NodeKind::LoopHeartbeat | NodeKind::Daemon => {}
             }
             out.push('\n');
         }
@@ -270,7 +299,7 @@ impl LoopGraphTool {
 impl AlephTool for LoopGraphTool {
     const NAME: &'static str = "loop_graph";
     const DESCRIPTION: &'static str = "Manage the loop-graph governance topology: register \
-        self-improvement loops (goal/cron/heartbeat/daemon), anchors (irrefutable measurements), \
+        self-improvement loops (goal/cron/heartbeat/daemon/team), anchors (irrefutable measurements), \
         frozen rules and human root references as nodes; wire the six governance verbs \
         (watches/owns_reference/arbitrates/audits/anchored_by/feeds) as edges; render live \
         status with structural lint; install the weekly audit loop (enable_audit). Use when the \
@@ -566,7 +595,7 @@ impl AlephTool for LoopGraphTool {
                 Ok(LoopGraphOutput {
                     message: format!(
                         "看守环已配对: {watcher_id} -[watches]-> {to_id}（{expr}）。\
-                         被看守 goal 的胜利宣称还会即时触发本看守（post-run 钩子，去抖 60s）。"
+                         被看守 goal/team 的胜利宣称（goal 完成 / team 解散）还会即时触发本看守（post-run 钩子，去抖 60s）。"
                     ),
                     nodes: None,
                     edges: None,
@@ -728,5 +757,33 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("cron service unavailable"));
+    }
+
+    #[tokio::test]
+    async fn team_node_registers_and_renders_without_team_store() {
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("team:release-crew".into());
+        a.kind = Some(NodeKind::Team);
+        a.label = Some("发版小队".into());
+        t.call(a).await.unwrap();
+
+        let out = t.call(args(LoopGraphAction::Status)).await.unwrap();
+        let rendered = out.rendered.unwrap();
+        assert!(rendered.contains("team:release-crew"));
+        // No team store attached → no live line, no panic, degraded gracefully.
+        assert!(!rendered.contains("live:") || !rendered.contains("team 记录已消失"));
+        // A registered team without watchers is a naked optimization loop.
+        assert!(rendered.contains("裸奔优化环"));
+    }
+
+    #[tokio::test]
+    async fn team_node_prefix_enforced() {
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("release-crew".into());
+        a.kind = Some(NodeKind::Team);
+        a.label = Some("发版小队".into());
+        assert!(t.call(a).await.is_err(), "team id must carry team: prefix");
     }
 }

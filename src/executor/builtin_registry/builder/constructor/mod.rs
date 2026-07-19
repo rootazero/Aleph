@@ -407,7 +407,8 @@ impl BuiltinToolRegistry {
         crate::loop_graph::init_global(loop_graph_store.clone());
         crate::loop_graph::service::init_cron_trigger(config.cron_service.clone());
         let loop_graph_tool = crate::builtin_tools::LoopGraphTool::new(loop_graph_store)
-            .with_cron_service(config.cron_service.clone());
+            .with_cron_service(config.cron_service.clone())
+            .with_team_store(config.team_store.clone());
 
         // Loop subsystem — in-memory only (never tasks.db); cleared on restart.
         let loop_registry = Arc::new(crate::looping::LoopRegistry::default());
