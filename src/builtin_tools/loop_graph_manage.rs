@@ -255,8 +255,7 @@ impl LoopGraphTool {
                                 t.leader_id,
                                 truncate(&t.name, 40)
                             )),
-                            _ => out
-                                .push_str("\n    live: ⚠ target missing（team 记录已消失）"),
+                            _ => out.push_str("\n    live: ⚠ target missing（team 记录已消失）"),
                         }
                     }
                 }
