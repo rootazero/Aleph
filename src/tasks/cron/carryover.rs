@@ -454,6 +454,10 @@ mod tests {
         // Verify the .json.tmp pattern: after write, the .tmp file is gone
         // (renamed to final). If a crash happened mid-write, a reader
         // would not see a half-written .json file.
+        //
+        // The final filename is `{sanitised_id}-{hash}.json` (the hash
+        // suffix disambiguates ids that would otherwise collide on the
+        // pure-character sanitisation — see `carryover_filename`).
         let dir = TempDir::new().unwrap();
         let rec = CarryOver::new("x", "y");
         write_at(dir.path(), "atomic_job", &rec).unwrap();
@@ -462,7 +466,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(entries.iter().any(|n| n == "atomic_job.json"));
+        assert!(
+            entries.iter().any(|n| n.starts_with("atomic_job-") && n.ends_with(".json")),
+            "expected atomic_job-<hash>.json in {entries:?}"
+        );
         assert!(
             !entries.iter().any(|n| n.ends_with(".tmp")),
             "tmp file must be renamed away, entries={entries:?}",
