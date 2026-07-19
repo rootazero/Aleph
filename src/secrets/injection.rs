@@ -4,7 +4,7 @@
 //! just before outbound requests. The resolved values are tracked
 //! for downstream leak detection.
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 
 use super::placeholder::extract_secret_refs;
 use super::types::{DecryptedSecret, SecretError};
