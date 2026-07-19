@@ -36,6 +36,18 @@ pub fn render_template(
     let now = clock.now_utc();
     let mut result = template.to_string();
 
+    // Substitute {{env:VAR}} FIRST on the original template text. Any
+    // `{{env:...}}` token that arrives via `last_output` or `context_vars`
+    // would otherwise be re-expanded against the live process environment
+    // when those values are spliced in below — letting a previous run's
+    // output, or a poisoned context_vars payload, exfiltrate secrets like
+    // `{{env:AWS_SECRET_ACCESS_KEY}}` into the prompt.
+    result = ENV_RE
+        .replace_all(&result, |caps: &regex::Captures| {
+            std::env::var(&caps[1]).unwrap_or_default()
+        })
+        .to_string();
+
     if result.contains("{{now}}") {
         result = result.replace("{{now}}", &now.to_rfc3339());
     }
@@ -75,13 +87,6 @@ pub fn render_template(
             }
         }
     }
-
-    // Environment variables: {{env:VAR_NAME}}
-    result = ENV_RE
-        .replace_all(&result, |caps: &regex::Captures| {
-            std::env::var(&caps[1]).unwrap_or_default()
-        })
-        .to_string();
 
     result
 }
