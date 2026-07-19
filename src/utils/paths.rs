@@ -30,6 +30,37 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 pub(crate) static ALEPH_HOME_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(test)]
+pub(crate) struct AlephHomeEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl AlephHomeEnvGuard {
+    pub(crate) fn acquire_and_set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let lock = ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("ALEPH_HOME");
+        std::env::set_var("ALEPH_HOME", value);
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for AlephHomeEnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var("ALEPH_HOME", value),
+            None => std::env::remove_var("ALEPH_HOME"),
+        }
+    }
+}
+
 /// Get the user's home directory in a cross-platform way
 ///
 /// Tries in order:
@@ -416,8 +447,8 @@ pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<Path
     let mut dirs = Vec::new();
 
     // Global: ~/.aleph/plugins/<plugin>/skills
-    if let Ok(home) = get_home_dir() {
-        collect_plugin_skills_from_root(&home.join(".aleph").join("plugins"), &mut dirs);
+    if let Ok(config_dir) = get_config_dir() {
+        collect_plugin_skills_from_root(&config_dir.join("plugins"), &mut dirs);
     }
 
     // Project: <project|cwd>/.aleph/plugins/<plugin>/skills
@@ -478,15 +509,14 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     dirs.extend(collect_project_skills_dirs(&start_dir, stop_at));
 
     // 2. User level: global directories
+    let global_aleph = get_skills_dir()?;
+    if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
+        info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
+        dirs.push(global_aleph);
+    }
+
     if let Ok(home) = get_home_dir() {
         info!(home = %home.display(), "Checking global directories");
-
-        // ~/.aleph/skills (user + official bundled skills)
-        let global_aleph = home.join(".aleph").join("skills");
-        if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
-            info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
-            dirs.push(global_aleph);
-        }
 
         // ~/.claude/skills (Claude Code compatibility)
         let global_claude = home.join(".claude").join("skills");
@@ -645,6 +675,32 @@ mod tests {
         let aleph_idx = dirs.iter().position(|d| d == &aleph_skills);
         let claude_idx = dirs.iter().position(|d| d == &claude_skills);
         assert!(aleph_idx < claude_idx);
+    }
+
+    #[test]
+    fn aleph_home_is_authoritative_for_skill_resolver() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join("home");
+        let aleph_home = temp_dir.path().join("aleph-home");
+        let project = temp_dir.path().join("project");
+        let global_aleph = aleph_home.join("skills");
+        let legacy_aleph = home.join(".aleph").join("skills");
+        let global_claude = home.join(".claude").join("skills");
+        std::fs::create_dir_all(&global_aleph).unwrap();
+        std::fs::create_dir_all(&legacy_aleph).unwrap();
+        std::fs::create_dir_all(&global_claude).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir(project.join(".git")).unwrap();
+
+        let dirs = {
+            let _aleph_home = AlephHomeEnvGuard::acquire_and_set(&aleph_home);
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            get_all_skills_dirs(Some(&project)).unwrap()
+        };
+
+        assert!(dirs.contains(&global_aleph));
+        assert!(dirs.contains(&global_claude));
+        assert!(!dirs.contains(&legacy_aleph));
     }
 
     #[test]

@@ -272,3 +272,47 @@ fn test_unified_tools_config_serialization_round_trip() {
     let shell = deserialized.native.shell.expect("Should have shell");
     assert_eq!(shell.timeout_seconds, 45);
 }
+
+mod is_clipboard_enabled_master_switch {
+    use crate::config::types::{ClipboardToolConfig, UnifiedToolsConfig};
+
+    #[test]
+    fn master_enabled_with_no_native_override_defaults_to_enabled() {
+        // No `[unified_tools.native.clipboard]` block at all → defaults to true
+        // so the legacy config (no clipboard section) keeps the current behavior.
+        let cfg = UnifiedToolsConfig::default();
+        assert!(cfg.is_clipboard_enabled());
+    }
+
+    #[test]
+    fn master_disabled_forces_clipboard_off_regardless_of_per_tool_flag() {
+        let mut cfg = UnifiedToolsConfig::default();
+        cfg.enabled = false;
+        cfg.native.clipboard = Some(ClipboardToolConfig { enabled: true });
+        assert!(
+            !cfg.is_clipboard_enabled(),
+            "the master `unified_tools.enabled = false` switch must short-circuit \
+             clipboard even when the per-tool block re-enables it"
+        );
+    }
+
+    #[test]
+    fn master_enabled_with_per_tool_disabled_is_off() {
+        // The doc-comment on `ClipboardToolConfig::enabled` only mentions "read",
+        // but the runtime treats it as the master for read+write+paste.
+        let mut cfg = UnifiedToolsConfig::default();
+        cfg.native.clipboard = Some(ClipboardToolConfig { enabled: false });
+        assert!(
+            !cfg.is_clipboard_enabled(),
+            "the per-tool `native.clipboard.enabled = false` is the runtime \
+             master switch for read / write / paste and must be honored"
+        );
+    }
+
+    #[test]
+    fn master_enabled_with_per_tool_enabled_is_on() {
+        let mut cfg = UnifiedToolsConfig::default();
+        cfg.native.clipboard = Some(ClipboardToolConfig { enabled: true });
+        assert!(cfg.is_clipboard_enabled());
+    }
+}

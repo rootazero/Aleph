@@ -331,11 +331,17 @@ impl BuiltinToolRegistry {
             None => false,
         };
 
+        let clipboard_enabled = match config.config {
+            Some(ref cfg) => cfg.read().await.get_effective_tools_config().is_clipboard_enabled(),
+            None => true,
+        };
+
         let desktop_tool = DesktopTool::new()
             .with_platform(Arc::clone(&desktop_platform))
             .with_vision_bridge(Arc::clone(&vision_bridge))
             .with_approval_policy(Arc::clone(&approval_policy))
-            .with_allow_global_pointer(allow_global_pointer);
+            .with_allow_global_pointer(allow_global_pointer)
+            .with_clipboard_enabled(clipboard_enabled);
 
         // AX query tools (macOS + Windows UIA; degrade gracefully on Linux).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()
@@ -357,7 +363,8 @@ impl BuiltinToolRegistry {
         // behind the same approval policy DesktopTool uses, so an agent cannot
         // bypass that gate by routing the same OS op through the `system` tool.
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform))
-            .with_approval_policy(Arc::clone(&approval_policy));
+            .with_approval_policy(Arc::clone(&approval_policy))
+            .with_clipboard_enabled(clipboard_enabled);
         // Automation runs arbitrary host code (AppleScript/JXA/shell/PowerShell)
         // + Shortcuts — gate it behind the same approval policy as DesktopTool/
         // PimTool via the `DesktopAutomation` action type (permissive default =

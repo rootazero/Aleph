@@ -473,6 +473,31 @@ mod tests {
     }
 
     #[test]
+    fn aleph_home_is_authoritative_for_component_discovery() {
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let aleph_home = temp.path().join("aleph-home");
+        let claude_home = home.join(".claude");
+        std::fs::create_dir_all(aleph_home.join("skills")).unwrap();
+        std::fs::create_dir_all(claude_home.join("skills")).unwrap();
+
+        let scanner = {
+            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            DirectoryScanner::new(&DiscoveryConfig {
+                working_dir: temp.path().to_path_buf(),
+                scan_claude_dirs: true,
+                scan_project_dirs: false,
+                max_upward_depth: 10,
+            })
+            .unwrap()
+        };
+
+        assert_eq!(scanner.aleph_home, aleph_home);
+        assert_eq!(scanner.claude_home, Some(claude_home));
+    }
+
+    #[test]
     fn test_scanner_get_directories() {
         let temp = TempDir::new().unwrap();
         let root = create_test_structure(&temp);

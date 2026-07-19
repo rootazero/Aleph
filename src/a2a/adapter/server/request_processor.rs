@@ -106,6 +106,14 @@ impl A2ARequestProcessor {
         request: JsonRpcRequest,
         auth: A2AAuthPrincipal,
     ) -> JsonRpcResponse {
+        if request.jsonrpc != "2.0" {
+            return JsonRpcResponse::error(
+                request.id,
+                -32600,
+                "Invalid request: jsonrpc field must be \"2.0\"",
+            );
+        }
+
         match request.method.as_str() {
             "message/send" => self.handle_message_send(request, auth).await,
             "tasks/get" => self.handle_tasks_get(request, auth).await,
@@ -177,6 +185,39 @@ impl A2ARequestProcessor {
             .get("taskId")
             .and_then(|v| v.as_str())
             .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
+
+        if let Some(push_params) = request.params.get("pushNotificationConfig").cloned() {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct InlinePushConfig {
+                url: String,
+                #[serde(default)]
+                token: Option<String>,
+                #[serde(default)]
+                events: Vec<String>,
+            }
+            match serde_json::from_value::<InlinePushConfig>(push_params) {
+                Ok(inline) => {
+                    let push_config =
+                        crate::a2a::service::notification::PushNotificationConfig {
+                            task_id: task_id.clone(),
+                            url: inline.url,
+                            token: inline.token,
+                            events: inline.events,
+                        };
+                    if let Err(e) = self.state.notification.set_config(push_config).await {
+                        return JsonRpcResponse::from_a2a_error(request.id, &e);
+                    }
+                }
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32602,
+                        &format!("Invalid params: invalid 'pushNotificationConfig': {e}"),
+                    );
+                }
+            }
+        }
 
         let session_id = request
             .params
@@ -937,6 +978,140 @@ mod tests {
             assert!(resp.error.is_some());
             let err = resp.error.unwrap();
             assert_eq!(err["code"], -32005); // Forbidden
+        }
+
+        #[tokio::test]
+        async fn invalid_jsonrpc_version_returns_invalid_request() {
+            let processor = A2ARequestProcessor::new(make_state());
+            let request = JsonRpcRequest {
+                jsonrpc: "1.0".to_string(),
+                method: "message/send".to_string(),
+                params: serde_json::json!({
+                    "message": {
+                        "messageId": "m1",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "hi"}]
+                    }
+                }),
+                id: Some(Value::Number(1.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.result.is_none());
+            let err = resp.error.expect("invalid jsonrpc version must error");
+            assert_eq!(err["code"], -32600);
+        }
+
+        #[tokio::test]
+        async fn missing_jsonrpc_version_returns_invalid_request() {
+            let processor = A2ARequestProcessor::new(make_state());
+            let request = JsonRpcRequest {
+                jsonrpc: String::new(),
+                method: "tasks/get".to_string(),
+                params: serde_json::json!({"id": "task-1"}),
+                id: Some(Value::Number(2.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.error.is_some());
+            assert_eq!(resp.error.unwrap()["code"], -32600);
+        }
+
+        #[tokio::test]
+        async fn message_send_with_push_notification_config_registers_config() {
+            let state = make_state();
+            let processor = A2ARequestProcessor::new(Arc::clone(&state));
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "message/send".to_string(),
+                params: serde_json::json!({
+                    "message": {
+                        "messageId": "m-push",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "hi"}]
+                    },
+                    "taskId": "task-push-1",
+                    "pushNotificationConfig": {
+                        "url": "https://8.8.8.8/notify",
+                        "token": "secret-token",
+                        "events": ["status-update"]
+                    }
+                }),
+                id: Some(Value::Number(11.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.error.is_none(), "message/send should succeed");
+
+            let stored = state
+                .notification
+                .get_config("task-push-1")
+                .await
+                .expect("get_config should not error")
+                .expect("push config should be registered under task-push-1");
+            assert_eq!(stored.url, "https://8.8.8.8/notify");
+            assert_eq!(stored.token.as_deref(), Some("secret-token"));
+            assert_eq!(stored.events, vec!["status-update".to_string()]);
+        }
+
+        #[tokio::test]
+        async fn message_send_generates_task_id_registers_push_config_under_generated_id()
+         {
+            let state = make_state();
+            let processor = A2ARequestProcessor::new(Arc::clone(&state));
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "message/send".to_string(),
+                params: serde_json::json!({
+                    "message": {
+                        "messageId": "m-push-2",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "hi"}]
+                    },
+                    "pushNotificationConfig": {
+                        "url": "https://8.8.8.8/notify"
+                    }
+                }),
+                id: Some(Value::Number(12.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.error.is_none());
+            let task_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+            assert!(uuid::Uuid::parse_str(&task_id).is_ok());
+
+            let stored = state
+                .notification
+                .get_config(&task_id)
+                .await
+                .expect("get_config should not error")
+                .expect("push config should be registered under generated task id");
+            assert_eq!(stored.url, "https://8.8.8.8/notify");
+            assert!(stored.token.is_none());
+        }
+
+        #[tokio::test]
+        async fn message_send_without_push_config_does_not_register() {
+            let state = make_state();
+            let processor = A2ARequestProcessor::new(Arc::clone(&state));
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "message/send".to_string(),
+                params: serde_json::json!({
+                    "message": {
+                        "messageId": "m-nopush",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "hi"}]
+                    },
+                    "taskId": "task-nopush"
+                }),
+                id: Some(Value::Number(13.into())),
+            };
+            let resp = processor.process(request, make_auth()).await;
+            assert!(resp.error.is_none());
+
+            let stored = state
+                .notification
+                .get_config("task-nopush")
+                .await
+                .expect("get_config should not error");
+            assert!(stored.is_none(), "no push config must be stored");
         }
     }
 }

@@ -49,17 +49,23 @@ impl MediaTool {
     /// Check the approval policy for a capture action. Returns `Some(refusal)`
     /// when denied or awaiting confirmation, `None` when allowed (or the action
     /// is read-only, or no policy is configured).
-    async fn check_capture_approval(&self, action: &str) -> Option<MediaOutput> {
+    async fn check_capture_approval(
+        &self,
+        action: &str,
+        target: String,
+        display_target: String,
+    ) -> Option<MediaOutput> {
         if !Self::is_capture_action(action) {
             return None;
         }
         let policy = self.approval_policy.as_ref()?;
 
-        let target = format!("media {action}");
-        let (agent_id, context) = crate::approval::audit_identity("media", action, &target);
+        let (agent_id, context) =
+            crate::approval::audit_identity("media", action, &display_target);
         let request = ActionRequest {
             action_type: ActionType::MediaCapture,
             target,
+            display_target,
             agent_id,
             context,
             timestamp: chrono::Utc::now(),
@@ -153,7 +159,36 @@ Examples:
         // Gate camera/mic capture before touching the sensor. Read-only actions
         // (device list / STT over a file) and the no-policy path fall straight
         // through.
-        if let Some(refusal) = self.check_capture_approval(&args.action).await {
+        let (capture_target, capture_display) = if Self::is_capture_action(&args.action) {
+            (
+                match args.action.as_str() {
+                    "camera_snap" => serde_json::json!({
+                        "action": "camera_snap",
+                        "quality": args.quality,
+                    })
+                    .to_string(),
+                    "camera_clip" => serde_json::json!({
+                        "action": "camera_clip",
+                        "duration": args.duration,
+                        "with_audio": args.with_audio,
+                    })
+                    .to_string(),
+                    "record_audio" => serde_json::json!({
+                        "action": "record_audio",
+                        "duration": args.duration,
+                    })
+                    .to_string(),
+                    _ => format!("media {}", args.action),
+                },
+                format!("media {}", args.action),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+        if let Some(refusal) = self
+            .check_capture_approval(&args.action, capture_target, capture_display)
+            .await
+        {
             return Ok(refusal);
         }
 
@@ -287,5 +322,186 @@ Examples:
                 )),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approval::{ApprovalPolicy, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
+    use crate::tools::AlephTool;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    struct CapturePolicy {
+        captured: Mutex<Vec<ActionRequest>>,
+    }
+
+    #[async_trait]
+    impl ApprovalPolicy for CapturePolicy {
+        async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
+            self.captured.lock().unwrap().push(request.clone());
+            ApprovalDecision::Allow
+        }
+        async fn record(&self, _request: &ActionRequest, _decision: &ApprovalDecision) {}
+    }
+
+    struct StubMedia;
+
+    #[async_trait]
+    impl aleph_desktop::traits::MediaCapability for StubMedia {
+        async fn camera_snap(
+            &self,
+            _config: aleph_desktop::media_types::CameraSnapConfig,
+        ) -> aleph_desktop::Result<aleph_desktop::media_types::CameraSnapResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("stub".into()))
+        }
+        async fn camera_clip(
+            &self,
+            _config: aleph_desktop::media_types::CameraClipConfig,
+        ) -> aleph_desktop::Result<aleph_desktop::media_types::CameraClipResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("stub".into()))
+        }
+        async fn record_audio(
+            &self,
+            _config: aleph_desktop::media_types::AudioRecordConfig,
+        ) -> aleph_desktop::Result<aleph_desktop::media_types::AudioRecordResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("stub".into()))
+        }
+        async fn list_audio_devices(
+            &self,
+        ) -> aleph_desktop::Result<Vec<aleph_desktop::media_types::AudioDeviceInfo>> {
+            Ok(vec![])
+        }
+        async fn speech_to_text(
+            &self,
+            _audio_path: &str,
+            _config: aleph_desktop::media_types::SpeechToTextConfig,
+        ) -> aleph_desktop::Result<aleph_desktop::media_types::SpeechToTextResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("stub".into()))
+        }
+    }
+
+    struct StubPlatform(StubMedia);
+
+    impl aleph_desktop::DesktopPlatform for StubPlatform {
+        fn platform_name(&self) -> &str {
+            "stub"
+        }
+        fn screen(&self) -> Option<&dyn aleph_desktop::traits::ScreenCapability> {
+            None
+        }
+        fn pim(&self) -> Option<&dyn aleph_desktop::traits::PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn aleph_desktop::traits::SystemCapability> {
+            None
+        }
+        fn automation(&self) -> Option<&dyn aleph_desktop::traits::AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn aleph_desktop::traits::PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn aleph_desktop::traits::MediaCapability> {
+            Some(&self.0)
+        }
+    }
+
+    fn tool_with_capture() -> (MediaTool, Arc<CapturePolicy>) {
+        let policy = Arc::new(CapturePolicy {
+            captured: Mutex::new(Vec::new()),
+        });
+        let dyn_policy: Arc<dyn ApprovalPolicy> = policy.clone();
+        let tool = MediaTool::new(Arc::new(StubPlatform(StubMedia)))
+            .with_approval_policy(dyn_policy);
+        (tool, policy)
+    }
+
+    fn deny_policy_blocking(secret_substring: &str) -> Arc<ConfigApprovalPolicy> {
+        use std::collections::HashMap;
+        let pattern = format!("*{secret_substring}*");
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            version: 1,
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::MediaCapture,
+                pattern,
+            }],
+        });
+        Arc::new(policy)
+    }
+
+    #[tokio::test]
+    async fn camera_clip_target_carries_with_audio_and_duration() {
+        let (tool, capture) = tool_with_capture();
+        let args = MediaArgs {
+            action: "camera_clip".into(),
+            quality: None,
+            duration: Some(7.5),
+            with_audio: Some(true),
+            audio_path: None,
+            language: None,
+        };
+        let _ = AlephTool::call(&tool, args).await.unwrap();
+        let captured = capture.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(req.action_type, ActionType::MediaCapture);
+        assert!(
+            req.target.contains("\"with_audio\":true"),
+            "camera_clip target must surface the with_audio flag for blocklist matching, got: {}",
+            req.target
+        );
+        assert!(
+            req.target.contains("\"duration\":7.5"),
+            "camera_clip target must surface the duration for blocklist matching, got: {}",
+            req.target
+        );
+    }
+
+    #[tokio::test]
+    async fn record_audio_target_carries_duration() {
+        let (tool, capture) = tool_with_capture();
+        let args = MediaArgs {
+            action: "record_audio".into(),
+            quality: None,
+            duration: Some(120.0),
+            with_audio: None,
+            audio_path: None,
+            language: None,
+        };
+        let _ = AlephTool::call(&tool, args).await.unwrap();
+        let captured = capture.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert!(
+            req.target.contains("\"duration\":120.0"),
+            "record_audio target must surface the duration for blocklist matching, got: {}",
+            req.target
+        );
+    }
+
+    #[tokio::test]
+    async fn blocklist_matching_with_audio_true_actually_blocks() {
+        let policy = deny_policy_blocking("\"with_audio\":true");
+        let tool = MediaTool::new(Arc::new(StubPlatform(StubMedia)))
+            .with_approval_policy(policy as Arc<dyn ApprovalPolicy>);
+        let args = MediaArgs {
+            action: "camera_clip".into(),
+            quality: None,
+            duration: Some(3.0),
+            with_audio: Some(true),
+            audio_path: None,
+            language: None,
+        };
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!out.success);
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("denied"),
+            "expected denial when blocklist matches with_audio=true, got: {msg}"
+        );
     }
 }

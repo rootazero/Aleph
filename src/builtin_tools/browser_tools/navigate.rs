@@ -104,7 +104,7 @@ impl AlephTool for BrowserNavigateTool {
         // Goto navigates the current tab to a new URL — routed through the
         // backend's `navigate` (SSRF-checked) rather than a JS history call.
         if let NavigateAction::Goto { url } = &args.action {
-            if let Err(violation) = self.manager.check_navigation(url) {
+            if let Err(violation) = self.manager.check_navigation(url).await {
                 return Ok(BrowserNavigateOutput {
                     success: false,
                     message: Some(format!("Blocked: {violation}")),

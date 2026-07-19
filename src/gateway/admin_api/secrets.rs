@@ -11,6 +11,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::admin_api::AdminApiState;
+use crate::secrets::validate_secret_name;
 
 pub fn router() -> Router<AdminApiState> {
     Router::new()
@@ -33,11 +34,12 @@ async fn create_or_update_secret(
     State(state): State<AdminApiState>,
     Json(body): Json<CreateOrUpdateSecretRequest>,
 ) -> Result<Json<SecretSummary>, (StatusCode, String)> {
+    let key = validate_secret_name(&body.key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     state
         .shared_token
-        .store_secret(&body.key, &body.value)
+        .store_secret(&key, &body.value)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(SecretSummary { key: body.key }))
+    Ok(Json(SecretSummary { key }))
 }
 
 async fn list_secrets(
@@ -59,6 +61,7 @@ async fn get_secret(
     State(state): State<AdminApiState>,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let key = validate_secret_name(&key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     match state.shared_token.get_secret(&key) {
         Ok(Some(secret)) => Ok(Json(serde_json::json!({
             "key": key,
@@ -73,6 +76,7 @@ async fn delete_secret(
     State(state): State<AdminApiState>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let key = validate_secret_name(&key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let removed = state
         .shared_token
         .delete_secret(&key)
@@ -217,5 +221,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn invalid_secret_names_return_400() {
+        let (app, _dir) = test_app();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "key": "bad name",
+            "value": "secret"
+        }))
+        .unwrap();
+        let requests = [
+            Request::builder()
+                .method("POST")
+                .uri("/secrets")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+            Request::builder()
+                .method("GET")
+                .uri("/secrets/bad$name")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/secrets/bad$name")
+                .body(Body::empty())
+                .unwrap(),
+        ];
+
+        let mut statuses = Vec::new();
+        for request in requests {
+            statuses.push(
+                app.clone()
+                    .oneshot(request)
+                    .await
+                    .unwrap()
+                    .status(),
+            );
+        }
+        assert_eq!(statuses, vec![StatusCode::BAD_REQUEST; 3]);
     }
 }

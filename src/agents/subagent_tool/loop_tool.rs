@@ -17,6 +17,7 @@ use crate::tools::runtime::{LoopTool, ToolResult};
 use tokio_util::sync::CancellationToken;
 
 use super::parse::parse_args;
+use super::spawn::CancelGuard;
 use super::types::{BatchTask, SubagentAction};
 use super::SubagentTool;
 
@@ -620,6 +621,7 @@ impl LoopTool for SubagentTool {
                     let batch_cancel = self.cancel_for_child_with(&cancel);
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
                     handles.push(tokio::spawn(async move {
+                        let _cancel_guard = CancelGuard::new(batch_cancel.clone());
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
                             .await;
@@ -733,6 +735,7 @@ impl LoopTool for SubagentTool {
                         strategy: None,
                     };
                     let agg_cancel = self.cancel_for_child_with(&cancel);
+                    let _agg_cancel_guard = CancelGuard::new(agg_cancel.clone());
                     let runtime = self.build_runtime(child_chain.clone(), agg_cancel.clone());
 
                     let agg_outcome = runtime.run(runtime_config).await;
@@ -881,6 +884,7 @@ impl LoopTool for SubagentTool {
             };
 
             let child_cancel = self.cancel_for_child_with(&cancel);
+            let _child_cancel_guard = CancelGuard::new(child_cancel.clone());
             let runtime = self.build_runtime(child_chain, child_cancel.clone());
 
             let run_outcome = runtime.run(runtime_config).await;

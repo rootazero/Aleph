@@ -262,18 +262,31 @@ impl IncomingHandler {
             self.root.join(raw)
         };
         let normalized = lexical_normalize(&joined);
-        if normalized.starts_with(&self.root) {
-            Ok(normalized)
-        } else {
+        if !normalized.starts_with(&self.root) {
             warn!(
                 requested,
                 root = %self.root.display(),
                 "ACP incoming: filesystem access denied outside workspace"
             );
-            Err(HandlerOutcome::Error {
+            return Err(HandlerOutcome::Error {
                 code: PERMISSION_DENIED,
                 message: format!("path '{requested}' is outside the session workspace"),
-            })
+            });
+        }
+        match canonicalize_within_root(&self.root, &normalized) {
+            Ok(canonical) => Ok(canonical),
+            Err(e) => {
+                warn!(
+                    requested,
+                    root = %self.root.display(),
+                    error = %e,
+                    "ACP incoming: filesystem access denied (symlink resolution)"
+                );
+                Err(HandlerOutcome::Error {
+                    code: PERMISSION_DENIED,
+                    message: format!("path '{requested}' is outside the session workspace"),
+                })
+            }
         }
     }
 }
@@ -303,6 +316,54 @@ fn lexical_normalize(path: &Path) -> PathBuf {
         }
     }
     result
+}
+
+/// Resolve `path` against the symlink-canonicalized `root`, walking
+/// components one at a time so a symlink pointing outside the workspace
+/// (or to a nonexistent target) is rejected *before* the syscall that
+/// would otherwise follow it. The input `path` is expected to be lexically
+/// normalized and absolute — `confine` guarantees that.
+fn canonicalize_within_root(root: &Path, path: &Path) -> std::io::Result<PathBuf> {
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut current: PathBuf = PathBuf::new();
+
+    for comp in path.components() {
+        match comp {
+            Component::Prefix(_) | Component::RootDir => current.push(comp.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if current.parent().is_some() {
+                    current.pop();
+                }
+            }
+            Component::Normal(name) => {
+                let candidate = current.join(name);
+                match std::fs::symlink_metadata(&candidate) {
+                    Ok(meta) if meta.is_symlink() => {
+                        let target = std::fs::read_link(&candidate)?;
+                        let base = candidate.parent().unwrap_or_else(|| Path::new(""));
+                        let resolved = if target.is_absolute() {
+                            lexical_normalize(&target)
+                        } else {
+                            lexical_normalize(&base.join(&target))
+                        };
+                        current = std::fs::canonicalize(&resolved)?;
+                    }
+                    Ok(_) => current.push(name),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => current.push(name),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+
+    if !current.starts_with(&canonical_root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "path resolves outside workspace",
+        ));
+    }
+    Ok(current)
 }
 
 /// Apply an optional 1-based `line`/`limit` window to file content. Absent
@@ -362,6 +423,14 @@ fn pick_option(options: &[Value], wanted: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unique_suffix() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}_{}", std::process::id(), nanos)
+    }
 
     fn handler_at(dir: &Path, policy: PermissionPolicy) -> IncomingHandler {
         IncomingHandler::new(Some(dir.to_str().unwrap()), policy)
@@ -596,5 +665,233 @@ mod tests {
         assert_eq!(apply_line_window("a\nb", None, None), "a\nb");
         assert_eq!(apply_line_window("a\nb\nc", Some(2), None), "b\nc");
         assert_eq!(apply_line_window("a\nb\nc", Some(5), None), "");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_inside_root_round_trips() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("acp_sym_in_{}", unique_suffix()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("real.txt"), "inner-content\n")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(dir.join("real_dir")).await.unwrap();
+        tokio::fs::write(dir.join("real_dir/nested.txt"), "nested\n")
+            .await
+            .unwrap();
+        symlink(dir.join("real.txt"), dir.join("link_file")).unwrap();
+        symlink(dir.join("real_dir"), dir.join("link_dir")).unwrap();
+
+        let h = handler_at(&dir, PermissionPolicy::ApproveAll);
+
+        let read_link = h
+            .handle("fs/read_text_file", &json!({ "path": "link_file" }))
+            .await;
+        match read_link {
+            HandlerOutcome::Result(v) => {
+                assert!(v["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("inner-content"));
+            }
+            other => panic!("inside-root symlink read should succeed, got {other:?}"),
+        }
+
+        let read_nested = h
+            .handle("fs/read_text_file", &json!({ "path": "link_dir/nested.txt" }))
+            .await;
+        match read_nested {
+            HandlerOutcome::Result(v) => {
+                assert!(v["content"].as_str().unwrap().contains("nested"));
+            }
+            other => panic!("inside-root symlinked dir read should succeed, got {other:?}"),
+        }
+
+        let write_through = h
+            .handle(
+                "fs/write_text_file",
+                &json!({ "path": "link_dir/written.txt", "content": "ok" }),
+            )
+            .await;
+        assert!(matches!(write_through, HandlerOutcome::Result(_)));
+        let written = tokio::fs::read_to_string(dir.join("real_dir/written.txt"))
+            .await
+            .unwrap();
+        assert_eq!(written, "ok");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_outside_root_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("acp_sym_out_{}", unique_suffix()));
+        let outside = std::env::temp_dir().join(format!("acp_sym_out_target_{}", unique_suffix()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        tokio::fs::write(outside.join("secret.txt"), "outside-data\n")
+            .await
+            .unwrap();
+        tokio::fs::write(outside.join("nested.txt"), "nested-out\n")
+            .await
+            .unwrap();
+        symlink(&outside, dir.join("escape")).unwrap();
+        symlink(outside.join("nested.txt"), dir.join("escape_file")).unwrap();
+
+        let h = handler_at(&dir, PermissionPolicy::ApproveAll);
+
+        let read_through_dir = h
+            .handle("fs/read_text_file", &json!({ "path": "escape/secret.txt" }))
+            .await;
+        match read_through_dir {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("outside-root symlink dir read must be denied, got {other:?}"),
+        }
+
+        let read_direct = h
+            .handle("fs/read_text_file", &json!({ "path": "escape_file" }))
+            .await;
+        match read_direct {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("outside-root symlink file read must be denied, got {other:?}"),
+        }
+
+        let write_through_dir = h
+            .handle(
+                "fs/write_text_file",
+                &json!({ "path": "escape/new.txt", "content": "leak" }),
+            )
+            .await;
+        match write_through_dir {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("outside-root symlink dir write must be denied, got {other:?}"),
+        }
+        assert!(
+            !outside.join("new.txt").exists(),
+            "write through escape symlink must not have created a file outside the workspace"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::remove_dir_all(&outside).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_symlink_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("acp_dang_{}", unique_suffix()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let bogus = format!(
+            "/definitely/does/not/exist/aleph_acp_{}",
+            unique_suffix()
+        );
+        symlink(&bogus, dir.join("dangle")).unwrap();
+        let file_link = format!(
+            "/definitely/does/not/exist/aleph_acp_file_{}",
+            unique_suffix()
+        );
+        symlink(&file_link, dir.join("dangle_file")).unwrap();
+
+        let h = handler_at(&dir, PermissionPolicy::ApproveAll);
+
+        let read = h
+            .handle("fs/read_text_file", &json!({ "path": "dangle/anything.txt" }))
+            .await;
+        match read {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("dangling symlink read must be denied, got {other:?}"),
+        }
+
+        let read_direct = h
+            .handle("fs/read_text_file", &json!({ "path": "dangle_file" }))
+            .await;
+        match read_direct {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("dangling symlink final read must be denied, got {other:?}"),
+        }
+
+        let write = h
+            .handle(
+                "fs/write_text_file",
+                &json!({ "path": "dangle/new.txt", "content": "x" }),
+            )
+            .await;
+        match write {
+            HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
+            other => panic!("dangling symlink write must be denied, got {other:?}"),
+        }
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn new_file_write_normal_succeeds() {
+        let dir = std::env::temp_dir().join(format!("acp_new_{}", unique_suffix()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let h = handler_at(&dir, PermissionPolicy::ApproveAll);
+        let out = h
+            .handle(
+                "fs/write_text_file",
+                &json!({ "path": "fresh/new.txt", "content": "data" }),
+            )
+            .await;
+        assert!(matches!(out, HandlerOutcome::Result(_)));
+        let written = tokio::fs::read_to_string(dir.join("fresh/new.txt"))
+            .await
+            .unwrap();
+        assert_eq!(written, "data");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tmp_style_root_resolves_through_symlink() {
+        let ws = std::path::PathBuf::from("/tmp").join(format!("aleph_acp_tmp_{}", unique_suffix()));
+        let _ = tokio::fs::remove_dir_all(&ws).await;
+        tokio::fs::create_dir_all(&ws).await.unwrap();
+        tokio::fs::write(ws.join("hello.txt"), "via-tmp\n")
+            .await
+            .unwrap();
+
+        let real_canon = std::fs::canonicalize(&ws).unwrap();
+        assert_ne!(
+            ws, real_canon,
+            "sanity: /tmp must resolve through a symlink for this test"
+        );
+
+        let h = handler_at(&ws, PermissionPolicy::ApproveAll);
+        let abs = ws.join("hello.txt").to_str().unwrap().to_string();
+        let read = h
+            .handle("fs/read_text_file", &json!({ "path": abs }))
+            .await;
+        match read {
+            HandlerOutcome::Result(v) => {
+                assert!(v["content"].as_str().unwrap().contains("via-tmp"));
+            }
+            other => panic!("read via /tmp symlink must succeed, got {other:?}"),
+        }
+
+        let write = h
+            .handle(
+                "fs/write_text_file",
+                &json!({ "path": "written.txt", "content": "ok" }),
+            )
+            .await;
+        assert!(matches!(write, HandlerOutcome::Result(_)));
+        let written = tokio::fs::read_to_string(ws.join("written.txt"))
+            .await
+            .unwrap();
+        assert_eq!(written, "ok");
+
+        let _ = tokio::fs::remove_dir_all(&ws).await;
     }
 }

@@ -42,30 +42,7 @@ pub(super) async fn init_tool_catalog(
     tool_catalog.register_builtin_tools().await;
 
     // Also register executor builtin tools as commands (search, screenshot, ocr, etc.)
-    for def in BUILTIN_TOOL_DEFINITIONS {
-        use alephcore::tool_metadata::{
-            shorthand_aliases_for, ToolSource as DToolSource, UnifiedTool as DUnifiedTool,
-        };
-        let mut tool = DUnifiedTool::new(
-            format!("builtin:{}", def.name),
-            def.name,
-            def.description,
-            DToolSource::Builtin,
-        );
-        // Seed discoverable slash aliases from the single alias source
-        // (`tool_metadata::aliases`) — the same table the execution fast path
-        // maps against. Only tools present here (not separately curated in
-        // `register_builtin_tools`) are the winning catalog entry, so seeding in
-        // this loop is correct for `/model`→select_model, `/status`→doctor,
-        // `/config`→self_config, `/memories`→memory_search, `/agent(s)`→
-        // agent_switch. Curated-and-in-defs names (skill_list) carry their alias
-        // on the curated entry instead, since that one wins.
-        let aliases = shorthand_aliases_for(def.name);
-        if !aliases.is_empty() {
-            tool = tool.with_aliases(aliases);
-        }
-        tool_catalog.register_with_conflict_resolution(tool).await;
-    }
+    register_builtin_definitions(&tool_catalog).await;
 
     // Runtime-only shorthand targets: provider-gated generation tools
     // (video/audio/speech_generate) that are NOT in BUILTIN_TOOL_DEFINITIONS,
@@ -485,4 +462,84 @@ pub(super) async fn init_tool_catalog(
     }
 
     tool_catalog
+}
+
+/// Register every entry in `BUILTIN_TOOL_DEFINITIONS` as a `ToolCatalog` row,
+/// except for canonical names that the curated `register_builtin_tools` set
+/// has already taken (`skill_list`, `skill_read`, `session_new`,
+/// `cron_manage`). Without the skip-if-conflict guard, the same-priority
+/// Builtin conflict resolves by renaming the defs entry to `name-system` — a
+/// ghost the LLM cannot dispatch, and one that crowds the `/help` listing
+/// with renamed lookalikes. The curated entry's metadata and aliases win
+/// because it was registered first.
+pub(super) async fn register_builtin_definitions(
+    tool_catalog: &alephcore::tool_metadata::ToolCatalog,
+) {
+    use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
+    use alephcore::tool_metadata::{
+        shorthand_aliases_for, ToolSource as DToolSource, UnifiedTool as DUnifiedTool,
+    };
+
+    for def in BUILTIN_TOOL_DEFINITIONS {
+        if tool_catalog.check_conflict(def.name).await.is_some() {
+            continue;
+        }
+        let mut tool = DUnifiedTool::new(
+            format!("builtin:{}", def.name),
+            def.name,
+            def.description,
+            DToolSource::Builtin,
+        );
+        // Seed discoverable slash aliases from the single alias source
+        // (`tool_metadata::aliases`) — the same table the execution fast path
+        // maps against. Only tools present here (not separately curated in
+        // `register_builtin_tools`) are the winning catalog entry, so seeding in
+        // this loop is correct for `/model`→select_model, `/status`→doctor,
+        // `/config`→self_config, `/memories`→memory_search, `/agent(s)`→
+        // agent_switch. Curated-and-in-defs names (skill_list) carry their alias
+        // on the curated entry instead, since that one wins.
+        let aliases = shorthand_aliases_for(def.name);
+        if !aliases.is_empty() {
+            tool = tool.with_aliases(aliases);
+        }
+        tool_catalog.register_with_conflict_resolution(tool).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::register_builtin_definitions;
+    use alephcore::tool_metadata::ToolCatalog;
+
+    /// After curated `register_builtin_tools()` runs first, the defs loop
+    /// must NOT register the overlapping builtins a second time —
+    /// `skill_list`, `skill_read`, `session_new`, `cron_manage` are all
+    /// already in the curated set, and a second `register_with_conflict_resolution`
+    /// of a same-priority `Builtin` would rename the defs entry to
+    /// `name-system`, producing a ghost the LLM cannot dispatch.
+    #[tokio::test]
+    async fn register_builtin_definitions_skips_curated_names() {
+        let catalog = ToolCatalog::new();
+        catalog.register_builtin_tools().await;
+
+        register_builtin_definitions(&catalog).await;
+
+        let names: Vec<String> = catalog
+            .list_root_commands()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        let ghosts: Vec<&String> = names.iter().filter(|n| n.ends_with("-system")).collect();
+        assert!(
+            ghosts.is_empty(),
+            "no `name-system` ghost renames after curated + defs: {names:?}"
+        );
+        for canonical in ["skill_list", "skill_read", "session_new", "cron_manage"] {
+            assert!(
+                catalog.check_conflict(canonical).await.is_some(),
+                "curated entry for `{canonical}` must still be registered"
+            );
+        }
+    }
 }

@@ -62,6 +62,7 @@ pub struct DesktopTool {
     /// Default `false` (fail closed). Only consulted on a platform that *has* a
     /// background rail (see [`native`]); elsewhere it is inert.
     pub(super) allow_global_pointer: bool,
+    pub(super) clipboard_enabled: bool,
 }
 
 impl DesktopTool {
@@ -74,6 +75,7 @@ impl DesktopTool {
             last_run_id: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
             vision_bridge: None,
             allow_global_pointer: false,
+            clipboard_enabled: true,
         }
     }
 
@@ -87,6 +89,12 @@ impl DesktopTool {
     #[must_use]
     pub fn with_allow_global_pointer(mut self, allow: bool) -> Self {
         self.allow_global_pointer = allow;
+        self
+    }
+
+    #[must_use]
+    pub fn with_clipboard_enabled(mut self, enabled: bool) -> Self {
+        self.clipboard_enabled = enabled;
         self
     }
 
@@ -343,6 +351,7 @@ impl DesktopTool {
         let request = ActionRequest {
             action_type,
             target: target.to_string(),
+            display_target: String::new(),
             agent_id,
             context,
             timestamp: chrono::Utc::now(),
@@ -772,6 +781,25 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
                     });
                 }
             }
+        }
+
+        if !self.clipboard_enabled
+            && matches!(
+                args.action.as_str(),
+                "clipboard_read" | "clipboard_write" | "paste"
+            )
+        {
+            return Ok(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some(
+                    "Clipboard actions (clipboard_read / clipboard_write / paste) are \
+                     disabled by configuration (UnifiedToolsConfig.clipboard.enabled = \
+                     false). Set [unified_tools.native.clipboard] enabled = true (or omit \
+                     the section) to allow them."
+                        .to_string(),
+                ),
+            });
         }
 
         // 1. Unconditional safety hard-block (sits below the approval policy).

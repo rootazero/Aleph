@@ -73,6 +73,7 @@ mod tests {
         ActionRequest {
             action_type,
             target: target.to_string(),
+            display_target: String::new(),
             agent_id: "test-agent".to_string(),
             context: "test context".to_string(),
             timestamp: Utc::now(),

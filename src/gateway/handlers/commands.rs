@@ -514,10 +514,19 @@ pub async fn handle_execute(
             )
         }
         None => {
-            // Not resolved — check if the first word is a namespace
+            // Not resolved — check if the first word is a namespace. Strip
+            // the Telegram `@botname` suffix first so `/session@MyBot` is
+            // classified as the `session` namespace, not as an unknown
+            // `session@mybot` token that misses every prefix check and the
+            // "did you mean?" suggester (the same suffix is already
+            // stripped by `resolve_command` on the happy path).
             let without_slash = slash_input.trim_start_matches('/');
             let words: Vec<&str> = without_slash.split_whitespace().collect();
-            let first_word = words.first().map(|w| w.to_lowercase()).unwrap_or_default();
+            let first_word = words
+                .first()
+                .copied()
+                .map(|w| w.split_once('@').map_or(w, |(n, _)| n).to_lowercase())
+                .unwrap_or_default();
 
             if tool_registry.is_namespace(&first_word).await {
                 // It's a known namespace
@@ -787,6 +796,90 @@ mod tests {
         assert_eq!(result["needs_interaction"], true);
         assert_eq!(result["namespace"], "session");
         assert!(result["children"].is_array());
+        let children = result["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    /// Telegram-style `@botname` suffix on a bare namespace input must still
+    /// resolve to the namespace listing, not silently fall through to the
+    /// "unknown command" + did-you-mean path.
+    #[tokio::test]
+    async fn test_execute_namespace_only_with_at_bot_suffix() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = Arc::new(ToolCatalog::new());
+
+        for (id, name, desc) in [
+            ("builtin:session_new", "session_new", "Start new session"),
+            ("builtin:session_list", "session_list", "List sessions"),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    id,
+                    name,
+                    desc,
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/session@MyBot"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        assert_eq!(result["needs_interaction"], true);
+        assert_eq!(result["namespace"], "session");
+        let children = result["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    /// `@botname` on a subcommand typo must still surface the unknown-
+    /// subcommand error keyed under the right namespace, with the bot
+    /// suffix dropped before the namespace check.
+    #[tokio::test]
+    async fn test_execute_bad_subcommand_with_at_bot_suffix() {
+        use crate::tool_metadata::ToolSource;
+
+        let registry = Arc::new(ToolCatalog::new());
+
+        for (id, name, desc) in [
+            ("builtin:session_new", "session_new", "Start new session"),
+            ("builtin:session_list", "session_list", "List sessions"),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    id,
+                    name,
+                    desc,
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/session@MyBot nw"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        assert_eq!(result["needs_interaction"], true);
+        assert_eq!(result["namespace"], "session");
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown subcommand"));
         let children = result["children"].as_array().unwrap();
         assert_eq!(children.len(), 2);
     }

@@ -24,3 +24,31 @@ pub use vault::SecretVault;
 pub use vault_resolver::VaultSecretResolver;
 pub use virtual_key_resolver::VirtualKeyResolver;
 pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult, TransactionIntent};
+
+const SECRET_NAME_MAX_LEN: usize = 128;
+
+pub fn validate_secret_name(name: &str) -> Result<String, String> {
+    let normalized = name.trim();
+
+    if normalized.is_empty() {
+        return Err("Secret name cannot be empty".to_string());
+    }
+
+    if normalized.len() > SECRET_NAME_MAX_LEN {
+        return Err(format!(
+            "Secret name must be <= {SECRET_NAME_MAX_LEN} characters"
+        ));
+    }
+
+    let valid = normalized
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
+    if !valid {
+        return Err(
+            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'"
+                .to_string(),
+        );
+    }
+
+    Ok(normalized.to_string())
+}

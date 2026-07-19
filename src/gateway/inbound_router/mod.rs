@@ -41,7 +41,7 @@ use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
-use command_handler::strip_bot_mention;
+use command_handler::{classify_special_slash, parse_clarify_index, strip_bot_mention, SpecialSlash};
 use dedup::InboundDedupTracker;
 use types::check_link_access;
 
@@ -812,30 +812,23 @@ impl InboundMessageRouter {
             }
         }
 
-        // /btw sidebar: ephemeral question without affecting context
-        // Strip @botname first to handle Telegram group format: /btw@BotName text
-        let btw_stripped = strip_bot_mention(ctx.message.text.trim());
-        if btw_stripped.starts_with("/btw ") || btw_stripped.starts_with("/btw\n") {
-            let btw_text = btw_stripped.strip_prefix("/btw").unwrap_or("").trim();
-            if !btw_text.is_empty() {
-                return self.handle_btw(&msg, &agent_id, btw_text).await;
+        // Special-case the inbound-only slash commands before the unified
+        // `CommandParser` path: `/btw` (ephemeral sidebar), `/stop` /
+        // `/abort` (cancel current run), `/help` (listing). All four are
+        // matched case-insensitively with the Telegram `@botname` suffix
+        // tolerated; `classify_special_slash` preserves the btw body in
+        // its original case for the model to read verbatim.
+        match classify_special_slash(&ctx.message.text) {
+            Some(SpecialSlash::Btw { body }) => {
+                return self.handle_btw(&msg, &agent_id, &body).await;
             }
-        }
-
-        // /stop (alias /abort): cancel the run executing on this session.
-        // Intercepted before agent dispatch like /btw — the command must act
-        // immediately, never be queued behind (or steered into) the very run
-        // it is stopping.
-        if btw_stripped.trim() == "/stop" || btw_stripped.trim() == "/abort" {
-            return self.handle_stop(&msg, &ctx).await;
-        }
-
-        // /help: reply with the curated slash-command listing. Intercepted
-        // before agent dispatch like /stop — a read-only listing must never be
-        // queued behind a running turn. Discovery-only `builtin:help` catalog
-        // entry (registration.rs) makes it appear in menus + "did you mean?".
-        if btw_stripped.trim() == "/help" {
-            return self.handle_help(&msg).await;
+            Some(SpecialSlash::Stop) => {
+                return self.handle_stop(&msg, &ctx).await;
+            }
+            Some(SpecialSlash::Help) => {
+                return self.handle_help(&msg).await;
+            }
+            None => {}
         }
 
         // Unified slash command interception
@@ -1123,24 +1116,28 @@ impl InboundMessageRouter {
 
         // Clarification button callback: `clarify:<1-based index>` from an
         // inline keyboard (the clarification twin of the `approve:` callback,
-        // built in `ask_user::build_choice_keyboard`). Strip the prefix and
-        // resolve the pending clarification with the bare index —
-        // `interpret_reply` maps it to that option, identical to the user
-        // typing the number. Handled BEFORE the generic clarification branch so
-        // the raw `clarify:N` token is never taken as free-text. A stale tap
-        // (nothing pending) is consumed silently rather than leaking the token
-        // into a new agent turn.
-        if let Some(index) = raw.strip_prefix("clarify:") {
-            if let Some(ref mgr) = self.clarification_manager {
-                if mgr.has_pending(&session_key).await
-                    && mgr.resolve(&session_key, index.trim()).await
-                {
-                    info!(
-                        "[Router] Routed button callback to pending clarification for {session_key}"
-                    );
+        // built in `ask_user::build_choice_keyboard`). Only a well-formed
+        // positive integer suffix is treated as a callback — buttons are
+        // 1-based, so `0` and any non-numeric suffix are malformed. A
+        // malformed `clarify:` falls through without consuming so the raw
+        // token is never taken as a free-text reply (which would also strip
+        // the pending state) and a legitimate answer can still be sent.
+        if let Some(suffix) = raw.strip_prefix("clarify:") {
+            match parse_clarify_index(suffix) {
+                Some(idx) => {
+                    if let Some(ref mgr) = self.clarification_manager {
+                        if mgr.has_pending(&session_key).await
+                            && mgr.resolve(&session_key, &idx.to_string()).await
+                        {
+                            info!(
+                                "[Router] Routed button callback to pending clarification for {session_key}"
+                            );
+                        }
+                    }
+                    return true;
                 }
+                None => return false,
             }
-            return true;
         }
 
         // Any slash command must reach its dedicated handler below, never be
@@ -1464,6 +1461,80 @@ mod tests {
         assert!(
             router.try_intercept_hitl(&ctx).await,
             "a clarify callback is always consumed, even when nothing is pending"
+        );
+    }
+
+    /// Malformed `clarify:` callbacks (`abc`, empty, `0`) must NOT consume the
+    /// pending clarification and must NOT be returned as consumed — the router
+    /// should fall through to the normal message path so a legitimate answer
+    /// can still be sent and the raw `clarify:<garbage>` token is not silently
+    /// promoted to a free-text reply that would also strip the pending state.
+    #[tokio::test]
+    async fn malformed_clarify_callback_keeps_pending_alive() {
+        use crate::clarification::{ClarificationManager, ClarificationRequest};
+        use crate::exec::manager::ExecApprovalManager;
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::routing::session_key::SessionKey;
+        use std::time::Duration;
+
+        let session_key = SessionKey::ephemeral("malformed-clarify-test");
+        let clarification = Arc::new(ClarificationManager::new());
+        let _rx = clarification
+            .register(
+                session_key.to_string(),
+                ClarificationRequest::text("ask-malformed", "Pick one:", None),
+                Duration::from_secs(60),
+            )
+            .await;
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        )
+        .with_hitl(
+            Arc::new(ExecApprovalManager::new()),
+            clarification.clone(),
+        );
+
+        let make_ctx = |text: &str| {
+            let msg = InboundMessage {
+                id: MessageId::new("m-malformed"),
+                channel_id: ChannelId::new("telegram"),
+                conversation_id: ConversationId::new("u1"),
+                sender_id: UserId::new("u1"),
+                sender_name: None,
+                text: text.to_string(),
+                attachments: vec![],
+                timestamp: chrono::Utc::now(),
+                reply_to: None,
+                is_group: false,
+                raw: None,
+                metadata: vec![],
+            };
+            let reply_route =
+                ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("u1"));
+            InboundContext::new(msg, reply_route, session_key.clone())
+        };
+
+        for bad_text in ["clarify:abc", "clarify:", "clarify:0", "clarify:  ", "clarify:-1"] {
+            assert!(
+                !router.try_intercept_hitl(&make_ctx(bad_text)).await,
+                "{bad_text:?} must NOT be consumed as a clarification callback"
+            );
+            assert!(
+                clarification.has_pending(&session_key.to_string()).await,
+                "{bad_text:?} must NOT remove the pending clarification"
+            );
+        }
+
+        assert!(
+            router.try_intercept_hitl(&make_ctx("clarify:1")).await,
+            "a well-formed clarify:1 callback still resolves the pending clarification"
+        );
+        assert!(
+            !clarification.has_pending(&session_key.to_string()).await,
+            "clarify:1 must consume the pending clarification"
         );
     }
 

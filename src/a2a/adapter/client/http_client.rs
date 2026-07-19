@@ -160,6 +160,13 @@ impl A2AClient {
             .await
             .map_err(|e| A2AError::ParseError(e.to_string()))?;
 
+        if rpc_response.jsonrpc != "2.0" {
+            return Err(A2AError::InvalidRequest(format!(
+                "response jsonrpc field must be \"2.0\", got {:?}",
+                rpc_response.jsonrpc
+            )));
+        }
+
         if let Some(error) = rpc_response.error {
             return Err(match error.code {
                 -32700 => A2AError::ParseError(error.message),
@@ -498,6 +505,31 @@ mod tests {
         match client.send_message_stream("task-1", &msg, None).await {
             Ok(_) => panic!("expected non-2xx status to error"),
             Err(e) => assert!(matches!(e, A2AError::AgentUnreachable(_))),
+        }
+    }
+
+    #[tokio::test]
+    async fn rpc_call_rejects_non_2_0_response_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"jsonrpc":"1.0","id":1,"result":{"ok":true}}"#.to_string(),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = A2AClient::new(server.uri());
+        let msg = A2AMessage::text(A2ARole::User, "hi");
+        match client.send_message("task-1", &msg, None).await {
+            Ok(_) => panic!("expected non-2.0 response version to error"),
+            Err(A2AError::InvalidRequest(msg)) => {
+                assert!(
+                    msg.contains("2.0"),
+                    "error message should mention the expected version, got: {msg}"
+                );
+            }
+            Err(other) => panic!("expected InvalidRequest, got: {other:?}"),
         }
     }
 }

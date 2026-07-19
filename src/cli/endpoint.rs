@@ -1,5 +1,6 @@
 //! `.ipc-endpoint.json` write + read helpers.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,29 @@ use tracing::warn;
 
 const ENDPOINT_FILENAME: &str = ".ipc-endpoint.json";
 const CURRENT_ENDPOINT_VERSION: u32 = 1;
+
+/// Build the IPC endpoint URL for a server bound on `addr`.
+///
+/// Rules:
+/// - `tls = true` → `https://`, else `http://`. (Self-signed cert trust is
+///   the caller's problem; this only formats the URL.)
+/// - `0.0.0.0` is a wildcard for IPv4 — map to `127.0.0.1` so a client
+///   that is also on the box can reach the loopback listener.
+/// - `::` is the IPv6 wildcard — map to `::1`.
+/// - Concrete addresses are preserved verbatim.
+pub fn build_endpoint_url(addr: SocketAddr, tls: bool) -> String {
+    let scheme = if tls { "https" } else { "http" };
+    let host = match addr.ip() {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        other => other,
+    };
+    let host_str = match host {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(_) => format!("[{host}]"),
+    };
+    format!("{scheme}://{host_str}:{}", addr.port())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcEndpoint {
@@ -133,5 +157,55 @@ mod tests {
         write_endpoint(dir.path(), &ep).unwrap();
         remove_endpoint(dir.path()).unwrap();
         assert!(read_endpoint(dir.path()).unwrap().is_none());
+    }
+
+    fn sa_v4(host: &str, port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(host.parse().unwrap()), port)
+    }
+
+    fn sa_v6(host: &str, port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(host.parse().unwrap()), port)
+    }
+
+    #[test]
+    fn url_uses_https_when_tls_enabled() {
+        let url = build_endpoint_url(sa_v4("127.0.0.1", 9000), true);
+        assert_eq!(url, "https://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn url_uses_http_when_tls_disabled() {
+        let url = build_endpoint_url(sa_v4("127.0.0.1", 9000), false);
+        assert_eq!(url, "http://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn url_maps_ipv4_unspecified_to_loopback() {
+        let url = build_endpoint_url(sa_v4("0.0.0.0", 18790), false);
+        assert_eq!(url, "http://127.0.0.1:18790");
+    }
+
+    #[test]
+    fn url_maps_ipv6_unspecified_to_ipv6_loopback() {
+        let url = build_endpoint_url(sa_v6("::", 18790), false);
+        assert_eq!(url, "http://[::1]:18790");
+    }
+
+    #[test]
+    fn url_preserves_concrete_ipv4() {
+        let url = build_endpoint_url(sa_v4("192.168.1.5", 9000), false);
+        assert_eq!(url, "http://192.168.1.5:9000");
+    }
+
+    #[test]
+    fn url_preserves_concrete_ipv6_global() {
+        let url = build_endpoint_url(sa_v6("2001:db8::1", 9000), true);
+        assert_eq!(url, "https://[2001:db8::1]:9000");
+    }
+
+    #[test]
+    fn url_treats_explicit_loopback_as_concrete_ipv6() {
+        let url = build_endpoint_url(sa_v6("::1", 9000), false);
+        assert_eq!(url, "http://[::1]:9000");
     }
 }

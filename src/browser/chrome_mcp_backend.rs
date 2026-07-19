@@ -118,6 +118,7 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         // Hold the per-profile lock across new_page + re-list so a concurrent
         // open on the same profile can't append a tab between the two calls and
@@ -165,6 +166,7 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
             .await?;

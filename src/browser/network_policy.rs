@@ -142,7 +142,7 @@ impl BrowserSsrfGuard {
     }
 
     /// Validate a URL against the SSRF policy.
-    pub fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
+    pub async fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
         // Browser navigation is web-only: reject any non-HTTP(S) scheme up-front.
         // The sync SSRF engine validates the *host* but not the scheme, so a
         // host-bearing alternate scheme (e.g. `gopher://internal:6379/…`,
@@ -178,8 +178,13 @@ impl BrowserSsrfGuard {
             }
         };
 
-        // Delegate to core engine (sync validation)
-        ssrf::validate_url(url_str, &core_policy).map_err(PolicyViolation::from)?;
+        // Delegate to core engine (async validation) — resolves hostnames and
+        // validates every returned IP against the blocklist, so a hostname
+        // that currently maps to loopback / private / link-local / metadata
+        // is rejected before being handed to Playwright/Chrome.
+        ssrf::validate_url_async(url_str, &core_policy)
+            .await
+            .map_err(PolicyViolation::from)?;
 
         // Additional browser-specific: allowlist-only mode
         // (when allowed_domains is non-empty, ONLY those domains are permitted)
@@ -212,8 +217,8 @@ impl BrowserSsrfGuard {
     /// set, a scan for embedded credentials. Use this for `goto`/`open`; the
     /// post-navigation active-URL re-check stays on [`Self::check_url`] so a
     /// landed page whose URL legitimately carries a token is still readable.
-    pub fn check_navigation(&self, url_str: &str) -> Result<(), PolicyViolation> {
-        self.check_url(url_str)?;
+    pub async fn check_navigation(&self, url_str: &str) -> Result<(), PolicyViolation> {
+        self.check_url(url_str).await?;
         if self.config.block_secrets_in_url {
             if let Some(rule) = super::secret_guard::scan_url_for_secrets(url_str) {
                 return Err(PolicyViolation::SecretInUrl(rule));
@@ -242,61 +247,68 @@ impl BrowserSsrfGuard {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_blocks_localhost() {
+    #[tokio::test]
+    async fn test_blocks_localhost() {
         let policy = BrowserSsrfGuard::default();
 
         assert!(matches!(
-            policy.check_url("http://localhost/path"),
+            policy.check_url("http://localhost/path").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
         assert!(matches!(
-            policy.check_url("http://127.0.0.1:8080/api"),
+            policy.check_url("http://127.0.0.1:8080/api").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
         assert!(matches!(
-            policy.check_url("http://[::1]/"),
+            policy.check_url("http://[::1]/").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
     }
 
-    #[test]
-    fn test_blocks_private_networks() {
+    #[tokio::test]
+    async fn test_blocks_private_networks() {
         let policy = BrowserSsrfGuard::default();
 
         // 10.x.x.x
         assert!(matches!(
-            policy.check_url("http://10.0.0.1/"),
+            policy.check_url("http://10.0.0.1/").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
         // 172.16.x.x
         assert!(matches!(
-            policy.check_url("http://172.16.0.1/"),
+            policy.check_url("http://172.16.0.1/").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
         // 172.31.x.x (upper bound)
         assert!(matches!(
-            policy.check_url("http://172.31.255.255/"),
+            policy.check_url("http://172.31.255.255/").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
         // 192.168.x.x
         assert!(matches!(
-            policy.check_url("http://192.168.1.1/"),
+            policy.check_url("http://192.168.1.1/").await,
             Err(PolicyViolation::PrivateNetwork(_))
         ));
     }
 
-    #[test]
-    fn test_allows_public_urls() {
+    #[tokio::test]
+    async fn test_allows_public_urls() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("example.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
 
-        assert!(policy.check_url("https://example.com/page").is_ok());
-        assert!(policy.check_url("https://8.8.8.8/dns").is_ok());
-        assert!(policy.check_url("https://172.32.0.1/").is_ok()); // 172.32 is NOT private
+        assert!(policy.check_url("https://example.com/page").await.is_ok());
+        assert!(policy.check_url("https://8.8.8.8/dns").await.is_ok());
+        assert!(policy.check_url("https://172.32.0.1/").await.is_ok()); // 172.32 is NOT private
+        clear_resolver();
     }
 
-    #[test]
-    fn test_blocked_domain_patterns() {
+    #[tokio::test]
+    async fn test_blocked_domain_patterns() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("safe.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
@@ -307,25 +319,29 @@ mod tests {
 
         // Subdomain match
         assert!(
-            policy.check_url("https://payload.malware.com/x").is_err(),
+            policy.check_url("https://payload.malware.com/x").await.is_err(),
             "subdomain of blocked wildcard should be blocked"
         );
         // Bare domain match for wildcard
         assert!(
-            policy.check_url("https://malware.com/x").is_err(),
+            policy.check_url("https://malware.com/x").await.is_err(),
             "bare domain of blocked wildcard should be blocked"
         );
         // Exact match
         assert!(
-            policy.check_url("https://evil.org/").is_err(),
+            policy.check_url("https://evil.org/").await.is_err(),
             "exact blocked domain should be blocked"
         );
         // Non-matching domain is fine
-        assert!(policy.check_url("https://safe.com/").is_ok());
+        assert!(policy.check_url("https://safe.com/").await.is_ok());
+        clear_resolver();
     }
 
-    #[test]
-    fn test_allowed_domains_whitelist() {
+    #[tokio::test]
+    async fn test_allowed_domains_whitelist() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("random.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -335,18 +351,23 @@ mod tests {
         });
 
         // Allowed
-        assert!(policy.check_url("https://app.trusted.com/").is_ok());
-        assert!(policy.check_url("https://api.example.org/v1").is_ok());
+        assert!(policy.check_url("https://app.trusted.com/").await.is_ok());
+        assert!(policy.check_url("https://api.example.org/v1").await.is_ok());
 
-        // Not in allowlist
+        // Not in allowlist (after DNS passes, the browser-level allowlist-only
+        // gate kicks in for any host not matching `allowed_domains`).
         assert!(matches!(
-            policy.check_url("https://random.com/"),
+            policy.check_url("https://random.com/").await,
             Err(PolicyViolation::NotInAllowlist(_))
         ));
+        clear_resolver();
     }
 
-    #[test]
-    fn test_disabled_ssrf_allows_everything() {
+    #[tokio::test]
+    async fn test_disabled_ssrf_allows_everything() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("example.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -355,24 +376,25 @@ mod tests {
             redact_secrets_in_content: false,
         });
 
-        assert!(policy.check_url("http://localhost/").is_ok());
-        assert!(policy.check_url("http://10.0.0.1/").is_ok());
-        assert!(policy.check_url("http://192.168.1.1/").is_ok());
-        assert!(policy.check_url("https://example.com/").is_ok());
+        assert!(policy.check_url("http://localhost/").await.is_ok());
+        assert!(policy.check_url("http://10.0.0.1/").await.is_ok());
+        assert!(policy.check_url("http://192.168.1.1/").await.is_ok());
+        assert!(policy.check_url("https://example.com/").await.is_ok());
+        clear_resolver();
     }
 
-    #[test]
-    fn test_invalid_url() {
+    #[tokio::test]
+    async fn test_invalid_url() {
         let policy = BrowserSsrfGuard::default();
 
         assert!(matches!(
-            policy.check_url("not-a-url"),
+            policy.check_url("not-a-url").await,
             Err(PolicyViolation::InvalidUrl(_))
         ));
     }
 
-    #[test]
-    fn test_rejects_non_http_schemes() {
+    #[tokio::test]
+    async fn test_rejects_non_http_schemes() {
         // Host-bearing alternate schemes must not slip past the host-only SSRF
         // checks (SSRF-via-alternate-scheme). Disable host blocking so the only
         // thing that can reject these is the scheme guard itself.
@@ -390,13 +412,16 @@ mod tests {
             "data:text/html,<script>alert(1)</script>",
         ] {
             assert!(
-                matches!(policy.check_url(url), Err(PolicyViolation::InvalidUrl(_))),
+                matches!(
+                    policy.check_url(url).await,
+                    Err(PolicyViolation::InvalidUrl(_))
+                ),
                 "scheme of {url} should be rejected"
             );
         }
         // http/https still pass when host policy is disabled.
-        assert!(policy.check_url("http://example.com/").is_ok());
-        assert!(policy.check_url("https://example.com/").is_ok());
+        assert!(policy.check_url("http://example.com/").await.is_ok());
+        assert!(policy.check_url("https://example.com/").await.is_ok());
     }
 
     #[test]
@@ -417,26 +442,31 @@ mod tests {
         assert!(v.to_string().contains("secret"));
     }
 
-    #[test]
-    fn check_navigation_blocks_secret_in_url() {
+    #[tokio::test]
+    async fn check_navigation_blocks_secret_in_url() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("public.example", "8.8.8.8".parse().unwrap());
         // Default guard has block_secrets_in_url = true.
         let policy = BrowserSsrfGuard::default();
         let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
         // SSRF alone allows the public host…
-        assert!(policy.check_url(url).is_ok());
+        assert!(policy.check_url(url).await.is_ok());
         // …but navigation rejects the embedded credential.
         assert!(matches!(
-            policy.check_navigation(url),
+            policy.check_navigation(url).await,
             Err(PolicyViolation::SecretInUrl(_))
         ));
         // Clean public URL still navigates.
         assert!(policy
             .check_navigation("https://public.example/docs")
+            .await
             .is_ok());
+        clear_resolver();
     }
 
-    #[test]
-    fn check_navigation_respects_disabled_secret_scan() {
+    #[tokio::test]
+    async fn check_navigation_respects_disabled_secret_scan() {
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -445,7 +475,7 @@ mod tests {
             redact_secrets_in_content: false,
         });
         let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
-        assert!(policy.check_navigation(url).is_ok());
+        assert!(policy.check_navigation(url).await.is_ok());
     }
 
     #[test]
@@ -474,5 +504,189 @@ mod tests {
         let out = policy.redact_content(page);
         assert_eq!(out, page);
         assert!(matches!(out, Cow::Borrowed(_)));
+    }
+
+    // --- Hostname→IP DNS rejection (async check_url resolves DNS, blocking
+    //     loopback / private / link-local / metadata hosts before Playwright) ---
+
+    use std::sync::Mutex;
+    static HOSTNAME_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serial_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        HOSTNAME_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn install_resolved_multi(map: std::collections::HashMap<String, Vec<std::net::IpAddr>>) {
+        crate::security::ssrf::dns::test_hook::install(map);
+    }
+
+    fn install_resolved(host: &str, ip: std::net::IpAddr) {
+        let mut map = std::collections::HashMap::new();
+        map.insert(host.to_string(), vec![ip]);
+        crate::security::ssrf::dns::test_hook::install(map);
+    }
+
+    fn clear_resolver() {
+        crate::security::ssrf::dns::test_hook::clear();
+    }
+
+    // These tests rely on a global test-only resolver hook. They must run
+    // serially so concurrent tests don't see each other's resolver state.
+    #[tokio::test]
+    async fn check_url_blocks_hostname_resolving_to_loopback() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://evil.example/admin").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "hostname resolving to 127.0.0.1 must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_hostname_resolving_to_private_10() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://internal.corp/api").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "RFC1918 10.0.0.0/8 resolution must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_hostname_resolving_to_private_192() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("router.lan", "192.168.0.1".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://router.lan/admin").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "RFC1918 192.168.0.0/16 resolution must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_hostname_resolving_to_link_local() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("apipa.host", "169.254.10.20".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://apipa.host/").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "link-local 169.254/16 resolution must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_hostname_resolving_to_cloud_metadata() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("aws.example", "169.254.169.254".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://aws.example/latest/meta-data/").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "cloud-metadata (169.254.169.254) resolution must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_ipv6_loopback_resolution() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("v6.example", "::1".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://v6.example/").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "IPv6 loopback ::1 resolution must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_blocks_when_any_returned_ip_is_loopback() {
+        // A record set mixing a public IP with a loopback must be rejected
+        // (TOCTOU floor: if ANY returned IP is blocked, reject entirely).
+        let _lock = serial_test_lock();
+        clear_resolver();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "mixed.example".to_string(),
+            vec![
+                "8.8.8.8".parse().unwrap(),
+                "127.0.0.1".parse().unwrap(),
+            ],
+        );
+        install_resolved_multi(map);
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://mixed.example/").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "mixed A records containing a loopback must be blocked — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_allows_hostname_resolving_to_public_ip() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("good.example", "8.8.8.8".parse().unwrap());
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_url("http://good.example/path").await;
+        assert!(
+            result.is_ok(),
+            "hostname resolving to a public IP must pass — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_navigation_blocks_hostname_resolving_to_loopback() {
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let policy = BrowserSsrfGuard::default();
+        let result = policy.check_navigation("https://evil.example/admin").await;
+        assert!(
+            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
+            "navigation guard must inherit DNS resolution — got {result:?}"
+        );
+        clear_resolver();
+    }
+
+    #[tokio::test]
+    async fn check_url_dns_resolution_disabled_when_policy_off() {
+        // When block_private=false and no allow/blocklists, the policy is
+        // disabled entirely — DNS validation is skipped (loopback reachable).
+        let _lock = serial_test_lock();
+        clear_resolver();
+        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
+            block_private: false,
+            blocked_domains: vec![],
+            allowed_domains: vec![],
+            block_secrets_in_url: false,
+            redact_secrets_in_content: false,
+        });
+        let result = policy.check_url("http://evil.example/admin").await;
+        assert!(
+            result.is_ok(),
+            "with all SSRF gating disabled, even loopback resolution must pass — got {result:?}"
+        );
+        clear_resolver();
     }
 }

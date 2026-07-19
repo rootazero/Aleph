@@ -48,12 +48,12 @@ pub const MCP_CONFIG_FILE: &str = ".mcp.json";
 
 /// Get the user's home directory
 pub fn home_dir() -> DiscoveryResult<PathBuf> {
-    dirs::home_dir().ok_or(DiscoveryError::HomeDirNotFound)
+    crate::utils::paths::get_home_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
 }
 
 /// Get the Aleph home directory (~/.aleph/)
 pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
-    Ok(home_dir()?.join(ALEPH_HOME_DIR))
+    crate::utils::paths::get_config_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
 }
 
 /// Get the Claude Code home directory (~/.claude/)
