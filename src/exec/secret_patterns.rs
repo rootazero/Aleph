@@ -22,7 +22,7 @@ pub(crate) struct LeakDetectorAssets {
 }
 
 #[must_use]
-pub fn secret_masker_patterns() -> Vec<SecretPattern> {
+pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
             regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
@@ -100,7 +100,7 @@ pub fn secret_masker_patterns() -> Vec<SecretPattern> {
 }
 
 #[must_use]
-pub fn leak_detector_assets() -> LeakDetectorAssets {
+pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
     let prefixes = vec![
         "sk-",
         "AIza",

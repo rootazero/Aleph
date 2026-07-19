@@ -210,10 +210,10 @@ async fn webhook_endpoint(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // Step 1: Verify signature
+// Step 1: Verify signature
     if !state.handler.verify(&headers, &body) {
         warn!(path = %state.handler.path(), "Webhook signature verification failed");
-        return (StatusCode::FORBIDDEN, "Forbidden: invalid signature");
+        return (StatusCode::FORBIDDEN, String::from("Forbidden: invalid signature"));
     }
 
 // Step 2: Parse payload into messages
@@ -239,7 +239,7 @@ async fn webhook_endpoint(
                         format!("Dropped {dropped} messages due to backpressure"),
                     );
                 }
-                (StatusCode::OK, "ok")
+                (StatusCode::OK, String::from("ok"))
             }
         Err(e) => {
             warn!(
@@ -247,7 +247,7 @@ async fn webhook_endpoint(
                 error = %e,
                 "Webhook handler error"
             );
-            (StatusCode::BAD_REQUEST, "Bad request")
+            (StatusCode::BAD_REQUEST, String::from("Bad request"))
         }
     }
 }
