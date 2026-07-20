@@ -152,7 +152,12 @@ impl ScreenCapability for MacOSScreen {
                 },
             )
             .await
-            .map_err(|e| DesktopError::OcrFailed(format!("bridge screen.ocr: {e}")))?;
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::OcrFailed(format!("bridge screen.ocr: {m}"))
+                }
+                other => other,
+            })?;
 
         // Convert protocol OcrResult → aleph_desktop OcrResult.
         // Vision boundingBox is normalized, bottom-left origin.
@@ -478,8 +483,11 @@ impl ScreenCapability for MacOSScreen {
                 },
             )
             .await
-            .map_err(|e| {
-                DesktopError::ScreenCapture(format!("bridge screen.capture (window): {e}"))
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::ScreenCapture(format!("bridge screen.capture (window): {m}"))
+                }
+                other => other,
             })?;
 
         Ok(WindowShot {
@@ -575,8 +583,11 @@ impl MacOSScreen {
             .bridge
             .call(METHOD_LIST_DISPLAYS, serde_json::Value::Null)
             .await
-            .map_err(|e| {
-                DesktopError::ScreenCapture(format!("bridge screen.list_displays: {e}"))
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::ScreenCapture(format!("bridge screen.list_displays: {m}"))
+                }
+                other => other,
             })?;
         Ok(rpc
             .displays
