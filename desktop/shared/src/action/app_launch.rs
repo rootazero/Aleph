@@ -8,7 +8,7 @@ use crate::error::{DesktopError, Result};
 ///
 /// - **macOS**: `open -b <bundle_id>` (or `open -a <app_name>` if not a bundle ID)
 /// - **Linux**: `xdg-open <app_name>`
-/// - **Windows**: `cmd /C start "" "<app_name>"`
+/// - **Windows**: `ShellExecuteW` with verb `"open"` (no cmd.exe)
 ///
 /// # Errors
 ///
@@ -67,20 +67,41 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("cmd")
-            .args(["/C", "start", "", app_name])
-            .output()
-            .map_err(|e| DesktopError::InputFailed(format!("Failed to launch app: {e}")))?;
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        let verb: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let app: Vec<u16> = std::ffi::OsStr::new(app_name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // ShellExecuteW resolves the app via file association / App Paths / PATH
+        // without invoking cmd.exe, closing the metacharacter-injection vector.
+        // SAFETY: `verb`/`app` are valid NUL-terminated wide buffers living past
+        // the call; other pointers are null as documented.
+        let hinst = unsafe {
+            ShellExecuteW(
+                HWND(std::ptr::null_mut()),
+                PCWSTR(verb.as_ptr()),
+                PCWSTR(app.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if hinst.0 as isize <= 32 {
             return Err(DesktopError::InputFailed(format!(
-                "Failed to launch '{}': {}",
-                app_name,
-                stderr.trim()
+                "Failed to launch '{app_name}' (ShellExecuteW code {})",
+                hinst.0 as isize
             )));
         }
-
         info!(app_name, "App launched (Windows)");
         Ok(())
     }

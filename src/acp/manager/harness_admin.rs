@@ -189,14 +189,20 @@ impl AcpAdapterManager {
         let mut configs = self.configs.write().await;
 
         if adapters.remove(id).is_none() {
-            return Err(AcpOperationError::new(
-                AcpErrorCode::HarnessNotFound,
-                format!("Harness '{id}' is not registered"),
-            )
-            .into());
+            // A previously disabled harness has no adapter entry but still owns
+            // a config record. Removing the orphan config is what the user
+            // asked `unregister_harness` to do — fail only when neither side
+            // knows about the id.
+            if configs.remove(id).is_none() {
+                return Err(AcpOperationError::new(
+                    AcpErrorCode::HarnessNotFound,
+                    format!("Harness '{id}' is not registered"),
+                )
+                .into());
+            }
+        } else {
+            configs.remove(id);
         }
-
-        configs.remove(id);
 
         // Detach all active sessions for this harness (all cwds) from the map,
         // then release every lock BEFORE killing. `kill()` awaits the OS; doing
@@ -246,6 +252,19 @@ impl AcpAdapterManager {
         let mut sessions = self.sessions.write().await;
         let mut adapters = self.adapters.write().await;
         let mut configs = self.configs.write().await;
+
+        // Refuse to create a brand-new harness via the update path — that is
+        // the job of `register_harness`, which validates duplicates and the
+        // enabled-flag invariant. Without this check, a typo in the harness id
+        // (or a stale UI sending the wrong id) would silently insert a new
+        // config and a new adapter instance.
+        if !adapters.contains_key(id) && !configs.contains_key(id) {
+            return Err(AcpOperationError::new(
+                AcpErrorCode::HarnessNotFound,
+                format!("Harness '{id}' is not registered; use register_harness instead"),
+            )
+            .into());
+        }
 
         // Helper: remove all sessions for this harness_id (across all cwds)
         let remove_sessions = |sessions: &mut HashMap<SessionKey, SessionEntry>,

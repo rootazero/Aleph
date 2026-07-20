@@ -175,8 +175,8 @@ pub(in crate::commands::start) async fn start_webchat_server(
             PathBuf::from("interfaces/webchat/dist"),
             PathBuf::from("../interfaces/webchat/dist"),
         ];
-        if let Some(home) = dirs::home_dir() {
-            candidates.push(home.join(".aleph/webchat"));
+        if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {
+            candidates.push(config_dir.join("webchat"));
         }
         candidates.into_iter().find(|p| p.exists())
     });

@@ -230,11 +230,11 @@ fn plugin_agent_to_def(
     if let Some(tools) = &reg.tools {
         let allowed: Vec<String> = tools
             .iter()
-            .filter_map(|(t, &ok)| ok.then(|| t.clone()))
+            .filter_map(|(t, &ok)| ok.then_some(t.clone()))
             .collect();
         let denied: Vec<String> = tools
             .iter()
-            .filter_map(|(t, &ok)| (!ok).then(|| t.clone()))
+            .filter_map(|(t, &ok)| (!ok).then_some(t.clone()))
             .collect();
         if !allowed.is_empty() {
             def = def.with_allowed_tools(allowed);

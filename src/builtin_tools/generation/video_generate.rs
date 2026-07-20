@@ -143,15 +143,11 @@ impl VideoGenerateTool {
         let result_summary = format!("视频生成完成 ({duration_ms} ms, provider: {provider_name})");
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        let display = if location_type == "data_url" {
-            format!("🎬 视频已生成 ({:.1}s)", duration_ms as f64 / 1000.0)
-        } else {
-            format!(
-                "🎬 视频已生成 ({:.1}s)\n{}",
-                duration_ms as f64 / 1000.0,
-                video_location
-            )
-        };
+        let display = format!(
+            "🎬 视频已生成 ({:.1}s)\n{}",
+            duration_ms as f64 / 1000.0,
+            video_location
+        );
 
         Ok(VideoGenerateOutput {
             _display: display,

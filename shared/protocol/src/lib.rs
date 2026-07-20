@@ -20,6 +20,7 @@ pub mod desktop_bridge;
 pub mod discovery;
 pub mod events;
 pub mod invitation;
+mod ids;
 pub mod jsonrpc;
 pub mod subagent_tree;
 pub mod thinking;

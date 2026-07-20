@@ -181,6 +181,14 @@ impl SqliteTeamStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_team_members_agent ON team_members(agent_id);
+
+            -- Enforce team-name uniqueness at the database layer so concurrent
+            -- `create_team` calls with the same name can't both succeed and
+            -- leave a first-match-wins shadow row that name-based lookups can
+            -- never reach. Only active teams participate — a previously-active
+            -- name may legitimately reappear after a disband.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_name_active
+                ON teams(name) WHERE status = 'active';
             "#,
         )
         .map_err(db_err)?;
@@ -327,7 +335,21 @@ impl TeamStore for SqliteTeamStore {
             "#,
             params![id, input.name, input.description, input.leader_id, now],
         )
-        .map_err(db_err)?;
+        .map_err(|e| match e {
+            // Surface a clean duplicate-name error so `team_create` callers can
+            // report it without parsing the SQLite message. The
+            // `idx_teams_name_active` partial UNIQUE index is the source of
+            // this constraint.
+            rusqlite::Error::SqliteFailure(err, _)
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                crate::error::AlephError::invalid_input(format!(
+                    "a team named '{}' already exists",
+                    input.name
+                ))
+            }
+            other => db_err(other),
+        })?;
         drop(conn);
 
         // Members (including the leader) enroll via `add_member`, which emits

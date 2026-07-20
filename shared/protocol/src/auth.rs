@@ -1,7 +1,6 @@
 //! Authentication types for Owner+Guest model
 
 use serde::{Deserialize, Serialize};
-use uuid;
 
 /// User role in Personal AI Hub
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +150,7 @@ impl IdentityContext {
     #[must_use]
     pub fn owner(session_key: String, source_channel: String) -> Self {
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id: crate::ids::next_id(),
             session_key,
             role: Role::Owner,
             identity_id: "owner".to_string(),
@@ -181,7 +180,7 @@ impl IdentityContext {
         source_channel: String,
     ) -> Self {
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id: crate::ids::next_id(),
             session_key,
             role: Role::Guest,
             identity_id: guest_id,
@@ -204,7 +203,7 @@ impl IdentityContext {
     #[must_use]
     pub fn anonymous(session_key: String, source_channel: String) -> Self {
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id: crate::ids::next_id(),
             session_key,
             role: Role::Anonymous,
             identity_id: "anonymous".to_string(),

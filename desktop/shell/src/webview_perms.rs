@@ -13,7 +13,9 @@
 //!   (a prompt, at best). We attach our own handler granting the mic.
 //! - **Linux (`WebKitGTK`)**: wry installs no permission handler at all, and
 //!   `enable-media-stream` defaults off, so `getUserMedia` is silently denied.
-//!   We enable the setting and allow `UserMediaPermissionRequest`.
+//!   We enable the setting, then grant a `UserMediaPermissionRequest` only when
+//!   it is audio-only (no camera) and originates from the Panel surface; every
+//!   other media request is explicitly denied and logged.
 
 use tauri::WebviewWindow;
 
@@ -41,7 +43,10 @@ pub fn grant_microphone(window: &WebviewWindow) {
 #[cfg(target_os = "linux")]
 fn grant_linux(pview: &tauri::webview::PlatformWebview) {
     use webkit2gtk::glib::object::Cast;
-    use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
 
     let webview = pview.inner();
 
@@ -50,22 +55,40 @@ fn grant_linux(pview: &tauri::webview::PlatformWebview) {
         settings.set_enable_media_stream(true);
     }
 
-    webview.connect_permission_request(|_webview, request| {
-        if request
-            .downcast_ref::<UserMediaPermissionRequest>()
-            .is_some()
-        {
+    webview.connect_permission_request(|webview, request| {
+        let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+            return false; // not a media request — defer to default handling
+        };
+        // Gate 1 — audio-only: the Panel voice button never needs a camera, so
+        // any request that includes a video device is refused wholesale.
+        let audio_only = media.is_for_audio_device() && !media.is_for_video_device();
+        // Gate 2 — origin: reuse the navigation SSOT for "is this the Panel
+        // surface?" (loopback daemon / tauri.localhost / configured remote).
+        // A `None` uri (unresolvable origin) folds into origin_ok = false.
+        let origin_ok = WebViewExt::uri(webview)
+            .and_then(|u| tauri::Url::parse(&u).ok())
+            .is_some_and(|u| crate::external_link::is_internal(&u));
+        if audio_only && origin_ok {
             request.allow();
-            return true; // handled — stop further emission
+        } else {
+            // Withhold camera / foreign-origin capture explicitly rather than
+            // relying on WebKitGTK's version-dependent unhandled default.
+            tracing::warn!(
+                audio_only,
+                origin_ok,
+                "webview UserMedia request denied (not audio-only from Panel origin)"
+            );
+            request.deny();
         }
-        false // defer everything else to default handling
+        true // handled — stop further emission
     });
 }
 
 #[cfg(target_os = "windows")]
 fn grant_windows(pview: &tauri::webview::PlatformWebview) {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
-    use webview2_com::PermissionRequestedEventHandler;
+    use webview2_com::{take_pwstr, PermissionRequestedEventHandler};
+    use windows_core::PWSTR;
 
     let controller = pview.controller();
     // `controller` is a live `ICoreWebView2Controller` COM interface owned by
@@ -85,7 +108,29 @@ fn grant_windows(pview: &tauri::webview::PlatformWebview) {
             let Some(args) = args else { return Ok(()) };
             let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
             args.PermissionKind(&mut kind)?;
-            if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+            if kind != COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                return Ok(());
+            }
+            // Only the Panel's own origin may auto-grant the mic. Reuse the
+            // navigation SSOT so there is one definition of "Panel origin"
+            // (loopback daemon / tauri.localhost / configured remote).
+            let mut uri = PWSTR::null();
+            // SAFETY: `Uri` writes an owned PWSTR (freed by `take_pwstr`);
+            // `args` is the live event-args COM interface for this callback.
+            args.Uri(&mut uri)?;
+            if uri.is_null() {
+                // A successful `Uri()` yielding a null pointer is a COM anomaly:
+                // the request carries no origin, so the grant is withheld. Log it
+                // rather than let the mic request vanish silently.
+                tracing::warn!(
+                    "WebView2 microphone permission request arrived with an unresolvable origin; withholding grant"
+                );
+                return Ok(());
+            }
+            let origin_ok = tauri::Url::parse(&take_pwstr(uri))
+                .ok()
+                .is_some_and(|u| crate::external_link::is_internal(&u));
+            if origin_ok {
                 args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
             }
             Ok(())

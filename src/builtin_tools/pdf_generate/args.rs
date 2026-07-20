@@ -61,7 +61,9 @@ impl ContentFormat {
     /// (headings, bold/italic, lists, code blocks, links, etc.).
     #[must_use]
     pub fn detect(content: &str) -> Self {
-        // Check first ~2000 chars for performance
+        // Check first ~2000 chars for performance. `get(..2000)` returns None when
+        // 2000 falls inside a multi-byte char, so the unwrap_or fallback is
+        // reachable on UTF-8 content — keep it as the conservative truncation.
         let sample = if content.len() > 2000 {
             content.get(..2000).unwrap_or(content)
         } else {

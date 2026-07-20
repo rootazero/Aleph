@@ -1817,8 +1817,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // server. The MarkdownSkillRefreshSource (Task 12) detects the bumped
     // revision on the next agent loop turn and refreshes the tool set.
     {
-        if let Some(home) = dirs::home_dir() {
-            let skills_dir = home.join(".aleph").join("skills");
+        if let Ok(skills_dir) = alephcore::utils::paths::get_skills_dir() {
             if skills_dir.exists() {
                 use alephcore::tools::markdown_skill::{
                     ReloadCallback, SkillWatcher, SkillWatcherConfig,
@@ -2669,7 +2668,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .config
         .clone()
         .map(|p| expand_path(&p.to_string_lossy()))
-        .or_else(|| dirs::home_dir().map(|h| h.join(".aleph/config.toml")));
+        .or_else(|| alephcore::utils::paths::get_config_file_path().ok());
     let _config_watcher = setup_config_watcher(
         &mut server,
         config_path,

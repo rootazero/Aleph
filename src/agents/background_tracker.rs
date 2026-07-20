@@ -2,9 +2,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use crate::agents::progress::{ProgressKind, SubagentProgress};
+use crate::agents::subagent_tree_events;
 use crate::sync_primitives::RwLock;
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode};
 use tokio::sync::Notify;
@@ -40,10 +41,7 @@ static GLOBAL_TRACKER: OnceLock<Arc<BackgroundAgentTracker>> = OnceLock::new();
 
 /// Wall-clock unix milliseconds, saturating on clock errors.
 fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+    subagent_tree_events::now_ms()
 }
 
 /// Tree metadata captured at spawn time, folded into the tracker node so

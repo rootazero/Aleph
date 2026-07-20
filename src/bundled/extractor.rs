@@ -520,7 +520,14 @@ pub(crate) fn extract_skill_tree_from_dir(
         }
     };
     for entry in entries.filter_map(|e| e.ok()) {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        // Use symlink_metadata so a top-level symlink-to-dir is NOT classified
+        // as a directory — copying through such a link would pull arbitrary
+        // external content under skills_dir. Match the convention already used
+        // by `copy_dir_into` / `copy_tree_with_prune`'s keep-side.
+        let is_dir = std::fs::symlink_metadata(entry.path())
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
             continue; // skip top-level files (.gitignore, README.md, .git)
         }
         let name = entry.file_name().to_string_lossy().to_string();
@@ -622,7 +629,11 @@ fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
     for e in std::fs::read_dir(dst)?.filter_map(|e| e.ok()) {
         if !keep.contains(&e.file_name()) {
             let p = e.path();
-            let ft = e.file_type()?;
+            // Use symlink_metadata so a symlink-to-dir here is treated as a
+            // symlink (and removed via remove_file), not recursed into via
+            // remove_dir_all — matches the keep-side already using
+            // symlink_metadata a few lines above.
+            let ft = std::fs::symlink_metadata(&p)?.file_type();
             if ft.is_dir() {
                 let _ = std::fs::remove_dir_all(&p);
             } else {

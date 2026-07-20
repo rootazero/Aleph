@@ -10,7 +10,6 @@ mod app;
 mod approval;
 mod command_tree;
 mod commands;
-mod cost;
 mod event;
 mod keys;
 mod markdown;

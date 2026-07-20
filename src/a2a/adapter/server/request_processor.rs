@@ -82,6 +82,18 @@ impl JsonRpcResponse {
             id,
         }
     }
+
+    /// Serialize a value into a JSON-RPC success response, or return an
+    /// internal-error response if serialization fails. Centralizes the
+    /// `to_value` / `success` / `error(-32603, ...)` dance used by every
+    /// handler that returns domain types.
+    #[must_use]
+    pub fn serialize_ok<T: Serialize>(id: Option<Value>, value: &T) -> Self {
+        match serde_json::to_value(value) {
+            Ok(v) => Self::success(id, v),
+            Err(e) => Self::error(id, -32603, &format!("Internal error: {e}")),
+        }
+    }
 }
 
 // --- Request Processor ---
@@ -231,14 +243,7 @@ impl A2ARequestProcessor {
             .handle_message(&task_id, message, session_id.as_deref())
             .await
         {
-            Ok(task) => match serde_json::to_value(&task) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: serialization failed: {e}"),
-                ),
-            },
+            Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
@@ -266,12 +271,7 @@ impl A2ARequestProcessor {
             .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
 
         match self.state.task_manager.get_task(id, history_length).await {
-            Ok(task) => match serde_json::to_value(&task) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
-                }
-            },
+            Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
@@ -296,12 +296,7 @@ impl A2ARequestProcessor {
         };
 
         match self.state.task_manager.cancel_task(id).await {
-            Ok(task) => match serde_json::to_value(&task) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
-                }
-            },
+            Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
@@ -333,12 +328,7 @@ impl A2ARequestProcessor {
         };
 
         match self.state.task_manager.list_tasks(params).await {
-            Ok(result) => match serde_json::to_value(&result) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => {
-                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}"))
-                }
-            },
+            Ok(result) => JsonRpcResponse::serialize_ok(request.id, &result),
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
@@ -370,14 +360,7 @@ impl A2ARequestProcessor {
                         }
                     };
                 match self.state.notification.set_config(config).await {
-                    Ok(c) => match serde_json::to_value(&c) {
-                        Ok(v) => JsonRpcResponse::success(request.id, v),
-                        Err(e) => JsonRpcResponse::error(
-                            request.id,
-                            -32603,
-                            &format!("Internal error: {e}"),
-                        ),
-                    },
+                    Ok(c) => JsonRpcResponse::serialize_ok(request.id, &c),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
             }
@@ -393,27 +376,13 @@ impl A2ARequestProcessor {
                     }
                 };
                 match self.state.notification.get_config(task_id).await {
-                    Ok(config) => match serde_json::to_value(&config) {
-                        Ok(v) => JsonRpcResponse::success(request.id, v),
-                        Err(e) => JsonRpcResponse::error(
-                            request.id,
-                            -32603,
-                            &format!("Internal error: {e}"),
-                        ),
-                    },
+                    Ok(config) => JsonRpcResponse::serialize_ok(request.id, &config),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
             }
             "tasks/pushNotificationConfig/list" => {
                 match self.state.notification.list_configs().await {
-                    Ok(configs) => match serde_json::to_value(&configs) {
-                        Ok(v) => JsonRpcResponse::success(request.id, v),
-                        Err(e) => JsonRpcResponse::error(
-                            request.id,
-                            -32603,
-                            &format!("Internal error: {e}"),
-                        ),
-                    },
+                    Ok(configs) => JsonRpcResponse::serialize_ok(request.id, &configs),
                     Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
             }
@@ -457,10 +426,7 @@ impl A2ARequestProcessor {
             return resp;
         }
 
-        match serde_json::to_value(&self.state.card) {
-            Ok(v) => JsonRpcResponse::success(request.id, v),
-            Err(e) => JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {e}")),
-        }
+        JsonRpcResponse::serialize_ok(request.id, &self.state.card)
     }
 
     // --- Authorization helper ---

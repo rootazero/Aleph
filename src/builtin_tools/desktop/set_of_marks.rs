@@ -222,10 +222,22 @@ fn annotate(
 
         // Anchor the badge at the element's top-left, then nudge it back inside
         // the image so an element flush to an edge keeps a readable label.
+        // On captures smaller than the largest-index badge, distributing by
+        // `mark.index` keeps labels distinct instead of collapsing every badge
+        // to (0,0).
         let badge_w_est = (mark.index.to_string().len() as i64) * (3 * gs + gs) + 2 * gs;
         let badge_h_est = 5 * gs + 2 * gs;
-        let lx = px.clamp(0, (iw - badge_w_est).max(0));
-        let ly = py.clamp(0, (ih - badge_h_est).max(0));
+        let spread_step = badge_w_est.max(1);
+        let lx = if iw >= badge_w_est {
+            px.clamp(0, iw - badge_w_est)
+        } else {
+            ((mark.index as i64 * spread_step) % iw.max(1)).max(0)
+        };
+        let ly = if ih >= badge_h_est {
+            py.clamp(0, ih - badge_h_est)
+        } else {
+            ((mark.index as i64 * badge_h_est.max(1)) % ih.max(1)).max(0)
+        };
         draw_label(&mut img, lx, ly, mark.index, gs, color);
     }
 

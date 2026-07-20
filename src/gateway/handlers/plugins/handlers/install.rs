@@ -125,6 +125,106 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
+/// How the daemon should install a raw `source` string. This is the R4-owned
+/// classification that used to live in the CLI shell: a bare name is a
+/// marketplace lookup; anything carrying a path/host/scheme separator is a
+/// direct git source.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PluginSourceKind {
+    Marketplace,
+    GitUrl,
+}
+
+/// Classify a plugin source. Mirrors the retired CLI heuristic verbatim:
+/// only a bare identifier (no `/`, `.`, or `:`) routes to the marketplace.
+pub fn classify_plugin_source(source: &str) -> PluginSourceKind {
+    let bare = !source.contains('/') && !source.contains('.') && !source.contains(':');
+    if bare {
+        PluginSourceKind::Marketplace
+    } else {
+        PluginSourceKind::GitUrl
+    }
+}
+
+/// Resolve the install source string from request params, accepting the new
+/// `source` key and falling back to the legacy `url` key so the pre-existing
+/// `plugin.install` (which took `{url}`) stays backward-compatible.
+fn install_source(params: Option<&serde_json::Value>) -> Option<String> {
+    params
+        .and_then(|p| p.get("source").or_else(|| p.get("url")))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Unified `plugin.install` entry: classify `source` server-side and dispatch
+/// to the marketplace or git-clone installer. Keeps the shell a pure forwarder
+/// (R4). Local `.zip` / `github:` sources stay client-side (they need local
+/// file / GitHub I/O) and continue to use `plugins.installFromZip`.
+pub async fn handle_install_unified(request: JsonRpcRequest) -> JsonRpcResponse {
+    let source = install_source(request.params.as_ref());
+    let Some(source) = source else {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing source");
+    };
+    let scope = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("scope"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    match classify_plugin_source(&source) {
+        PluginSourceKind::Marketplace => {
+            let sub = JsonRpcRequest {
+                jsonrpc: request.jsonrpc.clone(),
+                method: "plugin.marketplace.install".to_string(),
+                params: Some(json!({ "name": source, "scope": scope })),
+                id: request.id.clone(),
+            };
+            super::marketplace::handle_marketplace_install(sub).await
+        }
+        PluginSourceKind::GitUrl => {
+            let sub = JsonRpcRequest {
+                jsonrpc: request.jsonrpc.clone(),
+                method: "plugins.install".to_string(),
+                params: Some(json!({ "url": source })),
+                id: request.id.clone(),
+            };
+            handle_install(sub).await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_bare_name_is_marketplace() {
+        assert_eq!(classify_plugin_source("hello-world"), PluginSourceKind::Marketplace);
+        assert_eq!(classify_plugin_source("my_plugin"), PluginSourceKind::Marketplace);
+    }
+
+    #[test]
+    fn classify_urls_and_paths_are_git() {
+        assert_eq!(
+            classify_plugin_source("https://github.com/x/y"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(classify_plugin_source("owner/repo"), PluginSourceKind::GitUrl);
+        assert_eq!(classify_plugin_source("git@github.com:x/y.git"), PluginSourceKind::GitUrl);
+        assert_eq!(classify_plugin_source("./local.thing"), PluginSourceKind::GitUrl);
+    }
+
+    #[test]
+    fn install_source_prefers_source_then_url() {
+        use serde_json::json;
+        assert_eq!(install_source(Some(&json!({"source":"a","url":"b"}))).as_deref(), Some("a"));
+        assert_eq!(install_source(Some(&json!({"url":"https://x/y"}))).as_deref(), Some("https://x/y"));
+        assert_eq!(install_source(Some(&json!({}))), None);
+        assert_eq!(install_source(None), None);
+    }
+}
+
 /// Install plugins from a zip file
 pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: InstallFromZipParams = match parse_params(&request) {
