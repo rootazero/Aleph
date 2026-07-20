@@ -9,6 +9,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Client;
+use serde_json;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
