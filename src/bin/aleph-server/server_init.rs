@@ -189,13 +189,17 @@ where
                 tracing::info!(run_id = %run_id_clone, "Agent run completed successfully");
             }
             Err(e) => {
+                // Raw chain goes to server logs only; the wire gets the sanitized
+                // receipt (shared single source with ExecutionEngine::execute), so
+                // the Panel never sees the flattened internal error chain.
                 tracing::error!(run_id = %run_id_clone, error = %e, "Agent run failed");
+                let (error_code, error_message) = e.user_receipt();
                 if let Err(emit_err) = emitter_clone
                     .emit(StreamEvent::RunError {
                         run_id: run_id_clone.clone(),
                         seq: 0,
-                        error: e.to_string(),
-                        error_code: Some("EXECUTION_FAILED".to_string()),
+                        error: error_message,
+                        error_code: Some(error_code.to_string()),
                     })
                     .await
                 {
@@ -397,13 +401,17 @@ where
                 tracing::info!(run_id = %run_id_clone, "Chat run completed successfully");
             }
             Err(e) => {
+                // Raw chain goes to server logs only; the wire gets the sanitized
+                // receipt (shared single source with ExecutionEngine::execute), so
+                // the Panel never sees the flattened internal error chain.
                 tracing::error!(run_id = %run_id_clone, error = %e, "Chat run failed");
+                let (error_code, error_message) = e.user_receipt();
                 if let Err(emit_err) = emitter_clone
                     .emit(StreamEvent::RunError {
                         run_id: run_id_clone.clone(),
                         seq: 0,
-                        error: e.to_string(),
-                        error_code: Some("EXECUTION_FAILED".to_string()),
+                        error: error_message,
+                        error_code: Some(error_code.to_string()),
                     })
                     .await
                 {

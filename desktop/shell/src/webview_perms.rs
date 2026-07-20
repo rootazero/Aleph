@@ -13,7 +13,9 @@
 //!   (a prompt, at best). We attach our own handler granting the mic.
 //! - **Linux (`WebKitGTK`)**: wry installs no permission handler at all, and
 //!   `enable-media-stream` defaults off, so `getUserMedia` is silently denied.
-//!   We enable the setting and allow `UserMediaPermissionRequest`.
+//!   We enable the setting, then grant a `UserMediaPermissionRequest` only when
+//!   it is audio-only (no camera) and originates from the Panel surface; every
+//!   other media request is explicitly denied and logged.
 
 use tauri::WebviewWindow;
 
@@ -41,7 +43,10 @@ pub fn grant_microphone(window: &WebviewWindow) {
 #[cfg(target_os = "linux")]
 fn grant_linux(pview: &tauri::webview::PlatformWebview) {
     use webkit2gtk::glib::object::Cast;
-    use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
+    use webkit2gtk::{
+        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
+        UserMediaPermissionRequestExt, WebViewExt,
+    };
 
     let webview = pview.inner();
 
@@ -50,15 +55,32 @@ fn grant_linux(pview: &tauri::webview::PlatformWebview) {
         settings.set_enable_media_stream(true);
     }
 
-    webview.connect_permission_request(|_webview, request| {
-        if request
-            .downcast_ref::<UserMediaPermissionRequest>()
-            .is_some()
-        {
+    webview.connect_permission_request(|webview, request| {
+        let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
+            return false; // not a media request — defer to default handling
+        };
+        // Gate 1 — audio-only: the Panel voice button never needs a camera, so
+        // any request that includes a video device is refused wholesale.
+        let audio_only = media.is_for_audio_device() && !media.is_for_video_device();
+        // Gate 2 — origin: reuse the navigation SSOT for "is this the Panel
+        // surface?" (loopback daemon / tauri.localhost / configured remote).
+        // A `None` uri (unresolvable origin) folds into origin_ok = false.
+        let origin_ok = WebViewExt::uri(webview)
+            .and_then(|u| tauri::Url::parse(&u).ok())
+            .is_some_and(|u| crate::external_link::is_internal(&u));
+        if audio_only && origin_ok {
             request.allow();
-            return true; // handled — stop further emission
+        } else {
+            // Withhold camera / foreign-origin capture explicitly rather than
+            // relying on WebKitGTK's version-dependent unhandled default.
+            tracing::warn!(
+                audio_only,
+                origin_ok,
+                "webview UserMedia request denied (not audio-only from Panel origin)"
+            );
+            request.deny();
         }
-        false // defer everything else to default handling
+        true // handled — stop further emission
     });
 }
 

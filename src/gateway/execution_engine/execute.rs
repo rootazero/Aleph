@@ -893,19 +893,21 @@ where
                 // tells the user whether retrying is worthwhile (rate-limited /
                 // unreachable). The typed `e` is still returned below for
                 // internal callers; only the channel presentation changes.
-                let receipt = super::failure_receipt::FailureReceipt::from_error(&e);
+                // `ExecutionError::user_receipt` is the single source of truth,
+                // shared with the bin-crate RPC handlers (agent.run / chat.send).
+                let (error_code, error_message) = e.user_receipt();
                 if let Err(emit_err) = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),
                         seq: final_seq,
-                        error: receipt.message,
-                        error_code: Some(receipt.code.to_string()),
+                        error: error_message,
+                        error_code: Some(error_code.to_string()),
                     })
                     .await
                 {
                     tracing::warn!(
                         run_id = %run_id,
-                        error_code = %receipt.code,
+                        error_code = %error_code,
                         error = %emit_err,
                         "failed to emit RunError stream event"
                     );
