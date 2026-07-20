@@ -152,7 +152,10 @@ impl DiscordChannel {
             rich_text: true, // Markdown support
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
-            stream_protocol: Default::default(),
+            // Reply streaming: the generic ReplyEmitter drives send→edit via our
+            // `Channel::edit()` impl. The inbound executor flips `stream_enabled`
+            // on when it sees EditBased. Mirrors Telegram's progressive editing.
+            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
         }
     }
 
