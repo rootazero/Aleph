@@ -30,7 +30,17 @@ pub fn setup(app: &AppHandle) {
 /// React to one `aleph://` URL: focus the window, then deliver the raw URL
 /// to the Panel as an `aleph:deep-link` DOM event for it to route.
 fn handle_url(app: &AppHandle, url: &str) {
-    tracing::info!("deep link received: {url}");
+    // URLs commonly carry auth codes / tokens in the query (e.g.
+    // `aleph://oauth?code=...&state=...`) which must never reach an
+    // info-level log. Strip the query and fragment so the log only
+    // records "what scheme did the user invoke", and drop to debug
+    // for the full URL behind a feature most operators never enable.
+    tracing::info!("deep link received: {}", redacted_for_log(url));
+    if tracing::level_filters::LevelFilter::current()
+        >= tracing::level_filters::LevelFilter::DEBUG
+    {
+        tracing::debug!("deep link full URL: {url}");
+    }
     crate::focus_window(app);
 
     let Some(window) = app.get_webview_window("main") else {
@@ -38,6 +48,29 @@ fn handle_url(app: &AppHandle, url: &str) {
     };
     if let Err(e) = window.eval(deep_link_script(url)) {
         tracing::debug!("could not deliver the deep link to the Panel: {e}");
+    }
+}
+
+/// Return the URL with query string and fragment stripped, so secrets
+/// carried in either segment never reach an info-level log. Falls back to
+/// the input unchanged when parsing fails.
+fn redacted_for_log(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) => {
+            let mut s = u.clone();
+            s.set_query(None);
+            s.set_fragment(None);
+            s.to_string()
+        }
+        Err(_) => {
+            // Not a parseable absolute URL — best effort: drop the
+            // first `?` or `#` and everything after.
+            let end = url
+                .find('?')
+                .or_else(|| url.find('#'))
+                .unwrap_or(url.len());
+            url[..end].to_string()
+        }
     }
 }
 
