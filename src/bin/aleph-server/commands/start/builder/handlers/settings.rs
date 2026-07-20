@@ -205,7 +205,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
-) {
+) -> Arc<alephcore::ConfigPatcher> {
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::browser_config;
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
@@ -901,6 +901,10 @@ pub(in crate::commands::start) fn register_config_handlers(
             acp
         );
     }
+
+    // Hand the patcher back to the caller so it can late-bind `self_config`
+    // and `moa` tool instances (see `BuiltinToolRegistry::set_config_patcher`).
+    config_patcher
 }
 
 // ─── register_voice_capability_handlers ──────────────────────────────────────

@@ -32,6 +32,20 @@ impl BuiltinToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
+    /// Late-bind a `ConfigPatcher` into `self_config` and `moa_manage` tools.
+    ///
+    /// `ConfigPatcher` is built by `register_agent_handlers` *after* the
+    /// `BuiltinToolRegistry`, so the constructor cannot see it. Without this
+    /// setter those tools ship permanently without a patcher and every write
+    /// returns "patcher not available", even though their schema is advertised
+    /// to the LLM.
+    ///
+    /// Safe to call from any thread; only mutates the two tool instances.
+    pub fn set_config_patcher(&mut self, patcher: Arc<crate::config::patcher::ConfigPatcher>) {
+        self.self_config_tool.set_patcher(Arc::clone(&patcher));
+        self.moa_manage_tool.set_patcher(Arc::clone(&patcher));
+    }
+
     /// Extract the caller's `agent_id` for the tool call currently executing.
     ///
     /// Prefers the per-turn `TURN_CONTEXT` task-local — scoped by the dispatch

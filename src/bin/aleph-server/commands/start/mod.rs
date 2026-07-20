@@ -1374,7 +1374,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (e.g. the task reaper that reads `tasks_reaper` after handlers are
     // registered). `register_config_handlers` owns it via `Arc`, so the
     // extra reference count is the only cost.
-    register_config_handlers(
+    let config_patcher = register_config_handlers(
         &mut server,
         app_config.clone(),
         config_patcher,
@@ -1383,6 +1383,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         acp_manager.clone(),
     );
+    // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
+    // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
+    agent_result
+        .tool_registry
+        .set_config_patcher(config_patcher.clone());
 
     // Panel voice channel — native capture (record_start/stop) + TTS playback
     // (synthesize). Endpoint I/O for the mic button's full voice loop.
