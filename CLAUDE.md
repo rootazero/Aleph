@@ -279,7 +279,7 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 - 先给方案再写代码；不确定时列出选项，不猜测（呼应 P1 与全局 CLAUDE.md）
 - 重大变更前先问，小优化可直接执行
 - 回复用中文，代码注释用英文，文档中英双语
-- 极度节制 cargo 调用（系统负担）—— 默认不跑全量测试，高风险合并至多一次 `cargo check --lib`
+- 按需正常使用 cargo（`check` / `test` / `clippy`）—— 编译与测试验证优先，不再强制节制调用次数
 
 ### Git Worktree 注意事项
 
