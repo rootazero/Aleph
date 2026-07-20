@@ -18,6 +18,17 @@ use crate::browser::profile::PlaywrightCliConfig;
 use crate::builtin_tools::error::ToolError;
 
 /// Convert Markdown source to HTML fragment using pulldown-cmark.
+fn file_url_from_path(path: &Path) -> String {
+    // RFC 8089: file URLs use forward slashes and require `file:///` on
+    // Windows where paths start with a drive letter (`C:\…` → `file:///C:/…`).
+    // `Path::display` on Windows preserves backslashes, which leaves the URL
+    // unparseable for playwright-cli.
+    let mut s = path.to_string_lossy().replace('\\', "/");
+    if !s.starts_with('/') {
+        s.insert(0, '/');
+    }
+    format!("file://{s}")
+}
 ///
 /// Enables all extensions: tables, footnotes, strikethrough, task lists, etc.
 pub fn markdown_to_html(markdown: &str) -> String {
@@ -83,7 +94,7 @@ pub async fn generate(
     tokio::fs::write(tmp.path(), html_doc.as_bytes())
         .await
         .map_err(|e| ToolError::Execution(format!("write html: {e}")))?;
-    let file_url = format!("file://{}", tmp.path().display());
+    let file_url = file_url_from_path(tmp.path());
     debug!("pdf_generate wrote HTML to {}", tmp.path().display());
 
     let driver = PlaywrightCliDriver::new(PlaywrightCliConfig::default());
