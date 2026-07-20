@@ -3,7 +3,7 @@
 //! Gateway-level privacy protection that filters outbound messages
 //! before they reach LLM API providers.
 //!
-//! Unlike `utils::pii::scrub_pii()` (which is optimized for log scrubbing
+//! Unlike `aleph_logging::scrub_pii()` (which is optimized for log scrubbing
 //! and accepts false positives), this engine is tuned for precision —
 //! false positives degrade LLM comprehension.
 

@@ -38,7 +38,9 @@ mod execution_plan;
 pub use execution_plan::ExecutionPlanLayer;
 
 // --- Standing-goal layer (active goal objective, re-surfaced per turn) ---
+mod graph_topology;
 mod standing_goal;
+pub use graph_topology::GraphTopologyLayer;
 pub use standing_goal::StandingGoalLayer;
 
 // --- Timer-loop layer (active watch loop status, re-surfaced per turn) ---

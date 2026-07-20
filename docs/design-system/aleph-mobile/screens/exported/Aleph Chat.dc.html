@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="styles/aleph.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+    background:
+      radial-gradient(60% 50% at 18% 12%, oklch(0.62 0.10 310 / 0.18), transparent 70%),
+      radial-gradient(70% 60% at 88% 96%, oklch(0.60 0.09 250 / 0.16), transparent 70%),
+      oklch(0.93 0.006 290);
+    font-family: var(--font-sans);
+  }
+  .cc-hide-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+  .cc-hide-scroll::-webkit-scrollbar { display: none; }
+  @keyframes cc-blink { 0%, 45% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  @keyframes cc-dot { 0%, 80%, 100% { transform: translateY(0); opacity: .4; } 40% { transform: translateY(-3px); opacity: 1; } }
+</style>
+</helmet>
+
+<div style="position:relative; width:418px; padding:14px; border-radius:62px; background:linear-gradient(150deg, oklch(0.30 0.02 300), oklch(0.16 0.015 300)); box-shadow: 0 2px 6px oklch(0.2 0.02 310 / .2), 0 30px 80px oklch(0.25 0.03 310 / .35), inset 0 0 0 2px oklch(0.45 0.02 300 / .5); ">
+
+  <div data-screen-label="Chat" data-material="liquid" style="position:relative; width:390px; height:844px; border-radius:48px; overflow:hidden; background:
+      radial-gradient(120% 55% at 50% 0%, oklch(0.62 0.10 310 / 0.14), transparent 62%),
+      radial-gradient(120% 45% at 50% 100%, oklch(0.60 0.09 250 / 0.10), transparent 60%),
+      var(--color-surface); display:flex; flex-direction:column;">
+
+    <!-- Status bar -->
+    <div style="position:relative; height:54px; flex:none; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 6px; z-index:5;">
+      <span class="tabular-nums" style="font-size:15px; font-weight:600; color:var(--color-text-primary); letter-spacing:0;">9:41</span>
+      <div style="display:flex; align-items:center; gap:7px; color:var(--color-text-primary);">
+        <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="5" y="4.5" width="3" height="7.5" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity="0.4"/></svg>
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2A11 11 0 0 1 16 4.2"/><path d="M3.4 6.7A7.4 7.4 0 0 1 13.6 6.7"/><path d="M5.8 9.2a3.9 3.9 0 0 1 5.4 0"/><circle cx="8.5" cy="11" r="0.6" fill="currentColor"/></svg>
+        <div style="display:flex; align-items:center; gap:2px;"><div style="width:22px; height:11px; border:1.3px solid currentColor; border-radius:3px; padding:1.5px; opacity:.85;"><div style="width:75%; height:100%; background:currentColor; border-radius:1px;"></div></div><div style="width:1.5px; height:4px; background:currentColor; border-radius:1px; opacity:.6;"></div></div>
+      </div>
+    </div>
+    <!-- Dynamic island -->
+    <div style="position:absolute; top:11px; left:50%; transform:translateX(-50%); width:118px; height:34px; background:#000; border-radius:20px; z-index:6;"></div>
+
+    <!-- Top bar -->
+    <div class="glass" style="flex:none; display:flex; align-items:center; gap:8px; min-height:50px; padding:4px 12px 8px; border-bottom:1px solid var(--color-border-subtle); z-index:4; background-color:color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);">
+      <button class="btn btn-ghost" style="flex:1; justify-content:flex-start; gap:6px; min-height:38px; padding:0 8px; background:transparent; border:0;">
+        <span style="display:inline-flex; width:26px; height:26px; border-radius:var(--radius-full); background:linear-gradient(150deg, var(--color-primary), oklch(0.62 0.12 270)); color:var(--color-text-inverse); align-items:center; justify-content:center; font-size:12px; font-weight:700; box-shadow: var(--shadow-sm);">A</span>
+        <span style="font-size:16px; font-weight:600; color:var(--color-text-primary);">Assistant</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-text-tertiary);"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button class="btn btn-icon btn-ghost" aria-label="notifications" style="position:relative;">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        <span style="position:absolute; top:9px; right:10px; width:8px; height:8px; border-radius:var(--radius-full); background:var(--color-danger); border:1.5px solid var(--color-surface-overlay);"></span>
+      </button>
+    </div>
+
+    <!-- Message flow -->
+    <div class="cc-hide-scroll" style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:14px; padding:18px 16px 20px;">
+
+      <div style="align-self:center; display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:var(--radius-full); background:color-mix(in oklch, var(--color-surface-raised) 60%, transparent); border:1px solid var(--color-border-subtle); font-size:11px; color:var(--color-text-tertiary);">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        今天 · 9:40
+      </div>
+
+      <!-- User bubble -->
+      <div class="msg-glass-user" style="align-self:flex-end; max-width:80%; padding:11px 15px; border-radius:var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl); font-size:15px; line-height:1.5;">
+        帮我看下记忆里有没有部署相关的
+      </div>
+
+      <!-- AI bubble with answer + code + reasoning -->
+      <div style="align-self:flex-start; max-width:86%; display:flex; flex-direction:column; gap:8px;">
+        <div class="msg-glass" style="padding:12px 15px; border-radius:var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-sm); font-size:15px; line-height:1.55; color:var(--color-text-primary);">
+          在 Vault 里找到 3 条部署相关的记忆。最相关的一条是本地启动命令:
+          <div class="glass-inset mono" style="margin-top:10px; padding:10px 12px; border-radius:var(--radius-md); font-size:12.5px; line-height:1.5; color:var(--color-text-primary); overflow-x:auto; white-space:nowrap;">aleph-server start --port 18790</div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+            <span style="display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:var(--radius-full); background:var(--color-primary-subtle); color:var(--color-primary); font-size:11px; font-weight:600;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+              检索了 3 个来源
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Streaming AI bubble -->
+      <div class="msg-glass" style="align-self:flex-start; max-width:86%; padding:12px 15px; border-radius:var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-sm); font-size:15px; line-height:1.55; color:var(--color-text-primary);">
+        另外两条分别是部署清单和回滚脚本&mdash;&mdash;要我把它们整理成一份<span style="display:inline-block; width:9px; height:18px; margin-left:1px; transform:translateY(3px); border-radius:1.5px; background:var(--color-primary); animation:cc-blink 1s steps(1) infinite;"></span>
+      </div>
+
+    </div>
+
+    <!-- Composer -->
+    <div style="flex:none; padding:8px 12px 6px; background:color-mix(in oklch, var(--color-surface-overlay) 70%, transparent); border-top:1px solid var(--color-border-subtle); backdrop-filter:blur(var(--glass-blur)); -webkit-backdrop-filter:blur(var(--glass-blur));">
+      <div style="display:flex; align-items:flex-end; gap:8px;">
+        <button class="btn btn-icon btn-ghost" aria-label="attach" style="flex:none; width:40px; min-height:40px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <div class="glass-inset" style="flex:1; display:flex; align-items:center; gap:8px; min-height:44px; padding:0 6px 0 14px; border-radius:var(--radius-2xl); background:var(--color-surface-raised); border:1px solid var(--color-border);">
+          <span style="flex:1; font-size:15px; color:var(--color-text-tertiary);">问 Aleph&hellip;</span>
+          <span style="display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:600; color:var(--color-text-tertiary); padding:3px 7px; border-radius:var(--radius-sm); background:color-mix(in oklch, var(--color-text-primary) 6%, transparent);">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            /
+          </span>
+        </div>
+        <button class="btn btn-icon btn-secondary" aria-label="voice" style="flex:none; width:44px; min-height:44px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <button class="btn btn-icon btn-primary" aria-label="send" style="flex:none; width:44px; min-height:44px; box-shadow: 0 3px 12px oklch(0.55 0.12 310 / .35);">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tabbar glass" style="flex:none; padding-bottom:calc(0.4rem + 16px);">
+      <button class="tabitem tabitem-active">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.7 8.7 0 0 1-4-1L3 20l1-5.5a8.4 8.4 0 0 1-1-4A8.4 8.4 0 0 1 11.5 2 8.4 8.4 0 0 1 21 11.5z"/></svg>
+        Chat
+      </button>
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="8" r="2.4"/><circle cx="11" cy="17" r="2.4"/><path d="M8 8.4l1.5 6.4M15.8 9.6L12.6 15.6"/></svg>
+        Memory
+      </button>
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
+        Agents
+      </button>
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4 13.6H4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 5 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.4 4V4a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+        Settings
+      </button>
+    </div>
+
+    <!-- Home indicator -->
+    <div style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:134px; height:5px; border-radius:var(--radius-full); background:var(--color-text-primary); opacity:.28; z-index:7;"></div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

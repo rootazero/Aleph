@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::agents::swarm::tasks::acceptance::with_acceptance_criteria;
+use crate::agents::swarm::tasks::acceptance::{with_acceptance_criteria, with_require_grounding};
 use crate::agents::swarm::tasks::retry::with_max_retries;
 use crate::agents::swarm::tasks::timeout::with_task_timeout;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority};
@@ -44,6 +44,12 @@ pub struct TaskCreateArgs {
     /// grounded). Optional — omit for tasks with no explicit acceptance bar.
     #[serde(default)]
     pub acceptance_criteria: Option<Vec<String>>,
+    /// Require the reviewer to attach grounding evidence (a real measurement:
+    /// exit_code / numeric / line_count) before this task can be approved.
+    /// Use for tasks with verifiable side effects (tests, builds, published
+    /// output); leave off for tasks with nothing measurable (prose review).
+    #[serde(default)]
+    pub require_grounding: Option<bool>,
     /// How many times the dispatcher should automatically re-run this task if an
     /// attempt fails or times out, before marking it failed for good. Each retry
     /// resumes with the prior attempts' context (run log + exit journal), so the
@@ -126,7 +132,9 @@ impl AlephTool for TaskCreateTool {
          or specific agent owner. Once dependencies are met, the team \
          dispatcher runs the task automatically. Supply `acceptance_criteria` \
          (a checklist) to define when the task is done — the executing agent \
-         sees it as its bar, and the reviewer judges approval against it.";
+         sees it as its bar, and the reviewer judges approval against it. \
+         Set `require_grounding` to demand reviewer-side measurement evidence at the \
+         approval gate.";
 
     type Args = TaskCreateArgs;
     type Output = TaskCreateOutput;
@@ -158,9 +166,12 @@ impl AlephTool for TaskCreateTool {
         // session's goal tree budget (a no-op outside a turn context).
         let metadata = crate::gateway::goal_budget::with_origin_session(with_task_timeout(
             with_max_retries(
-                with_acceptance_criteria(
-                    with_managed_marker(args.metadata),
-                    args.acceptance_criteria.unwrap_or_default(),
+                with_require_grounding(
+                    with_acceptance_criteria(
+                        with_managed_marker(args.metadata),
+                        args.acceptance_criteria.unwrap_or_default(),
+                    ),
+                    args.require_grounding.unwrap_or(false),
                 ),
                 args.max_retries,
             ),

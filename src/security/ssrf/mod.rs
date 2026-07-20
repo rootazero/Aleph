@@ -110,19 +110,62 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
         return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
     }
 
-    let url = validate_url_common(url_str, policy)?;
+    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
+
+    if is_legacy_ip_literal(host) {
+        return Err(SsrfError::BlockedAddress(format!(
+            "legacy IP literal: {host}"
+        )));
+    }
+
+    if has_url_credentials(url_str) {
+        return Err(SsrfError::InvalidUrl(
+            "URL contains embedded credentials".to_string(),
+        ));
+    }
+
+    let allowlisted = is_allowlisted(host, &policy.allowed_hosts);
+
+    if !allowlisted {
+        if is_blocked_hostname(host) {
+            return Err(SsrfError::BlockedAddress(host.to_string()));
+        }
+        if is_blocklisted(host, &policy.blocked_hosts) {
+            return Err(SsrfError::BlockedAddress(format!(
+                "host in blocklist: {host}"
+            )));
+        }
+    }
 
     if matches!(
         url.host(),
         Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_))
     ) {
+        if let Some(ip) = match url.host() {
+            Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
+            Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
+            _ => None,
+        } {
+            if is_ip_blocked_by_policy(ip, policy) {
+                return Err(SsrfError::BlockedAddress(ip.to_string()));
+            }
+        }
         return Ok(url);
     }
 
-    // DNS resolution — validate all returned IPs via dns module
+    // DNS resolution — validate all returned IPs via dns module.
+    // For allowlisted hosts, classify the resolved IP with the relaxed
+    // `for_allowlisted_host()` policy so DNS rebinding cannot reach
+    // 127.0.0.1 / 169.254.169.254 even when the name is on the allowlist.
+    // This matches `safe_fetch::validate_url_full` semantics.
     let port = url.port_or_known_default().unwrap_or(80);
-    dns::resolve_and_validate(host, port, policy).await?;
+    let dns_policy = if allowlisted {
+        &SsrfPolicy::for_allowlisted_host()
+    } else {
+        policy
+    };
+    dns::resolve_and_validate(host, port, dns_policy).await?;
 
     Ok(url)
 }

@@ -8,6 +8,8 @@ use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::orchestrator::dispatch::TokenBreakdown;
 
+pub const DEFAULT_ROUTING_RETENTION_CAP: usize = 5000;
+
 /// Zero-judgment feedback surface — every field is a raw fact (§5.2). No
 /// `success: bool`, no `quality_score`, no `user_re_steer`, no `consecutive_errors`.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +38,7 @@ impl RoutingExperienceStore {
         Self {
             backend,
             embedder,
-            retention_cap: 5000,
+            retention_cap: DEFAULT_ROUTING_RETENTION_CAP,
         }
     }
 

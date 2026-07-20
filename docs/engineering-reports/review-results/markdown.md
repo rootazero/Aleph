@@ -1,0 +1,2 @@
+ISSUE|src/markdown/fences.rs:12|low|Production use of .expect() for static regex initialization violates CLAUDE.md "never unwrap/expect in production" guideline|static FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"...").expect("Invalid fence regex"));
+ISSUE|src/markdown/fences.rs:177|medium|Production use of .unwrap() can be eliminated; use .map(|s| s.to_string()) on split_whitespace() instead|Some(info.split_whitespace().next().unwrap().to_string())

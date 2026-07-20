@@ -286,6 +286,29 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_allowed_tool_sets(vec!["INVESTIGATION".into()])
             .with_denied_tools(vec!["file_write".into(), "file_edit".into(), "bash".into()])
             .with_max_iterations(20),
+        // Loop-auditor — the governance layer's independent evidence collector
+        // (spec 2026-07-19-graph-multiagent-fusion). Fresh context by design:
+        // an auditor that shares the auditee's memory/context can only confirm
+        // the auditee's own story ("agents reading the same data prove each
+        // other right"). Can measure (bash → real exit codes / counts) and
+        // read; cannot rewrite; network search denied per audit doctrine.
+        AgentDef::new("loop-auditor", AgentMode::SubAgent)
+            .with_description("Independent-context evidence collector for governance loops")
+            .with_when_to_use(
+                "When an audit/watcher governance turn needs independently gathered \
+                 evidence: run anchor probes, re-measure claimed numbers, verify a \
+                 reviewed deliverable against reality. Read-and-measure only.",
+            )
+            .with_context_mode(ContextMode::Fresh)
+            .with_allowed_tool_sets(vec!["READ_ONLY".into()])
+            .with_allowed_tools(vec!["bash".into()])
+            .with_denied_tools(vec![
+                "file_write".into(),
+                "file_edit".into(),
+                "search".into(),
+                "web_fetch".into(),
+            ])
+            .with_max_iterations(15),
         // Coder agent - file operations
         AgentDef::new("coder", AgentMode::SubAgent)
             .with_description("Code writing specialist with file operations")
@@ -425,7 +448,7 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 7);
+        assert_eq!(agents.len(), 8);
         assert!(
             agents.iter().all(|a| a.id != "store"),
             "store agent must be retired"
@@ -744,5 +767,27 @@ mod tests {
 
         // Unrelated tools must still be allowed on main.
         assert!(main.is_tool_allowed("flow_run"));
+    }
+
+    #[test]
+    fn loop_auditor_is_independent_and_measure_only() {
+        let agents = builtin_agents();
+        let auditor = agents
+            .iter()
+            .find(|a| a.id == "loop-auditor")
+            .expect("loop-auditor builtin must exist");
+        assert!(matches!(auditor.mode, AgentMode::SubAgent));
+        // Independent context is the whole point of this agent.
+        assert!(matches!(auditor.context_mode, ContextMode::Fresh));
+        // Can measure (bash for real exit codes) and read, cannot rewrite.
+        assert!(auditor.is_tool_allowed("bash"));
+        assert!(auditor.is_tool_allowed("file_read"));
+        assert!(!auditor.is_tool_allowed("file_write"));
+        assert!(!auditor.is_tool_allowed("file_edit"));
+        // Audit doctrine forbids network search — deny at the definition level.
+        assert!(!auditor.is_tool_allowed("search"));
+        assert!(!auditor.is_tool_allowed("web_fetch"));
+        // SubAgent mode structurally cannot recurse.
+        assert!(!auditor.is_tool_allowed("subagent"));
     }
 }

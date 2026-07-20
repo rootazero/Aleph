@@ -122,8 +122,31 @@ fn sanitise_job_id(raw: &str) -> String {
     }
 }
 
+/// Carryover filename for a `job_id`. Pure-character sanitisation is not
+/// injective (`foo/bar_baz` and `foo_bar_baz` both produce `foo_bar_baz`),
+/// so two distinct job ids would otherwise share one carryover file and
+/// silently overwrite / read each other's progress. Suffix a short hash of
+/// the raw id so collisions are distinguishable while the human-readable
+/// prefix stays grep-friendly.
+fn carryover_filename(job_id: &str) -> String {
+    let safe = sanitise_job_id(job_id);
+    let hash = short_hash(job_id.as_bytes());
+    format!("{safe}-{hash}.json")
+}
+
+/// 32-bit FNV-1a — fast, non-cryptographic, no external dep. Eight hex chars
+/// is enough to make accidental collisions negligible for carryover files.
+fn short_hash(bytes: &[u8]) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in bytes {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{:08x}", h)
+}
+
 fn carryover_path_at(dir: &std::path::Path, job_id: &str) -> PathBuf {
-    dir.join(format!("{}.json", sanitise_job_id(job_id)))
+    dir.join(carryover_filename(job_id))
 }
 
 /// Production helper — uses the default `carryover_dir()`.
@@ -431,6 +454,10 @@ mod tests {
         // Verify the .json.tmp pattern: after write, the .tmp file is gone
         // (renamed to final). If a crash happened mid-write, a reader
         // would not see a half-written .json file.
+        //
+        // The final filename is `{sanitised_id}-{hash}.json` (the hash
+        // suffix disambiguates ids that would otherwise collide on the
+        // pure-character sanitisation — see `carryover_filename`).
         let dir = TempDir::new().unwrap();
         let rec = CarryOver::new("x", "y");
         write_at(dir.path(), "atomic_job", &rec).unwrap();
@@ -439,7 +466,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(entries.iter().any(|n| n == "atomic_job.json"));
+        assert!(
+            entries.iter().any(|n| n.starts_with("atomic_job-") && n.ends_with(".json")),
+            "expected atomic_job-<hash>.json in {entries:?}"
+        );
         assert!(
             !entries.iter().any(|n| n.ends_with(".tmp")),
             "tmp file must be renamed away, entries={entries:?}",

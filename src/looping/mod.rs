@@ -98,6 +98,20 @@ impl LoopRegistry {
         self.lock().remove(session_id);
     }
 
+    /// Snapshot every loop across ALL sessions, any status. Backs
+    /// `loop(action='list')`: a loop started on one channel is invisible to
+    /// `status`, which keys by the current session — the same cross-session gap
+    /// `goal(action='list')` closes for goals (R6 一核多端 / R8 对话即管理面板).
+    /// The registry keeps at most one entry per session (`start` overwrites), so
+    /// this is small — one row per session that started a loop this daemon
+    /// lifetime. Process memory only, so it is exactly the loops alive now (no
+    /// orphan rows to reconcile, matching the "随会话消亡" contract). Ordering is
+    /// the caller's to impose.
+    #[must_use]
+    pub fn list_all(&self) -> Vec<LoopState> {
+        self.lock().values().cloned().collect()
+    }
+
     /// The continuation hook's whole post-run decision, under ONE lock guard:
     /// seed the token baseline, gate on an in-flight tick, then either claim
     /// the next tick (bump the counter, stamp the pending wake) or stop an
@@ -333,6 +347,19 @@ mod tests {
         reg.put(st("a"));
         reg.remove("a");
         assert!(reg.get("a").is_none());
+    }
+
+    #[test]
+    fn list_all_returns_every_session_regardless_of_status() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        reg.put(st("b").with_status(LoopStatus::Stopped));
+        reg.put(st("c"));
+        let all = reg.list_all();
+        assert_eq!(all.len(), 3, "one row per session, active and stopped alike");
+        let ids: std::collections::HashSet<_> = all.iter().map(|l| l.session_id.as_str()).collect();
+        assert!(ids.contains("a") && ids.contains("b") && ids.contains("c"));
+        assert!(LoopRegistry::default().list_all().is_empty(), "empty registry");
     }
 
     #[test]

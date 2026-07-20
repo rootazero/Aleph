@@ -273,51 +273,36 @@ pub struct CollaborativeSession {
 - `session_turn` — speak in session (`mode: respond` or `mode: conclude` to propose ending with outcome)
 - `session_read` — read transcript and outcome
 
-### Role Mechanism
+### Review & Acceptance Mechanism
 
-Roles are implemented through **prompt templates + structured tools + validation rules**, not code-level behavior logic (R8, R10).
+> Doc-drift fix (2026-07-19): an earlier revision of this section described
+> `review_score` / `ReviewScore` / `TeamRoleConfig` / `min_challenges`, none of
+> which exist in the implementation. What follows is the real mechanism.
 
-**AgentRole enum**: `Leader`, `Explorer`, `Critic`, `Worker`, `Custom(String)`
+Roles are prompt-level only (leader orchestration preamble in
+`src/teams/leader_prompt.rs` + per-member handoff context); there is no
+code-level role enum for members.
 
-**Role-specific behavior** is defined entirely in prompt templates:
+**Review**: the leader accepts/rejects a submitted deliverable with the
+`task_review` tool (`src/builtin_tools/team/task_review.rs`) — approve →
+`Completed` (dependents unblock), reject → back to `InProgress` (redo in
+place, feedback rides along). Verdicts are recorded on the task run
+(`ReviewVerdict` / `ReviewerKind` in `src/agents/swarm/tasks/mod.rs`).
 
-- **Explorer** — forced divergent thinking: generate multiple hypotheses, cite external sources, present counter-arguments to team consensus
-- **Critic** — anti-agreeableness bias: no agreement openers, minimum challenge count, evidence-backed challenges, pass threshold enforcement
+**Acceptance contract**: per-task policy lives in the task `metadata` JSON
+channel (`src/agents/swarm/tasks/acceptance.rs`) — `acceptance_criteria`
+(definition-of-done checklist rendered into the handoff prompt and the review
+gate), `lead_review_required` (route successful runs to `WaitingReview`), and
+`require_grounding` (approvals must carry reviewer-side measurement evidence).
 
-**ReviewScore** (`review_score` tool):
-
-```rust
-pub struct ReviewScore {
-    pub task_id: String,
-    pub artifact_id: String,
-    pub scores: Vec<DimensionScore>,   // dimension + score (1-10) + rationale
-    pub overall_pass: bool,
-    pub challenges: Vec<Challenge>,     // point + severity (Critical/Major/Minor) + evidence
-    pub improvement_suggestions: Vec<String>,
-    pub risks_if_accepted: Vec<String>,
-}
-```
-
-**Configurable validation** via `TeamRoleConfig`:
-- `min_challenges` (default: 3) — `review_score` rejects submission if `challenges.len() < min_challenges`
-- `min_score_threshold` (default: 7) — `overall_pass = true` only allowed when all scores >= threshold
-- `review_dimensions` — configurable per role (default: correctness, completeness, clarity)
-- Leader can override thresholds per task or per review round
-
-**Explorer-Critic Interaction Flow** (defined in leader's orchestration prompt, not code):
-
-```
-1. Leader assigns task to Explorer
-2. Explorer submits Discovery (via task_submit)
-3. Auto-notify Critic (L1 event → L2 message)
-4. Critic submits ReviewScore (via review_score)
-5. If overall_pass = false:
-   - Challenge sent to Explorer (L2 message)
-   - Explorer revises and resubmits
-   - Back to step 4
-6. If back-and-forth exceeds threshold → escalate to L3 CollaborativeSession
-7. Session outcome = final deliverable
-```
+**Grounding evidence** (2026-07-19): `task_review` accepts a structured
+`grounding` field (`kind: exit_code | numeric | line_count` — the same closed
+truth vocabulary as loop_graph anchors — plus `source`/`value`/`note`). When
+the task metadata carries `require_grounding: true`, an approve without
+evidence bounces with status `grounding_required`. Evidence is persisted as a
+`[grounding]` task comment for later audit. Reviewers may collect evidence
+independently via `subagent(agent_type="loop-auditor")` (fresh-context
+measure-only builtin). See `docs/reference/GRAPH_LAYER.md` §多智能体融合.
 
 ### Context Integration
 
@@ -348,10 +333,22 @@ pub enum TeamEventType {
     TaskCompleted,
     TaskFailed,
     ArtifactSubmitted,
-    ReviewScoreSubmitted,
     SessionStarted,
     SessionConcluded,
+    SessionDeadlocked,
     DigestGenerated,
+    ShutdownRequested,
+    ShutdownResolved,
+    PlanSubmitted,
+    PlanResolved,
+
+    // Team lifecycle events (EventBus integration)
+    TeamCreated,
+    MemberAdded,
+    MemberRemoved,
+    TaskAssigned,
+    TaskUpdated,
+    TeamDisbanded,
 }
 ```
 
@@ -645,7 +642,7 @@ the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 ### Team — Roles
 | Tool | Description |
 |------|-------------|
-| `review_score` | Submit structured review with configurable validation (Critic tool) |
+| `task_review` | Leader approves/rejects a submitted task deliverable — approve completes the task and unblocks dependents, reject sends it back for in-place redo; supports optional `grounding` evidence, required when the task carries `require_grounding: true` |
 
 ## Module Structure
 
@@ -697,7 +694,7 @@ Key design decisions for Team mode:
 - **Escalation**: Suggestion to leader, not auto-action (R8)
 - **Session orchestration**: Leader agent via tools, not code-level orchestrator (R8)
 - **Context management**: Tools return full content; agent loop handles truncation
-- **Critic validation**: Configurable thresholds from `TeamRoleConfig` — tool constraint (empowerment), not reasoning replacement
+- **Review gating**: `task_review` requires `grounding` evidence for an approval only when the task's metadata sets `require_grounding: true` — a plain metadata flag, not a role config type. Roles themselves stay prompt-level only (leader orchestration preamble + per-member handoff context) — there is no code-level role config type
 - **Tool count**: 9 new tools (consolidated `inbox_read` + thread, `session_turn` + conclude) — fewer tools improve LLM tool selection accuracy
 
 See also:

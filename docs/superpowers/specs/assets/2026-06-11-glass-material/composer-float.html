@@ -1,0 +1,114 @@
+<style>
+  .cf-card { border: 2px solid rgba(127,127,127,.18); border-radius: 18px; padding: 16px 16px 6px; cursor: pointer; margin-bottom: 26px; transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .cf-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,.10); }
+  .cf-card.selected { border-color: #7c5cff; box-shadow: 0 0 0 3px rgba(124,92,255,.22), 0 8px 30px rgba(0,0,0,.10); }
+  .cf-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 12px; }
+  .cf-letter { font-weight: 800; font-size: 20px; color: #7c5cff; }
+  .cf-head h3 { margin: 0; }
+  .cf-sub { font-size: 12px; opacity: .6; }
+  .cf-note { font-size: 12.5px; opacity: .75; line-height: 1.55; margin: 12px 4px 10px; }
+
+  .cf-stage { position: relative; height: 380px; border-radius: 14px; overflow: hidden; display: flex; padding: 12px; gap: 10px;
+    font-family: -apple-system, "SF Pro Text", "Inter", "PingFang SC", sans-serif;
+    background:
+      radial-gradient(ellipse 60% 55% at 10% 112%, rgba(124,82,255,.5), transparent 66%),
+      radial-gradient(ellipse 50% 48% at 96% 118%, rgba(40,140,255,.42), transparent 64%),
+      radial-gradient(ellipse 45% 40% at 88% -12%, rgba(255,80,160,.28), transparent 62%),
+      radial-gradient(ellipse 75% 52% at 45% -18%, rgba(90,60,220,.30), transparent 72%),
+      linear-gradient(180deg, #16131f, #120f1a);
+    --txt: #f2eefc; --txt2: rgba(235,228,255,.6); --txt3: rgba(235,228,255,.38);
+    --accent: #9d7bff; --accent2: #d05df5;
+    --edge: rgba(255,255,255,.15); --edge-top: rgba(255,255,255,.36); --spec: rgba(255,255,255,.32); }
+  .cf-stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .4; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"); }
+
+  .cf-side { width: 84px; flex: none; border-radius: 12px; padding: 10px 7px; display: flex; flex-direction: column; gap: 4px; position: relative; z-index: 2; opacity: .65;
+    background: rgba(255,255,255,.06); backdrop-filter: blur(18px) saturate(1.8); -webkit-backdrop-filter: blur(18px) saturate(1.8);
+    border: 1px solid var(--edge); box-shadow: 0 12px 40px rgba(0,0,0,.42), inset 0 1px 0 var(--spec); }
+  .cf-logo { display: flex; align-items: center; gap: 6px; margin: 2px 2px 10px; }
+  .cf-logo i { width: 16px; height: 16px; border-radius: 6px; background: linear-gradient(145deg, var(--accent), var(--accent2)); }
+  .cf-logo b { font-size: 10px; color: var(--txt); }
+  .cf-nav { font-size: 9.5px; padding: 5px 7px; border-radius: 8px; color: var(--txt2); }
+  .cf-nav.on { background: rgba(157,123,255,.2); color: #cdb6ff; font-weight: 600; }
+
+  .cf-main { flex: 1; position: relative; z-index: 2; min-width: 0; display: flex; flex-direction: column; }
+  .cf-tabs { height: 26px; flex: none; display: flex; gap: 6px; align-items: center; padding: 0 4px; margin-bottom: 8px; }
+  .cf-tab { font-size: 9.5px; padding: 4px 10px; border-radius: 8px; color: var(--txt2);
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.10); }
+  .cf-tab.on { color: var(--txt); background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.2); box-shadow: inset 0 1px 0 var(--spec); }
+
+  .cf-msg { font-size: 10.5px; line-height: 1.5; padding: 7px 11px; border-radius: 12px; color: var(--txt);
+    background-color: rgba(255,255,255,.07);
+    background-image: linear-gradient(165deg, rgba(255,255,255,.10), transparent 45%);
+    border: 1px solid rgba(255,255,255,.13); border-top-color: rgba(255,255,255,.32);
+    box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .cf-msg.user { align-self: flex-end; max-width: 78%; color: #fff;
+    background-color: rgba(124,82,255,.45);
+    background-image: linear-gradient(165deg, rgba(255,255,255,.18), transparent 50%);
+    border-color: rgba(165,120,255,.5); border-top-color: rgba(230,210,255,.62);
+    box-shadow: 0 8px 26px rgba(110,60,255,.45); }
+  .cf-composer { border-radius: 13px; display: flex; align-items: center; padding: 0 8px 0 13px; gap: 8px; height: 44px;
+    background: rgba(255,255,255,.075); backdrop-filter: blur(22px) saturate(1.8); -webkit-backdrop-filter: blur(22px) saturate(1.8);
+    border: 1px solid var(--edge); border-top-color: var(--edge-top);
+    box-shadow: 0 12px 36px rgba(0,0,0,.5), inset 0 1px 0 var(--spec); }
+  .cf-composer span { flex: 1; font-size: 10px; color: var(--txt3); }
+  .cf-send { width: 26px; height: 26px; border-radius: 9px; flex: none; background: linear-gradient(145deg, var(--accent), var(--accent2)); box-shadow: 0 2px 9px rgba(140,95,255,.5), inset 0 1px 0 rgba(255,255,255,.45); }
+
+  /* A — 现状：消息区与输入框上下分段，互不重叠 */
+  .cf-a .cf-msgs { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 10px; overflow: hidden; justify-content: flex-end; }
+  .cf-a .cf-composer { flex: none; }
+
+  /* B — 悬浮：消息流延伸到底，从输入框背后流过 */
+  .cf-b .cf-scroll { flex: 1; position: relative; min-height: 0; }
+  .cf-b .cf-msgs { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 0; overflow: hidden; justify-content: flex-end; }
+  .cf-b .cf-composer { position: absolute; left: 6px; right: 6px; bottom: 6px; z-index: 3; }
+  .cf-b .cf-fade { position: absolute; left: 0; right: 0; top: -2px; height: 30px; z-index: 2; pointer-events: none;
+    background: linear-gradient(180deg, rgba(18,15,26,.55), transparent); }
+</style>
+
+<h2>输入框：贴底分段，还是悬浮在消息流之上？</h2>
+<p class="subtitle">这是「真模糊」最可见的时刻：玻璃只有在内容从背后流过时才真正活过来。两张图都用 液态玻璃·暗 渲染，注意 B 里最后一条消息从输入框背后透出来的样子（真实 backdrop-filter 渲染，所见即所得）。</p>
+
+<div class="cf-card" data-choice="a" onclick="toggleSelect(this)">
+  <div class="cf-head"><span class="cf-letter">A</span><h3>保持现状 — 贴底分段</h3><span class="cf-sub">消息区和输入框上下排列，互不重叠 · 零布局改动</span></div>
+  <div class="cf-stage cf-a">
+    <div class="cf-side">
+      <div class="cf-logo"><i></i><b>Aleph</b></div>
+      <div class="cf-nav on">对话</div><div class="cf-nav">记忆</div><div class="cf-nav">技能</div><div class="cf-nav">设置</div>
+    </div>
+    <div class="cf-main">
+      <div class="cf-tabs"><div class="cf-tab on">主会话</div><div class="cf-tab">代码审查</div></div>
+      <div class="cf-msgs">
+        <div class="cf-msg">我先跑了一遍完整测试套件，349 个用例全部通过。接下来按计划开始重构 gateway 模块。</div>
+        <div class="cf-msg user">好，注意保持对外接口不变</div>
+        <div class="cf-msg">明白。接口签名冻结，只动内部实现。第一步先把路由表抽成独立文件，这样后面的改动每一步都可以独立验证。</div>
+      </div>
+      <div class="cf-composer"><span>输入消息…</span><div class="cf-send"></div></div>
+    </div>
+  </div>
+  <p class="cf-note">输入框的玻璃材质只能「看上去像玻璃」——背后永远是静态画布，模糊了也没人知道。优点：不动 messages.rs / view.rs 的布局，实现成本为零。</p>
+</div>
+
+<div class="cf-card" data-choice="b" onclick="toggleSelect(this)">
+  <div class="cf-head"><span class="cf-letter">B</span><h3>悬浮输入框 — 消息从背后流过</h3><span class="cf-sub">滚动区延伸到底部，输入框浮在其上 · 顶部加柔和渐隐</span></div>
+  <div class="cf-stage cf-b">
+    <div class="cf-side">
+      <div class="cf-logo"><i></i><b>Aleph</b></div>
+      <div class="cf-nav on">对话</div><div class="cf-nav">记忆</div><div class="cf-nav">技能</div><div class="cf-nav">设置</div>
+    </div>
+    <div class="cf-main">
+      <div class="cf-tabs"><div class="cf-tab on">主会话</div><div class="cf-tab">代码审查</div></div>
+      <div class="cf-scroll">
+        <div class="cf-fade"></div>
+        <div class="cf-msgs">
+          <div class="cf-msg">我先跑了一遍完整测试套件，349 个用例全部通过。接下来按计划开始重构 gateway 模块。</div>
+          <div class="cf-msg user">好，注意保持对外接口不变</div>
+          <div class="cf-msg">明白。接口签名冻结，只动内部实现。第一步先把路由表抽成独立文件，这样后面的改动每一步都可以独立验证，出问题也能快速定位到具体提交。滚动时这条消息会从输入框背后流过——玻璃在这一刻活了。</div>
+        </div>
+        <div class="cf-composer"><span>输入消息…</span><div class="cf-send"></div></div>
+      </div>
+    </div>
+  </div>
+  <p class="cf-note">滚动时消息从磨砂输入框背后流过、被实时冰冻——这是整个界面最「玻璃」的瞬间，也是 macOS / iOS 原生 App 的标志性手法。成本：+1 个有界模糊面（输入框一条带，远小于侧栏整列），滚动时那块区域本来就要重绘。需要改 view.rs 的布局结构（输入框移入滚动区悬浮）。</p>
+</div>
+
+<p class="subtitle" style="margin-top:4px">若选 B，会话标签条也会做同样处理（消息从顶部渐隐带下穿过）。点击卡片选择，或在终端补充想法。</p>

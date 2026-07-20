@@ -142,14 +142,17 @@ impl CgroupV2Scope {
         use std::fs;
         use std::sync::Once;
 
-        static WARN_ONCE: Once = Once::new();
+        static WARN_NO_HIERARCHY: Once = Once::new();
+        static WARN_PROC_SELF_CGROUP: Once = Once::new();
+        static WARN_SUBTREE_CONTROL: Once = Once::new();
+        static WARN_MKDIR: Once = Once::new();
 
         // Step 1: confirm v2 unified hierarchy is mounted.
         if !std::path::Path::new(UNIFIED_HIERARCHY)
             .join("cgroup.controllers")
             .exists()
         {
-            WARN_ONCE.call_once(|| {
+            WARN_NO_HIERARCHY.call_once(|| {
                 tracing::warn!(
                     "cgroup v2 unified hierarchy not found at {UNIFIED_HIERARCHY}; \
                      SP-5 cgroup containment skipped (RLIMIT_AS still applies)"
@@ -162,7 +165,7 @@ impl CgroupV2Scope {
         let proc_self = match fs::read_to_string("/proc/self/cgroup") {
             Ok(s) => s,
             Err(e) => {
-                WARN_ONCE.call_once(|| {
+                WARN_PROC_SELF_CGROUP.call_once(|| {
                     tracing::warn!("read /proc/self/cgroup failed: {e}; SP-5 skipped");
                 });
                 return None;
@@ -182,7 +185,7 @@ impl CgroupV2Scope {
         if let Err(e) = fs::write(&subtree, b"+memory +cpu +pids") {
             use std::io::ErrorKind;
             if e.kind() != ErrorKind::AlreadyExists && e.raw_os_error() != Some(libc::EBUSY) {
-                WARN_ONCE.call_once(|| {
+                WARN_SUBTREE_CONTROL.call_once(|| {
                     tracing::warn!("cgroup subtree_control write rejected ({e}); SP-5 skipped");
                 });
                 return None;
@@ -197,7 +200,7 @@ impl CgroupV2Scope {
             .unwrap_or(0);
         let child = parent.join(format!("aleph-sandbox-{pid}-{nonce}"));
         if let Err(e) = fs::create_dir(&child) {
-            WARN_ONCE.call_once(|| {
+            WARN_MKDIR.call_once(|| {
                 tracing::warn!("mkdir {child:?} failed ({e}); SP-5 skipped");
             });
             return None;

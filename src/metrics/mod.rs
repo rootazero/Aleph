@@ -20,7 +20,7 @@
 ///     .with_meta("model", "gpt-4");
 /// // ... do work
 /// ```
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -89,7 +89,7 @@ fn metrics_runtime() -> MetricsRuntime {
 pub struct StageTimer {
     name: String,
     start: Instant,
-    metadata: Option<HashMap<String, String>>,
+    metadata: Option<BTreeMap<String, String>>,
     target_ms: Option<u64>,
 }
 
@@ -139,7 +139,7 @@ impl StageTimer {
     /// ```
     pub fn with_meta(mut self, key: &str, value: &str) -> Self {
         self.metadata
-            .get_or_insert_with(HashMap::new)
+            .get_or_insert_with(BTreeMap::new)
             .insert(key.to_string(), value.to_string());
         self
     }
@@ -208,20 +208,13 @@ impl Drop for StageTimer {
             return;
         }
 
-        if self.metadata.as_ref().is_none_or(|m| m.is_empty()) {
-            tracing::debug!(
-                stage = %self.name,
-                duration_ms = %elapsed_ms,
-                "Stage completed"
-            );
-        } else {
-            tracing::debug!(
-                stage = %self.name,
-                duration_ms = %elapsed_ms,
-                metadata = ?self.metadata,
-                "Stage completed"
-            );
-        }
+        let meta = self.metadata.as_ref().filter(|m| !m.is_empty());
+        tracing::debug!(
+            stage = %self.name,
+            duration_ms = %elapsed_ms,
+            metadata = ?meta,
+            "Stage completed"
+        );
     }
 }
 

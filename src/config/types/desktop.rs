@@ -62,8 +62,10 @@ mod tests {
     #[test]
     fn default_matches_reporter_defaults() {
         let d = DesktopDaemonConfig::default();
-        // Presence reporter ships on; mic-level ships off (opt-in).
-        assert!(d.presence.enabled);
+        // Both presence and mic-level ship off by default. Both publish
+        // privacy-sensitive data (hostname + username / mic amplitude) on
+        // the Gateway event bus and must be opted in explicitly.
+        assert!(!d.presence.enabled);
         assert!(!d.mic_level.enabled);
     }
 
@@ -104,7 +106,7 @@ mod tests {
     #[test]
     fn empty_table_uses_inner_defaults() {
         let d: DesktopDaemonConfig = toml::from_str("").expect("parse empty");
-        assert!(d.presence.enabled);
+        assert!(!d.presence.enabled);
         assert!(!d.mic_level.enabled);
     }
 }

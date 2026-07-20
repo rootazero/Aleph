@@ -314,6 +314,22 @@ Hard rules that must not be violated by any bridge handler:
   justifying why it does not touch `~/.aleph/`. Bridge code review checks this
   invariant.
 
+### R1 carve-out — process-isolation FFI stays in-core
+
+The sandbox is the one place `src/` calls platform FFI directly
+(`windows-sys` under `src/sandbox/platforms/windows/*`, `src/sandbox/windows_init/*`),
+and this is a **deliberate R1 carve-out, not a violation**. The
+restricted-token / job-object / AppContainer / integrity-level / SID·ACL calls
+must be made by the parent **at spawn time** — you cannot sandbox a process
+from a separate helper, and routing a spawn-time restricted token through an
+IPC round-trip would weaken the security model. The local PID-liveness probe in
+`src/builtin_tools/desktop/session_lock.rs` (`OpenProcess`/`GetExitCodeProcess`)
+is in-core for the same reason. All of it is `#[cfg(windows)]`-gated and the
+crate is `[target.'cfg(target_os="windows")']`-gated. R1 targets the desktop
+UI / screen / Vision *limbs*, which still go through the Swift bridge — proven
+by `src/` carrying zero direct `cocoa`/`objc`/`core-graphics` use. See
+CLAUDE.md R1 "例外·进程隔离内核".
+
 ## Cycle 1 hardening (2026-05-20)
 
 Comparison against codex's three-OS sandbox (`/Volumes/TBU4/Github/codex`)

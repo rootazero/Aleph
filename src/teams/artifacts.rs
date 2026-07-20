@@ -15,6 +15,12 @@ use tokio::sync::Mutex;
 
 use crate::error::AlephError;
 
+/// Maximum bytes for a single artifact's content body. Artifacts cover
+/// plan markdown, shell snippets, extracted doc sections, and reviews —
+/// none of which have a legitimate need for multi-MiB payloads. 1 MiB is
+/// well above any real artifact and well below anything a model would read.
+pub(super) const MAX_ARTIFACT_CONTENT_LEN: usize = 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // ArtifactType
 // ---------------------------------------------------------------------------
@@ -379,6 +385,18 @@ impl SqliteArtifactStore {
 #[async_trait]
 impl ArtifactStore for SqliteArtifactStore {
     async fn create_artifact(&self, input: NewArtifact) -> crate::error::Result<TaskArtifact> {
+        // Per-artifact content cap. Artifact bodies can be plan markdown,
+        // shell snippets, or extracted doc sections — none of which have a
+        // legitimate need for multi-MiB payloads. Without a cap, a single
+        // create_artifact with a multi-GB content grows SQLite and is fully
+        // materialised into memory on every read for JSON parsing.
+        if input.content.len() > MAX_ARTIFACT_CONTENT_LEN {
+            return Err(crate::error::AlephError::config(format!(
+                "artifact content exceeds {} byte cap (got {})",
+                MAX_ARTIFACT_CONTENT_LEN,
+                input.content.len()
+            )));
+        }
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();

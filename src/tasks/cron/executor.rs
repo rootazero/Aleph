@@ -472,23 +472,19 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
     // run, if any. `read` returns Ok(None) for the common "no prior partial"
     // case; surface IO errors as warnings rather than blocking the run — a
     // broken carry-over file should not break the job.
+    //
+    // Do NOT clear the carry-over here. Doing so before `adapter.execute`
+    // runs would discard the partial progress if the execution itself
+    // fails (timeout / panic / permanent error), forcing the next firing
+    // to start over from zero. The post-run branch in `execute_cron_job`
+    // is the single point that either replaces the file with a fresh
+    // partial (BudgetExhaustedPartialResult path) or deletes it
+    // idempotently when the run completed cleanly.
     match crate::tasks::cron::carryover::read(&snapshot.id) {
         Ok(Some(record)) => {
             let prefix = crate::tasks::cron::carryover::render_prefix(&record);
             if !prefix.is_empty() {
                 parts.push(prefix);
-            }
-            // One-shot consumption: clear so a single carry-over only
-            // resumes the next run, not every subsequent firing. If the
-            // resumed run ITSELF caps out, the executor writes a fresh
-            // carry-over post-run.
-            if let Err(e) = crate::tasks::cron::carryover::clear(&snapshot.id) {
-                warn!(
-                    job_id = %snapshot.id,
-                    error = %e,
-                    "failed to clear cron carryover after read; \
-                     next firing may re-inject the same partial",
-                );
             }
         }
         Ok(None) => {}

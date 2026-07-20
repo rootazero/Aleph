@@ -38,8 +38,8 @@ pub enum ActorCommand {
 }
 
 pub struct SessionActor {
-    pub id: SessionId,
-    pub store: Arc<dyn SessionEventStore>,
+    pub(crate) id: SessionId,
+    pub(crate) store: Arc<dyn SessionEventStore>,
     state: SessionState,
     head_seq: EventSeq,
     inbox: mpsc::Receiver<ActorCommand>,

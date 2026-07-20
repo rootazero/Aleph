@@ -155,13 +155,14 @@ pub fn parse_skill_content(
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
     let raw: RawFrontmatter = serde_yaml::from_str(&yaml_str)?;
 
-    // Build the id from the name (lowercase, replace spaces with hyphens,
-    // collapse consecutive hyphens to prevent invalid ids like "a--b").
+    // Build the id from the name (lowercase, replace any Unicode whitespace run
+    // with a single hyphen, then collapse consecutive hyphens). `replace(' ', "-")`
+    // alone would leak tabs / NBSP / ideographic spaces into the id and break
+    // downstream path / filesystem operations.
     let id_str = raw
         .name
         .to_lowercase()
-        .replace(' ', "-")
-        .split('-')
+        .split_whitespace()
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");

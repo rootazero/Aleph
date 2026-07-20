@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for the `PresenceReporter` background task.
 ///
-/// Defaults are conservative: enabled, 30-second tick.
+/// **Default is `enabled = false`.** Presence snapshots carry the device
+/// hostname and the system username — both are PII on most systems — and
+/// are broadcast on the Gateway event bus to every subscriber. Broadcasting
+/// them without an explicit opt-in risks leaking identity to remote channels
+/// or shared log sinks, so the reporter stays off until the operator turns
+/// it on.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PresenceConfig {
     /// Whether to emit presence snapshots on the Gateway event bus.
@@ -18,7 +23,7 @@ pub struct PresenceConfig {
 }
 
 const fn default_enabled() -> bool {
-    true
+    false
 }
 
 const fn default_interval_secs() -> u64 {
@@ -47,9 +52,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_enabled_at_thirty_seconds() {
+    fn default_is_disabled_opt_in() {
         let c = PresenceConfig::default();
-        assert!(c.enabled);
+        assert!(!c.enabled, "presence must default to disabled to avoid PII leak");
         assert_eq!(c.interval_secs, 30);
         assert_eq!(c.effective_interval_secs(), 30);
     }

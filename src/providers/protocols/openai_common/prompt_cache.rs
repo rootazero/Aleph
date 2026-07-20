@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 
 /// `OpenAI` rejects a `prompt_cache_key` longer than 64 characters.
-pub const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
+pub(crate) const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
 
 /// Derive the request's `prompt_cache_key`: content-addressed from the static
 /// prefix, session-id fallback.

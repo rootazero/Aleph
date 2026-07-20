@@ -1,0 +1,51 @@
+<!-- @dsCard group="Components" name="Message bubbles (chat)" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Message bubbles — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+<style>
+  .flow{ display:flex; flex-direction:column; gap:12px; padding:16px; }
+  .bub{ max-width:80%; padding:11px 14px; border-radius:var(--radius-xl); font-size:.875rem; line-height:1.5; }
+  .bub.me{ align-self:flex-end; }
+  .code{ margin-top:8px; border-radius:var(--radius-md); padding:8px 10px; font-family:var(--font-mono); font-size:.75rem; color:var(--color-text-primary); }
+  .reason{ display:inline-flex;align-items:center;gap:.35rem;margin-top:8px;font-size:.6875rem;color:var(--color-text-tertiary); }
+</style>
+</head>
+<body>
+  <div class="ds-stage">
+    <!-- Light, Luxe -->
+    <div class="ds-panel" style="background:var(--color-surface);width:300px;padding:0;overflow:hidden;border-radius:20px">
+      <div class="flow">
+        <div class="bub me msg-glass-user">帮我看下记忆里有没有部署相关的</div>
+        <div class="bub msg-glass" style="color:var(--color-text-primary)">
+          找到 3 条。最相关的一条:
+          <div class="code glass-inset">aleph-server start --port 18790</div>
+          <span class="reason">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+            reasoning · 检索了 3 个来源
+          </span>
+        </div>
+        <div class="bub msg-glass-danger" style="color:var(--color-text-primary)">连接 core 失败,正在重试…</div>
+      </div>
+    </div>
+
+    <!-- Dark, Liquid -->
+    <div class="ds-panel dark" data-material="liquid" style="width:300px;padding:0;overflow:hidden;border-radius:20px;
+      background:
+        radial-gradient(120% 80% at 0% 0%, oklch(0.45 0.16 320 / .6), transparent 60%),
+        radial-gradient(120% 80% at 100% 100%, oklch(0.45 0.15 250 / .6), transparent 60%),
+        var(--color-surface)">
+      <div class="flow">
+        <div class="bub me msg-glass-user">Dark · Liquid material</div>
+        <div class="bub msg-glass" style="color:var(--color-text-primary)">
+          visionOS 风玻璃:白字浮于暗场,低填充。
+          <div class="code glass-inset">cargo run --bin aleph-server</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

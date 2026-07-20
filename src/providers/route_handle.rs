@@ -9,10 +9,12 @@
 //! prompt sees the new route with **no daemon restart** (the task's hot-state
 //! requirement).
 //!
-//! Lock-free by construction: two atomics, `Relaxed` ordering. Route selection
-//! is an advisory infrastructure preference, not a synchronization point — a
-//! reader racing a writer simply gets the old-or-new mode for one request, which
-//! is exactly the "next prompt picks it up" contract. No mutex on the hot path
+//! Lock-free by construction: the whole route state lives behind one
+//! [`ArcSwap`] cell. A hot-apply publishes *every* field atomically (a single
+//! RCU swap) and the failover walk reads one coherent [`snapshot`](RouteHandle::snapshot)
+//! per candidate-ordering pass — so a reader racing a writer gets the whole old
+//! config or the whole new one for one request, never a torn mix (new mode with
+//! stale targets). "Next prompt picks it up" without a mutex on the hot path
 //! (the Rust edge over the reference routers' lock-guarded Python state).
 //!
 //! R7/R10 stance unchanged: this carries the two HARD signals (operator mode +
@@ -20,7 +22,6 @@
 //! is the same data [`route_policy`](crate::providers::route_policy) already
 //! consumed, merely made live instead of boot-frozen.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 use arc_swap::ArcSwap;
@@ -29,75 +30,47 @@ use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::route_policy::{RateLimits, RouteTargets};
 use crate::sync_primitives::Arc;
 
-const MODE_AUTO: u8 = 0;
-const MODE_ALWAYS_LOCAL: u8 = 1;
-const MODE_ALWAYS_CLOUD: u8 = 2;
-
-const LB_ORDERED: u8 = 0;
-const LB_ROUND_ROBIN: u8 = 1;
-const LB_LEAST_BUSY: u8 = 2;
-const LB_LATENCY_AWARE: u8 = 3;
-const LB_USAGE_BASED: u8 = 4;
-const LB_COST_AWARE: u8 = 5;
-
-const fn mode_to_u8(mode: RouteMode) -> u8 {
-    match mode {
-        RouteMode::Auto => MODE_AUTO,
-        RouteMode::AlwaysLocal => MODE_ALWAYS_LOCAL,
-        RouteMode::AlwaysCloud => MODE_ALWAYS_CLOUD,
-    }
+/// One coherent generation of the live route state.
+///
+/// Published as a whole via [`RouteHandle::store`] and read as a whole via
+/// [`RouteHandle::snapshot`], so the failover walk never observes a torn mix of
+/// fields from two different config generations.
+#[derive(Debug, Clone)]
+pub struct RouteState {
+    /// Operator local/cloud preference.
+    pub mode: RouteMode,
+    /// Whether an `AlwaysLocal` route may still escalate to cloud.
+    pub allow_escalation: bool,
+    /// Load-balancing strategy for the same-tier fallback pool.
+    pub load_balance: LoadBalanceStrategy,
+    /// Operator provider pins.
+    pub targets: Arc<RouteTargets>,
+    /// Per-provider rate ceilings.
+    pub limits: Arc<RateLimits>,
 }
 
-const fn u8_to_mode(raw: u8) -> RouteMode {
-    match raw {
-        MODE_ALWAYS_LOCAL => RouteMode::AlwaysLocal,
-        MODE_ALWAYS_CLOUD => RouteMode::AlwaysCloud,
-        // MODE_AUTO and any out-of-range value fall back to the safe no-op.
-        _ => RouteMode::Auto,
-    }
-}
-
-const fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
-    match s {
-        LoadBalanceStrategy::Ordered => LB_ORDERED,
-        LoadBalanceStrategy::RoundRobin => LB_ROUND_ROBIN,
-        LoadBalanceStrategy::LeastBusy => LB_LEAST_BUSY,
-        LoadBalanceStrategy::LatencyAware => LB_LATENCY_AWARE,
-        LoadBalanceStrategy::UsageBased => LB_USAGE_BASED,
-        LoadBalanceStrategy::CostAware => LB_COST_AWARE,
-    }
-}
-
-const fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
-    match raw {
-        LB_ROUND_ROBIN => LoadBalanceStrategy::RoundRobin,
-        LB_LEAST_BUSY => LoadBalanceStrategy::LeastBusy,
-        LB_LATENCY_AWARE => LoadBalanceStrategy::LatencyAware,
-        LB_USAGE_BASED => LoadBalanceStrategy::UsageBased,
-        LB_COST_AWARE => LoadBalanceStrategy::CostAware,
-        // LB_ORDERED and any out-of-range value fall back to the safe no-op.
-        _ => LoadBalanceStrategy::Ordered,
+impl RouteState {
+    fn from_config(cfg: &ModelRouteConfig) -> Self {
+        Self {
+            mode: cfg.mode,
+            allow_escalation: cfg.allow_cloud_escalation,
+            load_balance: cfg.load_balance,
+            targets: Arc::new(RouteTargets::from_config(cfg)),
+            limits: Arc::new(RateLimits::from_config(cfg)),
+        }
     }
 }
 
 /// Live local/cloud route preference shared between the failover walk (reader)
 /// and the config-write path (writer).
 ///
-/// Cheap to clone (it is always behind an [`Arc`]). The two hard scalar signals
-/// (mode + escalation) are relaxed atomics; the optional provider pins live in
-/// an [`ArcSwap`] so the hot path reads them lock-free too (RCU load, no mutex —
-/// the Rust edge over the reference routers' lock-guarded Python state).
+/// Cheap to clone (it is always behind an [`Arc`]). The whole [`RouteState`]
+/// lives in one [`ArcSwap`] so the hot path reads a coherent snapshot lock-free
+/// (RCU load, no mutex — the Rust edge over the reference routers' lock-guarded
+/// Python state) and the config-write path swaps a new generation atomically.
 #[derive(Debug)]
 pub struct RouteHandle {
-    mode: AtomicU8,
-    allow_escalation: AtomicBool,
-    /// Load-balancing strategy for the same-tier fallback pool. A third hard
-    /// scalar signal alongside `mode` — same relaxed-atomic, hot-swap contract.
-    load_balance: AtomicU8,
-    targets: ArcSwap<RouteTargets>,
-    /// Per-provider rate ceilings. Same lock-free RCU contract as `targets`: the
-    /// hot path reads a stable snapshot, the config-write path swaps a new one.
-    limits: ArcSwap<RateLimits>,
+    state: ArcSwap<RouteState>,
 }
 
 impl RouteHandle {
@@ -105,62 +78,60 @@ impl RouteHandle {
     #[must_use]
     pub fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
-            mode: AtomicU8::new(mode_to_u8(cfg.mode)),
-            allow_escalation: AtomicBool::new(cfg.allow_cloud_escalation),
-            load_balance: AtomicU8::new(lb_to_u8(cfg.load_balance)),
-            targets: ArcSwap::from_pointee(RouteTargets::from_config(cfg)),
-            limits: ArcSwap::from_pointee(RateLimits::from_config(cfg)),
+            state: ArcSwap::from_pointee(RouteState::from_config(cfg)),
         }
     }
 
-    /// Hot-apply a new route preference. Visible to the very next
-    /// [`load`](Self::load) / [`targets`](Self::targets) — i.e. the next
-    /// request's candidate ordering.
+    /// Hot-apply a new route preference as a single atomic publish. Visible to
+    /// the very next [`snapshot`](Self::snapshot) — i.e. the next request's
+    /// candidate ordering — as one coherent generation: a concurrent reader gets
+    /// the whole old config or the whole new one, never a torn mix.
     pub fn store(&self, cfg: &ModelRouteConfig) {
-        self.mode.store(mode_to_u8(cfg.mode), Ordering::Relaxed);
-        self.allow_escalation
-            .store(cfg.allow_cloud_escalation, Ordering::Relaxed);
-        self.load_balance
-            .store(lb_to_u8(cfg.load_balance), Ordering::Relaxed);
-        self.targets.store(Arc::new(RouteTargets::from_config(cfg)));
-        self.limits.store(Arc::new(RateLimits::from_config(cfg)));
+        self.state.store(Arc::new(RouteState::from_config(cfg)));
+    }
+
+    /// One coherent snapshot of the live route state (single lock-free RCU load).
+    /// The failover walk reads every field it needs from this so one
+    /// candidate-ordering pass sees a single config generation.
+    pub fn snapshot(&self) -> Arc<RouteState> {
+        self.state.load_full()
     }
 
     /// Read the current `(mode, allow_cloud_escalation)` — the two hard signals
-    /// the route policy needs. One relaxed load each; no lock, no await.
+    /// the route policy needs. Prefer [`snapshot`](Self::snapshot) when reading
+    /// more than one field so the reads share one generation.
     pub fn load(&self) -> (RouteMode, bool) {
-        (
-            u8_to_mode(self.mode.load(Ordering::Relaxed)),
-            self.allow_escalation.load(Ordering::Relaxed),
-        )
+        let s = self.state.load();
+        (s.mode, s.allow_escalation)
     }
 
-    /// Read the current load-balancing strategy. One relaxed load; no lock.
+    /// Read the current load-balancing strategy.
     pub fn load_balance(&self) -> LoadBalanceStrategy {
-        u8_to_lb(self.load_balance.load(Ordering::Relaxed))
+        self.state.load().load_balance
     }
 
-    /// Read the current provider pins. Lock-free RCU load; the returned `Arc` is
-    /// a stable snapshot for the duration of one candidate ordering pass.
+    /// Read the current provider pins. The returned `Arc` is a stable snapshot.
     pub fn targets(&self) -> Arc<RouteTargets> {
-        self.targets.load_full()
+        // rust-doctor-disable-next-line excessive-clone
+        self.state.load().targets.clone()
     }
 
-    /// Read the current per-provider rate ceilings. Lock-free RCU load; the
-    /// returned `Arc` is a stable snapshot for one candidate ordering pass.
+    /// Read the current per-provider rate ceilings. The returned `Arc` is a
+    /// stable snapshot.
     pub fn limits(&self) -> Arc<RateLimits> {
-        self.limits.load_full()
+        // rust-doctor-disable-next-line excessive-clone
+        self.state.load().limits.clone()
     }
 }
 
 /// Process-global live handle. The daemon is an OS-level singleton (flock), so
 /// one cell per process is the whole world. Set once at boot from the loaded
-/// config; mutated in place thereafter via its interior atomics.
+/// config; swapped in place thereafter via its interior [`ArcSwap`].
 static GLOBAL: OnceLock<Arc<RouteHandle>> = OnceLock::new();
 
 /// Get-or-initialise the global handle from `cfg`. The first caller (boot,
 /// before the gateway serves) wins the initialisation; later callers get the
-/// same `Arc` and ignore their `cfg` argument (the live atomics are the truth).
+/// same `Arc` and ignore their `cfg` argument (the live state is the truth).
 pub fn global_route_handle(cfg: &ModelRouteConfig) -> Arc<RouteHandle> {
     GLOBAL
         .get_or_init(|| Arc::new(RouteHandle::from_config(cfg)))
@@ -217,6 +188,34 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_carries_every_field_coherently() {
+        let h = RouteHandle::from_config(&ModelRouteConfig::default());
+        let s = h.snapshot();
+        assert_eq!(s.mode, RouteMode::Auto);
+        assert!(!s.allow_escalation);
+        assert_eq!(s.load_balance, LoadBalanceStrategy::Ordered);
+        assert_eq!(*s.targets, RouteTargets::default());
+        assert!(s.limits.is_empty());
+
+        h.store(&ModelRouteConfig {
+            mode: RouteMode::AlwaysCloud,
+            allow_cloud_escalation: true,
+            load_balance: LoadBalanceStrategy::LeastBusy,
+            cloud_provider: Some("anthropic".to_string()),
+            ..Default::default()
+        });
+        // A snapshot taken before the store still reads the whole old generation.
+        assert_eq!(s.mode, RouteMode::Auto);
+        assert_eq!(*s.targets, RouteTargets::default());
+        // A fresh snapshot reads the whole new generation.
+        let s2 = h.snapshot();
+        assert_eq!(s2.mode, RouteMode::AlwaysCloud);
+        assert!(s2.allow_escalation);
+        assert_eq!(s2.load_balance, LoadBalanceStrategy::LeastBusy);
+        assert!(s2.targets.is_pinned("anthropic"));
+    }
+
+    #[test]
     fn targets_default_empty_and_hot_apply() {
         let h = RouteHandle::from_config(&ModelRouteConfig::default());
         assert_eq!(*h.targets(), RouteTargets::default());
@@ -237,28 +236,6 @@ mod tests {
         // Clearing pins hot-applies back to empty.
         h.store(&ModelRouteConfig::default());
         assert_eq!(*h.targets(), RouteTargets::default());
-    }
-
-    #[test]
-    fn unknown_raw_mode_decodes_to_auto() {
-        assert_eq!(u8_to_mode(99), RouteMode::Auto);
-    }
-
-    #[test]
-    fn unknown_raw_lb_decodes_to_ordered() {
-        assert_eq!(u8_to_lb(99), LoadBalanceStrategy::Ordered);
-    }
-
-    #[test]
-    fn usage_based_lb_round_trips() {
-        assert_eq!(lb_to_u8(LoadBalanceStrategy::UsageBased), LB_USAGE_BASED);
-        assert_eq!(u8_to_lb(LB_USAGE_BASED), LoadBalanceStrategy::UsageBased);
-    }
-
-    #[test]
-    fn cost_aware_lb_round_trips() {
-        assert_eq!(lb_to_u8(LoadBalanceStrategy::CostAware), LB_COST_AWARE);
-        assert_eq!(u8_to_lb(LB_COST_AWARE), LoadBalanceStrategy::CostAware);
     }
 
     #[test]
@@ -307,6 +284,79 @@ mod tests {
                 ..Default::default()
             });
             assert_eq!(h.load_balance(), s);
+        }
+    }
+
+    /// A config hot-swap that flips mode *and* pins together must never be
+    /// observed half-applied. Two coherent configs are alternated by a writer
+    /// while readers assert every observation is fully-A or fully-B — never a
+    /// torn mix (new mode + old targets). The single-`ArcSwap` publish plus a
+    /// one-shot [`RouteHandle::snapshot`] per read guarantees coherence; the
+    /// pre-fix per-field accessors (`load()` then `targets()`) tore here.
+    #[test]
+    fn concurrent_store_is_never_observed_torn() {
+        use std::sync::atomic::{AtomicBool, Ordering as O};
+        use std::sync::Arc as StdArc;
+
+        // Config A: always-local, pinned to "ollama", no cloud pin.
+        let cfg_a = ModelRouteConfig {
+            mode: RouteMode::AlwaysLocal,
+            local_provider: Some("ollama".to_string()),
+            ..Default::default()
+        };
+        // Config B: always-cloud, pinned to "anthropic", no local pin.
+        let cfg_b = ModelRouteConfig {
+            mode: RouteMode::AlwaysCloud,
+            cloud_provider: Some("anthropic".to_string()),
+            ..Default::default()
+        };
+
+        let handle = StdArc::new(RouteHandle::from_config(&cfg_a));
+        let stop = StdArc::new(AtomicBool::new(false));
+
+        let writer = {
+            let handle = StdArc::clone(&handle);
+            std::thread::spawn(move || {
+                for i in 0..200_000u32 {
+                    handle.store(if i % 2 == 0 { &cfg_b } else { &cfg_a });
+                }
+            })
+        };
+
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let handle = StdArc::clone(&handle);
+                let stop = StdArc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(O::Relaxed) {
+                        // One coherent snapshot — all fields share one generation.
+                        let snap = handle.snapshot();
+                        match snap.mode {
+                            RouteMode::AlwaysLocal => {
+                                assert!(
+                                    snap.targets.is_pinned("ollama")
+                                        && !snap.targets.is_pinned("anthropic"),
+                                    "torn read: AlwaysLocal mode with non-A targets"
+                                );
+                            }
+                            RouteMode::AlwaysCloud => {
+                                assert!(
+                                    snap.targets.is_pinned("anthropic")
+                                        && !snap.targets.is_pinned("ollama"),
+                                    "torn read: AlwaysCloud mode with non-B targets"
+                                );
+                            }
+                            RouteMode::Auto => unreachable!("neither config uses Auto"),
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        writer.join().unwrap();
+        stop.store(true, O::Relaxed);
+        for r in readers {
+            r.join().unwrap();
         }
     }
 }

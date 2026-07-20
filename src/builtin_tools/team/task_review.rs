@@ -12,10 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::agents::swarm::tasks::acceptance::require_grounding;
 use crate::agents::swarm::tasks::{
     CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
 };
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
@@ -26,6 +27,40 @@ use crate::tools::AlephTool;
 pub enum ReviewDecision {
     Approve,
     Reject,
+}
+
+/// Reviewer-side anchor evidence backing an approval — a real measurement the
+/// reviewer performed (not the submitter's self-report). `kind` uses the same
+/// closed truth vocabulary as loop_graph anchor nodes (one anchor language
+/// system-wide).
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct GroundingEvidence {
+    /// exit_code | numeric | line_count
+    pub kind: String,
+    /// The real command run / independent data source consulted
+    pub source: String,
+    /// The measured value (exit code, number, line count)
+    pub value: String,
+    /// Optional context note
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Closed grounding vocabulary — aligned with the loop_graph anchor truth set.
+fn grounding_kind_valid(kind: &str) -> bool {
+    matches!(kind, "exit_code" | "numeric" | "line_count")
+}
+
+/// Whether this review call must be bounced for missing grounding evidence.
+/// Only approvals are gated: a rejection is naturally conservative. Pure /
+/// host-testable.
+#[must_use]
+fn needs_grounding_bounce(
+    decision: ReviewDecision,
+    metadata: &serde_json::Value,
+    has_grounding: bool,
+) -> bool {
+    matches!(decision, ReviewDecision::Approve) && require_grounding(metadata) && !has_grounding
 }
 
 /// Arguments for `task_review`.
@@ -40,6 +75,11 @@ pub struct TaskReviewArgs {
     /// Optional feedback, stored on the task (shown to the owner on a reject).
     #[serde(default)]
     pub feedback: Option<String>,
+    /// Grounding evidence backing an approval (a measurement you ran yourself,
+    /// or one collected via subagent(agent_type='loop-auditor')). Required to
+    /// approve when the task carries `require_grounding: true`.
+    #[serde(default)]
+    pub grounding: Option<GroundingEvidence>,
 }
 
 /// Output from `task_review`.
@@ -108,7 +148,9 @@ impl AlephTool for TaskReviewTool {
          in_progress for the owner to redo — put what to fix in `feedback`. The \
          member's result is a self-report, not a verified fact: before approving \
          claims with external side-effects (files written, requests sent, things \
-         published), verify the handle it returned (path, URL, id) yourself.";
+         published), verify the handle it returned (path, URL, id) yourself. \
+         Tasks created with require_grounding=true bounce approvals lacking the \
+         `grounding` evidence field (kind: exit_code | numeric | line_count).";
 
     type Args = TaskReviewArgs;
     type Output = TaskReviewOutput;
@@ -117,6 +159,9 @@ impl AlephTool for TaskReviewTool {
         Some(vec![
             "task_review(task_id='task-3', decision='approve')".to_string(),
             "task_review(task_id='task-3', decision='reject', feedback='缺少错误处理,补上再交')"
+                .to_string(),
+            "task_review(task_id='task-3', decision='approve', grounding={kind:'exit_code', \
+             source:'cargo test -p alephcore --lib', value:'0'})"
                 .to_string(),
         ])
     }
@@ -162,6 +207,29 @@ impl AlephTool for TaskReviewTool {
             });
         }
 
+        if let Some(g) = &args.grounding {
+            if !grounding_kind_valid(&g.kind) {
+                return Err(AlephError::tool(format!(
+                    "task_review: grounding.kind '{}' invalid — must be one of \
+                     exit_code | numeric | line_count",
+                    g.kind
+                )));
+            }
+        }
+        if needs_grounding_bounce(args.decision, &task.metadata, args.grounding.is_some()) {
+            return Ok(TaskReviewOutput {
+                task_id: args.task_id,
+                status: "grounding_required".into(),
+                newly_unblocked: Vec::new(),
+                message: "this task requires grounding evidence to approve: run a real \
+                          measurement yourself (test/probe → exit_code, count → numeric, \
+                          output size → line_count) — or spawn \
+                          subagent(agent_type='loop-auditor') to collect it independently \
+                          — then re-call task_review with the `grounding` field filled"
+                    .into(),
+            });
+        }
+
         let status = target_status(args.decision);
         debug!(task_id = %args.task_id, ?status, "task_review verdict");
 
@@ -192,6 +260,25 @@ impl AlephTool for TaskReviewTool {
             let _ = self
                 .coord_store
                 .add_task_comment(&args.task_id, &self.current_agent_id, fb)
+                .await;
+        }
+        if let Some(g) = &args.grounding {
+            // Durable, migration-free evidence trail: ride the task-comment
+            // channel so auditors / loop-auditor can later verify the review
+            // touched reality.
+            let line = format!(
+                "[grounding] kind={} source={} value={}{}",
+                g.kind,
+                g.source,
+                g.value,
+                g.note
+                    .as_deref()
+                    .map(|n| format!(" note={n}"))
+                    .unwrap_or_default()
+            );
+            let _ = self
+                .coord_store
+                .add_task_comment(&args.task_id, &self.current_agent_id, &line)
                 .await;
         }
 
@@ -255,5 +342,45 @@ mod tests {
         let r: ReviewDecision = serde_json::from_str("\"reject\"").unwrap();
         assert_eq!(a, ReviewDecision::Approve);
         assert_eq!(r, ReviewDecision::Reject);
+    }
+
+    #[test]
+    fn grounding_bounce_matrix() {
+        use serde_json::json;
+        let gated = json!({ "require_grounding": true });
+        let open = json!({});
+        // require on + approve + no evidence → bounce
+        assert!(needs_grounding_bounce(
+            ReviewDecision::Approve,
+            &gated,
+            false
+        ));
+        // require on + approve + evidence → pass
+        assert!(!needs_grounding_bounce(
+            ReviewDecision::Approve,
+            &gated,
+            true
+        ));
+        // require on + reject + no evidence → pass (rejection is conservative)
+        assert!(!needs_grounding_bounce(
+            ReviewDecision::Reject,
+            &gated,
+            false
+        ));
+        // require off + approve + no evidence → pass
+        assert!(!needs_grounding_bounce(
+            ReviewDecision::Approve,
+            &open,
+            false
+        ));
+    }
+
+    #[test]
+    fn grounding_kind_is_closed_vocabulary() {
+        for k in ["exit_code", "numeric", "line_count"] {
+            assert!(grounding_kind_valid(k));
+        }
+        assert!(!grounding_kind_valid("vibes"));
+        assert!(!grounding_kind_valid(""));
     }
 }

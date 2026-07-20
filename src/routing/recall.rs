@@ -19,6 +19,8 @@ use crate::memory::store::sqlite::routing_experience::{ModelAggregate, RoutingNe
 use super::experience_store::RoutingExperienceStore;
 use super::RoutingAttribution;
 
+pub const DEFAULT_RECALL_K: usize = 5;
+
 /// Availability of a recalled experience's provider, for render-time gating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderStatus {
@@ -77,7 +79,7 @@ impl RoutingRecall {
         Self {
             store,
             availability,
-            k: 5,
+            k: DEFAULT_RECALL_K,
         }
     }
 

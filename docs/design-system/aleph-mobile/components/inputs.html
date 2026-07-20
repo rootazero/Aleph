@@ -1,0 +1,53 @@
+<!-- @dsCard group="Components" name="Inputs" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inputs — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+<style>.selectish{display:flex;align-items:center;justify-content:space-between}</style>
+</head>
+<body>
+  <div class="ds-stage">
+    <div class="ds-panel" style="background:var(--color-surface);width:300px">
+      <div class="ds-label">Light</div>
+      <div class="ds-col">
+        <div>
+          <label class="field-label">API base</label>
+          <input class="field" value="https://api.anthropic.com">
+        </div>
+        <div>
+          <label class="field-label">Focused</label>
+          <input class="field" value="claude-opus-4-8" style="border-color:var(--color-border-focus);box-shadow:var(--focus-ring)">
+        </div>
+        <div>
+          <label class="field-label">Provider</label>
+          <div class="field selectish">
+            <span>Anthropic</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-text-tertiary)"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+        <div>
+          <label class="field-label">System prompt</label>
+          <textarea class="field">You are Aleph.</textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="ds-panel dark" style="background:var(--color-surface);width:300px">
+      <div class="ds-label">Dark</div>
+      <div class="ds-col">
+        <div>
+          <label class="field-label">API base</label>
+          <input class="field" value="https://api.anthropic.com">
+        </div>
+        <div>
+          <label class="field-label">Focused</label>
+          <input class="field" value="claude-opus-4-8" style="border-color:var(--color-border-focus);box-shadow:var(--focus-ring)">
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

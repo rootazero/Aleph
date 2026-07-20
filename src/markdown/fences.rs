@@ -101,7 +101,7 @@ impl FenceSpan {
     pub fn reopen_line(&self) -> String {
         match &self.language {
             Some(lang) if !lang.is_empty() => format!("{}{}{}", self.indent, self.marker, lang),
-            _ => format!("{}{}", self.indent, self.marker),
+            _ => self.close_line(),
         }
     }
 }
@@ -172,7 +172,6 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                     current_fence = Some(open);
                 }
             } else {
-                // Opening a new fence
                 let language = if info.is_empty() {
                     None
                 } else {
@@ -188,15 +187,16 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
             }
         }
 
-        // Move offset past line and line terminator (\n or \r\n)
-        offset = if text.as_bytes().get(line_end) == Some(&b'\r')
-            && text.as_bytes().get(line_end + 1) == Some(&b'\n')
+        // `str::lines()` strips `\n`/`\r\n`, so re-check the original bytes
+        // to keep `offset` aligned with the source text byte positions.
+        let bytes = text.as_bytes();
+        offset = if bytes.get(line_end) == Some(&b'\r') && bytes.get(line_end + 1) == Some(&b'\n')
         {
-            line_end + 2 // \r\n
+            line_end + 2
         } else if line_end < text.len() {
-            line_end + 1 // \n
+            line_end + 1
         } else {
-            line_end // end of text, no trailing newline
+            line_end
         };
     }
 
