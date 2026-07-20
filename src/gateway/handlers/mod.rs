@@ -102,7 +102,6 @@ pub mod rerank_config;
 pub mod route_config;
 pub mod routing_rules;
 pub mod runtimes;
-pub mod schema;
 pub mod search_config;
 pub mod secret_approvals;
 pub mod secret_migration;
@@ -254,12 +253,6 @@ impl HandlerRegistry {
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
-
-        // Schema introspection handlers
-        registry.register("schema.list", schema::handle_schema_list);
-        registry.register("schema.get", schema::handle_schema_get);
-        registry.register("schema.protocol", schema::handle_schema_protocol);
-        registry.register("schema.openapi", schema::handle_schema_openapi);
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);

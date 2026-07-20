@@ -195,8 +195,6 @@ pub struct SlashAccessDecision {
     /// `true` → gating is configured for this scope. When `false`, every
     /// already-authorized sender is treated as admin.
     pub gating_enabled: bool,
-    /// `true` → caller is admin (only meaningful when `gating_enabled`).
-    pub is_admin: bool,
 }
 
 /// Slash commands that are universally allowed for any user passing the
@@ -336,7 +334,6 @@ impl SlashAccessConfig {
             return SlashAccessDecision {
                 allowed: true,
                 gating_enabled: false,
-                is_admin: true,
             };
         }
 
@@ -346,7 +343,6 @@ impl SlashAccessConfig {
             return SlashAccessDecision {
                 allowed: true,
                 gating_enabled: true,
-                is_admin: true,
             };
         }
         if ALWAYS_ALLOWED_SLASH_COMMANDS
@@ -356,7 +352,6 @@ impl SlashAccessConfig {
             return SlashAccessDecision {
                 allowed: true,
                 gating_enabled: true,
-                is_admin: false,
             };
         }
         let allowed = user_list
@@ -365,7 +360,6 @@ impl SlashAccessConfig {
         SlashAccessDecision {
             allowed,
             gating_enabled: true,
-            is_admin: false,
         }
     }
 }
@@ -459,7 +453,6 @@ mod slash_access_tests {
         let d = cfg.slash_command_gate("alice", "image", false);
         assert!(!d.gating_enabled);
         assert!(d.allowed);
-        assert!(d.is_admin, "with gating off everyone is treated as admin");
     }
 
     #[test]
@@ -467,7 +460,6 @@ mod slash_access_tests {
         let cfg = cfg_with_admins(&["alice"], &[], false);
         let d = cfg.slash_command_gate("alice", "image", false);
         assert!(d.gating_enabled);
-        assert!(d.is_admin);
         assert!(d.allowed);
     }
 
@@ -476,7 +468,6 @@ mod slash_access_tests {
         let cfg = cfg_with_admins(&["alice"], &["status"], false);
         let d = cfg.slash_command_gate("bob", "image", false);
         assert!(d.gating_enabled);
-        assert!(!d.is_admin);
         assert!(!d.allowed);
     }
 
@@ -485,7 +476,6 @@ mod slash_access_tests {
         let cfg = cfg_with_admins(&["alice"], &["status", "ping"], false);
         let d = cfg.slash_command_gate("bob", "status", false);
         assert!(d.allowed);
-        assert!(!d.is_admin);
     }
 
     #[test]
@@ -520,7 +510,6 @@ mod slash_access_tests {
         let cfg = cfg_with_admins(&["alice"], &["status"], false);
         let d = cfg.slash_command_gate("", "image", false);
         assert!(d.gating_enabled);
-        assert!(!d.is_admin);
         assert!(!d.allowed);
     }
 
