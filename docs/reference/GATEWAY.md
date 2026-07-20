@@ -218,7 +218,7 @@ pub trait Interface: Send + Sync {
 | CLI | `cli` | Command-line interface |
 | Telegram | `telegram` | Telegram Bot API |
 | Discord | `discord` | Discord Bot |
-| iMessage | (macOS only) | Apple iMessage |
+| iMessage | always compiled | Apple iMessage — two transports: **Local** (chat.db poll + AppleScript, macOS-only) and **BlueBubbles** (REST + webhook, any OS). See `src/gateway/interfaces/imessage/`. |
 | WebChat | `gateway` | Built-in web chat |
 
 ### Interface Configuration

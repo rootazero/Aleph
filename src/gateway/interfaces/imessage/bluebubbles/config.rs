@@ -41,10 +41,13 @@ pub struct BlueBubblesConfig {
     /// Whether to send read receipts for inbound messages.
     #[serde(default = "default_true")]
     pub send_read_receipts: bool,
-    /// Require a mention/wake word in group chats before dispatching.
-    #[serde(default)]
-    pub require_mention: bool,
-    /// Group wake-word regex patterns (empty = no gating).
-    #[serde(default)]
-    pub mention_patterns: Vec<String>,
 }
+
+// Note: group mention gating lives in a single source — the inbound router's
+// permission layer, driven by `[channels.imessage].require_mention` +
+// `bot_name` (see `inbound_router::permission::check_permission`). The old
+// transport-level `require_mention` / `mention_patterns` (regex) knobs were a
+// second, conflicting gate that only ran on the webhook path (never on
+// catch-up poll) and matched wake words by regex — an R7/P8 violation. They
+// were removed; existing configs carrying them still parse (unknown fields are
+// ignored) and are simply inert.

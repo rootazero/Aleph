@@ -56,6 +56,9 @@ pub async fn run_catchup_poll(
         if cursor > after {
             tracker.advance(cursor, "imessage-bb");
         }
+        // Piggyback the attachment sweep on the existing poll interval so staged
+        // downloads don't accumulate over a long-running daemon — no extra task.
+        super::super::staging::sweep_stale(super::super::staging::RETENTION);
         tokio::time::sleep(interval).await;
     }
 }

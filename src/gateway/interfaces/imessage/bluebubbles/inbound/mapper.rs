@@ -1,6 +1,10 @@
 //! Map a BlueBubbles webhook/message JSON object to a transport-neutral struct.
 
-const MESSAGE_EVENTS: &[&str] = &["new-message", "message", "updated-message"];
+// `updated-message` is intentionally absent: the channel no longer subscribes
+// to it (edits reuse the original GUID and get deduped, so they were inert) —
+// see `api::register_webhook`. `message` stays as a defensive alias for servers
+// that emit the bare type.
+const MESSAGE_EVENTS: &[&str] = &["new-message", "message"];
 const TAPBACK_TYPES: &[i64] = &[
     2000, 2001, 2002, 2003, 2004, 2005, 3000, 3001, 3002, 3003, 3004, 3005,
 ];
