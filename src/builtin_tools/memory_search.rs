@@ -380,6 +380,10 @@ impl MemorySearchTool {
                 let query_lower = args.query.to_lowercase();
                 raws.into_iter()
                     .filter(|r| r.content.to_lowercase().contains(&query_lower))
+                    // Session-raw facts without a source path can't be acted on —
+                    // emitting an empty path makes the LLM treat it as a valid
+                    // file reference and try to read it.
+                    .filter(|r| r.path.is_some())
                     .take(args.max_results)
                     .map(|raw| FactResult {
                         content: raw.content,
