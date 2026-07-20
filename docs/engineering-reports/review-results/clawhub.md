@@ -1,0 +1,4 @@
+ISSUE|client.rs:267|medium|download temp filename only replaces '/' in the slug, leaving '\' and '..' path components that can redirect the write outside the temp directory|let safe_slug = slug.replace('/', "-"); temp_dir().join(format!("clawhub-{}-{}.zip", safe_slug, ...)) embeds the raw slug into a filesystem path
+ISSUE|client.rs:327|medium|error response body in check_status is read into memory without any size cap, allowing a malicious server to exhaust memory|resp.bytes().await reads the full body; no MAX_DOWNLOAD_BYTES limit
+ISSUE|client.rs:106|low|success JSON responses are parsed into memory without a size cap, risking OOM from a huge registry response|resp.json() in get_json consumes the entire response body
+ISSUE|client.rs:254|low|download buffers the entire response in memory before writing to disk despite using a byte stream|all chunks are accumulated into Vec<u003cu8> and only then written via tokio::fs::write

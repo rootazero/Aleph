@@ -28,6 +28,10 @@ pub enum LoopAction {
     Status,
     /// Re-pace a model-paced loop (`next_wake`) or adjust caps.
     Update,
+    /// List every timer loop across ALL sessions (not just this one), so the
+    /// model can answer "what loops are running?" from any channel — `status`
+    /// only sees the current session (R6 一核多端 / R8).
+    List,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -203,6 +207,7 @@ impl LoopTool {
             LoopAction::Stop => self.stop(&session),
             LoopAction::Status => self.status(&session),
             LoopAction::Update => self.update(&session, args),
+            LoopAction::List => self.list(&session),
         }
     }
 
@@ -352,6 +357,79 @@ impl LoopTool {
         }
     }
 
+    /// Cross-session enumeration (R6 一核多端 / R8 对话即管理面板): a loop
+    /// started on one channel is invisible to `status`, which keys by the
+    /// current session. Reuse the registry's in-memory map so the model can
+    /// answer "what timer loops are running?" from anywhere. Mirrors
+    /// `GoalTool`'s `list`; process memory only, so the answer is exactly the
+    /// loops alive now — no orphan rows to reconcile.
+    fn list(&self, session: &str) -> std::result::Result<LoopOutput, String> {
+        let mut loops = self.registry.list_all();
+        if loops.is_empty() {
+            return Ok(LoopOutput {
+                success: true,
+                message: "No timer loops in any session.".to_string(),
+            });
+        }
+        // Newest-started first so the most recent watch leads. A loop has no
+        // `updated_at`, so `created_at_ms` is its only ordering key (goal sorts
+        // by `updated_at_ms`; the intent — most-relevant-first — is the same).
+        loops.sort_unstable_by_key(|l| std::cmp::Reverse(l.created_at_ms));
+        let now = now_ms();
+        let mut message = format!("Timer loops ({}):\n", loops.len());
+        for state in &loops {
+            message.push_str(&Self::render_list_line(state, session, now));
+            message.push('\n');
+        }
+        Ok(LoopOutput {
+            success: true,
+            message: message.trim_end().to_string(),
+        })
+    }
+
+    /// One compact line per loop for `list` — mirrors `GoalTool::render_list_line`:
+    /// status, the watch prompt (truncated), a `(this session)` flag, cadence,
+    /// ticks/cap, and the stop reason when stopped. UTF-8-safe truncation (P7).
+    fn render_list_line(state: &LoopState, current_session: &str, now_ms: u64) -> String {
+        let here = if state.session_id == current_session {
+            " (this session)"
+        } else {
+            ""
+        };
+        let status = if state.is_active() { "active" } else { "stopped" };
+        // A watch prompt can be a paragraph — keep the list line compact.
+        let prompt: String = state.prompt.chars().take(60).collect();
+        let ellipsis = if state.prompt.chars().count() > 60 {
+            "…"
+        } else {
+            ""
+        };
+        let mut s = format!(
+            "- [{status}] {prompt}{ellipsis}{here} | {}",
+            state.cadence.describe()
+        );
+        match state.max_iterations {
+            Some(max) => s.push_str(&format!(" | ticks {}/{max}", state.iterations_used)),
+            None => s.push_str(&format!(" | ticks {}", state.iterations_used)),
+        }
+        if let Some(deadline) = state.deadline_ms {
+            if now_ms != 0 && deadline > now_ms {
+                s.push_str(&format!(
+                    " | time left {}",
+                    crate::looping::types::fmt_duration_ms(deadline - now_ms)
+                ));
+            }
+        }
+        // Explain a stopped loop; the status tag already says "[stopped]", so
+        // the reason adds the "why" without repeating the "what".
+        if !state.is_active() {
+            if let Some(reason) = &state.stop_reason {
+                s.push_str(&format!(" | {reason}"));
+            }
+        }
+        s
+    }
+
     fn update(&self, session: &str, args: LoopArgs) -> std::result::Result<LoopOutput, String> {
         let Some(mut state) = self.registry.get(session) else {
             return Ok(LoopOutput {
@@ -499,9 +577,16 @@ impl AlephTool for LoopTool {
          tick to set the next delay). action='update' also re-paces a running \
          loop in place — pass `interval` to change a fixed cadence, or \
          `prompt`/`timeout_minutes`/`max_iterations` to re-target or re-bound it \
-         without stop/start. Optional safety caps: max_iterations, \
-         timeout_minutes. Use for watch/poll duties (e.g. 'every 5 minutes check \
-         the deploy and tell me if it changed').";
+         without stop/start. action='status' reports THIS session's loop; \
+         action='list' shows every timer loop across ALL sessions (use it to \
+         answer 'what loops are running?', since status only sees the current \
+         session). Optional safety caps: max_iterations, timeout_minutes. If a \
+         tick finds it is blocked on slow external work (a rate-limit cooldown, a \
+         long build), defer the next check instead of busy-ticking or stopping — \
+         on a fixed loop update to a longer `interval`, on a model-paced loop set \
+         a larger `next_wake` (or hand the wait to `goal`, which can park until an \
+         exact event). Use for watch/poll duties (e.g. 'every 5 minutes check the \
+         deploy and tell me if it changed').";
 
     type Args = LoopArgs;
     type Output = LoopOutput;
@@ -513,6 +598,7 @@ impl AlephTool for LoopTool {
             "loop(action='update', next_wake='8m')".into(),
             "loop(action='update', interval='10m')".into(),
             "loop(action='status')".into(),
+            "loop(action='list')".into(),
             "loop(action='stop')".into(),
         ])
     }
@@ -1170,5 +1256,74 @@ mod tests {
 
         // Outside a scoped turn the shared handle remains the fallback.
         assert_eq!(tool.session().await, "concurrent-run-session");
+    }
+
+    fn list_args() -> LoopArgs {
+        LoopArgs {
+            action: LoopAction::List,
+            interval: None,
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_empty_reports_no_loops() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(reg).with_session_for_test("sess-x");
+        let out = tool.run(list_args()).await.unwrap();
+        assert!(out.success);
+        assert!(out.message.contains("No timer loops"), "{}", out.message);
+    }
+
+    #[tokio::test]
+    async fn list_enumerates_all_sessions_and_flags_current() {
+        // The R6/R8 gap this closes: a loop set on another channel is invisible
+        // to `status` (keyed by the current session) — `list` sees all of them.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        reg.put(LoopState::new(
+            "sess-here",
+            "watch the deploy",
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            1_000,
+        ));
+        reg.put(
+            LoopState::new(
+                "sess-elsewhere",
+                "triage the PR queue",
+                Cadence::ModelPaced {
+                    fallback_ms: 600_000,
+                },
+                2_000,
+            )
+            .with_status(LoopStatus::Stopped)
+            .with_stop_reason(Some(
+                "Loop stopped: reached the iteration cap (20 ticks).".into(),
+            )),
+        );
+        let tool = LoopTool::new(reg).with_session_for_test("sess-here");
+        let out = tool.run(list_args()).await.unwrap();
+        assert!(out.success);
+        assert!(out.message.contains("Timer loops (2)"), "{}", out.message);
+        // The current session's loop is flagged; both loops are visible.
+        assert!(out.message.contains("watch the deploy (this session)"));
+        assert!(out.message.contains("triage the PR queue"));
+        // Status tags + the stop reason for the stopped one.
+        assert!(out.message.contains("[active]"));
+        assert!(out.message.contains("[stopped]"));
+        assert!(out.message.contains("iteration cap"), "{}", out.message);
+        // The other session's loop is NOT flagged as current.
+        assert!(
+            !out.message
+                .lines()
+                .any(|l| l.contains("triage the PR queue") && l.contains("(this session)")),
+            "{}",
+            out.message
+        );
     }
 }

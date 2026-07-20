@@ -57,7 +57,13 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
     let regexes: Vec<regex::Regex> = deny_read_globs
         .iter()
         .filter_map(|g| glob_to_anchored_regex(g))
-        .filter_map(|r| regex::Regex::new(&r).ok())
+        .filter_map(|r| match regex::Regex::new(&r) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                tracing::warn!(pattern = %r, error = %e, "deny_read_globs regex failed to compile; pattern dropped");
+                None
+            }
+        })
         .collect();
     if regexes.is_empty() {
         return Vec::new();

@@ -1,0 +1,94 @@
+<!-- @dsCard group="Foundations" name="Colors" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colors — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+<style>
+  .sw { display:flex; flex-direction:column; gap:6px; }
+  .sw-box { width:84px; height:52px; border-radius:var(--radius-md); border:1px solid var(--color-border); }
+  .sw-name { font-size:.75rem; color:var(--color-text-primary); }
+  .sw-val { font-size:.625rem; color:var(--color-text-tertiary); font-family:var(--font-mono); }
+  .grp { margin-bottom:18px; }
+</style>
+</head>
+<body>
+  <div class="ds-stage">
+    <!-- LIGHT -->
+    <div class="ds-panel" style="background:var(--color-surface)">
+      <div class="ds-label">Light · Mauve</div>
+      <div class="grp">
+        <div class="ds-label">Surfaces</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface)"></div><span class="sw-name">surface</span><span class="sw-val">0.96 .005 220</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-raised)"></div><span class="sw-name">raised</span><span class="sw-val">1.00 0 0</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-sunken)"></div><span class="sw-name">sunken</span><span class="sw-val">0.905 .01 220</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-overlay)"></div><span class="sw-name">overlay</span><span class="sw-val">0.985 .004 220</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="ds-label">Text</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-primary)"></div><span class="sw-name">primary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-secondary)"></div><span class="sw-name">secondary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-tertiary)"></div><span class="sw-name">tertiary</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="ds-label">Status</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-primary)"></div><span class="sw-name">primary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-success)"></div><span class="sw-name">success</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-warning)"></div><span class="sw-name">warning</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-danger)"></div><span class="sw-name">danger</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-info)"></div><span class="sw-name">info</span></div>
+        </div>
+      </div>
+      <div class="grp" style="margin:0">
+        <div class="ds-label">Accents (data-accent)</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:oklch(0.60 0.13 310)"></div><span class="sw-name">mauve</span></div>
+          <div class="sw"><div class="sw-box" style="background:oklch(0.58 0.13 250)"></div><span class="sw-name">ocean</span></div>
+          <div class="sw"><div class="sw-box" style="background:oklch(0.55 0.12 150)"></div><span class="sw-name">forest</span></div>
+          <div class="sw"><div class="sw-box" style="background:oklch(0.66 0.135 60)"></div><span class="sw-name">sunset</span></div>
+          <div class="sw"><div class="sw-box" style="background:oklch(0.62 0.15 15)"></div><span class="sw-name">rose</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DARK -->
+    <div class="ds-panel dark" style="background:var(--color-surface)">
+      <div class="ds-label">Dark · Mauve</div>
+      <div class="grp">
+        <div class="ds-label">Surfaces</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface)"></div><span class="sw-name">surface</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-raised)"></div><span class="sw-name">raised</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-sunken)"></div><span class="sw-name">sunken</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-surface-overlay)"></div><span class="sw-name">overlay</span></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="ds-label">Text</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-primary)"></div><span class="sw-name">primary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-secondary)"></div><span class="sw-name">secondary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-text-tertiary)"></div><span class="sw-name">tertiary</span></div>
+        </div>
+      </div>
+      <div class="grp" style="margin:0">
+        <div class="ds-label">Status</div>
+        <div class="ds-row">
+          <div class="sw"><div class="sw-box" style="background:var(--color-primary)"></div><span class="sw-name">primary</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-success)"></div><span class="sw-name">success</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-warning)"></div><span class="sw-name">warning</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-danger)"></div><span class="sw-name">danger</span></div>
+          <div class="sw"><div class="sw-box" style="background:var(--color-info)"></div><span class="sw-name">info</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

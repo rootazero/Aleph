@@ -113,8 +113,15 @@ impl RouteObservability {
         // Live route knobs; safe defaults when no handle is wired (tests).
         let (mode, allow_escalation, strategy, targets, limits) = match &self.route {
             Some(h) => {
-                let (mode, esc) = h.load();
-                (mode, esc, h.load_balance(), h.targets(), h.limits())
+                // One coherent generation for the whole status render.
+                let s = h.snapshot();
+                (
+                    s.mode,
+                    s.allow_escalation,
+                    s.load_balance,
+                    Arc::clone(&s.targets),
+                    Arc::clone(&s.limits),
+                )
             }
             None => (
                 RouteMode::Auto,

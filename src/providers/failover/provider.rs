@@ -12,7 +12,7 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
 use crate::providers::load_stats::LoadStats;
-use crate::providers::route_handle::RouteHandle;
+use crate::providers::route_handle::{RouteHandle, RouteState};
 use crate::providers::route_policy::{
     classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
     RateLimits, RouteTargets,
@@ -257,42 +257,23 @@ impl FailoverProvider {
         }
     }
 
-    /// The load-balancing strategy to apply *now*: the live handle if attached,
-    /// else the safe no-op [`LoadBalanceStrategy::Ordered`] (tests / `new()`).
-    fn route_load_balance(&self) -> LoadBalanceStrategy {
-        self.route_handle
-            .as_ref()
-            .map(|h| h.load_balance())
-            .unwrap_or_default()
-    }
-
-    /// The route preference to apply *now*: the live handle if attached, else
-    /// the boot snapshot.
-    fn route_preference(&self) -> (RouteMode, bool) {
+    /// One coherent snapshot of the live route state for this candidate-ordering
+    /// pass: the live handle if attached, else the boot config frozen into a
+    /// [`RouteState`]. Reading mode/targets/strategy/limits from a *single*
+    /// snapshot means a config hot-swap landing mid-pass is seen whole or not at
+    /// all — never a torn mix (new mode with stale targets). Pins/limits only
+    /// ever enter via the boot-wired handle, so `new()`/tests see an empty set —
+    /// byte-identical to unpinned/pre-usage ordering.
+    fn route_snapshot(&self) -> Arc<RouteState> {
         match &self.route_handle {
-            Some(h) => h.load(),
-            None => (self.route_mode, self.allow_cloud_escalation),
-        }
-    }
-
-    /// The operator's provider pins to apply *now*: the live handle if attached,
-    /// else empty (no promotion). Pins only ever enter via the boot-wired handle,
-    /// so `new()`/tests see an empty set — byte-identical to unpinned ordering.
-    fn route_targets(&self) -> Arc<RouteTargets> {
-        match &self.route_handle {
-            Some(h) => h.targets(),
-            None => Arc::new(RouteTargets::default()),
-        }
-    }
-
-    /// The operator's per-provider rate ceilings to apply *now*: the live handle
-    /// if attached, else empty (no rate awareness). Limits only ever enter via
-    /// the boot-wired handle, so `new()`/tests see an empty set — byte-identical
-    /// to pre-usage ordering.
-    fn route_limits(&self) -> Arc<RateLimits> {
-        match &self.route_handle {
-            Some(h) => h.limits(),
-            None => Arc::new(RateLimits::default()),
+            Some(h) => h.snapshot(),
+            None => Arc::new(RouteState {
+                mode: self.route_mode,
+                allow_escalation: self.allow_cloud_escalation,
+                load_balance: LoadBalanceStrategy::default(),
+                targets: Arc::new(RouteTargets::default()),
+                limits: Arc::new(RateLimits::default()),
+            }),
         }
     }
 
@@ -442,8 +423,11 @@ impl FailoverProvider {
                 .cloned()
                 .collect()
         };
-        let (mode, allow_escalation) = self.route_preference();
-        let targets = self.route_targets();
+        // One coherent route snapshot for the whole ordering pass — mode,
+        // targets, strategy and limits all read from a single config generation.
+        let route = self.route_snapshot();
+        let (mode, allow_escalation) = (route.mode, route.allow_escalation);
+        let targets = Arc::clone(&route.targets);
 
         // Classify the primary in place. A `Skip` (a hard-guardrail mode with
         // escalation off, on a cross-tier pin) drops it so the chain falls
@@ -458,8 +442,8 @@ impl FailoverProvider {
         // configured rate limits (the over-limit gate must deprioritise
         // saturated providers even under `Ordered`); otherwise the
         // configured-order path stays byte-identical to before.
-        let strategy = self.route_load_balance();
-        let limits = self.route_limits();
+        let strategy = route.load_balance;
+        let limits = Arc::clone(&route.limits);
         let needs_balance = strategy != LoadBalanceStrategy::Ordered || !limits.is_empty();
         let ordered = match &self.load {
             Some(load) if needs_balance => {
@@ -522,8 +506,10 @@ impl FailoverProvider {
         out
     }
 
-    /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the
-    /// cooldown has elapsed (allowing exactly one probe).
+    /// Whether `name` may be tried now. Transitions `Open → HalfOpen` once the
+    /// cooldown has elapsed. `HalfOpen` then admits probe traffic — concurrent
+    /// requests are *not* serialized to a single probe; the probe outcomes drive
+    /// the circuit via [`Self::mark_healthy`] / [`Self::mark_unhealthy`].
     async fn circuit_allows(&self, name: &str) -> bool {
         let mut map = self.health.0.write().await;
         let st = map.entry(name.to_string()).or_default();
@@ -606,29 +592,31 @@ impl AiProvider for FailoverProvider {
         &'a self,
         payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-        // Own every borrowed field so the payload can be rebuilt per attempt.
-        let messages = payload.messages.to_vec();
-        let system_prompt = payload.system_prompt.map(str::to_string);
+        // The big fields (conversation, system prompt, tool defs) are `&'a`
+        // borrows of the caller's data — copy the references so a failover
+        // request never deep-clones the whole conversation. Only the small
+        // owned fields (tool_choice / model / metadata) are taken by value so
+        // each per-attempt rebuild can restamp `model`; they are cloned per
+        // attempt below (all tiny — an enum tag, a model name, a header map).
+        let messages = payload.messages;
+        let system_prompt = payload.system_prompt;
         // Preserve the prompt-cache split (`cache: true` prefix) across the
         // failover rebuild — dropping it here silently negated caching for any
         // caller behind a Failover wrapper (the Guardian judge, the main loop).
-        let system_blocks = payload.system_blocks.map(<[_]>::to_vec);
-        let tools = payload.tools.map(<[_]>::to_vec);
+        let system_blocks = payload.system_blocks;
+        let tools = payload.tools;
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
-        // rust-doctor-disable-next-line excessive-clone
-        let tool_choice = payload.tool_choice.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let req_model = payload.model.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let metadata = payload.metadata.clone();
+        let tool_choice = payload.tool_choice;
+        let req_model = payload.model;
+        let metadata = payload.metadata;
         // C floor: derive the request's structural capability requirements once
         // (image blocks → vision, tools array → tool-calling, text size →
         // context window). Prompt-blind; shapes the candidate model set below.
         let reqs = RequestRequirements::from_request(
-            &messages,
-            tools.as_ref().is_some_and(|t| !t.is_empty()),
+            messages,
+            tools.is_some_and(|t| !t.is_empty()),
         );
 
         Box::pin(async move {
@@ -735,10 +723,10 @@ impl AiProvider for FailoverProvider {
                     let mut attempt: u32 = 0;
                     loop {
                         let inner = RequestPayload {
-                            messages: &messages,
-                            system_prompt: system_prompt.as_deref(),
-                            system_blocks: system_blocks.as_deref(),
-                            tools: tools.as_deref(),
+                            messages,
+                            system_prompt,
+                            system_blocks,
+                            tools,
                             think_level,
                             temperature,
                             max_tokens,

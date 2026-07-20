@@ -1,0 +1,59 @@
+<!-- @dsCard group="Foundations" name="Glass materials" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Materials — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+<style>
+  .mat { width:230px; border-radius:var(--radius-2xl); padding:16px;
+    background:
+      radial-gradient(120% 90% at 0% 0%, oklch(0.72 0.16 320 / .55), transparent 60%),
+      radial-gradient(120% 90% at 100% 100%, oklch(0.70 0.15 250 / .55), transparent 60%),
+      var(--color-surface); }
+  .mat .bub { padding:10px 13px; border-radius:var(--radius-xl); font-size:.8125rem; margin-bottom:10px; max-width:78%; }
+  .mat .bub.me { margin-left:auto; }
+  .pop { margin-top:6px; padding:10px 13px; border-radius:var(--radius-lg); font-size:.75rem; color:var(--color-text-primary); }
+  .mlabel { font-size:.75rem; font-weight:600; color:var(--color-text-primary); margin-bottom:10px; }
+  .msub { font-size:.625rem; color:var(--color-text-secondary); font-family:var(--font-mono); margin-bottom:12px; }
+</style>
+</head>
+<body>
+  <div class="ds-stage">
+    <!-- LUXE -->
+    <div class="mat">
+      <div class="mlabel">Luxe · default</div>
+      <div class="msub">blur 20 · sat 1.6</div>
+      <div class="bub msg-glass" style="color:var(--color-text-primary)">内敛磨砂,克制的深度。</div>
+      <div class="bub me msg-glass-user">默认材质</div>
+      <div class="pop glass">popover / menu</div>
+    </div>
+    <!-- LIQUID -->
+    <div class="mat" data-material="liquid">
+      <div class="mlabel">Liquid · visionOS</div>
+      <div class="msub">blur 34 · sat 2.0 · 推荐手机</div>
+      <div class="bub msg-glass" style="color:var(--color-text-primary)">明亮高光镜面,天然贴合 iOS。</div>
+      <div class="bub me msg-glass-user">建议默认</div>
+      <div class="pop glass">popover / menu</div>
+    </div>
+    <!-- AURORA -->
+    <div class="mat" data-material="aurora">
+      <div class="mlabel">Aurora · frost</div>
+      <div class="msub">blur 26 · sat 1.5</div>
+      <div class="bub msg-glass" style="color:var(--color-text-primary)">厚奶白霜,色彩透出。</div>
+      <div class="bub me msg-glass-user">氛围感</div>
+      <div class="pop glass">popover / menu</div>
+    </div>
+
+    <!-- DARK LIQUID -->
+    <div class="mat dark" data-material="liquid">
+      <div class="mlabel">Liquid · dark</div>
+      <div class="msub">白墨低填充 / 暗场</div>
+      <div class="bub msg-glass" style="color:var(--color-text-primary)">深色玻璃,白字浮于暗场。</div>
+      <div class="bub me msg-glass-user">dark</div>
+      <div class="pop glass">popover / menu</div>
+    </div>
+  </div>
+</body>
+</html>

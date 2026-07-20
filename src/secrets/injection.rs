@@ -9,6 +9,9 @@ use std::hash::{Hash, Hasher};
 use super::placeholder::extract_secret_refs;
 use super::types::{DecryptedSecret, SecretError};
 
+pub(crate) const INJECTED_HASH_KEY0: u64 = 0x517c_c1b7_2722_0a95;
+pub(crate) const INJECTED_HASH_KEY1: u64 = 0x6c62_272e_07bb_0142;
+
 /// Trait for resolving secret names to decrypted values.
 #[async_trait::async_trait]
 pub trait AsyncSecretResolver: Send + Sync {
@@ -29,9 +32,8 @@ pub struct InjectedSecret {
 impl InjectedSecret {
     #[must_use]
     pub fn from_value(name: &str, value: &str) -> Self {
-        // Use non-zero fixed keys to avoid trivial rainbow table attacks
         let mut hasher =
-            siphasher::sip::SipHasher::new_with_keys(0x517c_c1b7_2722_0a95, 0x6c62_272e_07bb_0142);
+            siphasher::sip::SipHasher::new_with_keys(INJECTED_HASH_KEY0, INJECTED_HASH_KEY1);
         value.hash(&mut hasher);
         let hash = hasher.finish();
 
@@ -155,7 +157,6 @@ mod tests {
         assert_eq!(record.name, "key");
         assert_eq!(record.value_len, "my-secret-value".len());
         assert_ne!(record.value_hash, 0);
-        // prefix field removed — InjectedSecret must never store plaintext
     }
 
     #[tokio::test]

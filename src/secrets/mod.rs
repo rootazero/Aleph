@@ -13,7 +13,6 @@ pub mod vault;
 pub mod vault_resolver;
 pub mod vendor_patterns;
 pub mod virtual_key_resolver;
-pub mod web3_signer;
 
 pub use injection::{render_with_secrets, AsyncSecretResolver, InjectedSecret};
 pub use leak_detector::{LeakDecision, LeakDetector};
@@ -23,7 +22,6 @@ pub use types::{DecryptedSecret, EntryMetadata, SecretError};
 pub use vault::SecretVault;
 pub use vault_resolver::VaultSecretResolver;
 pub use virtual_key_resolver::VirtualKeyResolver;
-pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult, TransactionIntent};
 
 const SECRET_NAME_MAX_LEN: usize = 128;
 

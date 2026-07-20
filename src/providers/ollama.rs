@@ -130,22 +130,6 @@ struct OllamaError {
     error: String,
 }
 
-/// Response from Ollama /api/tags endpoint
-#[derive(Debug, Deserialize)]
-pub(crate) struct TagsResponse {
-    pub(crate) models: Vec<OllamaModelInfo>,
-}
-
-/// Model info from Ollama tags
-#[derive(Debug, Deserialize)]
-pub(crate) struct OllamaModelInfo {
-    pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) size: Option<u64>,
-    #[serde(default)]
-    pub(crate) modified_at: Option<String>,
-}
-
 impl OllamaProvider {
     /// Create new Ollama provider
     ///
@@ -533,36 +517,6 @@ impl AiProvider for OllamaProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl crate::providers::model_discovery::ModelDiscovery for OllamaProvider {
-    fn provider_name(&self) -> &str {
-        &self.name
-    }
-
-    async fn discover_models(
-        &self,
-    ) -> anyhow::Result<Vec<crate::providers::model_discovery::DiscoveredModel>> {
-        use crate::providers::model_discovery::DiscoveredModel;
-
-        // Derive base URL from the /api/chat endpoint
-        let base_url = self.endpoint.trim_end_matches("/api/chat");
-        let url = format!("{base_url}/api/tags");
-
-        let resp: TagsResponse = self.client.get(&url).send().await?.json().await?;
-
-        Ok(resp
-            .models
-            .into_iter()
-            .map(|m| DiscoveredModel {
-                id: m.name.clone(),
-                display_name: Some(m.name),
-                size_bytes: m.size,
-                modified_at: m.modified_at,
-            })
-            .collect())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -897,21 +851,5 @@ mod tests {
         let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
         let resp = provider.build_provider_response(chat);
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
-    }
-
-    #[test]
-    fn parse_tags_response_success() {
-        let json = r#"{"models": [{"name": "llama3:latest"}, {"name": "codellama:7b"}]}"#;
-        let tags: TagsResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(tags.models.len(), 2);
-        assert_eq!(tags.models[0].name, "llama3:latest");
-        assert_eq!(tags.models[1].name, "codellama:7b");
-    }
-
-    #[test]
-    fn parse_tags_response_empty() {
-        let json = r#"{"models": []}"#;
-        let tags: TagsResponse = serde_json::from_str(json).unwrap();
-        assert!(tags.models.is_empty());
     }
 }

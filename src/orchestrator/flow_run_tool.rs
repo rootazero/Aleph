@@ -94,6 +94,8 @@ impl FlowRunTool {
             // No per-run thinking directive on this path — the provider keeps its
             // own default, which is what every release before this field sent.
             think_level: None,
+            // Subagent sub-flows carry no resolved exec tier — no approval line.
+            exec_tier: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

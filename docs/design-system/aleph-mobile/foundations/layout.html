@@ -1,0 +1,48 @@
+<!-- @dsCard group="Foundations" name="Radius · Shadow · Focus" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layout — Aleph</title>
+<link rel="stylesheet" href="../styles/aleph.css">
+<style>
+  .tile { width:72px; height:56px; background:var(--color-surface-raised); border:1px solid var(--color-border); display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; font-size:.625rem; color:var(--color-text-tertiary); font-family:var(--font-mono); }
+  .shtile { width:96px; height:64px; background:var(--color-surface-raised); border-radius:var(--radius-lg); display:flex; align-items:flex-end; justify-content:center; padding-bottom:6px; font-size:.625rem; color:var(--color-text-tertiary); font-family:var(--font-mono); }
+</style>
+</head>
+<body>
+  <div class="ds-stage">
+    <div class="ds-panel" style="background:var(--color-surface);max-width:620px">
+      <div class="ds-label">Radius scale (× --control-ui-radius-scale)</div>
+      <div class="ds-row" style="margin-bottom:20px">
+        <div class="tile" style="border-radius:var(--radius-xs)">xs·3</div>
+        <div class="tile" style="border-radius:var(--radius-sm)">sm·6</div>
+        <div class="tile" style="border-radius:var(--radius-md)">md·8</div>
+        <div class="tile" style="border-radius:var(--radius-lg)">lg·12</div>
+        <div class="tile" style="border-radius:var(--radius-xl)">xl·16</div>
+        <div class="tile" style="border-radius:var(--radius-2xl)">2xl·20</div>
+        <div class="tile" style="border-radius:var(--radius-3xl)">3xl·28</div>
+      </div>
+
+      <div class="ds-label">Shadow tiers (mauve-tinted, layered)</div>
+      <div class="ds-row" style="margin-bottom:20px;gap:18px">
+        <div class="shtile" style="box-shadow:var(--shadow-xs)">xs</div>
+        <div class="shtile" style="box-shadow:var(--shadow-sm)">sm</div>
+        <div class="shtile" style="box-shadow:var(--shadow-md)">md</div>
+        <div class="shtile" style="box-shadow:var(--shadow-lg)">lg</div>
+        <div class="shtile" style="box-shadow:var(--shadow-xl)">xl</div>
+      </div>
+
+      <div class="ds-label">Spacing base</div>
+      <p class="card-sub" style="margin:0 0 18px"><span class="mono">--spacing = 0.22rem × density</span> — 比 Tailwind 默认紧 ~12%,密度轴从此处统一缩放。</p>
+
+      <div class="ds-label">Focus ring (accent-aware, two-layer)</div>
+      <div class="ds-row" style="padding-top:6px">
+        <input class="field" style="max-width:220px;box-shadow:var(--focus-ring);border-color:var(--color-border-focus)" value=":focus-visible">
+        <span class="card-sub mono">2px surface + 4px accent@55%</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

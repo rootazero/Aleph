@@ -36,6 +36,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _max_iterations_override: Option<u32>,
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
+        _exec_tier: Option<crate::config::types::policies::ExecTier>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -133,6 +134,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -170,6 +172,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         .unwrap_err();
@@ -201,6 +204,7 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -236,6 +240,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         .unwrap_err();
@@ -283,6 +288,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _max_iterations_override: Option<u32>,
             _transient_context: Option<String>,
             _think_level: Option<crate::agents::thinking::ThinkLevel>,
+            _exec_tier: Option<crate::config::types::policies::ExecTier>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
@@ -318,6 +324,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         max_iterations_override: None,
         transient_context: None,
         think_level: None,
+        exec_tier: None,
     };
 
     // rust-doctor-disable-next-line unwrap-in-production
@@ -348,6 +355,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         max_iterations_override: None,
         transient_context: None,
         think_level: None,
+        exec_tier: None,
     };
 
     // First dispatch — await completion.
@@ -399,6 +407,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _max_iterations_override: Option<u32>,
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
+        _exec_tier: Option<crate::config::types::policies::ExecTier>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         *self
             .received_tool_service
@@ -521,6 +530,7 @@ async fn dispatch_forwards_tool_service_override() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -561,6 +571,7 @@ async fn dispatch_forwards_trace_sink() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production

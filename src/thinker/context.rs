@@ -246,6 +246,17 @@ pub struct ResolvedContext {
     /// byte-identical for non-voice turns.
     #[serde(skip, default)]
     pub voice: VoiceContext,
+    /// Active execution-permission tier (Ask / Auto / Full), rendered by
+    /// `SecurityLayer` (priority 600) as the `Approval mode:` line. This is the
+    /// approval half of the operating envelope — the complement of
+    /// [`Self::sandbox_summary`]'s filesystem/network half — and the Aleph
+    /// equivalent of codex's `<approval_policy>`. Populated in the harness
+    /// bridge from the turn's resolved [`ExecTier`](crate::config::types::policies::ExecTier)
+    /// (request pill > session > global, after the channel clamp — the exact
+    /// tier the tool gate will enforce). `None` on internal / subagent dispatch
+    /// that carries no resolved tier, keeping their prompt byte-identical.
+    #[serde(skip, default)]
+    pub approval_tier: Option<crate::config::types::policies::ExecTier>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -326,6 +337,7 @@ impl ContextAggregator {
             strategy: None,
             strategy_guardrails: None,
             voice: VoiceContext::Off,
+            approval_tier: None,
         }
     }
 

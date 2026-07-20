@@ -25,6 +25,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// Stale session threshold (1 hour).
 const STALE_THRESHOLD: Duration = Duration::from_secs(3600);
 
+const FALLBACK_FILENAME_PREFIX_LEN: usize = 8;
+
 /// A resolved attachment cached on disk.
 #[derive(Debug, Clone)]
 pub struct CachedMedia {
@@ -296,7 +298,7 @@ impl MediaCache {
                         .filename
                         .as_deref()
                         .map(|s| s.to_string())
-                        .or_else(|| Some(format!("{}.bin", id.get(..8).unwrap_or(&id)))),
+.or_else(|| Some(format!("{}.bin", id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)))),
                     size: Some(bytes.len() as u64),
                     url: None,
                     path: None,
@@ -351,7 +353,7 @@ impl MediaCache {
                     .filename
                     .as_deref()
                     .map(|s| s.to_string())
-                    .or_else(|| Some(format!("{}.bin", id.get(..8).unwrap_or(&id)))),
+                    .or_else(|| Some(format!("{}.bin", id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)))),
                 size: None,
                 // rust-doctor-disable-next-line excessive-clone
                 url: Some(item.url.clone()),
@@ -476,7 +478,7 @@ async fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error>
     let marker = dir.join(".created_at");
     // create_dir_all is idempotent — avoids TOCTOU between exists() check and creation.
     tokio::fs::create_dir_all(&dir).await?;
-    if !marker.exists() {
+    if !tokio::fs::try_exists(&marker).await.unwrap_or(false) {
         // Best-effort marker — if it fails, cleanup_stale falls back to mtime
         let _ = tokio::fs::write(&marker, "").await;
     }

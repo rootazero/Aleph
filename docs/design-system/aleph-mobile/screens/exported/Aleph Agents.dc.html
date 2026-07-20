@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="styles/aleph.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+    background:
+      radial-gradient(60% 50% at 18% 12%, oklch(0.62 0.10 310 / 0.18), transparent 70%),
+      radial-gradient(70% 60% at 88% 96%, oklch(0.60 0.09 250 / 0.16), transparent 70%),
+      oklch(0.93 0.006 290);
+    font-family: var(--font-sans);
+  }
+  .cc-hide-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+  .cc-hide-scroll::-webkit-scrollbar { display: none; }
+</style>
+</helmet>
+
+<div style="position:relative; width:418px; padding:14px; border-radius:62px; background:linear-gradient(150deg, oklch(0.30 0.02 300), oklch(0.16 0.015 300)); box-shadow: 0 2px 6px oklch(0.2 0.02 310 / .2), 0 30px 80px oklch(0.25 0.03 310 / .35), inset 0 0 0 2px oklch(0.45 0.02 300 / .5); ">
+
+  <div data-screen-label="Agents" data-material="liquid" style="position:relative; width:390px; height:844px; border-radius:48px; overflow:hidden; background:
+      radial-gradient(120% 55% at 50% 0%, oklch(0.62 0.10 310 / 0.14), transparent 62%),
+      radial-gradient(120% 45% at 50% 100%, oklch(0.60 0.09 250 / 0.10), transparent 60%),
+      var(--color-surface); display:flex; flex-direction:column;">
+
+    <!-- Status bar -->
+    <div style="position:relative; height:54px; flex:none; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 6px; z-index:5;">
+      <span class="tabular-nums" style="font-size:15px; font-weight:600; color:var(--color-text-primary); letter-spacing:0;">9:41</span>
+      <div style="display:flex; align-items:center; gap:7px; color:var(--color-text-primary);">
+        <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="5" y="4.5" width="3" height="7.5" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity="0.4"/></svg>
+        <svg width="17" height="12" viewBox="0 0 17 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2A11 11 0 0 1 16 4.2"/><path d="M3.4 6.7A7.4 7.4 0 0 1 13.6 6.7"/><path d="M5.8 9.2a3.9 3.9 0 0 1 5.4 0"/><circle cx="8.5" cy="11" r="0.6" fill="currentColor"/></svg>
+        <div style="display:flex; align-items:center; gap:2px;"><div style="width:22px; height:11px; border:1.3px solid currentColor; border-radius:3px; padding:1.5px; opacity:.85;"><div style="width:75%; height:100%; background:currentColor; border-radius:1px;"></div></div><div style="width:1.5px; height:4px; background:currentColor; border-radius:1px; opacity:.6;"></div></div>
+      </div>
+    </div>
+    <!-- Dynamic island -->
+    <div style="position:absolute; top:11px; left:50%; transform:translateX(-50%); width:118px; height:34px; background:#000; border-radius:20px; z-index:6;"></div>
+
+    <!-- Top bar -->
+    <div class="glass" style="flex:none; display:flex; align-items:center; gap:8px; min-height:50px; padding:4px 14px 8px; z-index:4; background-color:color-mix(in oklch, var(--color-surface-overlay) 78%, transparent);">
+      <span style="flex:1; font-size:20px; font-weight:700; letter-spacing:-0.02em; color:var(--color-text-primary);">Agents</span>
+      <button class="btn btn-icon btn-ghost" aria-label="add agent">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+
+    <!-- Agent list -->
+    <div class="cc-hide-scroll" style="flex:1; min-height:0; overflow-y:auto; padding:14px 16px 16px;">
+      <div style="font-size:12px; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; color:var(--color-text-tertiary); padding:0 2px 8px;">4 个 Agent</div>
+
+      <div class="list">
+        <!-- Assistant (default) -->
+        <div class="cell">
+          <span class="cell-leading" style="width:38px; height:38px; border-radius:var(--radius-full); background:linear-gradient(150deg, var(--color-primary), oklch(0.62 0.12 270)); color:var(--color-text-inverse); font-size:15px; font-weight:700; box-shadow:var(--shadow-sm);">A</span>
+          <div class="cell-body">
+            <div class="cell-title" style="font-weight:600;">Assistant</div>
+            <div class="cell-sub" style="margin-top:1px;">Generalist · Sonnet 4.8</div>
+          </div>
+          <span class="badge badge-primary" style="flex:none;">default</span>
+          <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+        </div>
+        <!-- Expert (selected) -->
+        <div class="cell" style="background:color-mix(in oklch, var(--color-info) 7%, transparent); box-shadow:inset 3px 0 0 var(--color-info);">
+          <span class="cell-leading" style="width:38px; height:38px; border-radius:var(--radius-full); background:var(--color-info-subtle); color:var(--color-info); font-size:15px; font-weight:700;">E</span>
+          <div class="cell-body">
+            <div class="cell-title" style="font-weight:600;">Expert</div>
+            <div class="cell-sub" style="margin-top:1px;">Expert · Opus 4.8</div>
+          </div>
+          <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+        </div>
+        <!-- Companion -->
+        <div class="cell">
+          <span class="cell-leading" style="width:38px; height:38px; border-radius:var(--radius-full); background:var(--color-success-subtle); color:var(--color-success); font-size:15px; font-weight:700;">C</span>
+          <div class="cell-body">
+            <div class="cell-title" style="font-weight:600;">Companion</div>
+            <div class="cell-sub" style="margin-top:1px;">Companion · Sonnet 4.8</div>
+          </div>
+          <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+        </div>
+        <!-- Maker -->
+        <div class="cell">
+          <span class="cell-leading" style="width:38px; height:38px; border-radius:var(--radius-full); background:var(--color-warning-subtle); color:var(--color-warning); font-size:15px; font-weight:700;">M</span>
+          <div class="cell-body">
+            <div class="cell-title" style="font-weight:600;">Maker</div>
+            <div class="cell-sub" style="margin-top:1px;">Maker · Opus 4.8</div>
+          </div>
+          <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Current agent overview card -->
+    <div style="flex:none; padding:0 16px 14px;">
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:11px;">
+          <span style="display:inline-flex; width:42px; height:42px; border-radius:var(--radius-full); align-items:center; justify-content:center; background:var(--color-info-subtle); color:var(--color-info); font-size:17px; font-weight:700; flex:none;">E</span>
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:7px;">
+              <span class="card-title">Expert</span>
+              <span class="badge badge-info" style="flex:none;">selected</span>
+            </div>
+            <div class="card-sub" style="margin-top:1px;">Expert · Opus 4.8</div>
+          </div>
+        </div>
+        <p style="margin:11px 0 0; font-size:13.5px; line-height:1.55; color:var(--color-text-secondary);">
+          深度技术伙伴 &mdash; 偏好严谨、有依据的长回答,先给结论再展开论证。
+        </p>
+        <button class="btn btn-secondary btn-sm btn-block" style="margin-top:12px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          设为默认 Agent
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tabbar glass" style="flex:none; padding-bottom:calc(0.4rem + 16px);">
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.7 8.7 0 0 1-4-1L3 20l1-5.5a8.4 8.4 0 0 1-1-4A8.4 8.4 0 0 1 11.5 2 8.4 8.4 0 0 1 21 11.5z"/></svg>
+        Chat
+      </button>
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="8" r="2.4"/><circle cx="11" cy="17" r="2.4"/><path d="M8 8.4l1.5 6.4M15.8 9.6L12.6 15.6"/></svg>
+        Memory
+      </button>
+      <button class="tabitem tabitem-active">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
+        Agents
+      </button>
+      <button class="tabitem">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4 13.6H4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 5 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.4 4V4a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+        Settings
+      </button>
+    </div>
+
+    <!-- Home indicator -->
+    <div style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:134px; height:5px; border-radius:var(--radius-full); background:var(--color-text-primary); opacity:.28; z-index:7;"></div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

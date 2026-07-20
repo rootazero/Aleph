@@ -1117,6 +1117,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // the harness bridge, and finally stamped onto every
                 // `RequestPayload` in `think.rs`.
                 think_level,
+                // This turn's resolved exec tier — the same value fed to the
+                // `ScopedToolService` gate above — surfaced to the model as the
+                // `Approval mode:` line so it can pace itself against the
+                // approval regime it will actually meet (codex `<approval_policy>`
+                // parity, R9).
+                exec_tier: Some(exec_tier),
             };
 
             // Dispatch via the orchestrator

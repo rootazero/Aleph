@@ -78,7 +78,6 @@ pub mod moa;
 pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
-pub mod model_discovery;
 pub mod model_override_provider;
 pub mod ollama;
 pub mod openai;
@@ -97,19 +96,13 @@ pub mod route_observe;
 pub mod route_policy;
 pub mod session_moa_handle;
 pub mod session_model_handle;
-pub mod shared;
 pub mod think_level_provider;
 
 // Re-exports
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use auth_profiles::{
-    calculate_billing_cooldown_ms, calculate_cooldown_ms, clear_profile_cooldown,
-    mark_profile_failure, mark_profile_good, mark_profile_used, normalize_provider_id,
-    resolve_profile_order, ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
-    AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats, TokenCredential,
-};
+pub use auth_profiles::{calculate_cooldown_ms, AuthProfileFailureReason};
 pub use default_handle::{DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,

@@ -167,6 +167,41 @@ impl ExecTier {
             .and_then(Value::as_str)
             .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op))
     }
+
+    /// One model-facing line describing this tier's approval regime, for the
+    /// system prompt (rendered by `SecurityLayer`). Codex surfaces the same
+    /// fact as `<approval_policy>` inside its `<environment_context>` so the
+    /// model can pace itself against the human backstop instead of discovering
+    /// it through interrupted tool calls (R9: intelligence in the prompt).
+    ///
+    /// The copy lives next to `rule_for` — the single source of what each tier
+    /// actually gates — so a change to the enforcement rule and its description
+    /// cannot drift apart. Model-facing prompt text is always English (unlike a
+    /// user-surface label, which follows the reader's locale — see
+    /// [`TierPreset`]).
+    #[must_use]
+    pub const fn approval_prompt_line(self) -> &'static str {
+        match self {
+            Self::Ask => {
+                "Approval mode: ask — every mutating or side-effecting tool call \
+                 pauses for the user's confirmation before it runs; read-only tools run \
+                 freely. Plan ahead and batch related changes, and state what you intend to \
+                 do before a run of edits, so the user is not interrupted step by step."
+            }
+            Self::Auto => {
+                "Approval mode: auto — routine tool calls run without interruption; \
+                 only irreversible or destructive actions (deletions, moves, credential \
+                 writes, disbanding a team) pause for the user's confirmation."
+            }
+            Self::Full => {
+                "Approval mode: full — no tool call is gated; nothing pauses for \
+                 confirmation. You are the last line of defense: double-check destructive or \
+                 irreversible actions yourself before running them. (The command-policy \
+                 hardline floor — fork bombs, `rm -rf /`, device wipes — still blocks under \
+                 every mode.)"
+            }
+        }
+    }
 }
 
 /// The effective permission for a tool: the operator's explicit decision, else
@@ -477,6 +512,26 @@ mod tests {
             assert_eq!(ExecTier::from_id(tier.id()), Some(tier));
         }
         assert_eq!(ExecTier::from_id("nonsense"), None);
+    }
+
+    #[test]
+    fn approval_prompt_line_is_distinct_and_names_the_tier() {
+        // Each tier renders a non-empty, tier-specific line that leads with its
+        // id so the model can key on it. The three lines must be distinct — a
+        // copy-paste that collapsed two tiers would hide the regime from the
+        // model.
+        let ask = ExecTier::Ask.approval_prompt_line();
+        let auto = ExecTier::Auto.approval_prompt_line();
+        let full = ExecTier::Full.approval_prompt_line();
+        assert!(ask.contains("Approval mode: ask"));
+        assert!(auto.contains("Approval mode: auto"));
+        assert!(full.contains("Approval mode: full"));
+        assert_ne!(ask, auto);
+        assert_ne!(auto, full);
+        assert_ne!(ask, full);
+        // The `Full` line must warn that there is no human backstop — that is
+        // the whole reason to surface the regime at this tier.
+        assert!(full.contains("last line of defense"));
     }
 
     #[test]

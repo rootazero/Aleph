@@ -1,0 +1,1 @@
+ISSUE|src/cli/endpoint.rs:39|low|.ipc-endpoint.json file permissions are restricted only on Unix; on Windows the endpoint file is created with default ACLs and may be readable by other users|#[cfg(unix)] guards the 0o600 set_permissions call at lines 39-49, with no Windows equivalent

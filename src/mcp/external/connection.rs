@@ -15,6 +15,10 @@ use crate::mcp::transport::{McpTransport, StdioTransport};
 use crate::mcp::types::McpTool;
 use crate::sync_primitives::Arc;
 
+fn strip_server_prefix<'a>(s: &'a str, server_name: &str) -> &'a str {
+    s.strip_prefix(&format!("{server_name}:")).unwrap_or(s)
+}
+
 /// Default timeout for the entire MCP server connection process
 /// This includes: process spawn + initialize handshake + tools/list
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -563,9 +567,7 @@ impl McpServerConnection {
     /// Call a tool on this server
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
         // Strip server namespace prefix if present
-        let tool_name = name
-            .strip_prefix(&format!("{}:", self.name))
-            .unwrap_or(name);
+        let tool_name = strip_server_prefix(name, &self.name);
 
         let params = mcp_types::ToolCallParams {
             name: tool_name.to_string(),
@@ -689,7 +691,7 @@ impl McpServerConnection {
     /// Read a resource by URI
     pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
         // Strip server namespace prefix if present
-        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
+        let resource_uri = strip_server_prefix(uri, &self.name);
 
         let params = mcp_types::ResourceReadParams {
             uri: resource_uri.to_string(),
@@ -758,9 +760,7 @@ impl McpServerConnection {
         arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<crate::mcp::prompts::PromptResult> {
         // Strip server namespace prefix if present
-        let prompt_name = name
-            .strip_prefix(&format!("{}:", self.name))
-            .unwrap_or(name);
+        let prompt_name = strip_server_prefix(name, &self.name);
 
         let params = mcp_types::PromptGetParams {
             name: prompt_name.to_string(),

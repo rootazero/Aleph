@@ -6,6 +6,9 @@ use std::path::PathBuf;
 
 use crate::logging::LoggingError;
 
+const DEFAULT_RETENTION_DAYS: u32 = 7;
+const DEFAULT_FILTER: &str = "info";
+
 /// Initialize file + console logging for a named component.
 ///
 /// Delegates to `aleph_logging::init_component_logging`.
@@ -23,7 +26,7 @@ pub fn init_component_logging(
 ///
 /// Convenience wrapper that calls `init_component_logging("server", 7, "info")`.
 pub fn init_file_logging() -> Result<(), LoggingError> {
-    init_component_logging("server", 7, "info")
+    init_component_logging("server", DEFAULT_RETENTION_DAYS, DEFAULT_FILTER)
 }
 
 /// Get the log directory path: `~/.aleph/logs/`
