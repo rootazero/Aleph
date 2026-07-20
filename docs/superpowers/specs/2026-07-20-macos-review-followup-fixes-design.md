@@ -34,7 +34,7 @@
 - `region == Some(r)`：`stream_config.setSourceRect(CGRect)` 从 region 裁剪，输出 `setWidth/Height` 设为 **region 尺寸 × scale**。
 - 依赖：`SCStreamConfiguration::setSourceRect(CGRect)`（已核实存在于 `objc2-screen-capture-kit 0.3.2`）。`CGRect/CGPoint/CGSize` **必须**取自 `objc2-core-foundation 0.3.2`——objc2 SCK 方法签名要求带 `Encode` 的 objc2 版 `CGRect`，`core-graphics 0.25` 的同名类型是**不同类型、不通用**。仅需在 `desktop/shared/Cargo.toml` 的 macos target 段加一行 `objc2-core-foundation = { version = "0.3", features = ["objc2"] }`（已在 Cargo.lock 树中经 SCK 传递引入——**非新增重依赖，R3 合规**）。此依赖**仅 A（`screen_record.rs`）用**。
 
-**坐标空间约定（关键）**：`sourceRect` 在 display 的 **point** 空间（左上原点）。`ScreenRegion{x,y,w,h: u32}` 采用与截图轨（`screenshot_via_bridge` 把 region 原样作 sourceRect points 传 Swift 助手）**一致的 points 语义**，故 `sourceRect = region 原值`，与全屏分支的 `display_points × scale` 内部一致，无需 point↔pixel 换算。**此约定由运行时录制验证兜底**（录已知 region，核对输出像素尺寸 == region × scale 且内容正确）。
+**坐标空间约定（关键 · Task 1 评审修正）**：`sourceRect` 在 display 的 **point** 空间（左上原点），但 `ScreenRegion{x,y,w,h: u32}` 是**物理像素**（`lib.rs:58` 明确 "in physical pixels"；`coord_resolve.rs::resolve_viewport` 产出 `dim × scale`；Linux/Windows 同胞录制器 `build_x11grab_args`/`build_gdigrab_args` 把 region 原样当像素喂 ffmpeg）。故 SCK 裁剪需换算：`sourceRect(points) = region(pixels) ÷ scale`，输出 `setWidth/Height(pixels) = region(pixels)` **原值**（不再 ×scale）。全屏分支仍为 `display_points × scale`；一个等于全屏的 region 由此复现全屏输出（正确性锚点）。**早稿曾误写 "region 采用 points 语义 = sourceRect 原值"——已按评审改正。此约定由运行时录制验证兜底**（录已知 region，核对输出像素尺寸 == region 且内容为裁剪区）。
 
 **纯函数 + clamp（可单测）**：抽一个 `#[cfg(any(target_os="macos", test))]` 纯函数（仿 `build_x11grab_args` 的可测模式），入参 `(region, display_w_pt, display_h_pt)`，出参"裁剪到 display 边界后的 rect（points, f64）+ 输出像素 `(w,h): usize`"；region 与 display 交集为空 → 返回错误（映射 `DesktopError::ScreenCapture`）。macOS 代码把纯函数结果转成 `CGRect` 喂 `setSourceRect`。
 - 单测：region 全在界内（原样）、越界（裁到边界）、完全在界外（Err）、零尺寸（Err）。
@@ -108,7 +108,7 @@ fn preserve_typed(method: &str, e: DesktopError, wrap: impl Fn(String) -> Deskto
 | AX `kAXPosition/kAXSize` | 左上（全局） | points | C 读/写窗口几何 |
 | CGWindowList `kCGWindowBounds` | 左上（全局） | points | C 匹配基准（`WindowInfo.bounds`） |
 
-A 的 region 与 C 的 AX/CG 都在 points 左上空间，彼此自洽；A 的输出尺寸乘 `scale`（沿用现有 `scale=2` 假设，region 与全屏分支同用同一 scale，内部一致，实际因子的准确性由运行时验证）。
+A 的 `ScreenRegion` 是**物理像素**（非 points）：裁剪矩形 `sourceRect(points) = region ÷ scale`，输出尺寸 = region 像素原值。C 的 AX/CG 都在 points 左上空间，彼此自洽（C 不涉及 region，不受此修正影响）。沿用现有 `scale=2` 假设（region 与全屏分支同用同一 scale，内部一致；非 Retina 实机 scale≠2 的准确性为既有局限，由运行时验证兜底，超出本轮范围）。
 
 ## 落地与验证策略
 
