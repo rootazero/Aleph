@@ -179,6 +179,12 @@ impl ConflictResolver {
     /// Uses a single write lock to prevent TOCTOU races between conflict
     /// check and tool insertion.
     ///
+    /// Aliases participate in conflict detection: a later tool whose `name`
+    /// or any `alias` collides with an existing canonical name (or alias)
+    /// is treated as a conflict and resolved via the same priority rules.
+    /// This stops a low-priority registrant from shadowing a high-priority
+    /// builtin alias like `/model` or `/compact`.
+    ///
     /// # Arguments
     ///
     /// * `tool` - The tool to register
@@ -196,11 +202,25 @@ impl ConflictResolver {
 
         let mut tools = self.tools.write().await;
 
-        // Inline conflict check under write lock (no TOCTOU race)
+        // Inline conflict check under write lock (no TOCTOU race).
+        // Match against the new tool's canonical name OR any of its aliases.
         let name_lower = tool.name.to_lowercase();
+        let alias_lowers: Vec<String> = tool
+            .aliases
+            .iter()
+            .map(|a| a.to_lowercase())
+            .collect();
         let conflict = tools
             .values()
-            .find(|t| t.name.to_lowercase() == name_lower)
+            .find(|t| {
+                if t.name.to_lowercase() == name_lower {
+                    return true;
+                }
+                let existing_name_lower = t.name.to_lowercase();
+                alias_lowers
+                    .iter()
+                    .any(|a| a == &existing_name_lower)
+            })
             .map(|t| ConflictInfo {
                 existing_id: t.id.clone(),
                 existing_name: t.name.clone(),

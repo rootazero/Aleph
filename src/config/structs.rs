@@ -102,12 +102,24 @@ pub struct Config {
     pub sandbox: crate::sandbox::SandboxConfig,
     /// Smart conversation flow configuration
     #[serde(default)]
+    #[deprecated(
+        since = "2026.07.20",
+        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
+    )]
     pub smart_flow: SmartFlowConfig,
     /// Smart matching configuration (semantic detection system)
     #[serde(default)]
+    #[deprecated(
+        since = "2026.07.20",
+        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
+    )]
     pub smart_matching: SmartMatchingConfig,
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
+    #[deprecated(
+        since = "2026.07.20",
+        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
+    )]
     pub dispatcher: DispatcherConfigToml,
     /// Agent task orchestration configuration (renamed from cowork)
     /// Supports both [agent] and [cowork] sections for backward compatibility
@@ -128,6 +140,10 @@ pub struct Config {
     pub orchestrator: OrchestratorConfig,
     /// Sub-agent synchronization configuration
     #[serde(default)]
+    #[deprecated(
+        since = "2026.07.20",
+        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
+    )]
     pub subagent: SubAgentConfig,
     /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
     /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
@@ -152,6 +168,10 @@ pub struct Config {
     pub personas: Vec<PersonaConfig>,
     /// Skill evolution configuration (Skill Compiler - Phase 10)
     #[serde(default)]
+    #[deprecated(
+        since = "2026.07.20",
+        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
+    )]
     pub evolution: EvolutionConfig,
     /// Media understanding pipeline configuration
     #[serde(default)]

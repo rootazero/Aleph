@@ -1,30 +1,26 @@
 //! Tool Metadata Layer
 //!
-//! This module manages tool registration, discovery, and risk evaluation:
+//! This module manages tool registration and discovery:
 //!
 //! - **Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)
-//! - **Risk Evaluation**: Tool risk assessment
 //! - **Tool Index**: Semantic tool retrieval and hydration
+//!
+//! Note: the legacy `risk::RiskEvaluator` regex classifier was removed — R8 reserves
+//! regex for machine formats (JSON / URLs / file globs); intent classification belongs
+//! to the LLM via prompt.
 
-// === Constants ===
 mod constants;
 pub use constants::*;
 
-// === Slash-command aliases (single source for execution + discovery) ===
 pub mod aliases;
 pub use aliases::{
     is_shorthand_alias, resolve_shorthand, runtime_only_target_description, shorthand_aliases_for,
     RUNTIME_ONLY_ALIAS_TARGETS, SHORTHAND_ALIASES,
 };
 
-// === Tool Management ===
 mod registry;
 mod types;
 
-// === Risk Evaluation ===
-pub mod risk;
-
-// === Re-exports: Tool Management ===
 pub use registry::ResolvedCommand;
 pub use registry::ToolCatalog;
 pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
@@ -33,9 +29,6 @@ pub use types::{
     ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolPriority,
     ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
-
-// === Re-exports: Risk Evaluation ===
-pub use risk::{RiskEvaluator, RiskLevel};
 
 #[cfg(all(test, feature = "loom"))]
 mod loom_concurrency;

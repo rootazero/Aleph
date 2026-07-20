@@ -231,6 +231,12 @@ impl MoaManageTool {
         self.config_patcher = Some(patcher);
         self
     }
+
+    /// Late-bind a `ConfigPatcher` after construction (see
+    /// `BuiltinToolRegistry::set_config_patcher`).
+    pub fn set_patcher(&mut self, patcher: Arc<ConfigPatcher>) {
+        self.config_patcher = Some(patcher);
+    }
 }
 
 fn no_turn_context_output() -> MoaManageOutput {

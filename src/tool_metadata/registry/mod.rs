@@ -154,7 +154,9 @@ impl ToolCatalog {
 
     /// Register custom commands from config rules
     pub async fn register_custom_commands(&self, rules: &[RoutingRuleConfig]) {
-        self.registrar.register_custom_commands(rules).await;
+        self.registrar
+            .register_custom_commands(rules, &self.conflict_resolver)
+            .await;
         self.health.invalidate_all();
     }
 
