@@ -96,9 +96,17 @@ fn grant_windows(pview: &tauri::webview::PlatformWebview) {
             // SAFETY: `Uri` writes an owned PWSTR (freed by `take_pwstr`);
             // `args` is the live event-args COM interface for this callback.
             args.Uri(&mut uri)?;
-            let origin_ok = (!uri.is_null())
-                .then(|| tauri::Url::parse(&take_pwstr(uri)).ok())
-                .flatten()
+            if uri.is_null() {
+                // A successful `Uri()` yielding a null pointer is a COM anomaly:
+                // the request carries no origin, so the grant is withheld. Log it
+                // rather than let the mic request vanish silently.
+                tracing::warn!(
+                    "WebView2 microphone permission request arrived with an unresolvable origin; withholding grant"
+                );
+                return Ok(());
+            }
+            let origin_ok = tauri::Url::parse(&take_pwstr(uri))
+                .ok()
                 .is_some_and(|u| crate::external_link::is_internal(&u));
             if origin_ok {
                 args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
