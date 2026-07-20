@@ -278,28 +278,27 @@ impl ConfigApprovalPolicy {
 
     /// Permissive fallback used when **no** policy file exists.
     ///
-    /// Every action type defaults to [`ApprovalDecision::Allow`].
-    ///
-    /// This is the production no-config default: the tools that hold an
-    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`, `AutomationTool`) emit
-    /// `Desktop*`/`PimWrite` action types, so an all-`Allow` desktop default
-    /// keeps autonomous desktop/PIM/automation behavior unchanged from when no
-    /// policy was wired at all. Dropping a `~/.aleph/approval-policy.json` is
-    /// the explicit opt-in to tighten this (e.g. `desktop_automation: ask`).
+    /// Mirrors the [`Default`] impl: low-risk browser actions default to
+    /// `Allow`, while privacy- and sensor-routing actions
+    /// (`DesktopAutomation`, `PimWrite`, `MediaCapture`, `BrowserEvaluate`)
+    /// default to `Ask`. This keeps "no config file" on the same side of
+    /// fail-closed as "config exists but unreadable" — only the explicit
+    /// opt-in of dropping `~/.aleph/approval-policy.json` after writing a
+    /// tighter policy is treated as a permission escalation.
     fn permissive_default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserClick, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
-        defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopClick, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopType, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
-        defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
-        defaults.insert(ActionType::MediaCapture, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Ask);
+        defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Ask);
+        defaults.insert(ActionType::PimWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::MediaCapture, DefaultDecision::Ask);
 
         Self::new(PolicyConfig {
             version: 1,
