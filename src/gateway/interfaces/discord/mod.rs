@@ -48,7 +48,8 @@ use std::collections::HashMap;
 
 use serenity::{
     all::{
-        ChannelId as SerenityChannelId, CommandDataOptionValue, Context, CreateAttachment,
+        ButtonStyle, ChannelId as SerenityChannelId, CommandDataOptionValue, ComponentInteraction,
+        Context, CreateActionRow, CreateAttachment, CreateButton, CreateInteractionResponse,
         CreateMessage, EditMessage, EventHandler, GatewayIntents, GuildChannel, Interaction,
         Message, MessageId as SerenityMessageId, PartialGuildChannel, Ready,
     },
@@ -200,6 +201,22 @@ impl DiscordChannel {
 
 }
 
+/// Map an approval `callback_data` to a styled Discord button.
+///
+/// `approve*` → green (Success), `deny*` → red (Danger), otherwise neutral.
+/// The `custom_id` carries `callback_data` verbatim so the click round-trips
+/// back to the approval sink unchanged.
+fn button_style_for(callback_data: &str, text: &str) -> CreateButton {
+    let style = if callback_data.starts_with("approve") {
+        ButtonStyle::Success
+    } else if callback_data.starts_with("deny") {
+        ButtonStyle::Danger
+    } else {
+        ButtonStyle::Secondary
+    };
+    CreateButton::new(callback_data).label(text).style(style)
+}
+
 /// Event handler for Discord gateway events
 struct Handler {
     inbound_tx: InboundMessageSender,
@@ -207,6 +224,64 @@ struct Handler {
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
     thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
+}
+
+impl Handler {
+    /// Forward a button/select-menu click to the router's approval sink.
+    ///
+    /// The router recognises approval callbacks by the `cb_` message-id prefix
+    /// and hands `text` (== the button's `custom_id`) plus the clicker id to the
+    /// injected `ApprovalCallbackSink`. Discord itself holds no approval state —
+    /// this stays R4-pure I/O: translate the interaction into an inbound message.
+    async fn handle_component(&self, ctx: &Context, component: &ComponentInteraction) {
+        // Enforce the same guild/channel allowlist as messages and commands so a
+        // button can't drive the agent from a non-allowed surface.
+        if let Some(guild_id) = component.guild_id {
+            if !self.config.is_guild_allowed(guild_id.get()) {
+                return;
+            }
+        }
+        if !self.config.is_channel_allowed(component.channel_id.get()) {
+            return;
+        }
+
+        // Key the conversation exactly like message()/interaction_create so the
+        // approval reply lands in the same conversation as the original prompt.
+        let conversation_id = if component.guild_id.is_some() {
+            ConversationId::new(component.channel_id.to_string())
+        } else {
+            ConversationId::new(format!("dm:{}", component.user.id))
+        };
+
+        let inbound = InboundMessage {
+            id: MessageId::new(format!("cb_{}", component.id)),
+            channel_id: ChannelId::new("discord"),
+            conversation_id,
+            sender_id: UserId::new(component.user.id.to_string()),
+            sender_name: Some(component.user.name.clone()),
+            text: component.data.custom_id.clone(),
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: component.guild_id.is_some(),
+            raw: None,
+            metadata: vec![],
+        };
+
+        if let Err(e) = self.inbound_tx.send(inbound) {
+            tracing::error!(error = ?e, "Failed to forward Discord button callback");
+        }
+
+        // ACK the interaction (deferred update) so Discord clears the click
+        // spinner. The human-visible result is posted by the router as a normal
+        // channel message.
+        if let Err(e) = component
+            .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+            .await
+        {
+            tracing::debug!(error = ?e, "Failed to ACK Discord component interaction");
+        }
+    }
 }
 
 #[async_trait]
@@ -373,7 +448,14 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        // Button / select-menu clicks (approval UI): forward the callback to the
+        // router's approval sink via a cb_-prefixed inbound message, then ACK.
+        if let Interaction::Component(component) = &interaction {
+            self.handle_component(&ctx, component).await;
+            return;
+        }
+
         let serenity::all::Interaction::Command(command) = interaction else {
             return;
         };
@@ -713,6 +795,29 @@ impl Channel for DiscordChannel {
             }
         }
 
+        // Render inline keyboard (approval UI etc.) as Discord button components.
+        // The button `custom_id` carries the callback_data verbatim; a click comes
+        // back through `interaction_create` → cb_-prefixed inbound → approval sink.
+        // Discord caps action rows at 5 and buttons-per-row at 5.
+        if let Some(keyboard) = &message.inline_keyboard {
+            let rows: Vec<CreateActionRow> = keyboard
+                .rows
+                .iter()
+                .take(5)
+                .filter_map(|row| {
+                    let buttons: Vec<CreateButton> = row
+                        .iter()
+                        .take(5)
+                        .map(|btn| button_style_for(&btn.callback_data, &btn.text))
+                        .collect();
+                    (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
+                })
+                .collect();
+            if !rows.is_empty() {
+                builder = builder.components(rows);
+            }
+        }
+
         // Send the message
         let sent = channel_id
             .send_message(http, builder)
@@ -905,5 +1010,33 @@ mod tests {
         let channel = DiscordChannel::new("discord-test", config);
         assert_eq!(channel.info().id.as_str(), "discord-test");
         assert_eq!(channel.info().channel_type, "discord");
+    }
+
+    #[test]
+    fn test_stream_protocol_is_edit_based() {
+        // Reply streaming relies on this: the inbound executor only enables
+        // stream_enabled when the channel declares EditBased.
+        assert_eq!(
+            DiscordChannel::capabilities().stream_protocol,
+            crate::gateway::channel::StreamProtocol::EditBased
+        );
+    }
+
+    #[test]
+    fn test_button_style_mapping() {
+        // approve* → green, deny* → red, everything else neutral. The label and
+        // custom_id (== callback_data) must survive verbatim for the round-trip.
+        // We assert via the serialized component JSON since CreateButton exposes
+        // no getters.
+        let approve = serde_json::to_value(button_style_for("approve:abc:once", "Approve")).unwrap();
+        assert_eq!(approve["style"], 3); // ButtonStyle::Success
+        assert_eq!(approve["custom_id"], "approve:abc:once");
+        assert_eq!(approve["label"], "Approve");
+
+        let deny = serde_json::to_value(button_style_for("deny:abc", "Deny")).unwrap();
+        assert_eq!(deny["style"], 4); // ButtonStyle::Danger
+
+        let other = serde_json::to_value(button_style_for("misc:x", "Other")).unwrap();
+        assert_eq!(other["style"], 2); // ButtonStyle::Secondary
     }
 }

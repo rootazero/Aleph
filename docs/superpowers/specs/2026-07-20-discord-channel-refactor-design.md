@@ -78,32 +78,28 @@ Aleph 孤立的 `StreamingHandler` 实现的却是 **presence 追踪**（用户�
 
 ### 3.1 回复流式（连线 `EditBased`）
 
-**改动面**：`mod.rs`
-1. `capabilities()` / `ChannelInfo`：`stream_protocol = StreamProtocol::EditBased`，设 `max_message_length = 2000`（Discord 上限）。
-2. 实现 `Channel::edit(&self, conversation_id, message_id, new_content) -> ChannelResult<()>`：serenity `http.edit_message(channel_id, message_id, EditMessage::new().content(...))`。
-3. 复用：`inbound_router/executor.rs:129` 见 `EditBased` 即 `stream_enabled = true`，`ReplyEmitter` + `StreamingController`（debounce/flood 控制）自动驱动 send→edit。**Discord 侧零流式状态机**。
+**改动面**：`mod.rs`（**实测仅一行**）
+1. `capabilities()`：`stream_protocol = StreamProtocol::EditBased`（`max_message_length = 2000` 已设）。
+2. `Channel::edit()` **Discord 已实现**（serenity `edit_message`）——无需新增。
+3. 复用：`inbound_router/executor.rs:134` 见 `EditBased` 即 `stream_enabled = true`，`ReplyEmitter` + `StreamingController`（debounce/flood 控制）自动驱动 send→edit。**Discord 侧零流式状态机**。
 
 **收益**：Discord 回复从"憋完一次性发"→"实时渐进编辑"，对齐 Telegram 体验。
 
 ### 3.2 交互按钮 → 真实审批（连线 `ApprovalCallbackSink`）
 
-**改动面**：`mod.rs::Handler::interaction_create` + `start()`
-1. `interaction_create` 增加 `Interaction::Component(mc)` 分支（当前直接 `return`）：
-   - 取 `mc.data.custom_id`（审批 UI 发的 `d`）、`mc.user.id`（clicker RAW id，`u`）。
-   - 转发给 `ApprovalCallbackSink::handle_callback(d, u)`（经 `Handler` 持有的 sink 句柄注入）。
-   - 用返回的 `ApprovalCallbackResult` 文案 `create_interaction_response` 回渲染（ACK 按钮）。
-2. `Handler` 增 `approval_sink: Option<Arc<dyn ApprovalCallbackSink>>` 字段；`start()` 从 channel_registry / inbound_router 注入（对齐 Telegram/Slack 注入方式——实现时对照其 wiring）。
+> **实测修正**：审批按钮是**双向**的。router 用 InboundMessage 的 **`cb_` id 前缀**识别回调（`inbound_router/mod.rs:546`），把 `text`（=custom_id）+ `sender_id` 交给注入的 sink。故 Discord **不需持有 sink**——只发一条 `cb_`-前缀 InboundMessage 走现有 `inbound_tx` 即可（R4 纯 I/O）。但按钮要先出现，还需 outbound 渲染。
 
-**熵减**：删除 `handlers/approval.rs`（`ApprovalQueue`）+ `handlers/interaction.rs`（`InteractionHandler`）——真实审批走 `ApprovalCallbackSink`，二者冗余。
+**改动面**：`mod.rs`（双向）
+1. **Outbound**（`send()`）：把 `OutboundMessage.inline_keyboard` 渲染成 Discord 按钮组件（`CreateActionRow::Buttons` + `CreateButton`，5×5 上限）。`custom_id` = `callback_data` 逐字透传。`approve*`→绿 / `deny*`→红 / 其余中性（`button_style_for`）。
+2. **Inbound**（`interaction_create`）：新增 `Interaction::Component` 分支 → `handle_component()`：施加 guild/channel allowlist → 构造 `id="cb_<interaction_id>"`、`text=custom_id`、`sender_id=clicker` 的 InboundMessage 发 `inbound_tx` → `CreateInteractionResponse::Acknowledge` 消解点击 spinner（结果由 router 作普通消息回渲染）。
+
+**熵减**：`ApprovalQueue`/`InteractionHandler` 已在 Phase 1 删除——真实审批走 `ApprovalCallbackSink`。
 
 > ✅ **决策已确认（2026-07-20）**：真实审批基础设施是 `ApprovalCallbackSink`，`ApprovalQueue` 与之重复。"连线真实路径"的正解是接 sink，故**删除 ApprovalQueue + InteractionHandler**。
 
-### 3.3 Typing 生命周期（打磨）
+### 3.3 Typing 生命周期（打磨）— **已降级/取消**
 
-**改动面**：`mod.rs::Handler::message` / outbound 侧
-- 现状：inbound 命中时一次性 `broadcast_typing`（~10s 后消失，长回复期间无指示）。
-- 改为：命中处理→回复完成期间周期性重播 typing（Discord typing 约 10s TTL，每 ~8s 重播一次），回复送达即停。
-- 实现：轻量 `tokio::spawn` + `oneshot`/`AtomicBool` 停止信号，绑定 run 生命周期。**不引入新基础设施**，仅本地增强。
+> **ROI 决策（2026-07-20）**：Phase 2 回复流式启用后，消息会实时出现并渐进增长——用户已获得处理反馈。在其上再叠"持续 typing 指示器"需 message()（start）↔ send()（stop）跨方法生命周期协调，收益边际且增复杂度，违 R10 YAGNI。既有一次性 `broadcast_typing` 作流式前指示足矣。**本次不做。**
 
 ### 3.4 Thread 绑定去重（连线 + 熵减）
 
@@ -135,11 +131,11 @@ Aleph 孤立的 `StreamingHandler` 实现的却是 **presence 追踪**（用户�
 
 ---
 
-## 6. 阶段（供 writing-plans 展开）
+## 6. 阶段（实施记录）
 
-1. **Phase 1 — 熵减**：删除 §4 全部孤立代码 + 修 mod.rs/config.rs 引用 + 删孤立测试 → `cargo check` 绿。（安全、可独立验证）
-2. **Phase 2 — 回复流式**：`EditBased` + `Channel::edit()` + 单测。
-3. **Phase 3 — 按钮审批连线**：`interaction_create` Component 分支 + sink 注入 + 单测。
-4. **Phase 4 — typing 生命周期 + thread 去重收尾** + 全量回归。
+1. **Phase 1 — 熵减** ✅：删除 §4 全部孤立代码 + 修引用 + 删孤立测试（净 −1456 行）。
+2. **Phase 2 — 回复流式** ✅：`stream_protocol = EditBased`（一行；`edit()` 已存在）。
+3. **Phase 3 — 按钮审批双向连线** ✅：`send()` 渲染按钮 + `interaction_create` Component→cb_ inbound + `button_style_for` 单测。
+4. **Phase 4 — typing 生命周期**：降级取消（见 §3.3）。thread 去重＝Phase 1 方案 A（删孤立 handler，无需替换）。
 
 每 Phase 一或多次提交，遵循 `discord: <desc>` 规范。
