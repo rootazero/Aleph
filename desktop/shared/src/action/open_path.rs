@@ -20,7 +20,7 @@ use crate::error::{DesktopError, Result};
 ///
 /// - **macOS**: `/usr/bin/open <target>`
 /// - **Linux**: `xdg-open <target>`
-/// - **Windows**: `cmd /C start "" "<target>"`
+/// - **Windows**: `ShellExecuteW` with verb `"open"` (no cmd.exe)
 ///
 /// # Errors
 ///
@@ -67,15 +67,41 @@ pub fn open(target: &str) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // The empty "" is the window title `start` expects as its first quoted
-        // argument; the real target follows. Mirrors `app_launch::launch_app`.
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "start", "", target])
-            .status()
-            .map_err(|e| DesktopError::InputFailed(format!("open: failed to run start: {e}")))?;
-        if !status.success() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        // NUL-terminated wide buffers for the Win32 W API.
+        let verb: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let file: Vec<u16> = std::ffi::OsStr::new(target)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // ShellExecuteW hands `target` straight to the shell's association
+        // resolver — it never spawns cmd.exe, so shell metacharacters in
+        // `target` cannot inject a command. Returns HINSTANCE > 32 on success.
+        // SAFETY: `verb`/`file` are valid NUL-terminated wide buffers that
+        // outlive the call; the remaining pointer args are null as documented.
+        let hinst = unsafe {
+            ShellExecuteW(
+                HWND(std::ptr::null_mut()),
+                PCWSTR(verb.as_ptr()),
+                PCWSTR(file.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if hinst.0 as isize <= 32 {
             return Err(DesktopError::InputFailed(format!(
-                "open: 'start {target}' exited with {status}"
+                "open: ShellExecuteW failed for '{target}' (code {})",
+                hinst.0 as isize
             )));
         }
         info!(target, "Opened with default handler (Windows)");
