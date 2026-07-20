@@ -212,6 +212,35 @@ pub async fn handle_history_db(
     }
 }
 
+/// Best-effort USD cost for a session's token usage. `(None, "unknown")` when
+/// the provider/model is unpriced; otherwise the total USD and serialized
+/// status. Pure wrapper over `crate::pricing::estimate` so it is unit-testable
+/// without a SessionStore, and so all pricing stays in core (R4 — the shells
+/// no longer own a price table).
+fn session_usage_cost(
+    provider: Option<&str>,
+    model: Option<&str>,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> (Option<f64>, &'static str) {
+    let (Some(provider), Some(model)) = (provider, model) else {
+        return (None, "unknown");
+    };
+    let breakdown = crate::orchestrator::dispatch::TokenBreakdown {
+        input: u32::try_from(input_tokens).unwrap_or(u32::MAX),
+        output: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+        ..Default::default()
+    };
+    let est = crate::pricing::estimate(provider, model, &breakdown);
+    match est.status {
+        crate::pricing::CostStatus::Unknown => (None, "unknown"),
+        crate::pricing::CostStatus::Complete => (Some(est.usd), "complete"),
+        crate::pricing::CostStatus::PartialMissingPrice => {
+            (Some(est.usd), "partial_missing_price")
+        }
+    }
+}
+
 /// Handle session.usage RPC request with database backend
 pub async fn handle_usage_db(
     request: JsonRpcRequest,
@@ -245,6 +274,13 @@ pub async fn handle_usage_db(
                     )
                 });
 
+            let (cost_usd, cost_status) = session_usage_cost(
+                session_meta.and_then(|s| s.model_provider.as_deref()),
+                session_meta.and_then(|s| s.model.as_deref()),
+                input_tokens,
+                output_tokens,
+            );
+
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -255,6 +291,8 @@ pub async fn handle_usage_db(
                     "messages": message_count,
                     "created_at": created_at,
                     "last_active_at": last_active_at,
+                    "cost_usd": cost_usd,
+                    "cost_status": cost_status,
                 }),
             )
         }
@@ -374,7 +412,7 @@ pub async fn handle_preview_db(
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_derived_title, handle_list_db, resolve_display_title, SessionInfo};
+    use super::{clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost, SessionInfo};
     use crate::gateway::protocol::JsonRpcRequest;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionPatch};
@@ -531,5 +569,22 @@ mod tests {
     #[test]
     fn none_stays_none() {
         assert_eq!(clean_derived_title(None), None);
+    }
+
+    #[test]
+    fn session_usage_cost_prices_known_model() {
+        let (usd, status) =
+            session_usage_cost(Some("anthropic"), Some("claude-sonnet-4-6"), 1_000_000, 1_000_000);
+        assert_eq!(status, "complete");
+        assert!(usd.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn session_usage_cost_unknown_without_price() {
+        assert_eq!(session_usage_cost(None, None, 100, 100), (None, "unknown"));
+        assert_eq!(
+            session_usage_cost(Some("anthropic"), Some("no-such-model"), 100, 100).1,
+            "unknown"
+        );
     }
 }
