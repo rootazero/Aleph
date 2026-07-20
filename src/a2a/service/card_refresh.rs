@@ -15,7 +15,23 @@ use crate::sync_primitives::Arc;
 
 use super::card_registry::CardRegistry;
 use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
+use crate::a2a::domain::AgentCard;
 use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
+
+fn rebuilt_agent(
+    agent: &RegisteredAgent,
+    card: AgentCard,
+    health: AgentHealth,
+) -> RegisteredAgent {
+    RegisteredAgent {
+        card,
+        trust_level: agent.trust_level,
+        base_url: agent.base_url.clone(),
+        last_seen: chrono::Utc::now(),
+        health,
+        auth_token: agent.auth_token.clone(),
+    }
+}
 
 /// Fetch the real Agent Card for every registered agent and upsert it.
 ///
@@ -39,14 +55,7 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
         match client.fetch_agent_card().await {
             Ok(card) => {
                 registry
-                    .upsert(RegisteredAgent {
-                        card,
-                        trust_level: agent.trust_level,
-                        base_url: agent.base_url.clone(),
-                        last_seen: chrono::Utc::now(),
-                        health: AgentHealth::Healthy,
-                        auth_token: agent.auth_token.clone(),
-                    })
+                    .upsert(rebuilt_agent(&agent, card, AgentHealth::Healthy))
                     .await;
                 refreshed += 1;
             }
@@ -58,14 +67,11 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
                     "A2A card refresh: keeping placeholder card"
                 );
                 registry
-                    .upsert(RegisteredAgent {
-                        card: agent.card.clone(),
-                        trust_level: agent.trust_level,
-                        base_url: agent.base_url.clone(),
-                        last_seen: chrono::Utc::now(),
-                        health: AgentHealth::Unreachable,
-                        auth_token: agent.auth_token.clone(),
-                    })
+                    .upsert(rebuilt_agent(
+                        &agent,
+                        agent.card.clone(),
+                        AgentHealth::Unreachable,
+                    ))
                     .await;
             }
         }
@@ -107,14 +113,7 @@ pub async fn health_check_pass(registry: &CardRegistry, pool: &A2AClientPool) ->
             Err(_) => AgentHealth::Unreachable,
         };
         registry
-            .upsert(RegisteredAgent {
-                card: agent.card.clone(),
-                trust_level: agent.trust_level,
-                base_url: agent.base_url.clone(),
-                last_seen: chrono::Utc::now(),
-                health,
-                auth_token: agent.auth_token.clone(),
-            })
+            .upsert(rebuilt_agent(&agent, agent.card.clone(), health))
             .await;
         probed += 1;
     }

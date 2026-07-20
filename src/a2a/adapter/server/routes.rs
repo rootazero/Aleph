@@ -319,14 +319,16 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 
 /// Extract credentials from HTTP headers
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        // RFC 7235: auth-scheme is case-insensitive
-        if let Some(prefix) = auth.get(..7) {
-            if prefix.eq_ignore_ascii_case("bearer ") {
-                return Credentials::BearerToken(auth[7..].to_string());
+if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+            // RFC 7235: auth-scheme is case-insensitive
+            if let Some(prefix) = auth.get(..7) {
+                if prefix.eq_ignore_ascii_case("bearer ") {
+                    if let Some(token) = auth.get(7..) {
+                        return Credentials::BearerToken(token.to_string());
+                    }
+                }
             }
         }
-    }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         return Credentials::ApiKey(key.to_string());
     }
