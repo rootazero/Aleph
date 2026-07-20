@@ -165,8 +165,20 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
         "device_id": "aleph-desktop-shell",
         "channel_kind": "desktop",
     });
-    if matches!(target, crate::connection::ConnectionTarget::Remote(_)) {
-        if let (Some(credential), Some(obj)) =
+    if let crate::connection::ConnectionTarget::Remote(url) = target {
+        // Only present a credential over an encrypted transport. The remote
+        // Gateway exposes operator tokens via the same JSON-RPC frame the
+        // bridge sends over `ws://` — sending one in clear is a credential
+        // leak to network observers. If the operator really runs a remote
+        // Gateway over http://, the bridge connects bare and the gateway
+        // walls it (`guest`); the user gets a debug log explaining why.
+        let scheme = url.scheme();
+        if !matches!(scheme, "https" | "wss") {
+            tracing::warn!(
+                "notification bridge: remote target scheme {scheme:?} is unencrypted; \
+                 skipping Gateway credential presentation and connecting as guest"
+            );
+        } else if let (Some(credential), Some(obj)) =
             (crate::connection::load_gateway_token(), params.as_object_mut())
         {
             let key = if credential.starts_with("aleph-bt-") {
