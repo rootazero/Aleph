@@ -452,8 +452,8 @@ pub fn present_agent_trace_event(
             index,
             count,
             label,
+            text,
             error,
-            ..
         } => Some(if *count == 0 {
             // Activation-failure form (runner Step 3-MoA build failure).
             AgentTracePresentation {
@@ -476,10 +476,24 @@ pub fn present_agent_trace_event(
                 duration_ms: None,
             }
         } else {
+            // Audit TO1: render the advisor's advice (not just the label) so
+            // native TUI / CLI / Panel trace-tree — all of which consume this
+            // shared formatter — reach parity with the webchat inline renderer,
+            // which reads the raw `text` field directly. Previously the `..`
+            // dropped `text`, leaving the advisor's whole point invisible on
+            // those surfaces. Mirrors the adjacent MoaAdvisorSpend cost_usd fix.
+            let advice = text.trim();
             AgentTracePresentation {
                 kind: event.kind().into(),
                 status: AgentTracePresentationStatus::Info,
-                content: format!("Advisor {index}/{count} — {label}"),
+                content: if advice.is_empty() {
+                    format!("Advisor {index}/{count} — {label}")
+                } else {
+                    format!(
+                        "Advisor {index}/{count} — {label}\n{}",
+                        truncate(advice, options.content_limit)
+                    )
+                },
                 duration_ms: None,
             }
         }),
@@ -901,6 +915,24 @@ mod tests {
         };
         let p = present_agent_trace_event(&not_activated, &opts, &labels).unwrap();
         assert!(p.content.contains("not activated"));
+
+        // Audit TO1: a SUCCESSFUL advisor renders its advice text on the shared
+        // formatter (TUI / CLI / Panel-tree parity), not just the bare label.
+        let ok_advisor = AgentTraceEvent::MoaAdvisor {
+            index: 1,
+            count: 3,
+            label: "openai:gpt-5".into(),
+            text: "use a binary search here".into(),
+            error: None,
+        };
+        let p = present_agent_trace_event(&ok_advisor, &opts, &labels).unwrap();
+        assert!(matches!(p.status, AgentTracePresentationStatus::Info));
+        assert!(p.content.contains("openai:gpt-5"), "{}", p.content);
+        assert!(
+            p.content.contains("use a binary search here"),
+            "{}",
+            p.content
+        );
 
         let cached = AgentTraceEvent::MoaAggregating {
             aggregator: "p:m".into(),

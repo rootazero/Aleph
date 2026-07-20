@@ -91,6 +91,23 @@ impl AlephTool for SelectModelTool {
         // model pick clears MoA. Arm logic is the single source in
         // moa::activation.
         if args.model == "moa" || args.model.starts_with("moa:") {
+            // Audit AW1: operator gate — parity with the `moa` tool (listed in
+            // method_authz OPERATOR_TOOLS) and both `/moa` slash paths, which
+            // gate on `role_is_operator`. `select_model` is NOT in
+            // OPERATOR_TOOLS (its normal model picks stay open to chat tier),
+            // so the MoA-arm branch must gate INLINE — otherwise a chat-tier
+            // (guest) channel could arm advisory (advisor fan-out = cost/latency
+            // blast-radius) via the one arm surface the other three deny it.
+            if !ctx.caller_is_operator() {
+                let message = "MoA advisory requires operator; model unchanged.".to_string();
+                notify_tool_result(Self::NAME, &message, false);
+                return Ok(SelectModelOutput {
+                    ok: false,
+                    model: args.model,
+                    provider: None,
+                    message,
+                });
+            }
             let preset = args
                 .model
                 .strip_prefix("moa:")
@@ -391,5 +408,70 @@ mod tests {
             .unwrap();
         assert!(!out.ok);
         assert!(out.message.contains("moa"));
+    }
+
+    #[tokio::test]
+    async fn moa_arm_denied_for_guest_caller() {
+        // Audit AW1: a chat-tier (guest) channel must NOT arm MoA via the
+        // select_model slot — parity with the operator-gated `moa` tool / `/moa`.
+        use crate::providers::{session_moa_handle, session_model_handle};
+        let _guard = moa_config_test_lock();
+        let sk = SessionKey::Ephemeral {
+            agent_id: "main".to_string(),
+            ephemeral_id: "select-moa-guest".to_string(),
+        };
+        let key = sk.to_key_string();
+        crate::providers::moa::store_moa_config(Some(deep_preset_config()));
+
+        let ctx = TurnContext {
+            session_key: sk.clone(),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+        let out = TURN_CONTEXT
+            .scope(ctx, async {
+                SelectModelTool
+                    .call(SelectModelArgs {
+                        model: "moa:deep".to_string(),
+                        provider: None,
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert!(!out.ok, "guest must be denied MoA arming");
+        assert!(out.message.contains("operator"), "{}", out.message);
+        // Nothing armed: the sticky handle stays empty.
+        assert!(session_moa_handle::get_session_moa(&key).is_none());
+
+        // A normal model pick from the SAME guest caller is still allowed.
+        let ctx2 = TurnContext {
+            session_key: sk,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+        let out2 = TURN_CONTEXT
+            .scope(ctx2, async {
+                SelectModelTool
+                    .call(SelectModelArgs {
+                        model: "gpt-5".to_string(),
+                        provider: None,
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+        assert!(out2.ok, "guest may still pick a normal model");
+        session_model_handle::clear_session_model(&key);
+        crate::providers::moa::store_moa_config(None);
     }
 }
