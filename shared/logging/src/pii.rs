@@ -29,13 +29,21 @@ fn get_patterns() -> &'static PiiPatterns {
         phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").expect("static PII regex is valid"),
         ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("static PII regex is valid"),
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").expect("static PII regex is valid"),
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,})\b").expect("static PII regex is valid"),
+        // `Basic\s+<b64>` was previously swallowed as plain `Basic` by the
+        // generic_secret regex (its [^\s,}]+ value cap stops at whitespace),
+        // so the entire base64 blob leaked past scrubbing. Catch it here so
+        // the value is fully redacted before generic_secret runs (which then
+        // does no work for Authorization: Basic ...).
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{8,}|Basic\s+[A-Za-z0-9+/=]{8,})\b").expect("static PII regex is valid"),
         // Catch arbitrary secrets assigned to a credential-like key, regardless of
         // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
         // Preserves the key name; redacts only the value. Conservative over-match
         // is acceptable (this module favours false positives over leaks).
+        // `[_\-\s]?` (not just `[_-]?`) lets the alternation also match
+        // `api key=...` with a literal space, so vendor terminology like
+        // `Authorization: api key <value>` is caught.
         generic_secret: Regex::new(
-            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
+            r#"(?i)(password|passwd|pwd|secret|token|api[_\-\s]?key|access[_\-\s]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
         )
         .expect("static PII regex is valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").expect("static PII regex is valid"),

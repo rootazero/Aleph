@@ -105,11 +105,21 @@ impl CliConfig {
             .map_err(|e| CliError::Config(format!("Failed to write config: {e}")))?;
 
         // Restrict to owner read/write so the config isn't world-readable
-        // (default file mode is 0644).
+        // (default file mode is 0644). On filesystems without POSIX mode
+        // bits (FAT32, 9P, Windows shares, etc.) chmod is silently a
+        // no-op; surface the unexpected case at warn so the operator at
+        // least sees that the world-readable mode stuck.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600));
+            if let Err(e) =
+                std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!(
+                    "could not chmod {} to 0600 (config may remain world-readable): {e}",
+                    config_path.display()
+                );
+            }
         }
 
         Ok(())
