@@ -68,6 +68,7 @@ impl ConfigResolver {
     }
 
     fn resolve_account_defaults(account: &TelegramAccountConfig) -> ResolvedConfig {
+        let error_policy = account.error_policy.clone().unwrap_or_default();
         ResolvedConfig {
             account_id: account.id.clone(),
             bot_token: account.bot_token.clone(),
@@ -79,14 +80,20 @@ impl ConfigResolver {
             allowed_users: account.allowed_users.clone().unwrap_or_default(),
             allowed_groups: account.allowed_groups.clone().unwrap_or_default(),
             streaming: account.streaming.clone().unwrap_or_default(),
-            error_policy: account.error_policy.clone().unwrap_or_default(),
-            max_retries: 3,
+            // Send-retry budget follows the configured error policy (default 3)
+            // instead of a hardcoded constant.
+            max_retries: error_policy.max_retries,
+            error_policy,
             html_fallback: account.html_fallback.unwrap_or(true),
             link_preview: account.link_preview.unwrap_or_default(),
         }
     }
 
     fn merge_group(base: &ResolvedConfig, group: &TelegramGroupConfig) -> ResolvedConfig {
+        let error_policy = group
+            .error_policy
+            .clone()
+            .unwrap_or_else(|| base.error_policy.clone());
         ResolvedConfig {
             account_id: base.account_id.clone(),
             bot_token: base.bot_token.clone(),
@@ -104,17 +111,18 @@ impl ConfigResolver {
                 .unwrap_or_else(|| base.allowed_users.clone()),
             allowed_groups: base.allowed_groups.clone(),
             streaming: base.streaming.clone(),
-            error_policy: group
-                .error_policy
-                .clone()
-                .unwrap_or_else(|| base.error_policy.clone()),
-            max_retries: base.max_retries,
+            max_retries: error_policy.max_retries,
+            error_policy,
             html_fallback: base.html_fallback,
             link_preview: base.link_preview,
         }
     }
 
     fn merge_topic(base: &ResolvedConfig, topic: &TelegramTopicConfig) -> ResolvedConfig {
+        let error_policy = topic
+            .error_policy
+            .clone()
+            .unwrap_or_else(|| base.error_policy.clone());
         ResolvedConfig {
             account_id: base.account_id.clone(),
             bot_token: base.bot_token.clone(),
@@ -135,11 +143,8 @@ impl ConfigResolver {
                 .unwrap_or_else(|| base.allowed_users.clone()),
             allowed_groups: base.allowed_groups.clone(),
             streaming: base.streaming.clone(),
-            error_policy: topic
-                .error_policy
-                .clone()
-                .unwrap_or_else(|| base.error_policy.clone()),
-            max_retries: base.max_retries,
+            max_retries: error_policy.max_retries,
+            error_policy,
             html_fallback: base.html_fallback,
             link_preview: base.link_preview,
         }

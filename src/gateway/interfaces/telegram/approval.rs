@@ -113,13 +113,11 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
     ) -> AuthorizationResult {
         let user_id = actor_user_id.0.parse::<i64>().ok();
         match user_id {
+            // Approval authority stays with the statically-configured allowlist.
+            // Runtime pairing is owned by the router's `pairing_store`; a paired
+            // chat user is not implicitly granted tool-approval authority.
             Some(uid) => {
-                let is_paired = {
-                    let runtime_users = self.access.runtime_users();
-                    let users = runtime_users.read().await;
-                    users.contains(&uid)
-                };
-                if is_paired || self.access.config().allowed_users.contains(&uid) {
+                if self.access.config().allowed_users.contains(&uid) {
                     AuthorizationResult::Authorized
                 } else {
                     AuthorizationResult::Denied

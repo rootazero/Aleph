@@ -126,8 +126,6 @@ test-helpers = []
 control-plane = []
 # Disabled test modules awaiting rewrite
 disabled-tests = []
-# Experimental Telegram Draft API support
-telegram-draft-api = []
 # Reserved placeholder for the in-flight WASM plugin runtime. Declared
 # so tests/wasm_capability_test.rs can keep its `cfg(feature =
 # "plugin-wasm")` gate without tripping rustc's unexpected-cfg lint

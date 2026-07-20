@@ -16,6 +16,12 @@ pub struct LaneState {
     pub final_message_id: Option<i64>,
     pub is_streaming: bool,
     pub last_update: Instant,
+    /// Cumulative text delivered on this lane so far. Deltas are appended here
+    /// and the preview is edited with the full accumulated text (an edit with a
+    /// bare delta would replace the preview with just the latest fragment). A
+    /// throttled edit is not lost: the next delta past the debounce interval (or
+    /// `finalize`) flushes whatever has accumulated by then.
+    pub accumulated: String,
 }
 
 impl LaneState {
@@ -26,6 +32,7 @@ impl LaneState {
             final_message_id: None,
             is_streaming: false,
             last_update: Instant::now(),
+            accumulated: String::new(),
         }
     }
 }
