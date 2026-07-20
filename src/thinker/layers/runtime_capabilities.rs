@@ -21,7 +21,6 @@ impl PromptLayer for RuntimeCapabilitiesLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -29,24 +28,16 @@ impl PromptLayer for RuntimeCapabilitiesLayer {
         if let Some(ref runtimes) = input.config.runtime_capabilities {
             let runtimes = sanitize_for_prompt(runtimes, SanitizeLevel::Light);
             output.push_str("## Available Runtimes\n\n");
-            output.push_str("You can execute code using these installed runtimes:\n\n");
+            output.push_str("You can run code with these installed, pre-verified runtimes:\n\n");
             output.push_str(&runtimes);
+            // The LIST is the runtime fact. Keep only the non-obvious, Aleph-
+            // specific usage note (invoke the managed Executable path, not a
+            // bare `python3`); the "runtimes aren't tools" / no-probing lecture
+            // was cut as inferable how-to (§1.1 prune-the-prompt).
             output.push_str(
-                "\n**IMPORTANT**: Runtimes are NOT tools — they're execution environments. \
-                 To run Python/Node code, write a script with `file_ops`, then run it with \
-                 `bash`. Don't call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools.\n",
-            );
-            output.push_str(
-                "\n**CRITICAL - Use Aleph Runtimes**: always invoke the full \"Executable\" path \
-                 shown above (e.g. `/path/to/python script.py`), never bare `python3` / `python` \
-                 — the system default may be missing or incompatible. Aleph's managed runtimes \
-                 guarantee the right versions and dependencies.\n",
-            );
-            output.push_str(
-                "These paths were already detected and verified on this host — use them \
-                 directly. You do NOT need to re-check availability (no `which` / `command -v` / \
-                 `--version` probing) before each call. A runtime absent from this list is not \
-                 installed; don't hunt for it on PATH.\n\n",
+                "\nInvoke the full \"Executable\" path shown above (not a bare `python3` / \
+                 `node`) — these are Aleph's managed runtimes; the system default may be missing \
+                 or incompatible, and a runtime absent from this list isn't installed.\n\n",
             );
         }
     }
@@ -71,7 +62,10 @@ mod tests {
 
         assert!(out.contains("## Available Runtimes"));
         assert!(out.contains("Python 3.11"));
-        assert!(out.contains("CRITICAL - Use Aleph Runtimes"));
+        // The runtime LIST + the non-obvious full-path usage note survive; the
+        // "runtimes aren't tools" / no-probing lecture is gone.
+        assert!(out.contains("Executable"));
+        assert!(!out.contains("Runtimes are NOT tools"));
     }
 
     #[test]

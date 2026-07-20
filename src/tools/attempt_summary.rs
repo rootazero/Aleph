@@ -56,8 +56,10 @@ use crate::tools::error_kind::{classify_error_str, ToolErrorKind};
 /// (from `fallback_registry::render_persistence_hint`) is enough; the
 /// aggregate adds noise.
 ///
-/// Picked to match guidelines.rs rule 6's (2-strike) "switch family"
-/// wording so the summary fires exactly when the rule's threshold trips.
+/// Two-strike-plus heuristic: once a `(tool, kind)` pair has failed this many
+/// times the aggregate nudges the model to switch family. The old guidelines.rs
+/// "2-strike" prompt rule was removed (§1.1 prune-the-prompt); this runtime
+/// signal, surfaced in the error hint, is now the LLM-visible form of it.
 pub const SUMMARY_THRESHOLD: usize = 3;
 
 /// One row of the aggregate: how many times a given `(tool, kind)` pair
@@ -367,9 +369,9 @@ mod tests {
 
     #[test]
     fn default_default_for_threshold_constant() {
-        // Sanity guard: changing SUMMARY_THRESHOLD silently breaks the
-        // rule 6 (2-strike) alignment in guidelines.rs. If you intentionally
-        // change it, update this assertion AND the rule wording together.
+        // Sanity guard: SUMMARY_THRESHOLD is the 2-strike switch-family
+        // threshold surfaced in the runtime error hint (the prompt-side rule
+        // was removed under §1.1 prune-the-prompt; the signal carries it now).
         assert_eq!(SUMMARY_THRESHOLD, 3);
     }
 }

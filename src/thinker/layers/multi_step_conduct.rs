@@ -45,7 +45,6 @@ impl PromptLayer for MultiStepConductLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -67,47 +66,27 @@ impl PromptLayer for MultiStepConductLayer {
             return;
         }
 
-        // Section 1 — when to plan.
+        // Section 1 — the scratchpad planning tool exists (Aleph-specific
+        // mechanism the model can't infer). The old when-to-plan / don't-plan-
+        // trivial cognition prose was cut — a capable model decides that from
+        // the task shape (§1.1 prune-the-prompt).
         output.push_str("## Planning Multi-Step Work\n\n");
         output.push_str(
-            "When a request genuinely needs several ordered steps, spans multiple phases, or \
-             asks for more than one distinct thing, plan before you act: use the `scratchpad` \
-             tool to set an objective and lay out an execution list, then work it one item at a \
-             time with `start_item` / `complete_item`.\n\n",
-        );
-        output.push_str(
-            "Do not plan trivial work. A direct answer, a single tool call, or anything that \
-             finishes in one or two steps needs no scratchpad — just do it. Decide from the shape \
-             of the task; don't wait to be told. Stay flexible: drop the plan if the task turns \
-             out simpler than expected, or start one mid-task if it grows.\n\n",
+            "For genuinely multi-step work, use the `scratchpad` tool to set an objective and an \
+             execution list, then work it one item at a time with `start_item` / `complete_item`. \
+             Skip it for anything that finishes in a step or two.\n\n",
         );
 
-        // Section 2 — narrate progress (interactive only, same gate as above).
+        // Section 2 — narrate progress. The non-inferable fact is the UX one:
+        // tool calls stream to the user live, so silence reads as a stalled
+        // spinner. The old preamble word-counts and sample phrasings ("Config
+        // found — now wiring…") were a few-shot cage and were cut.
         output.push_str("## Narrate Your Progress\n\n");
         output.push_str(
-            "This is an interactive conversation and the user is watching. Don't work silently \
-             across many tool calls. In your visible reply (not hidden thinking):\n",
-        );
-        output.push_str(
-            "- Before an action or a batch of related actions, post a one-line preamble \
-             (roughly 8-12 words) of what you're about to do. Group logically related \
-             actions under ONE preamble — don't narrate every single tool call.\n",
-        );
-        output.push_str(
-            "- Skip the preamble for a single trivial read (opening one file, one quick \
-             lookup); narrate the batch it belongs to instead.\n",
-        );
-        output.push_str(
-            "- Connect each preamble to what came before — e.g. \"Config found — now \
-             wiring the new field.\" — so progress reads as one thread.\n",
-        );
-        output.push_str(
-            "- After finishing each plan step, post a brief recap, e.g. \"Done: the data \
-             model is in place.\", so the user can follow along.\n\n",
-        );
-        output.push_str(
-            "Keep these to a sentence or two — enough to show momentum, not so much that it \
-             clutters the conversation.\n\n",
+            "This is an interactive conversation and your tool calls stream to the user live, so \
+             don't work in silence across many steps. Post a short line of intent before a batch \
+             of related actions and a brief recap after, in your visible reply — a sentence or \
+             two, enough to show momentum without clutter.\n\n",
         );
     }
 }
@@ -175,11 +154,14 @@ mod tests {
         let out = render(&ctx_for(InteractionParadigm::WebRich));
         assert!(out.contains("## Planning Multi-Step Work"));
         assert!(out.contains("scratchpad"));
-        // Lock the anti-over-trigger copy so a future edit can't silently drop it.
-        assert!(out.contains("Do not plan trivial work"));
+        assert!(out.contains("start_item") && out.contains("complete_item"));
+        // Anti-over-trigger intent preserved in compressed form.
+        assert!(out.contains("Skip it for anything that finishes in a step or two"));
         assert!(out.contains("## Narrate Your Progress"));
-        assert!(out.contains("Group logically related actions"));
-        assert!(out.contains("Skip the preamble for a single trivial read"));
+        assert!(out.contains("stream to the user live"));
+        // The sample-phrasing cage and narration micromanagement are gone.
+        assert!(!out.contains("Config found"));
+        assert!(!out.contains("8-12 words"));
     }
 
     #[test]

@@ -23,7 +23,6 @@ impl PromptLayer for SkillInstructionsLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -327,11 +326,10 @@ mod tests {
     #[test]
     fn paths_include_all_assembly_paths() {
         let paths = SkillInstructionsLayer.paths();
-        assert_eq!(paths.len(), 5);
+        assert_eq!(paths.len(), 4);
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

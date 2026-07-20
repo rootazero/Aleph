@@ -49,7 +49,6 @@ impl PromptLayer for ChainContextLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

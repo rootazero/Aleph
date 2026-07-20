@@ -25,7 +25,6 @@ impl PromptLayer for AgentCatalogLayer {
         &[
             AssemblyPath::Basic,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

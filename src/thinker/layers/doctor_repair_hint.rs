@@ -33,7 +33,6 @@ impl PromptLayer for DoctorRepairHintLayer {
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

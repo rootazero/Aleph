@@ -36,20 +36,14 @@ impl PromptLayer for ThinkingGuidanceLayer {
             return;
         }
 
-        output.push_str("## Thinking Transparency\n\n");
-        output.push_str("Make your reasoning visible as you work so the user can follow it:\n\n");
+        // Lean: the Observation→Analysis→Planning→Decision framework + the
+        // confidence/alternatives sample phrasings were a reasoning cage a
+        // capable model doesn't need (§1.1 prune-the-prompt). Keep only the
+        // directive. (Self-gated on `thinking_transparency`, off by default.)
         output.push_str(
-            "- **Reasoning Flow**: progress through Observation (current state) → \
-             Analysis (options and trade-offs) → Planning (your approach) → Decision \
-             (the conclusion you act on).\n",
-        );
-        output.push_str(
-            "- **Expressing Uncertainty**: state your confidence plainly (\"I'm confident…\", \
-             \"I think…\", \"I'm not sure, but…\") rather than hiding it.\n",
-        );
-        output.push_str(
-            "- **Acknowledging Alternatives**: when relevant, name the options you weighed and \
-             why you chose one (\"I chose X over Y because…\").\n\n",
+            "## Thinking Transparency\n\nMake your reasoning visible as you work — what you \
+             observe, the options you weigh, and why you choose one — and state your confidence \
+             plainly rather than hiding it.\n\n",
         );
     }
 }
@@ -72,9 +66,8 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.contains("## Thinking Transparency"));
-        assert!(out.contains("Reasoning Flow"));
-        assert!(out.contains("Expressing Uncertainty"));
-        assert!(out.contains("Acknowledging Alternatives"));
+        assert!(out.contains("reasoning visible"));
+        assert!(out.contains("confidence"));
     }
 
     #[test]

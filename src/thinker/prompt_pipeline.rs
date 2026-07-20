@@ -7,7 +7,7 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
     ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GraphTopologyLayer,
-    GuidelinesLayer, HeartbeatLayer, IdentityFilesLayer, LanguageLayer, McpInstructionsLayer,
+    GuidelinesLayer, IdentityFilesLayer, LanguageLayer, McpInstructionsLayer,
     MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
     ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
@@ -207,7 +207,6 @@ impl PromptPipeline {
             Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
-            Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
             Box::new(MultiStepConductLayer),
             Box::new(ProviderGuidanceLayer),
@@ -399,9 +398,13 @@ mod tests {
         // `mcp_list_resources`/`mcp_list_prompts` tools (doubled, verbatim ids
         // that do round-trip; R7/R10 static partition, no prompt-layer — as
         // MODEL_PERCEIVABLE_ECOSYSTEM.md already declared).
-        // → 41 (GraphTopologyLayer @1753 Dynamic — tells a governed session
-        // its place in the loop-graph governance topology, 2026-07-19).
-        assert_eq!(pipeline.layer_count(), 41);
+        // → 40 (was 41): HeartbeatLayer removed (§1.1 prune-the-prompt —
+        // a pure progress-reporting how-to with `[step N/total]` template,
+        // redundant with MultiStepConductLayer's narration guidance).
+        // GraphTopologyLayer retained (41 @1753 Dynamic — tells a governed
+        // session its place in the loop-graph governance topology,
+        // 2026-07-19).
+        assert_eq!(pipeline.layer_count(), 40);
     }
 
     #[test]
@@ -450,7 +453,6 @@ mod mode_tests {
             "environment",
             "runtime_capabilities",
             "protocol_tokens",
-            "heartbeat",
             "operational_guidelines",
             "provider_guidance",
             "session_budget",

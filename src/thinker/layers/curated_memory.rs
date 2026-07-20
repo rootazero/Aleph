@@ -30,7 +30,6 @@ impl PromptLayer for CuratedMemoryLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
