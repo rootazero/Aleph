@@ -375,8 +375,14 @@ impl BlueBubblesApi {
         if self.list_webhooks().await.iter().any(|(_, u)| u == url) {
             return true;
         }
-        let payload =
-            serde_json::json!({ "url": url, "events": ["new-message", "updated-message"] });
+        // Subscribe to `new-message` only. `updated-message` (edits / delivery
+        // status) was previously subscribed but is inert: the inbound handler
+        // dedups by message GUID, and an edit carries the same GUID as the
+        // original, so it is always dropped as a duplicate. Subscribing to it
+        // only added webhook traffic with no effect — Aleph has no edit-apply
+        // path. Drop the subscription until edits are handled as a first-class
+        // event.
+        let payload = serde_json::json!({ "url": url, "events": ["new-message"] });
         self.client
             .post(self.api_url("/api/v1/webhook"))
             .json(&payload)
@@ -443,7 +449,10 @@ impl BlueBubblesApi {
                 }
             })
             .collect();
-        let path = std::env::temp_dir().join(format!("aleph-bb-{sanitized}.{ext}"));
+        // Land in the dedicated staging subdir so the periodic sweep can bound
+        // disk use; fall back to the bare temp dir if the subdir can't be made.
+        let dir = super::staging::ensure_staging_dir().unwrap_or_else(|_| std::env::temp_dir());
+        let path = dir.join(format!("aleph-bb-{sanitized}.{ext}"));
         if let Err(e) = tokio::fs::write(&path, &bytes).await {
             tracing::debug!("BlueBubbles attachment write failed for {guid}: {e}");
             return None;

@@ -182,9 +182,19 @@ impl DesktopPlatform for MacOSPlatform {
     }
 }
 
-/// Shorthand for creating a `BridgeFailed` error.
-fn bridge_err(msg: &str) -> aleph_desktop::DesktopError {
-    aleph_desktop::DesktopError::BridgeFailed(msg.to_string())
+/// Map a bridge-call error while **preserving typed recovery variants**.
+///
+/// `SwiftBridge::call` already returns a typed `DesktopError` (permission /
+/// timeout / platform / …, mapped in `bridge/client.rs::map_bridge_error`). The
+/// media rail used to re-flatten every error into `BridgeFailed`, discarding the
+/// `PermissionDenied` guide and timeout semantics the caller needs. Keep those
+/// variants intact; only add method context to an opaque `BridgeFailed`.
+fn preserve_typed(method: &str, e: aleph_desktop::DesktopError) -> aleph_desktop::DesktopError {
+    use aleph_desktop::DesktopError;
+    match e {
+        DesktopError::BridgeFailed(m) => DesktopError::BridgeFailed(format!("{method}: {m}")),
+        other => other,
+    }
 }
 
 /// Extra time beyond a capture's requested duration to allow for capture-
@@ -222,7 +232,7 @@ impl MediaCapability for MacOSPlatform {
                 },
             )
             .await
-            .map_err(|e| bridge_err(&format!("media.camera.snap RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.camera.snap", e))?;
         Ok(CameraSnapResult {
             image_base64: rpc.image_base64,
             width: rpc.width,
@@ -254,7 +264,7 @@ impl MediaCapability for MacOSPlatform {
                 Duration::from_secs_f64(config.duration_secs + CAPTURE_TIMEOUT_MARGIN_SECS),
             )
             .await
-            .map_err(|e| bridge_err(&format!("media.camera.clip RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.camera.clip", e))?;
         Ok(CameraClipResult {
             file_path: rpc.file_path,
             duration_secs: rpc.duration_secs,
@@ -283,7 +293,7 @@ impl MediaCapability for MacOSPlatform {
                 Duration::from_secs_f64(config.duration_secs + CAPTURE_TIMEOUT_MARGIN_SECS),
             )
             .await
-            .map_err(|e| bridge_err(&format!("media.audio.record RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.audio.record", e))?;
         Ok(AudioRecordResult {
             file_path: rpc.file_path,
             duration_secs: rpc.duration_secs,
@@ -300,7 +310,7 @@ impl MediaCapability for MacOSPlatform {
             .bridge
             .call(METHOD_AUDIO_RECORD_START, RecordStartParams {})
             .await
-            .map_err(|e| bridge_err(&format!("media.audio.record_start RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.audio.record_start", e))?;
         Ok(())
     }
 
@@ -319,7 +329,7 @@ impl MediaCapability for MacOSPlatform {
                 Duration::from_secs(15),
             )
             .await
-            .map_err(|e| bridge_err(&format!("media.audio.record_stop RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.audio.record_stop", e))?;
         Ok(AudioRecordResult {
             file_path: rpc.file_path,
             duration_secs: rpc.duration_secs,
@@ -336,7 +346,7 @@ impl MediaCapability for MacOSPlatform {
             .bridge
             .call(METHOD_AUDIO_LIST_DEVICES, ListAudioDevicesParams {})
             .await
-            .map_err(|e| bridge_err(&format!("media.audio.list_devices RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.audio.list_devices", e))?;
         Ok(rpc
             .devices
             .into_iter()
@@ -357,7 +367,7 @@ impl MediaCapability for MacOSPlatform {
             .bridge
             .call(METHOD_AUDIO_MIC_METER, MicMeterParams {})
             .await
-            .map_err(|e| bridge_err(&format!("media.audio.mic_meter RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.audio.mic_meter", e))?;
         Ok(aleph_desktop::traits::media::MicMeterSample {
             level: rpc.level,
             active: rpc.active,
@@ -391,7 +401,7 @@ impl MediaCapability for MacOSPlatform {
                 SPEECH_TRANSCRIBE_TIMEOUT,
             )
             .await
-            .map_err(|e| bridge_err(&format!("media.speech.transcribe_file RPC: {e}")))?;
+            .map_err(|e| preserve_typed("media.speech.transcribe_file", e))?;
         Ok(SpeechToTextResult {
             text: rpc.text,
             language: rpc.language,
@@ -447,5 +457,27 @@ mod tests {
             !platform.bridge().is_running(),
             "constructing a platform must not spawn the bridge"
         );
+    }
+
+    #[test]
+    fn preserve_typed_passes_timeout_through() {
+        use aleph_desktop::DesktopError;
+        let e = DesktopError::BridgeTimeout("slow".into());
+        assert!(matches!(
+            preserve_typed("media.audio.record", e),
+            DesktopError::BridgeTimeout(_)
+        ));
+    }
+
+    #[test]
+    fn preserve_typed_decorates_bridge_failed_with_method() {
+        use aleph_desktop::DesktopError;
+        match preserve_typed(
+            "media.camera.snap",
+            DesktopError::BridgeFailed("boom".into()),
+        ) {
+            DesktopError::BridgeFailed(m) => assert_eq!(m, "media.camera.snap: boom"),
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 }

@@ -37,7 +37,9 @@ pub async fn run_catchup_poll(
         let cursor = newest_cursor(&msgs, after);
         for raw in &msgs {
             if let Some(m) = map_webhook_record(raw) {
-                if m.is_from_me || m.is_tapback || m.guid.is_empty() {
+                // Drop echoes, remove-tapbacks, and GUID-less records; normal
+                // messages and add-tapbacks (surfaced as reactions) route on.
+                if !m.is_routable() {
                     continue;
                 }
                 let dup = {
@@ -56,6 +58,9 @@ pub async fn run_catchup_poll(
         if cursor > after {
             tracker.advance(cursor, "imessage-bb");
         }
+        // Piggyback the attachment sweep on the existing poll interval so staged
+        // downloads don't accumulate over a long-running daemon — no extra task.
+        super::super::staging::sweep_stale(super::super::staging::RETENTION);
         tokio::time::sleep(interval).await;
     }
 }

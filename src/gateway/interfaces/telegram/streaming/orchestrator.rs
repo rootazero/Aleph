@@ -28,11 +28,22 @@ impl StreamOrchestrator {
         config: StreamingOptions,
     ) -> (Self, mpsc::Sender<StreamEvent>) {
         let (event_tx, event_rx) = mpsc::channel(config.buffer_size);
+        // `conversation_id` is built internally from numeric Telegram chat ids,
+        // so a parse failure is not expected — but a spawned orchestrator task
+        // must never panic on it (P7 defensive design). Fall back to a null chat
+        // id and log: the downstream `sendMessage`/`editMessageText` will fail
+        // and be handled by the delivery error path rather than killing the task.
         let (chat_id, thread_id) =
             crate::gateway::interfaces::telegram::delivery::parse_conversation_id(
                 &delivery.conversation_id,
             )
-            .unwrap_or_else(|_| unreachable!("Invalid conversation_id in TelegramDelivery"));
+            .unwrap_or_else(|_| {
+                tracing::error!(
+                    conversation_id = %delivery.conversation_id,
+                    "StreamOrchestrator: unparseable conversation_id; streaming degraded for this run"
+                );
+                (teloxide::types::ChatId(0), None)
+            });
         let tracker = Arc::new(Mutex::new(LaneDeliveryTracker::new(
             chat_id.0,
             thread_id.map(i64::from),

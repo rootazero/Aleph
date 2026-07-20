@@ -17,7 +17,6 @@ mod deadline;
 mod engine;
 pub(crate) mod event_drain;
 mod execute;
-mod failure_receipt;
 mod fast_path;
 mod gate;
 mod goal_continuation;
@@ -363,4 +362,149 @@ pub enum ExecutionError {
 
     #[error("orchestrator: {0}")]
     Orchestrator(String),
+}
+
+impl ExecutionError {
+    /// Map this error into a user-facing receipt: a stable machine `code` plus a
+    /// short, non-leaky message telling the user *whether retrying is worthwhile*
+    /// (rate-limited / unreachable → yes, soon) without exposing the raw internal
+    /// error chain.
+    ///
+    /// **Single source of truth** for user-channel error presentation. Both the
+    /// in-engine `RunError` emit ([`execute`]) and the gateway RPC handlers
+    /// (`agent.run` / `chat.send` in the aleph-server bin) route through it, so
+    /// the flattened internal chain (e.g. `"Execution failed: flow: internal
+    /// dispatch error: harness: llm error: Rate limit error: Anthropic API rate
+    /// limited (429)..."`) never reaches the Panel. `ExecutionError` is `pub` and
+    /// this method must stay `pub` because the leak site lives in the bin crate,
+    /// which cannot reach the (private) presentation helpers. The typed error is
+    /// unchanged for internal callers; only the presentation string is derived.
+    #[must_use]
+    pub fn user_receipt(&self) -> (&'static str, String) {
+        match self {
+            Self::Timeout => (
+                "TIMEOUT",
+                "任务超时未完成。请重试，或把任务拆小一些再发给我。".to_string(),
+            ),
+            Self::Cancelled => ("CANCELLED", "任务已取消。".to_string()),
+            Self::AgentBusy(_) => ("AGENT_BUSY", "当前 Agent 正忙，请稍后再试。".to_string()),
+            // The only string-carrying variant; classify by signature so a
+            // provider rate-limit / network outage reads as transient.
+            Self::Failed(msg) => classify_failed(msg),
+            // Routing / lookup errors the user cannot act on — keep generic and
+            // never echo the raw internal string.
+            Self::RunNotFound(_)
+            | Self::RunNotActive(_)
+            | Self::Fallthrough { .. }
+            | Self::Orchestrator(_) => ("FAILED", "任务执行失败，请重试。".to_string()),
+        }
+    }
+}
+
+/// Classify a [`ExecutionError::Failed`] payload. The message originates from the
+/// gateway dispatch loop after failover/retries are exhausted, so a rate-limit or
+/// network signature here means *every* provider/model in the chain was tried and
+/// the failure is genuinely transient — worth telling the user to retry.
+fn classify_failed(msg: &str) -> (&'static str, String) {
+    if is_rate_limited(msg) {
+        (
+            "RATE_LIMITED",
+            "模型服务商当前限流（请求过于频繁），且备用通道也已用尽。稍等片刻后重试即可。"
+                .to_string(),
+        )
+    } else if is_unreachable(msg) {
+        (
+            "PROVIDERS_UNREACHABLE",
+            "无法连接到模型 / 搜索服务（网络不可达或服务暂时中断），所有可用通道均已尝试。请检查网络后重试。"
+                .to_string(),
+        )
+    } else {
+        ("FAILED", "任务执行失败，请重试。".to_string())
+    }
+}
+
+fn is_rate_limited(msg: &str) -> bool {
+    msg.contains("429")
+        || msg.contains("rate limit")
+        || msg.contains("Rate limit")
+        || msg.contains("rate_limit")
+        || msg.contains("receiving too many requests")
+}
+
+fn is_unreachable(msg: &str) -> bool {
+    msg.contains("Network error")
+        || msg.contains("error sending request")
+        || msg.contains("connection")
+        || msg.contains("Connection")
+        || msg.contains("dns")
+        || msg.contains("timed out")
+        || msg.contains("502")
+        || msg.contains("503")
+}
+
+#[cfg(test)]
+mod user_receipt_tests {
+    use super::ExecutionError;
+
+    #[test]
+    fn rate_limit_failure_reads_as_retryable() {
+        let e = ExecutionError::Failed(
+            "flow: internal dispatch error: harness: llm error: Rate limit error: \
+             Anthropic API rate limited (429): receiving too many requests"
+                .to_string(),
+        );
+        let (code, message) = e.user_receipt();
+        assert_eq!(code, "RATE_LIMITED");
+        assert!(message.contains("限流"));
+        // The raw internal chain must not leak to the user.
+        assert!(!message.contains("dispatch error"));
+    }
+
+    #[test]
+    fn network_outage_reads_as_unreachable() {
+        let e = ExecutionError::Failed(
+            "provider kimi-for-coding transient: Network error: error sending request \
+             for url (https://api.kimi.com/coding/v1/messages)"
+                .to_string(),
+        );
+        let (code, message) = e.user_receipt();
+        assert_eq!(code, "PROVIDERS_UNREACHABLE");
+        assert!(message.contains("网络"));
+    }
+
+    #[test]
+    fn rate_limit_takes_precedence_over_network() {
+        // A 429 that also mentions a url should still classify as rate-limited.
+        let e = ExecutionError::Failed(
+            "429 rate limit on error sending request for url (x)".to_string(),
+        );
+        assert_eq!(e.user_receipt().0, "RATE_LIMITED");
+    }
+
+    #[test]
+    fn unclassified_failed_stays_generic() {
+        let e = ExecutionError::Failed("some opaque internal failure".to_string());
+        assert_eq!(e.user_receipt().0, "FAILED");
+    }
+
+    #[test]
+    fn timeout_and_cancel_keep_their_codes() {
+        assert_eq!(ExecutionError::Timeout.user_receipt().0, "TIMEOUT");
+        assert_eq!(ExecutionError::Cancelled.user_receipt().0, "CANCELLED");
+    }
+
+    #[test]
+    fn agent_busy_and_routing_errors_never_leak_raw() {
+        // AgentBusy is the admit_run early-return path surfaced by the bin-crate
+        // RPC handlers; routing errors carry internal ids. Neither may echo raw.
+        let busy = ExecutionError::AgentBusy("run 7f3a already active".to_string());
+        let (code, message) = busy.user_receipt();
+        assert_eq!(code, "AGENT_BUSY");
+        assert!(!message.contains("7f3a"));
+
+        let routing = ExecutionError::RunNotFound("internal-run-id-42".to_string());
+        let (code, message) = routing.user_receipt();
+        assert_eq!(code, "FAILED");
+        assert!(!message.contains("internal-run-id-42"));
+    }
 }

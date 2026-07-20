@@ -78,6 +78,7 @@ core-graphics = "0.25"
 core-foundation = "0.10"
 objc2-screen-capture-kit = "0.3"
 objc2-core-media = { version = "0.3", features = ["CMTime", "objc2"] }
+objc2-core-foundation = { version = "0.3", features = ["objc2"] }
 dispatch2 = "0.3"
 
 [dev-dependencies]

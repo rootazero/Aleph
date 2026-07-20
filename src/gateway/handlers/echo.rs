@@ -1,32 +1,7 @@
 //! Echo Handler
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
-use super::schema::HandlerSchema;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct EchoParams(pub Option<Value>);
-
-impl EchoParams {
-    #[must_use]
-    pub const fn new(value: Option<Value>) -> Self {
-        Self(value)
-    }
-}
-
-pub struct EchoHandler;
-
-impl HandlerSchema for EchoHandler {
-    type Params = EchoParams;
-    const METHOD: &'static str = "echo";
-    const DESCRIPTION: &'static str = "Echoes back the request parameters for testing purposes";
-
-    async fn handle_with_params(id: Option<Value>, params: Self::Params) -> JsonRpcResponse {
-        JsonRpcResponse::success(id, json!({ "echo": params.0 }))
-    }
-}
+use serde_json::json;
 
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
@@ -35,19 +10,17 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::super::schema::TypedHandler;
-    use super::{EchoHandler, JsonRpcRequest};
+    use super::{handle, JsonRpcRequest};
     use serde_json::json;
 
     #[tokio::test]
     async fn test_echo_with_params() {
-        let handler = TypedHandler::<EchoHandler>::new();
         let request = JsonRpcRequest::new(
             "echo",
             Some(json!({"message": "hello", "count": 42})),
             Some(json!(1)),
         );
-        let response = handler.handle(&request).await;
+        let response = handle(request).await;
 
         assert!(response.is_success());
 
@@ -58,9 +31,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo_without_params() {
-        let handler = TypedHandler::<EchoHandler>::new();
         let request = JsonRpcRequest::with_id("echo", None, json!(1));
-        let response = handler.handle(&request).await;
+        let response = handle(request).await;
 
         assert!(response.is_success());
 
@@ -70,9 +42,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo_preserves_id() {
-        let handler = TypedHandler::<EchoHandler>::new();
         let request = JsonRpcRequest::new("echo", Some(json!("test")), Some(json!("custom-id")));
-        let response = handler.handle(&request).await;
+        let response = handle(request).await;
 
         assert_eq!(response.id, Some(json!("custom-id")));
     }
