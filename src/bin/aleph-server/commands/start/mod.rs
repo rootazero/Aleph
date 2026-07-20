@@ -21,6 +21,7 @@ use alephcore::tasks::cron::service::timer::run_timer_loop;
 use alephcore::tasks::cron::{CronService, SharedCronService};
 use alephcore::tasks::heartbeat::store::HeartbeatStore;
 use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
+use alephcore::executor::BuiltinToolRegistry;
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
@@ -962,7 +963,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    let agent_result = register_agent_handlers(
+    let mut agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
         event_bus.clone(),
@@ -1385,9 +1386,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     // `self_config` and `moa` tools need the same `ConfigPatcher`; it is built
     // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
-    agent_result
-        .tool_registry
-        .set_config_patcher(config_patcher.clone());
+    if let Some(tool_registry) = agent_result.tool_registry.as_mut() {
+        BuiltinToolRegistry::set_config_patcher(tool_registry, config_patcher.clone());
+    }
 
     // Panel voice channel — native capture (record_start/stop) + TTS playback
     // (synthesize). Endpoint I/O for the mic button's full voice loop.

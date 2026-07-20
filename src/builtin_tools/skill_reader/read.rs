@@ -164,7 +164,7 @@ impl ReadSkillTool {
                     if !path.is_dir() || !path.join("SKILL.md").exists() {
                         continue;
                     }
-                    if let Some(slug) = skill_md_slug(&path) {
+                    if let Some(slug) = slug_from_skill_md(&path) {
                         if slug == skill_id && seen_canonical.insert(
                             fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
                         ) {
@@ -181,19 +181,9 @@ impl ReadSkillTool {
     /// and return the same slug the registry uses (lowercase, spaces → `-`).
     /// Returns `None` for any I/O / parse failure so the caller can simply
     /// skip that directory instead of erroring out of the whole lookup.
+    #[allow(dead_code)]
     fn skill_md_slug(skill_dir: &std::path::Path) -> Option<String> {
-        let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).ok()?;
-        for line in body.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("name:") {
-                let name = rest.trim().trim_matches(['"', '\'']).trim();
-                if name.is_empty() {
-                    return None;
-                }
-                return Some(name.to_lowercase().replace(' ', "-"));
-            }
-        }
-        None
+        slug_from_skill_md(skill_dir)
     }
 
     /// Validate `skill_id` to prevent path traversal attacks
@@ -451,6 +441,25 @@ impl Clone for ReadSkillTool {
             max_file_size: self.max_file_size,
         }
     }
+}
+
+/// Read the first `name:` frontmatter line from `<skill_dir>/SKILL.md`
+/// and return the same slug the registry uses (lowercase, spaces → `-`).
+/// Returns `None` for any I/O / parse failure so the caller can simply
+/// skip that directory instead of erroring out of the whole lookup.
+fn slug_from_skill_md(skill_dir: &std::path::Path) -> Option<String> {
+    let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).ok()?;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("name:") {
+            let name = rest.trim().trim_matches(['"', '\'']).trim();
+            if name.is_empty() {
+                return None;
+            }
+            return Some(name.to_lowercase().replace(' ', "-"));
+        }
+    }
+    None
 }
 
 /// Implementation of `AlephTool` trait for `ReadSkillTool`

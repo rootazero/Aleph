@@ -14,6 +14,7 @@ use super::types::ToolStorage;
 
 /// Registration functionality for `ToolCatalog`
 pub struct ToolRegistrar {
+    #[allow(dead_code)]
     tools: ToolStorage,
 }
 
