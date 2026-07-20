@@ -1,77 +1,74 @@
 # Review Summary
 
-**Date**: 2026-07-19
-**Modules reviewed**: 16 (all under `src/`)
-**Threshold**: confidence >= 80 (all reported findings considered actionable)
+**Date**: 2026-07-20
+**Modules reviewed**: 6 (`src/wizard`, `src/workflow`, `desktop`, `interfaces`, `shared`, `mobile`)
+**Reviewer**: static (4-perspective checklist: security / logic / architecture / quality)
+**Threshold**: no scoring pass — all reported findings are considered actionable; severity is supplied by the reviewer
 
 ## Module Totals
 
-| Module | Files | Lines | Critical | High | Medium | Low | Total |
-|--------|------:|------:|---------:|-----:|-------:|----:|------:|
-| core | 2 | 146 | 0 | 0 | 0 | 0 | 0 |
-| init_unified | 3 | 591 | 0 | 0 | 1 | 2 | 3 |
-| domain | 2 | 940 | 0 | 0 | 0 | 6 | 6 |
-| guardrails | 9 | 1269 | 0 | 0 | 1 | 1 | 2 |
-| discovery | 4 | 1298 | 0 | 2 | 9 | 4 | 15 |
-| components | 20 | 1686 | 0 | 5 | 6 | 8 | 19 |
-| group_chat | 8 | 2715 | 0 | 0 | 4 | 11 | 15 |
-| exec | 17 | 3515 | 0 | 1 | 5 | 12 | 18 |
-| tool_metadata | 27 | 5990 | 0 | 0 | 3 | 14 | 17 |
-| executor | 21 | 8352 | 0 | 4 | 7 | 13 | 24 |
-| context | 24 | 10033 | 0 | 7 | 8 | 12 | 27 |
-| config | 98 | 23819 | 0 | 1 | 9 | 25 | 35 |
-| generation | 79 | 20386 | 0 | 0 | 5 | 8 | 13 |
-| harness | 26 | 16600 | 0 | 0 | 1 | 5 | 6 |
-| extension | 70 | 21608 | 0 | 0 | 3 | 12 | 15 |
-| gateway (messaging/lanes) | 13 | ~190k | 1 | 8 | 11 | 3 | 23 |
-| gateway (sessions/routing) | ~40 | ~120k | 0 | 0 | 3 | 17 | 20 |
-| gateway (handlers/interfaces) | ~470 | ~156k | 0 | 0 | 17 | 100+ | 130+ |
-| gateway (misc top-level) | ~50 | ~250k | 0 | 0 | 1 | 9 | 10 |
-| **TOTAL** | — | — | **1** | **28** | **83** | **260+** | **~380** |
+| Module              | Files |    LOC | Critical | High | Medium |  Low | Total |
+|---------------------|------:|-------:|---------:|-----:|-------:|-----:|------:|
+| src/wizard          |     6 |   1607 |        0 |    1 |      3 |   11 |    15 |
+| src/workflow        |    10 |   4672 |        0 |    0 |      3 |    7 |    10 |
+| desktop             |    99 |  24623 |    **2** |   20 |     14 |    0 |    36 |
+| interfaces          |   391 |  ~95k  |        0 |    2 |      8 |   10 |    20 |
+| shared              |    51 |   8045 |        0 |    3 |      5 |   17 |    25 |
+| mobile              |    —  |    —   |        — |   —  |     —  |   —  |    N/A (Swift-only) |
+| **TOTAL (Rust)**    |   557 | ~134k  |    **2** |  **26** |  **33** |  **45** |  **~106** |
 
 ## Top Priorities (Critical + High)
 
-1. **gateway/channel_approval.rs:147** — critical — approval bypass (operator auth not enforced)
-2. **gateway/channel_registry.rs:570** — high — RecvError::Lagged kills channel forever
-3. **gateway/channel_registry.rs:455** — high — channel write-lock held across I/O
-4. **gateway/channel_registry.rs:220** — high — re-registration silently drops old channel
-5. **gateway/delivery_queue.rs:352** — high — non-atomic claim causes duplicate sends
-6. **gateway/delivery_queue.rs:667,709** — high — duplicate delivery windows
-7. **gateway/coalescer.rs:113** — high — group-chat sender attribution lost
-8. **gateway/channel_policy.rs:110** — high — snapshot timeout ignored
-9. **context/budget/mod.rs:300** — high — R10 violation (diminishing-returns heuristic)
-10. **context/compact/tool_aware_chunker.rs:50** — high — usize overflow on token_ratio
-11. **context/compact/compactor.rs:528,1016** — high — non-truncating fallback for long lines
-12. **context/compact/summary_utils.rs:160** — high — prompt injection via transcript
-13. **context/compact/session_split.rs:117** — high — non-atomic session split
-14. **context/retrieval/content_index.rs:382** — high — non-transactional FTS cleanup
-15. **executor/builtin_registry/builder/constructor/mod.rs:249** — high — R1 violation (Core instantiates platform code)
-16. **executor/builtin_registry/builder/constructor/mod.rs:849** — high — caller identity frozen at registry construction
-17. **executor/builtin_registry/registry/inherent.rs:38** — high — caller identity race
-18. **executor/tool_registry.rs:68** — high — shared ToolContextHandle causes workspace crosstalk
-19. **config/backup.rs:46** — high — backup dir falls back to "."
-20. **exec/approval/types.rs:30** — high — ApprovalRequest naming collision
-21. **context/compact/compactor.rs:1016** — see #11
-22. **context/budget/mod.rs:300** — see #9
-23. **discovery/paths.rs:90** — high — find_git_root duplicated with utils/paths.rs
-24. **discovery/scanner.rs:368** — high — project vs global plugins share priority 10
-25. **components/*** (5 high) — dead code from removed EventHandler chain
+1. **desktop/windows/src/escape_listener.rs:146** — critical — use-after-free when listener is stopped while a hook callback is mid-flight
+2. **desktop/shell/src/cert_trust/pending.rs:79** — critical — host-only validation; another TLS challenge for the same host overwrites a pending record so a stale page approves a fingerprint the user never reviewed (auth bypass)
+3. **src/wizard/prompter.rs:132** — high — `prompter.finish()` defined as documented contract but never called; `WizardNextResult.data` is permanently `None`
+4. **desktop/shared/src/media_types.rs:47** — high — camera clip duration accepts NaN → panics in `Duration::from_secs_f64` on macOS
+5. **desktop/shared/src/media_types.rs:104** — high — audio recording duration accepts NaN → same panic
+6. **desktop/shared/src/action/input.rs:307** — high — drag duration uncapped: untrusted u64 blocks worker thread
+7. **desktop/shared/src/action/open_path.rs:73** — high — Windows cmd.exe command injection via `target`
+8. **desktop/shared/src/action/app_launch.rs:71** — high — Windows cmd.exe command injection via `app_name`
+9. **desktop/windows/src/escape_listener.rs:98** — high — keyboard hook installed without message loop; callbacks not delivered
+10. **desktop/windows/src/ax.rs:334** — high — COM init errors ignored; unbalanced COM lifecycle
+11. **desktop/windows/src/ax.rs:364** — high — AX resolution falls back to foreground process when PID has no visible window → reads/writes wrong application
+12. **desktop/shell/src/webview_perms.rs:58** — high — Linux UserMedia grants camera + mic without origin/type check
+13. **desktop/shell/src/webview_perms.rs:89** — high — Windows grants mic to every origin instead of configured Panel origin
+14. **desktop/shell/src/deeplink.rs:33** — high — full deep-link URL logged at info level → leaks auth codes/tokens
+15. **desktop/shell/src/notify.rs:139** — high — Remote Gateway creds sent over `ws://` when target uses HTTP → network sniffable
+16. **desktop/shell/src/notify.rs:67** — high — notification WebSocket skips in-app cert pin store → approved certs don't deliver
+17. **desktop/shell/src/notify.rs:51** — high — connection-target changes don't terminate active WebSocket → bridge subscribed to old gateway
+18. **desktop/shell/src/connection.rs:104** — high — gateway-token deletion failures ignored → wrong-remote credential leakage
+19. **desktop/shell/src/external_link.rs:92** — high — allow-list compares only hostnames → spoofed scheme/port treated as Panel origin
+20. **desktop/shell/src/update.rs:53** — high — update controls matched on path alone → content can self-install
+21. **desktop/shell/src/update.rs:259** — high — update has no in-progress latch → concurrent download+install
+22. **desktop/shell/src/perm_monitor.rs:126** — high — permission monitor looks for `aleph-bridge` but helper is `AlephBridge` → permission transitions unmonitored
+23. **desktop/shared/src/perception/screen_record.rs:225** — high — recorder ignores `ScreenRecordConfig.region` and captures entire display → out-of-region PII
+24. **interfaces/cli/src/commands/plugin_cmd.rs:104** — high — TOML injection: plugin name interpolated unescaped into manifest
+25. **interfaces/cli/src/commands/doctor.rs:235** — high — R4 violation: shell embeds bespoke repair-prompt engineering
+26. **shared/logging/src/pii_filter.rs:9 / lib.rs:31 / pii_filter.rs:13** — high — `PiiScrubbingLayer` is a public no-op re-exported at crate root, breaking documented contract under R9
 
 ## Architecture Compliance Snapshot
 
-- **R1** (no platform APIs in core): 1 violation in `executor/builtin_registry/builder/constructor/mod.rs:249` (instantiates `aleph_desktop_macos::MacOSPlatform::new` etc.)
-- **R3** (no heavy deps for non-core): clean
-- **R4** (no business logic in interfaces): clean
-- **R8** (regex not for LLM reasoning): 2 violations — `tool_metadata/risk.rs` (intent classification), `context/budget/mod.rs` (diminishing-returns heuristic), `gateway/i18n.rs:format_execution_error` (over-broad keyword match)
-- **R10** (intelligence in prompts): see context/budget/mod.rs:300
+| Redline | Status across the 6 modules |
+|---------|------------------------------|
+| **R1** (no platform APIs in core) | clean — `src/wizard` and `src/workflow` stay in core; no platform calls detected |
+| **R3** (no heavy deps for non-core) | **1 violation** — `shared/protocol/src/jsonrpc.rs:302` pulls `uuid` (with `v4` → `rand`) for wire IDs; replaceable with `AtomicU64` |
+| **R4** (interface layer = pure I/O) | **4 violations** — `interfaces/cli/src/main.rs:583` marketplace-vs-direct routing heuristic in shell; `interfaces/cli/src/commands/doctor.rs:235` shell-side repair prompt engineering; `interfaces/tui/src/tui/cost.rs:19` provider pricing table in shell; `interfaces/tui/src/tui/app/trace.rs:112` AgentTraceEvent variant routing in shell |
+| **R8** (regex only for machine formats) | clean — no intent classification via regex found in the 5 modules reviewed |
+| **R9** (configurability as tools) | **1 violation** — `shared/logging/src/pii_filter.rs:13` empty `PiiScrubbingLayer` is a switch that does nothing |
+| **R10** (intelligence in prompts) | clean |
 
 ## Categories Summary
 
-- **Dead code**: ~25 findings (components, discovery, gateway/run_event_bus, rate_limiter, etc.)
-- **DRY violations**: ~30 findings
-- **`lock().unwrap()` poisoned mutex hazards**: 25+ in gateway (security/store, surface/r5_router, execution_engine/unattended_redacting_sink)
-- **`.ok()` silent error suppression**: pervasive in gateway/handlers (~80 instances)
-- **`unwrap_or(usize::MAX)` / clock-skew**: ~15 sites in gateway handlers
-- **Function length >50 lines**: ~15 findings (already acknowledged in harness/CLAUDE.md)
-- **`pub` where `pub(crate)` suffices**: ~8 findings
-- **Visibility & consistency**: ~30 minor findings
+- **Critical**: 2 (both in `desktop`)
+- **Race / lock**: 4 (gateway ax, connection lifecycle, listener UAF)
+- **Command injection**: 2 (desktop Windows shell passthrough)
+- **Certificate / TLS**: 3 (cert-trust pending race, notify WebSocket skip, connection token deletion)
+- **Privacy / PII leaks in logs**: 2 (deeplink logging, half-implemented PII layer)
+- **Authorization bypass**: 2 (webview perms, external-link allow-list, cert-trust pending race)
+- **Dead code / pub visibility**: ~25 (`shared/ui_logic` empty modules, `src/wizard` unused `StepType::Action`/constructors, etc.)
+- **DRY violations**: ~8 (doctor.rs stream-event loop re-impl, clippy/wizard error-unwrap pattern, etc.)
+- **File length >500 lines**: 2 (`shared/protocol/src/events.rs` 980, `shared/protocol/src/trace_presentation.rs` 933, `src/workflow/interop/import.rs` 1658)
+
+## Fix Strategy (next pass)
+
+Critical + high fixes will land as separate commits per module on `main`, no PR, no `cargo check` mid-flight. Single `cargo check -p alephcore` after all fixes are in.
