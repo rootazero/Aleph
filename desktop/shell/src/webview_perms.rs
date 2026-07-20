@@ -65,7 +65,8 @@ fn grant_linux(pview: &tauri::webview::PlatformWebview) {
 #[cfg(target_os = "windows")]
 fn grant_windows(pview: &tauri::webview::PlatformWebview) {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
-    use webview2_com::PermissionRequestedEventHandler;
+    use webview2_com::{take_pwstr, PermissionRequestedEventHandler};
+    use windows_core::PWSTR;
 
     let controller = pview.controller();
     // `controller` is a live `ICoreWebView2Controller` COM interface owned by
@@ -85,7 +86,21 @@ fn grant_windows(pview: &tauri::webview::PlatformWebview) {
             let Some(args) = args else { return Ok(()) };
             let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
             args.PermissionKind(&mut kind)?;
-            if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+            if kind != COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                return Ok(());
+            }
+            // Only the Panel's own origin may auto-grant the mic. Reuse the
+            // navigation SSOT so there is one definition of "Panel origin"
+            // (loopback daemon / tauri.localhost / configured remote).
+            let mut uri = PWSTR::null();
+            // SAFETY: `Uri` writes an owned PWSTR (freed by `take_pwstr`);
+            // `args` is the live event-args COM interface for this callback.
+            args.Uri(&mut uri)?;
+            let origin_ok = (!uri.is_null())
+                .then(|| tauri::Url::parse(&take_pwstr(uri)).ok())
+                .flatten()
+                .is_some_and(|u| crate::external_link::is_internal(&u));
+            if origin_ok {
                 args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
             }
             Ok(())

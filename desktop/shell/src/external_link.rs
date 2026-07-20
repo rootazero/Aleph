@@ -43,7 +43,7 @@ static REMOTE_ORIGIN: RwLock<Option<String>> = RwLock::new(None);
 /// Update the remote origin allow-list. Pass the remote target's URL when
 /// switching to a remote Gateway, or `None` when returning to Local.
 pub fn set_remote_host(url: Option<Url>) {
-    let origin = url.and_then(|u| u.origin().ok());
+    let origin = url.map(|u| u.origin().unicode_serialization());
     *REMOTE_ORIGIN
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = origin;
@@ -88,11 +88,10 @@ pub fn is_internal(url: &Url) -> bool {
                 // Allow the currently-configured remote Gateway origin —
                 // full origin match (scheme + host + port) so a different
                 // scheme/port on the same host cannot piggy-back.
-                REMOTE_ORIGIN
+                *REMOTE_ORIGIN
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .as_deref()
-                    == Some(url.origin().as_str())
+                    == Some(url.origin().unicode_serialization())
             }
             None => false,
         },
