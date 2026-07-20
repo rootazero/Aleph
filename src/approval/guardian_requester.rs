@@ -48,6 +48,8 @@ use crate::sandbox::exec_approval::ApprovalAction;
 use crate::sync_primitives::Arc;
 use crate::thinker::prompt_builder::SystemPromptPart;
 
+use crate::exec::masker::SecretMasker;
+
 /// Hard deadline for the judge call — past it the human is asked instead
 /// (codex: 90s fail-closed; ours can be tighter because the fallback is a
 /// human prompt, not a denial).
@@ -329,16 +331,24 @@ fn can_fully_judge(action: &ApprovalAction) -> bool {
 /// and length-capped; when a full command analysis is present its complete
 /// segments are rendered too, so a truncated summary never hides the command
 /// tail from the judge.
+///
+/// Segments are passed through the same `SecretMasker` the approval card uses
+/// before being sent to the guardian LLM — otherwise the upstream redacted
+/// summary alone leaks nothing while the per-segment `raw` text (built from
+/// the original argv by the shell parser) can still carry bearer tokens, URL
+/// basic-auth credentials, or generic password assignments.
 fn render_action(action: &ApprovalAction) -> String {
+    let masker = SecretMasker::new();
     let mut p = format!(
         "Pending action:\ntool: {}\naction: {}\n",
-        action.tool_name, action.summary
+        action.tool_name,
+        masker.mask(&action.summary)
     );
     if let Some(analysis) = action.analysis.as_ref() {
         if analysis.ok && !analysis.segments.is_empty() {
             p.push_str("full command segments (complete, untruncated):\n");
             for seg in &analysis.segments {
-                p.push_str(&format!("  $ {}\n", seg.raw));
+                p.push_str(&format!("  $ {}\n", masker.mask(&seg.raw)));
             }
         }
     }
