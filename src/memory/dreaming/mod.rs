@@ -865,6 +865,16 @@ impl DreamDaemon {
                     finished_at: report.finished_at.max(run_start),
                     duration_ms: duration_ms as i64,
                     synthesis_count: report.synthesis_count,
+                    notes_consolidated: report.notes_consolidated,
+                    notes_woven: report.notes_woven,
+                    notes_archived: report.notes_archived,
+                    // Count only feedback-distill actions (the Dreaming×correction
+                    // Goodhart counter-metric); skill-distill shares the vec.
+                    feedback_distilled: report
+                        .distill_actions
+                        .iter()
+                        .filter(|r| r.stage == "feedback_distill")
+                        .count() as u32,
                     // rust-doctor-disable-next-line excessive-clone
                     errors: report.errors.clone(),
                     namespace: "owner".to_string(),

@@ -117,9 +117,15 @@ impl AlephTool for GovernanceMetricsTool {
 Returns, for a look-back window (default 7 days):
 - `corrections`: how many real user corrections landed (raw memories under
   aleph://correction/) — the counter-metric for the Dreaming×correction
-  Goodhart check.
-- `dreaming`: dream-pipeline activity grouped by pipeline_type ({runs,
-  synthesis_sum}) — whether memory distillation kept producing this window.
+  Goodhart check. Pair it against each bucket's `feedback_distilled_sum`
+  (are corrections actually being distilled into feedback rules?).
+- `dreaming`: dream-pipeline activity grouped by pipeline_type — whether memory
+  distillation kept producing this window. Each bucket carries {runs,
+  synthesis_sum, consolidated_sum, woven_sum, archived_sum,
+  feedback_distilled_sum}. IMPORTANT: `synthesis_sum` is 0 on every `consolidate`
+  run by design (the NoteSynthesis stage lives only in the rarer `synthesize`
+  pipeline), so a healthy nightly consolidate shows synthesis_sum=0 — read the
+  other counters (and `runs`) for the distillation actually done.
 
 This is the in-core replacement for the old `sqlite3 ~/.aleph/data/memory.db`
 audit probes: same numbers, no sandbox escape, no raw DB access. For cron
@@ -209,6 +215,10 @@ mod tests {
                 finished_at: now - 100,
                 duration_ms: 100,
                 synthesis_count: 4,
+                notes_consolidated: 6,
+                notes_woven: 1,
+                notes_archived: 2,
+                feedback_distilled: 3,
                 errors: None,
                 namespace: "owner".to_string(),
             })
@@ -226,5 +236,9 @@ mod tests {
         assert_eq!(out.dreaming[0].pipeline_type, "full");
         assert_eq!(out.dreaming[0].runs, 1);
         assert_eq!(out.dreaming[0].synthesis_sum, 4);
+        assert_eq!(out.dreaming[0].consolidated_sum, 6);
+        assert_eq!(out.dreaming[0].woven_sum, 1);
+        assert_eq!(out.dreaming[0].archived_sum, 2);
+        assert_eq!(out.dreaming[0].feedback_distilled_sum, 3);
     }
 }
