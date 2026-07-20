@@ -118,8 +118,11 @@ impl ClarificationManager {
     /// Register a clarification for `session_key`.
     ///
     /// Returns a receiver that resolves when the user replies (via
-    /// [`resolve`](Self::resolve)), is superseded, or times out
-    /// ([`cleanup_expired`](Self::cleanup_expired)).
+    /// [`resolve`](Self::resolve)), is superseded by another registration on the
+    /// same `session_key`, or is reaped on the next [`register`](Self::register)
+    /// call after its timeout expires. There is no background timer; stale entries
+    /// are cleared opportunistically by the next registration, mirroring
+    /// [`ExecApprovalManager::register_pending`].
     pub async fn register(
         &self,
         session_key: impl Into<String>,
@@ -141,12 +144,25 @@ impl ClarificationManager {
             created_at: Instant::now(),
             timeout,
         };
+        let session_key = session_key.into();
         let mut pending = self.pending.write().await;
-        if let Some(mut old) = pending.insert(session_key.into(), entry) {
-            // Supersede: unblock the old waiter so its tool call doesn't hang.
-            if let Some(sender) = old.sender.take() {
-                let _ = sender.send(ClarificationResult::cancelled());
+        let superseded = match pending.insert(session_key.clone(), entry) {
+            Some(mut old) => {
+                // Supersede: unblock the old waiter so its tool call doesn't hang.
+                if let Some(sender) = old.sender.take() {
+                    let _ = sender.send(ClarificationResult::cancelled());
+                }
+                true
             }
+            None => false,
+        };
+        drop(pending);
+        if superseded {
+            // Honor the same "one terminal frame per clarification" invariant as
+            // resolve/cleanup so clients drop the old card in every window.
+            // `Cancelled` is the canonical outcome for "nobody can answer any
+            // more (… superseded)" per the `ClarificationOutcome` docstring.
+            publish_ended(&session_key, ClarificationOutcome::Cancelled);
         }
         rx
     }
