@@ -301,6 +301,12 @@ pub fn drag(
 
     match duration_ms {
         Some(ms) if ms > 0 => {
+            // Cap raw duration at 10s so an untrusted caller cannot pin a
+            // worker thread for arbitrary time despite the step cap. The
+            // 600-step cap already bounds iterations; this bounds wall
+            // clock. Above the ceiling, fall back to an instantaneous drag
+            // (the Some(ms) arm becoming effectively `_ =>`).
+            let ms = ms.min(10_000);
             // Cap at 600 steps (10 seconds at 60fps) to prevent excessive iteration
             // from malicious or erroneous duration values.
             let steps = ((ms as f64 / 1000.0) * 60.0).ceil().clamp(1.0, 600.0) as u64;
