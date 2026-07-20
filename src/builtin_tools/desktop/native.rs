@@ -1395,11 +1395,18 @@ impl super::DesktopTool {
                     region,
                 };
                 match screen.screen_record(config).await {
-                    Ok(result) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::to_value(&result).unwrap_or_default()),
-                        message: None,
-                    })),
+                    Ok(result) => {
+                        let data = serde_json::to_value(&result).map_err(|e| {
+                            AlephError::tool(format!(
+                                "screen_record: failed to serialize result: {e}"
+                            ))
+                        })?;
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(data),
+                            message: None,
+                        }))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
