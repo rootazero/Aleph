@@ -565,6 +565,25 @@ fn macos_set_window_bounds(
         }
     };
 
+    // Precise path: resolve the exact CGWindowID to its AX window (by geometry)
+    // and set position/size there. Falls through to the osascript-by-title path
+    // below when AX can't resolve/authorize the window (no match / no perm).
+    if let Some(bounds) = window.bounds.as_ref() {
+        match super::window_ax::set_window_geometry(pid, bounds, position, size) {
+            Ok(true) => {
+                info!(window_id, pid, "Window bounds updated via AX (macOS)");
+                return Ok(());
+            }
+            Ok(false) => { /* no AX match — fall through to osascript */ }
+            Err(e) => {
+                tracing::warn!(
+                    window_id,
+                    "AX set-bounds error: {e}; falling back to osascript"
+                );
+            }
+        }
+    }
+
     let script = format!(
         r#"on run argv
 set pid to (item 1 of argv) as integer
