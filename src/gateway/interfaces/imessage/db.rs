@@ -16,8 +16,9 @@ use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace, warn};
 
+use super::reaction;
 use crate::gateway::channel::{
-    Attachment, ChannelId, ConversationId, InboundMessage, MessageId, UserId,
+    Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
 
 /// Apple epoch offset (2001-01-01 00:00:00 UTC in Unix timestamp)
@@ -31,6 +32,21 @@ fn apple_timestamp_to_datetime(apple_ts: i64) -> DateTime<Utc> {
         chrono::LocalResult::Single(dt) => dt,
         _ => Utc::now(),
     }
+}
+
+/// Extract the target message GUID a tapback refers to. chat.db stores
+/// `associated_message_guid` with a part prefix — `p:0/<GUID>` (indexed part) or
+/// `bp:<GUID>` — so strip it down to the bare GUID. Returns `None` if empty.
+fn reaction_target_guid(assoc: &str) -> Option<String> {
+    let guid = if let Some((_, rest)) = assoc.rsplit_once('/') {
+        rest
+    } else {
+        assoc
+            .strip_prefix("bp:")
+            .or_else(|| assoc.strip_prefix("p:"))
+            .unwrap_or(assoc)
+    };
+    (!guid.is_empty()).then(|| guid.to_string())
 }
 
 /// Resolve a raw `attachment.filename` value (an absolute path, often with a
@@ -55,6 +71,11 @@ pub struct RawMessage {
     pub date: i64,
     pub cache_has_attachments: bool,
     pub chat_id: Option<i64>,
+    /// `associated_message_type`: 0 for a normal message, 2000–2005 for an
+    /// add-tapback (removes 3000–3005 are excluded by the query).
+    pub associated_message_type: i64,
+    /// `associated_message_guid`: the reacted-to message (tapback rows only).
+    pub associated_message_guid: Option<String>,
 }
 
 /// Chat information
@@ -162,12 +183,14 @@ impl MessagesDb {
 
     /// Poll for new messages since the last poll.
     ///
-    /// The `associated_message_type = 0` and `item_type = 0` filters drop
-    /// tapbacks/reactions (2000–3005) and group-action system rows (participant
-    /// added/removed, group renamed, etc.) at the source, matching the
-    /// BlueBubbles path's `is_tapback` skip. Without them these rows arrive as
-    /// junk text (e.g. `Loved "…"`, `You named the conversation …`) and trigger
-    /// spurious agent turns.
+    /// The `item_type = 0` filter drops group-action system rows (participant
+    /// added/removed, group renamed, etc.). The `associated_message_type`
+    /// predicate keeps normal messages (type 0) and *add* tapbacks (2000–2005),
+    /// while excluding *remove* tapbacks (3000–3005). Add tapbacks surface as
+    /// reaction messages (`Reacted with: …` + [`MessageMeta::Reaction`]),
+    /// matching the BlueBubbles path; removes and system rows are dropped so they
+    /// don't arrive as junk text (e.g. `You named the conversation …`) and
+    /// trigger spurious agent turns.
     pub fn poll_new_messages(&mut self) -> SqliteResult<Vec<InboundMessage>> {
         let sql = r#"
             SELECT
@@ -178,12 +201,15 @@ impl MessagesDb {
                 m.date,
                 m.is_from_me,
                 m.cache_has_attachments,
-                cmj.chat_id
+                cmj.chat_id,
+                m.associated_message_type,
+                m.associated_message_guid
             FROM message m
             LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
             WHERE m.ROWID > ?1
               AND m.is_from_me = 0
-              AND m.associated_message_type = 0
+              AND (m.associated_message_type = 0
+                   OR m.associated_message_type BETWEEN 2000 AND 2005)
               AND m.item_type = 0
             ORDER BY m.ROWID ASC
             LIMIT 100
@@ -199,6 +225,8 @@ impl MessagesDb {
                 date: row.get(4)?,
                 cache_has_attachments: row.get::<_, i64>(6)? != 0,
                 chat_id: row.get(7)?,
+                associated_message_type: row.get(8)?,
+                associated_message_guid: row.get(9)?,
             })
         })?;
 
@@ -212,8 +240,19 @@ impl MessagesDb {
                 self.last_message_rowid = raw.rowid;
             }
 
-            // Skip empty messages (unless they have attachments)
-            if raw.text.is_none() && !raw.cache_has_attachments {
+            // A non-zero associated_message_type is an add-tapback (the query
+            // already excludes removes 3000–3005 and system rows). Map it to its
+            // emoji so it surfaces as a reaction; a row the filter let through
+            // with an unmapped type falls back to normal handling.
+            let reaction_emoji = if raw.associated_message_type == 0 {
+                None
+            } else {
+                reaction::tapback_emoji(raw.associated_message_type)
+            };
+
+            // Skip empty messages (unless they have attachments). Reactions carry
+            // synthesized text, so they are never treated as empty.
+            if reaction_emoji.is_none() && raw.text.is_none() && !raw.cache_has_attachments {
                 continue;
             }
 
@@ -240,8 +279,12 @@ impl MessagesDb {
             };
 
             // Get attachments if present (and enabled). Degrade to no
-            // attachments on error instead of dropping the whole batch.
-            let attachments = if raw.cache_has_attachments && self.include_attachments {
+            // attachments on error instead of dropping the whole batch. Reaction
+            // rows never carry attachments, so skip the lookup for them.
+            let attachments = if raw.cache_has_attachments
+                && self.include_attachments
+                && reaction_emoji.is_none()
+            {
                 match self.get_message_attachments(raw.rowid) {
                     Ok(a) => a,
                     Err(e) => {
@@ -266,13 +309,30 @@ impl MessagesDb {
             // Determine if this is a group message
             let is_group = chat_info.as_ref().is_some_and(|c| c.is_group);
 
+            // Render an add-tapback like the Telegram/Matrix reaction convention:
+            // `Reacted with: <emoji>` + a Reaction meta, pointed at the reacted-to
+            // message. Normal rows keep their own text and carry no reaction meta.
+            let (text, reply_to, metadata) = match reaction_emoji {
+                Some(emoji) => (
+                    format!("Reacted with: {emoji}"),
+                    raw.associated_message_guid
+                        .as_deref()
+                        .and_then(reaction_target_guid)
+                        .map(MessageId::new),
+                    vec![MessageMeta::Reaction {
+                        emojis: vec![emoji.to_string()],
+                    }],
+                ),
+                None => (raw.text.clone().unwrap_or_default(), None, vec![]),
+            };
+
             let inbound = InboundMessage {
                 id: MessageId::new(&raw.guid),
                 channel_id: ChannelId::new("imessage"),
                 conversation_id: ConversationId::new(&conversation_id),
                 sender_id: UserId::new(&handle.id),
                 sender_name: None, // Would need AddressBook access
-                text: raw.text.unwrap_or_default(),
+                text,
                 attachments: attachments
                     .into_iter()
                     .map(|a| {
@@ -309,10 +369,10 @@ impl MessagesDb {
                     })
                     .collect(),
                 timestamp: apple_timestamp_to_datetime(raw.date),
-                reply_to: None,
+                reply_to,
                 is_group,
                 raw: None,
-                metadata: vec![],
+                metadata,
             };
 
             trace!("Parsed message: {:?}", inbound);
@@ -495,17 +555,20 @@ mod tests {
                 ROWID INTEGER PRIMARY KEY,
                 guid TEXT, text TEXT, handle_id INTEGER, date INTEGER,
                 is_from_me INTEGER, cache_has_attachments INTEGER,
-                associated_message_type INTEGER, item_type INTEGER
+                associated_message_type INTEGER, item_type INTEGER,
+                associated_message_guid TEXT
             );
             INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage');
             -- normal inbound message (kept)
-            INSERT INTO message VALUES (10,'g-normal','hello',1,0,0,0,0,0);
-            -- tapback / reaction (dropped: associated_message_type != 0)
-            INSERT INTO message VALUES (11,'g-tapback','Loved "hello"',1,0,0,0,2000,0);
+            INSERT INTO message VALUES (10,'g-normal','hello',1,0,0,0,0,0,NULL);
+            -- add-tapback love (kept: surfaces as a reaction on g-normal)
+            INSERT INTO message VALUES (11,'g-love','Loved "hello"',1,0,0,0,2000,0,'p:0/g-normal');
             -- group-action system row (dropped: item_type != 0)
-            INSERT INTO message VALUES (12,'g-sysevt','You named the conversation',1,0,0,0,0,1);
+            INSERT INTO message VALUES (12,'g-sysevt','You named the conversation',1,0,0,0,0,1,NULL);
             -- outbound echo (dropped: is_from_me = 1)
-            INSERT INTO message VALUES (13,'g-fromme','my own reply',1,0,1,0,0,0);
+            INSERT INTO message VALUES (13,'g-fromme','my own reply',1,0,1,0,0,0,NULL);
+            -- remove-tapback (dropped: type 3000 outside 2000–2005)
+            INSERT INTO message VALUES (14,'g-unlove','Removed a heart',1,0,0,0,3000,0,'p:0/g-normal');
             "#,
         )
         .unwrap();
@@ -513,20 +576,40 @@ mod tests {
     }
 
     #[test]
-    fn poll_filters_tapbacks_system_rows_and_self() {
+    fn poll_surfaces_add_tapbacks_drops_removes_system_self() {
         let mut db = MessagesDb::from_conn(seed_db());
         let msgs = db.poll_new_messages().unwrap();
-        // Only the one normal inbound message survives the WHERE filters.
-        assert_eq!(msgs.len(), 1, "expected only the normal message, got {msgs:?}");
+        // The normal message and the add-tapback survive; system / self / remove drop.
+        assert_eq!(msgs.len(), 2, "expected normal + reaction, got {msgs:?}");
+
         assert_eq!(msgs[0].text, "hello");
         assert_eq!(msgs[0].id.as_str(), "g-normal");
-        // The watermark tracks the last *matched* row (10), not the last scanned
-        // ROWID (13): the trailing tapback/system/self rows are excluded by the
-        // WHERE clause and so never advance it — identical to how the
-        // pre-existing `is_from_me = 0` filter already behaved. This is safe:
-        // SQLite applies the WHERE filter before LIMIT, so a later real message
-        // is still returned even when many filtered rows sit in between.
-        assert_eq!(db.last_rowid(), 10);
+        assert!(msgs[0].metadata.is_empty());
+
+        // The add-tapback is rendered as a reaction pointed at the reacted-to
+        // message (the `p:0/` part prefix stripped down to the bare GUID).
+        assert_eq!(msgs[1].text, "Reacted with: ❤️");
+        assert_eq!(msgs[1].id.as_str(), "g-love");
+        assert_eq!(msgs[1].reply_to.as_ref().map(|r| r.as_str()), Some("g-normal"));
+        assert!(matches!(
+            msgs[1].metadata.as_slice(),
+            [MessageMeta::Reaction { .. }]
+        ));
+
+        // The watermark tracks the last *matched* row (11): the trailing system,
+        // self, and remove-tapback rows are excluded by the WHERE clause and so
+        // never advance it. Safe because SQLite applies the WHERE filter before
+        // LIMIT, so a later real message is still returned even when filtered rows
+        // sit in between.
+        assert_eq!(db.last_rowid(), 11);
+    }
+
+    #[test]
+    fn reaction_target_guid_strips_part_prefix() {
+        assert_eq!(reaction_target_guid("p:0/ABC-123"), Some("ABC-123".to_string()));
+        assert_eq!(reaction_target_guid("bp:ABC-123"), Some("ABC-123".to_string()));
+        assert_eq!(reaction_target_guid("ABC-123"), Some("ABC-123".to_string()));
+        assert_eq!(reaction_target_guid(""), None);
     }
 
     #[test]
