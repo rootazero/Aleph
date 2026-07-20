@@ -99,19 +99,35 @@ impl NodeCommand for FileWriteCommand {
         }
 
         let dest = resolve_in_jail(path, &self.workspace_dir).await?;
-        if tokio::fs::try_exists(&dest)
-            .await
-            .map_err(|e| format!("file.write: {e}"))?
-            && !overwrite
-        {
-            return Err("file.write: target exists (set overwrite)".to_string());
-        }
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| format!("file.write: {e}"))?;
         }
-        tokio::fs::write(&dest, &bytes)
+        // Atomic create-or-truncate: open with `create_new(!overwrite)` so a
+        // racing writer that beat us to the path either wins (we get `AlreadyExists`)
+        // or loses (our exclusive create succeeds). This replaces the
+        // `try_exists` → `tokio::fs::write` pair that had a TOCTOU window where
+        // a concurrent file.write with `overwrite=false` could observe "absent"
+        // and then succeed over a freshly-arrived file.
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        if !overwrite {
+            opts.create_new(true);
+        }
+        let open_result = opts.open(&dest).await;
+        let mut file = match open_result {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err("file.write: target exists (set overwrite)".to_string());
+            }
+            Err(e) => return Err(format!("file.write: {e}")),
+        };
+        use tokio::io::AsyncWriteExt;
+        file.write_all(&bytes)
+            .await
+            .map_err(|e| format!("file.write: {e}"))?;
+        file.flush()
             .await
             .map_err(|e| format!("file.write: {e}"))?;
         Ok(json!({ "written": bytes.len() }))
