@@ -403,6 +403,136 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
     }
 }
 
+// Bridge the Telegram channel's own multi-account config into the central
+// permission layer so the inbound router is the single source of truth for
+// Telegram access (R4). Gating is driven by the default (first) account —
+// matching the channel-local access controller's account-level resolution.
+// Without this bridge the router fell back to `ChannelConfig::default()`
+// (Pairing / Open), silently ignoring the operator's Telegram dm_policy /
+// group_policy / allowlists.
+impl From<&crate::gateway::interfaces::telegram::TelegramConfigV2> for ChannelConfig {
+    fn from(cfg: &crate::gateway::interfaces::telegram::TelegramConfigV2) -> Self {
+        use crate::gateway::interfaces::telegram::config_v2::{
+            DmPolicy as TgDm, GroupPolicy as TgGroup,
+        };
+
+        let account = cfg.accounts.first();
+        let dm_policy = account.and_then(|a| a.dm_policy.clone()).unwrap_or_default();
+        let group_policy = account
+            .and_then(|a| a.group_policy.clone())
+            .unwrap_or_default();
+        let allowed_users = account
+            .and_then(|a| a.allowed_users.clone())
+            .unwrap_or_default();
+        let allowed_groups = account
+            .and_then(|a| a.allowed_groups.clone())
+            .unwrap_or_default();
+        // Matches the interface default (mod.rs): groups respond to every message
+        // unless `require_mention` is explicitly enabled.
+        let require_mention = account.and_then(|a| a.require_mention).unwrap_or(false);
+        let bot_name = account.and_then(|a| a.bot_username.clone());
+
+        Self {
+            dm_policy: match dm_policy {
+                TgDm::Open => DmPolicy::Open,
+                TgDm::Allowlist => DmPolicy::Allowlist,
+                TgDm::Pairing => DmPolicy::Pairing,
+                TgDm::Disabled => DmPolicy::Disabled,
+            },
+            group_policy: match group_policy {
+                TgGroup::Open => GroupPolicy::Open,
+                // Telegram semantic: `Allowlist` with an empty `allowed_groups`
+                // means "allow all groups" (see access.rs
+                // test_group_allowlist_empty_allows_all). The router's Allowlist
+                // *denies* when `group_allow_from` is empty, so preserve the
+                // "allow all" intent by mapping the empty case to Open.
+                TgGroup::Allowlist if allowed_groups.is_empty() => GroupPolicy::Open,
+                TgGroup::Allowlist => GroupPolicy::Allowlist,
+                TgGroup::Disabled => GroupPolicy::Disabled,
+            },
+            allow_from: allowed_users.iter().map(i64::to_string).collect(),
+            group_allow_from: allowed_groups.iter().map(i64::to_string).collect(),
+            require_mention,
+            bot_name,
+            slash_access: SlashAccessConfig::default(),
+            permission_level: ChannelPermissionLevel::default(),
+            default_workspace: None,
+            busy_input_mode: BusyInputMode::default(),
+            // Boot wiring overlays `tool_permissions` from the instance's flat
+            // config block (same ChannelPolicyConfig parse as other channels).
+            tool_permissions: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod telegram_bridge_tests {
+    use super::*;
+    use crate::gateway::interfaces::telegram::config_v2::{
+        DmPolicy as TgDm, GroupPolicy as TgGroup, TelegramAccountConfig, TelegramConfigV2,
+    };
+
+    fn cfg(account: TelegramAccountConfig) -> TelegramConfigV2 {
+        TelegramConfigV2 {
+            accounts: vec![account],
+            coalescing: None,
+        }
+    }
+
+    #[test]
+    fn dm_pairing_and_allowlist_are_mapped() {
+        let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
+            dm_policy: Some(TgDm::Allowlist),
+            allowed_users: Some(vec![123, 456]),
+            ..Default::default()
+        }));
+        assert!(matches!(c.dm_policy, DmPolicy::Allowlist));
+        assert_eq!(c.allow_from, vec!["123".to_string(), "456".to_string()]);
+    }
+
+    #[test]
+    fn empty_allowlist_group_maps_to_open() {
+        // Telegram's `Allowlist` + empty groups == "allow all"; the router's
+        // Allowlist would deny on empty, so it must become Open.
+        let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
+            group_policy: Some(TgGroup::Allowlist),
+            allowed_groups: None,
+            ..Default::default()
+        }));
+        assert!(matches!(c.group_policy, GroupPolicy::Open));
+        assert!(c.group_allow_from.is_empty());
+    }
+
+    #[test]
+    fn nonempty_allowlist_group_stays_allowlist() {
+        let c = ChannelConfig::from(&cfg(TelegramAccountConfig {
+            group_policy: Some(TgGroup::Allowlist),
+            allowed_groups: Some(vec![-100111]),
+            ..Default::default()
+        }));
+        assert!(matches!(c.group_policy, GroupPolicy::Allowlist));
+        assert_eq!(c.group_allow_from, vec!["-100111".to_string()]);
+    }
+
+    #[test]
+    fn require_mention_defaults_to_false() {
+        let c = ChannelConfig::from(&cfg(TelegramAccountConfig::default()));
+        assert!(!c.require_mention);
+    }
+
+    #[test]
+    fn no_accounts_falls_back_to_telegram_defaults() {
+        // Empty accounts → telegram policy defaults: DM Pairing, group Allowlist
+        // (which, with no allowed_groups, maps to Open).
+        let c = ChannelConfig::from(&TelegramConfigV2 {
+            accounts: vec![],
+            coalescing: None,
+        });
+        assert!(matches!(c.dm_policy, DmPolicy::Pairing));
+        assert!(matches!(c.group_policy, GroupPolicy::Open));
+    }
+}
+
 /// Check if a link (channel) is allowed to access an agent.
 pub(crate) fn check_link_access(
     allowed_links: &Option<Vec<String>>,

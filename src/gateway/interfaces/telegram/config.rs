@@ -3,37 +3,12 @@
 //! Configuration types for the Telegram Bot integration.
 
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 
 use crate::gateway::coalescer::CoalescingConfig;
 
 use super::config_v2::{
     DmPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig, TelegramConfigV2,
 };
-
-/// A pending pairing entry: code + creation time + TTL.
-#[derive(Debug, Clone)]
-pub struct PairingEntry {
-    pub code: String,
-    pub created_at: Instant,
-    pub ttl_secs: u64,
-}
-
-impl PairingEntry {
-    #[must_use]
-    pub fn new(code: String) -> Self {
-        Self {
-            code,
-            created_at: Instant::now(),
-            ttl_secs: 3600,
-        }
-    }
-
-    #[must_use]
-    pub fn is_expired(&self) -> bool {
-        self.created_at.elapsed().as_secs() > self.ttl_secs
-    }
-}
 
 /// Telegram channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,10 +44,6 @@ pub struct TelegramConfig {
     #[serde(default)]
     pub group_policy: GroupPolicy,
 
-    /// Webhook configuration (optional, defaults to long-polling)
-    #[serde(default)]
-    pub webhook: Option<WebhookConfig>,
-
     /// Polling interval in seconds (for long-polling mode)
     #[serde(default = "default_polling_interval")]
     pub polling_interval_secs: u64,
@@ -99,28 +70,6 @@ pub struct TelegramConfig {
     pub link_preview: super::config_v2::LinkPreviewMode,
 }
 
-/// Webhook configuration for receiving updates
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebhookConfig {
-    /// Public URL for the webhook
-    pub url: String,
-
-    /// Port to listen on (default: 8443)
-    #[serde(default = "default_webhook_port")]
-    pub port: u16,
-
-    /// Path for the webhook endpoint
-    #[serde(default = "default_webhook_path")]
-    pub path: String,
-
-    /// SSL certificate path (optional, for self-signed)
-    pub certificate: Option<String>,
-
-    /// Secret token for webhook verification
-    #[serde(default)]
-    pub secret_token: Option<String>,
-}
-
 const fn default_true() -> bool {
     true
 }
@@ -131,14 +80,6 @@ const fn default_polling_interval() -> u64 {
 
 const fn default_max_retries() -> u32 {
     3
-}
-
-const fn default_webhook_port() -> u16 {
-    8443
-}
-
-fn default_webhook_path() -> String {
-    "/telegram/webhook".to_string()
 }
 
 fn default_coalescing() -> Option<CoalescingConfig> {
@@ -156,7 +97,6 @@ impl Default for TelegramConfig {
             groups_allowed: true,
             dm_policy: DmPolicy::default(),
             group_policy: GroupPolicy::default(),
-            webhook: None,
             polling_interval_secs: 1,
             send_typing: true,
             max_retries: 3,
@@ -181,8 +121,8 @@ impl TelegramConfig {
     /// Check if a user ID is in the static config allowlist.
     ///
     /// Returns `true` when the allowlist is empty (open to all) or when the user
-    /// is explicitly listed. Runtime-paired users are tracked separately in
-    /// `AccessController::runtime_users`.
+    /// is explicitly listed. Runtime pairing is owned by the router's
+    /// `pairing_store`, not tracked here.
     #[must_use]
     pub fn is_user_allowed(&self, user_id: i64) -> bool {
         if self.allowed_users.is_empty() {
@@ -253,8 +193,13 @@ impl TelegramConfig {
                 bot_token: self.bot_token.clone(),
                 bot_username: self.bot_username.clone(),
                 default_agent: None,
-                dm_policy: Some(self.dm_policy.clone()),
-                group_policy: Some(self.group_policy.clone()),
+                // Resolve through the effective_* accessors so the legacy
+                // `dm_allowed`/`groups_allowed` toggles are honored: a config with
+                // `dm_allowed: false` must upgrade to `Disabled`, not silently
+                // carry the raw `Pairing` default (which would leave DMs
+                // reachable). Also applies the allowlist promotion.
+                dm_policy: Some(self.effective_dm_policy()),
+                group_policy: Some(self.effective_group_policy()),
                 send_typing: Some(self.send_typing),
                 // Legacy flat config has no mention gate — inherit the default.
                 require_mention: None,
@@ -375,14 +320,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pairing_entry_not_expired() {
-        let entry = PairingEntry::new("ABC123".to_string());
-        assert!(!entry.is_expired());
-        assert_eq!(entry.code, "ABC123");
-        assert_eq!(entry.ttl_secs, 3600);
-    }
-
-    #[test]
     fn parse_v2_config_directly() {
         let raw = serde_json::json!({
             "accounts": [{
@@ -417,18 +354,6 @@ mod tests {
         let raw = serde_json::json!({ "bot_username": "AlephzBot" });
         let err = parse_telegram_channel_config(raw).unwrap_err();
         assert!(err.to_string().contains("accounts"));
-    }
-
-    // Backdating an `Instant` by an hour underflows on Windows (its monotonic
-    // clock epoch can be <1h old); the expiry logic is platform-agnostic, so
-    // this time-travel test is POSIX-only.
-    #[cfg(not(windows))]
-    #[test]
-    fn test_pairing_entry_expired() {
-        let mut entry = PairingEntry::new("XYZ789".to_string());
-        // Backdate the creation time so it appears expired
-        entry.created_at = Instant::now() - std::time::Duration::from_secs(3601);
-        assert!(entry.is_expired());
     }
 
     // --- DmPolicy / GroupPolicy backward-compatibility tests ---

@@ -640,6 +640,58 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire Telegram gating config into the central permission layer (R4: the
+    // inbound router is the single source of truth for Telegram access). The
+    // `From<&TelegramConfigV2>` conversion maps dm_policy / group_policy /
+    // allowlists / require_mention; the router's `pairing_store` then owns the
+    // authoritative pairing flow. Previously the router fell back to
+    // `ChannelConfig::default()` (Pairing / Open) for Telegram, ignoring the
+    // operator's configured access policy.
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        for inst in cfg.resolved_channels() {
+            if inst.channel_type != "telegram" {
+                continue;
+            }
+            match parse_telegram_channel_config(inst.config.clone()) {
+                Ok(tg_config) => {
+                    let mut channel_config =
+                        alephcore::gateway::inbound_router::ChannelConfig::from(&tg_config);
+                    // Overlay the flat-key slash-access + tier / workspace /
+                    // tool_permissions block, same ChannelPolicyConfig parse as
+                    // every other channel.
+                    let slash_access = serde_json::from_value::<
+                        alephcore::gateway::inbound_router::SlashAccessConfig,
+                    >(inst.config.clone())
+                    .unwrap_or_default();
+                    let policy = serde_json::from_value::<
+                        alephcore::gateway::inbound_router::ChannelPolicyConfig,
+                    >(inst.config.clone())
+                    .unwrap_or_default();
+                    channel_config.slash_access = slash_access;
+                    channel_config.permission_level = policy.permission_level;
+                    channel_config.default_workspace = policy.default_workspace;
+                    channel_config.busy_input_mode = policy.busy_input_mode;
+                    channel_config.tool_permissions = policy.tool_permissions;
+                    inbound_router.register_channel_config(&inst.id, channel_config);
+                    if !daemon {
+                        println!(
+                            "  Inbound router: Telegram gating config registered for '{}'",
+                            inst.id
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse telegram config '{}' for gating: {}",
+                        inst.id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     // Wire slash-command access tiering for every *other* channel type.
     //
     // The `slash_command_gate` infrastructure (admin / per-command allowlists,
@@ -658,8 +710,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         for inst in cfg.resolved_channels() {
-            if inst.channel_type == "imessage" {
-                continue; // handled by the dedicated full-config path above
+            if inst.channel_type == "imessage" || inst.channel_type == "telegram" {
+                continue; // handled by the dedicated full-config paths above
             }
             let slash_access = serde_json::from_value::<
                 alephcore::gateway::inbound_router::SlashAccessConfig,
