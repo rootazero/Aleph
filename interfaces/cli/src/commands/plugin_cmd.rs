@@ -71,6 +71,16 @@ pub fn init(name: &str, template: PluginTemplate, target_dir: Option<&Path>) -> 
 
 /// Create the plugin directory structure and files.
 pub fn scaffold_plugin(target: &Path, name: &str, template: PluginTemplate) -> CliResult<()> {
+    // Plugin names are interpolated unescaped into TOML/Cargo/JSON/TS
+    // template bodies; without a character whitelist a name like
+    // `a"foo=b" \n key = "injected"` would break TOML parsing or smuggle
+    // extra fields. npm-style names (lowercase + hyphens, optional scope
+    // prefix) cover the common cases. Reject anything outside `[A-Za-z0-9._-]`.
+    if !is_safe_plugin_name(name) {
+        return Err(CliError::Other(format!(
+            "invalid plugin name '{name}': use only letters, digits, '.', '_' or '-'"
+        )));
+    }
     // Check target directory
     if target.exists() {
         let entries: Vec<_> = std::fs::read_dir(target)?.collect();
@@ -556,6 +566,45 @@ Describe when and how to use this skill.
 // ---------------------------------------------------------------------------
 // `aleph plugin pack`
 // ---------------------------------------------------------------------------
+
+/// A plugin name is safe for unescaped interpolation into TOML/Cargo/JSON/TS
+/// template bodies iff every byte is a member of `[A-Za-z0-9._-]`. Empty
+/// strings are rejected (every downstream consumer also wants non-empty).
+fn is_safe_plugin_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .as_bytes()
+            .iter()
+            .all(|&b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::is_safe_plugin_name;
+
+    #[test]
+    fn allows_npm_style_names() {
+        for ok in ["my-plugin", "my_plugin", "plugin.js", "Plugin42", "v1.2.3"] {
+            assert!(is_safe_plugin_name(ok), "should accept: {ok}");
+        }
+    }
+
+    #[test]
+    fn rejects_quotes_backslashes_newlines_and_empty() {
+        for bad in [
+            "",
+            "a\"",
+            "a\\",
+            "a\nb",
+            "a=b",
+            "../escape",
+            "name with space",
+            "name;injection",
+        ] {
+            assert!(!is_safe_plugin_name(bad), "should reject: {bad:?}");
+        }
+    }
+}
 
 const PACK_EXCLUDE: &[&str] = &[
     "node_modules",
