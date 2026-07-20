@@ -117,6 +117,21 @@ impl BuiltinToolRegistry {
                 ),
             );
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
+
+            // governance_metrics — read-only audit reality probe. Exposed
+            // whenever a memory backend exists (independent of retrieval policy,
+            // like flag_user_correction): the loop-governance audit ring runs in
+            // a headless cron session and must reach it regardless of injection
+            // mode.
+            reg(
+                tools,
+                "governance_metrics",
+                crate::builtin_tools::governance_metrics::GovernanceMetricsTool::DESCRIPTION,
+                schema::<crate::builtin_tools::governance_metrics::GovernanceMetricsArgs>(
+                    "governance_metrics",
+                ),
+            );
+            info!("Registered governance_metrics tool in BuiltinToolRegistry");
         }
 
         // Spec A Task 17 — remember tool is always exposed; its execution

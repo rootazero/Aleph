@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use crate::runtimes::{ensure_capability, ledger::CapabilityLedger};
+use crate::security::secret_env::is_secret_env;
 use crate::sync_primitives::RwLock;
 use crate::utils::no_window::NoWindow;
 
@@ -187,71 +188,6 @@ impl PlaywrightCliDriver {
     pub const fn config(&self) -> &PlaywrightCliConfig {
         &self.config
     }
-}
-
-/// Well-known secret-bearing env var names, stripped from the browser child.
-/// Combined with a suffix heuristic in [`is_secret_env`] to catch the long tail.
-const SECRET_ENV_EXACT: &[&str] = &[
-    // Aleph internal
-    "ALEPH_VAULT_KEY",
-    // LLM providers
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "GROQ_API_KEY",
-    "MISTRAL_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "XAI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "TOGETHER_API_KEY",
-    "COHERE_API_KEY",
-    "PERPLEXITY_API_KEY",
-    // Cloud / infra
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "AZURE_CLIENT_SECRET",
-    // Developer platforms
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "GITLAB_TOKEN",
-    "HF_TOKEN",
-    "HUGGING_FACE_HUB_TOKEN",
-    "NPM_TOKEN",
-    "CARGO_REGISTRY_TOKEN",
-    "DOCKER_PASSWORD",
-    // Comms / SaaS
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-    "TELEGRAM_BOT_TOKEN",
-    "STRIPE_SECRET_KEY",
-    "TWILIO_AUTH_TOKEN",
-    "SENDGRID_API_KEY",
-    "TAVILY_API_KEY",
-    // Generic
-    "DATABASE_URL",
-];
-
-/// Whether an env var name should be withheld from the browser subprocess —
-/// either an exact match against [`SECRET_ENV_EXACT`] or a credential-shaped suffix.
-fn is_secret_env(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    if SECRET_ENV_EXACT.contains(&upper.as_str()) {
-        return true;
-    }
-    const SECRET_SUFFIXES: &[&str] = &[
-        "_API_KEY",
-        "_SECRET",
-        "_SECRET_KEY",
-        "_TOKEN",
-        "_PASSWORD",
-        "_CREDENTIALS",
-        "_ACCESS_KEY",
-        "_PRIVATE_KEY",
-    ];
-    SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s))
 }
 
 fn classify_stderr(

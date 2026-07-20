@@ -41,10 +41,9 @@ fn parse_path(s: &str) -> Result<AssemblyPath, String> {
         "basic" => Ok(AssemblyPath::Basic),
         "hydration" => Ok(AssemblyPath::Hydration),
         "soul" => Ok(AssemblyPath::Soul),
-        "context" => Ok(AssemblyPath::Context),
         "cached" => Ok(AssemblyPath::Cached),
         other => Err(format!(
-            "unknown --path '{other}' (expected: basic | hydration | soul | context | cached)"
+            "unknown --path '{other}' (expected: basic | hydration | soul | cached)"
         )),
     }
 }

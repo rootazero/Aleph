@@ -33,6 +33,76 @@ pub(super) fn strip_bot_mention(input: &str) -> String {
     }
 }
 
+/// Special slash-command variants intercepted in the inbound router before the
+/// generic `CommandParser` path. Case-insensitive over the command word, with
+/// the `@botname` Telegram suffix tolerated. `Btw` carries the verbatim body
+/// (original case preserved) so the model reads the user's actual phrasing
+/// rather than a lowercased copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SpecialSlash {
+    Help,
+    Stop,
+    Btw { body: String },
+}
+
+/// Classify a raw inbound text as a `SpecialSlash` variant.
+///
+/// Returns `None` for anything that is not `/help`, `/stop`, `/abort`, or
+/// `/btw <body>` (case-insensitive, optional `@botname`). `/btw` without a
+/// non-empty body is rejected — an empty sidebar question has no place to go.
+pub(super) fn classify_special_slash(text: &str) -> Option<SpecialSlash> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+    let (head, rest) = match trimmed.split_once(char::is_whitespace) {
+        Some((h, r)) => (h, r),
+        None => (trimmed, ""),
+    };
+    let cmd = head.split_once('@').map_or(head, |(c, _)| c);
+    let cmd_lower = cmd.strip_prefix('/').unwrap_or(cmd).to_lowercase();
+    match cmd_lower.as_str() {
+        "help" => Some(SpecialSlash::Help),
+        "stop" | "abort" => Some(SpecialSlash::Stop),
+        "btw" => {
+            let body = rest.trim();
+            if body.is_empty() {
+                None
+            } else {
+                Some(SpecialSlash::Btw {
+                    body: body.to_string(),
+                })
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parse the suffix after `clarify:` into a 1-based option index.
+///
+/// Returns `Some(n)` when the suffix (after trimming) is a positive integer,
+/// matching the `ask_user::build_choice_keyboard` button contract — buttons
+/// are emitted as `clarify:1`, `clarify:2`, … so `0` and any non-numeric
+/// value are rejected as malformed.
+///
+/// `None` for empty, non-numeric, zero, or overflowing input. `@bot` is
+/// unrelated to this parser: the router strips Telegram's `@botname`
+/// suffix before this is called, and callback data never carries one.
+pub(super) fn parse_clarify_index(suffix: &str) -> Option<usize> {
+    let trimmed = suffix.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: usize = trimmed.parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    Some(n)
+}
+
 /// Truncate a string to `max_chars` at a char boundary
 pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
@@ -403,5 +473,170 @@ impl InboundMessageRouter {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_special_slash, parse_clarify_index, SpecialSlash};
+
+    #[test]
+    fn classify_help_lowercase() {
+        assert_eq!(classify_special_slash("/help"), Some(SpecialSlash::Help));
+    }
+
+    #[test]
+    fn classify_help_mixed_case() {
+        assert_eq!(classify_special_slash("/Help"), Some(SpecialSlash::Help));
+        assert_eq!(classify_special_slash("/HELP"), Some(SpecialSlash::Help));
+    }
+
+    #[test]
+    fn classify_help_at_bot() {
+        assert_eq!(
+            classify_special_slash("/help@MyBot"),
+            Some(SpecialSlash::Help)
+        );
+    }
+
+    #[test]
+    fn classify_help_with_extra_text_is_still_help() {
+        assert_eq!(
+            classify_special_slash("/HELP please"),
+            Some(SpecialSlash::Help)
+        );
+    }
+
+    #[test]
+    fn classify_stop_uppercase() {
+        assert_eq!(classify_special_slash("/STOP"), Some(SpecialSlash::Stop));
+    }
+
+    #[test]
+    fn classify_abort_uppercase() {
+        assert_eq!(classify_special_slash("/ABORT"), Some(SpecialSlash::Stop));
+    }
+
+    #[test]
+    fn classify_stop_at_bot() {
+        assert_eq!(
+            classify_special_slash("/stop@MyBot"),
+            Some(SpecialSlash::Stop)
+        );
+        assert_eq!(
+            classify_special_slash("/abort@MyBot extra"),
+            Some(SpecialSlash::Stop)
+        );
+    }
+
+    #[test]
+    fn classify_btw_lowercase() {
+        assert_eq!(
+            classify_special_slash("/btw What is X?"),
+            Some(SpecialSlash::Btw {
+                body: "What is X?".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn classify_btw_uppercase_preserves_body_case() {
+        let body = "What is the Weather Forecast for Tokyo?";
+        assert_eq!(
+            classify_special_slash("/BTW What is the Weather Forecast for Tokyo?"),
+            Some(SpecialSlash::Btw {
+                body: body.to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn classify_btw_at_bot_preserves_body_case() {
+        assert_eq!(
+            classify_special_slash("/btw@MyBot Explain Async/Await in Rust"),
+            Some(SpecialSlash::Btw {
+                body: "Explain Async/Await in Rust".to_string()
+            })
+        );
+        assert_eq!(
+            classify_special_slash("/BTW@MyBot Hello, World!"),
+            Some(SpecialSlash::Btw {
+                body: "Hello, World!".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn classify_btw_newline_separator() {
+        assert_eq!(
+            classify_special_slash("/btw\nQuestion on next line"),
+            Some(SpecialSlash::Btw {
+                body: "Question on next line".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn classify_btw_empty_body_is_not_a_command() {
+        assert_eq!(classify_special_slash("/btw"), None);
+        assert_eq!(classify_special_slash("/btw "), None);
+        assert_eq!(classify_special_slash("/btw@MyBot"), None);
+        assert_eq!(classify_special_slash("/BTW\n   "), None);
+    }
+
+    #[test]
+    fn classify_no_slash_prefix_is_not_a_command() {
+        assert_eq!(classify_special_slash("help"), None);
+        assert_eq!(classify_special_slash("STOP"), None);
+        assert_eq!(classify_special_slash("btw hi"), None);
+    }
+
+    #[test]
+    fn classify_unknown_command_is_none() {
+        assert_eq!(classify_special_slash("/foo"), None);
+        assert_eq!(classify_special_slash("/HELLO"), None);
+        assert_eq!(classify_special_slash("/"), None);
+        assert_eq!(classify_special_slash(""), None);
+    }
+
+    #[test]
+    fn parse_clarify_index_accepts_positive_int() {
+        assert_eq!(parse_clarify_index("1"), Some(1));
+        assert_eq!(parse_clarify_index("2"), Some(2));
+        assert_eq!(parse_clarify_index("42"), Some(42));
+    }
+
+    #[test]
+    fn parse_clarify_index_trims_whitespace() {
+        assert_eq!(parse_clarify_index("  1  "), Some(1));
+        assert_eq!(parse_clarify_index("\t3\n"), Some(3));
+    }
+
+    #[test]
+    fn parse_clarify_index_rejects_zero() {
+        assert_eq!(parse_clarify_index("0"), None);
+        assert_eq!(parse_clarify_index(" 0 "), None);
+    }
+
+    #[test]
+    fn parse_clarify_index_rejects_empty() {
+        assert_eq!(parse_clarify_index(""), None);
+        assert_eq!(parse_clarify_index("   "), None);
+        assert_eq!(parse_clarify_index("\n"), None);
+    }
+
+    #[test]
+    fn parse_clarify_index_rejects_non_numeric() {
+        assert_eq!(parse_clarify_index("abc"), None);
+        assert_eq!(parse_clarify_index("1a"), None);
+        assert_eq!(parse_clarify_index("a1"), None);
+        assert_eq!(parse_clarify_index("-1"), None);
+        assert_eq!(parse_clarify_index("1.0"), None);
+    }
+
+    #[test]
+    fn parse_clarify_index_rejects_bot_suffix_artifact() {
+        assert_eq!(parse_clarify_index("1@MyBot"), None);
+        assert_eq!(parse_clarify_index("clarify:1"), None);
     }
 }

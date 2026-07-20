@@ -103,6 +103,11 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     }
     let dest_path = plugins_dir.join(repo_name);
 
+    if let Err(reason) = alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path) {
+        eprintln!("Error: {reason}");
+        std::process::exit(1);
+    }
+
     if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin already exists at: {}", dest_path.display());
         std::process::exit(1);
@@ -117,6 +122,13 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             .await?;
     match clone_result {
         Ok(_) => {
+            if let Err(reason) =
+                alephcore::extension::ensure_plugin_root_within_authoritative(&plugins_dir, &dest_path)
+            {
+                eprintln!("Error: {reason}");
+                let _ = std::fs::remove_dir_all(&dest_path);
+                std::process::exit(1);
+            }
             println!("Repository cloned successfully.");
 
             // Validate the installed plugin via AdapterRegistry

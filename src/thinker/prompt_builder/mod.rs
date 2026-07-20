@@ -146,10 +146,7 @@ pub struct PromptBuilder {
     /// context) for the Phase 2 widened layers — `SecurityLayer`,
     /// `OperationalGuidelinesLayer`, `ProtocolTokensLayer`,
     /// `RuntimeContextLayer`. Threaded into every `LayerInput` so those
-    /// layers can render content on the Basic / Hydration / Soul paths
-    /// without forcing a switch to the dedicated `Context` route.
-    /// `build_system_prompt_with_context()` ignores this field — its
-    /// `LayerInput::context` constructor already supplies a context.
+    /// layers can render content on the Basic / Cached assembly paths.
     resolved_context: Option<super::context::ResolvedContext>,
     behavior_name: Option<String>,
     model_behavior_delta: Option<String>,
@@ -261,13 +258,9 @@ impl PromptBuilder {
     /// Attach a `ResolvedContext` so the Phase 2 widened layers
     /// (`SecurityLayer`, `OperationalGuidelinesLayer`,
     /// `ProtocolTokensLayer`, `RuntimeContextLayer`) can emit content on
-    /// the Basic / Hydration / Soul paths. The harness bridge builds a
+    /// the Basic / Cached assembly paths. The harness bridge builds a
     /// default `ResolvedContext` from `Background` paradigm + permissive
     /// security; channel-specific paths can override with a stricter one.
-    ///
-    /// `build_system_prompt_with_context()` ignores this builder field —
-    /// it already receives a `ResolvedContext` parameter that the
-    /// `LayerInput::context` constructor wires directly.
     pub fn with_resolved_context(mut self, ctx: super::context::ResolvedContext) -> Self {
         self.resolved_context = Some(ctx);
         self
@@ -354,26 +347,6 @@ impl PromptBuilder {
     /// Access the underlying config mutably (for dynamic modifications).
     pub const fn config_mut(&mut self) -> &mut PromptConfig {
         &mut self.config
-    }
-
-    /// Build system prompt using `ResolvedContext`
-    ///
-    /// This is the new entry point that uses the two-phase filtered context
-    /// from the `ContextAggregator`. The pipeline layers handle all sections
-    /// (runtime context, environment, security, protocol tokens, etc.)
-    /// in priority order.
-    pub fn build_system_prompt_with_context(
-        &self,
-        ctx: &super::context::ResolvedContext,
-    ) -> String {
-        let input = LayerInput::context(&self.config, ctx)
-            .with_curated_envelope(self.curated_memory_envelope.clone())
-            .with_chain_context_opt(self.chain_context.as_ref())
-            .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
-            .with_iteration_cap_opt(self.iteration_cap)
-            .with_session_summaries(self.has_session_summaries);
-        self.pipeline.execute(AssemblyPath::Context, &input)
     }
 }
 

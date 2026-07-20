@@ -18,16 +18,13 @@ impl PromptLayer for SecurityLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        // Phase 2 wiring: participate in every non-minimal path so the
-        // layer fires on the harness `Basic` path. The inject() guard
-        // keeps output empty until a `ResolvedContext` is threaded into
-        // `LayerInput::context` (Phase 3 work), so widening here is a
-        // pure no-op today and ready to emit when context arrives.
+        // Participate in every non-minimal path so the layer fires on the
+        // harness `Basic` / `Cached` routes, where `ResolvedContext` is
+        // threaded. The inject() guard keeps output empty when it is absent.
         &[
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -147,7 +144,6 @@ mod tests {
         // ResolvedContext is threaded in.
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
@@ -190,7 +186,7 @@ mod tests {
         let layer = SecurityLayer;
         let config = PromptConfig::default();
         let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
-        let input = LayerInput::context(&config, &ctx);
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -218,7 +214,7 @@ mod tests {
 
         let layer = SecurityLayer;
         let config = PromptConfig::default();
-        let input = LayerInput::context(&config, &ctx);
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -248,7 +244,7 @@ mod tests {
 
         let layer = SecurityLayer;
         let config = PromptConfig::default();
-        let input = LayerInput::context(&config, &ctx);
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -274,7 +270,7 @@ mod tests {
 
         let layer = SecurityLayer;
         let config = PromptConfig::default();
-        let input = LayerInput::context(&config, &ctx);
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -300,7 +296,7 @@ mod tests {
         let layer = SecurityLayer;
         let config = PromptConfig::default();
         let _tools: Vec<crate::tools::info::ToolInfo> = vec![];
-        let input = LayerInput::context(&config, &ctx);
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 

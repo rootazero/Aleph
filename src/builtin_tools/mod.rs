@@ -51,6 +51,7 @@ pub mod gateway_route;
 pub mod generation;
 pub mod goal;
 pub mod google_meet;
+pub mod governance_metrics;
 pub mod heartbeat_manage;
 pub mod hub;
 pub mod list_models;

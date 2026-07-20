@@ -1728,3 +1728,305 @@ mod type_text_focus_gate {
         assert_eq!(evaluate(None, true), Gate::Allow);
     }
 }
+
+mod clipboard_master_switch {
+    use super::*;
+    use crate::builtin_tools::desktop::types::DesktopBatchAction;
+    use aleph_desktop::system_types::ClipboardContent;
+    use aleph_desktop::traits::{
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{DesktopPlatform, MouseButton, Result as DResult, WindowInfo};
+    use std::sync::Mutex;
+
+    struct Counts {
+        screen_reads: Mutex<usize>,
+        screen_writes: Mutex<Vec<String>>,
+        key_combos: Mutex<Vec<Vec<String>>>,
+        system_reads: Mutex<usize>,
+        system_writes: Mutex<Vec<String>>,
+    }
+
+    impl Default for Counts {
+        fn default() -> Self {
+            Self {
+                screen_reads: Mutex::new(0),
+                screen_writes: Mutex::new(Vec::new()),
+                key_combos: Mutex::new(Vec::new()),
+                system_reads: Mutex::new(0),
+                system_writes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    struct TrackingScreen {
+        counts: Arc<Counts>,
+    }
+
+    #[async_trait]
+    impl ScreenCapability for TrackingScreen {
+        async fn screenshot(&self, _r: Option<aleph_desktop::ScreenRegion>) -> DResult<aleph_desktop::Screenshot> {
+            unimplemented!()
+        }
+        async fn ocr(&self, _i: Option<&[u8]>) -> DResult<aleph_desktop::OcrResult> {
+            unimplemented!()
+        }
+        async fn click(&self, _x: f64, _y: f64, _b: MouseButton) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn type_text(&self, _t: &str) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn key_combo(&self, modifiers: &[String], key: &str) -> DResult<()> {
+            let mut entry = modifiers.to_vec();
+            entry.push(key.to_string());
+            self.counts.key_combos.lock().unwrap().push(entry);
+            Ok(())
+        }
+        async fn key_combo_targeted(
+            &self,
+            _pid: i32,
+            modifiers: &[String],
+            key: &str,
+        ) -> DResult<()> {
+            let mut entry = modifiers.to_vec();
+            entry.push(key.to_string());
+            self.counts.key_combos.lock().unwrap().push(entry);
+            Ok(())
+        }
+        async fn scroll(&self, _d: &str, _a: i32) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+            Ok(vec![])
+        }
+        async fn focus_window(&self, _id: u64) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn launch_app(&self, _n: &str) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn clipboard_read(&self) -> DResult<String> {
+            *self.counts.screen_reads.lock().unwrap() += 1;
+            Ok("screen-text".into())
+        }
+        async fn clipboard_write(&self, text: &str) -> DResult<()> {
+            self.counts.screen_writes.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+        async fn display_list(&self) -> DResult<Vec<aleph_desktop::DisplayInfo>> {
+            Ok(vec![])
+        }
+    }
+
+    struct TrackingSystem {
+        counts: Arc<Counts>,
+    }
+
+    #[async_trait]
+    impl SystemCapability for TrackingSystem {
+        async fn launch_app(&self, _app: &str) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn quit_app(&self, _app: &str) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn list_running_apps(&self) -> DResult<Vec<aleph_desktop::system_types::AppInfo>> {
+            Ok(vec![])
+        }
+        async fn send_notification(&self, _t: &str, _b: &str) -> DResult<()> {
+            unimplemented!()
+        }
+        async fn clipboard_read(&self) -> DResult<ClipboardContent> {
+            *self.counts.system_reads.lock().unwrap() += 1;
+            Ok(ClipboardContent {
+                text: Some("system-text".into()),
+                has_image: false,
+                image_base64: None,
+            })
+        }
+        async fn clipboard_write(&self, text: &str) -> DResult<()> {
+            self.counts.system_writes.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+        async fn system_info(&self) -> DResult<aleph_desktop::system_types::SystemInfo> {
+            unimplemented!()
+        }
+    }
+
+    struct TrackingPlatform {
+        screen: TrackingScreen,
+        system: TrackingSystem,
+    }
+
+    impl DesktopPlatform for TrackingPlatform {
+        fn platform_name(&self) -> &str {
+            "clipboard-master-switch"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(&self.screen)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            Some(&self.system)
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+    }
+
+    fn build(enabled: bool) -> (DesktopTool, Arc<Counts>) {
+        let counts = Arc::new(Counts::default());
+        let platform: Arc<dyn DesktopPlatform> = Arc::new(TrackingPlatform {
+            screen: TrackingScreen {
+                counts: Arc::clone(&counts),
+            },
+            system: TrackingSystem {
+                counts: Arc::clone(&counts),
+            },
+        });
+        let mut tool = DesktopTool::new().with_platform(platform);
+        if !enabled {
+            tool = tool.with_clipboard_enabled(false);
+        }
+        (tool, counts)
+    }
+
+    fn make_batch(args: Vec<DesktopArgs>) -> DesktopArgs {
+        let mut outer = make_args("batch");
+        outer.actions = args
+            .into_iter()
+            .map(|a| DesktopBatchAction {
+                action: a.action,
+                text: a.text,
+                ..DesktopBatchAction::empty("")
+            })
+            .collect();
+        outer
+    }
+
+    #[tokio::test]
+    async fn read_is_refused_and_mock_records_zero_when_disabled() {
+        let (tool, counts) = build(false);
+        let out = AlephTool::call(&tool, make_args("clipboard_read")).await.unwrap();
+        assert!(!out.success, "clipboard_read must refuse when disabled");
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("disabled") || msg.contains("clipboard"),
+            "refusal must explain the master switch: {msg}"
+        );
+        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "screen clipboard_read must not be called");
+        assert_eq!(*counts.system_reads.lock().unwrap(), 0, "system clipboard_read must not be called");
+    }
+
+    #[tokio::test]
+    async fn write_is_refused_and_mock_records_zero_when_disabled() {
+        let (tool, counts) = build(false);
+        let mut args = make_args("clipboard_write");
+        args.text = Some("hello".into());
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!out.success, "clipboard_write must refuse when disabled");
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("disabled") || msg.contains("clipboard"),
+            "refusal must explain the master switch: {msg}"
+        );
+        assert!(
+            counts.screen_writes.lock().unwrap().is_empty(),
+            "screen clipboard_write must not be called"
+        );
+        assert!(
+            counts.system_writes.lock().unwrap().is_empty(),
+            "system clipboard_write must not be called"
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_is_refused_and_mock_records_zero_when_disabled() {
+        let (tool, counts) = build(false);
+        let mut args = make_args("paste");
+        args.text = Some("line1\nline2".into());
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!out.success, "paste must refuse when disabled");
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("disabled") || msg.contains("clipboard"),
+            "refusal must explain the master switch: {msg}"
+        );
+        assert!(counts.screen_writes.lock().unwrap().is_empty(), "paste writes nothing when disabled");
+        assert!(counts.key_combos.lock().unwrap().is_empty(), "paste key_combo must not fire when disabled");
+        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "snapshot must not be taken when disabled");
+        assert_eq!(*counts.system_reads.lock().unwrap(), 0, "system read must not be taken when disabled");
+    }
+
+    #[tokio::test]
+    async fn read_flows_through_by_default_preserving_existing_behavior() {
+        let counts = Arc::new(Counts::default());
+        let platform: Arc<dyn DesktopPlatform> = Arc::new(TrackingPlatform {
+            screen: TrackingScreen {
+                counts: Arc::clone(&counts),
+            },
+            system: TrackingSystem {
+                counts: Arc::clone(&counts),
+            },
+        });
+        let tool = DesktopTool::new().with_platform(platform);
+        let out = AlephTool::call(&tool, make_args("clipboard_read")).await.unwrap();
+        assert!(
+            out.success,
+            "clipboard_read must work by default (current behavior), got: {:?}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn write_flows_through_by_default_preserving_existing_behavior() {
+        let counts = Arc::new(Counts::default());
+        let platform: Arc<dyn DesktopPlatform> = Arc::new(TrackingPlatform {
+            screen: TrackingScreen {
+                counts: Arc::clone(&counts),
+            },
+            system: TrackingSystem {
+                counts: Arc::clone(&counts),
+            },
+        });
+        let tool = DesktopTool::new().with_platform(platform);
+        let mut args = make_args("clipboard_write");
+        args.text = Some("hi".into());
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(
+            out.success,
+            "clipboard_write must work by default, got: {:?}",
+            out.message
+        );
+        assert_eq!(counts.screen_writes.lock().unwrap().clone(), vec!["hi".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn disabled_refuses_clipboard_inside_a_batch_subaction() {
+        let (tool, counts) = build(false);
+        let mut leaf = make_args("clipboard_write");
+        leaf.text = Some("x".into());
+        let batch = make_batch(vec![leaf, make_args("clipboard_read")]);
+        let out = AlephTool::call(&tool, batch).await.unwrap();
+        assert!(!out.success, "batch with disabled clipboard action must refuse");
+        assert!(
+            counts.screen_writes.lock().unwrap().is_empty(),
+            "batch sub-action write must not reach the platform"
+        );
+        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "batch sub-action read must not reach the platform");
+        assert_eq!(*counts.system_reads.lock().unwrap(), 0);
+    }
+}

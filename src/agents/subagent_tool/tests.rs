@@ -1275,3 +1275,114 @@ async fn wait_action_multi_returns_first_completion() {
     assert!(tracker.is_consumed("b"));
     assert!(!tracker.is_consumed("a"));
 }
+
+/// Wiring proof — the foreground / aggregator / batch / background
+/// scopes all build the same shape against `SubagentTool::cancel_for_child_with`:
+///
+/// ```ignore
+/// let token = self.cancel_for_child_with(harness);
+/// let _guard = CancelGuard::new(token.clone());
+/// ```
+///
+/// Without the guard, `CancellationToken::drop` does NOT auto-cancel, so a
+/// panic in the body of `runtime.run(...).await` (foreground / aggregator —
+/// no `catch_unwind`) or after `catch_unwind` (batch / background) leaks the
+/// bridge watcher parked on `harness.cancelled() | token.cancelled()`.
+///
+/// This test exercises the EXACT shape against the real
+/// `cancel_for_child_with` API and asserts both halves of the contract:
+///   - WITHOUT guard on panic: token stays live, watcher stays parked
+///   - WITH    guard on panic: token is cancelled, watcher exits
+///
+/// Sequential arms — the first arm's leaked task must not influence the
+/// second arm's observation, so they run in distinct scopes with their
+/// own cancellation tokens.
+#[tokio::test]
+async fn wiring_proof_guard_terminates_bridge_on_unwind() {
+    use super::spawn::CancelGuard;
+
+    let tool = make_tool();
+
+    // ─── Arm 1: WITHOUT guard → watcher must stay parked ─────────────
+    {
+        let harness = CancellationToken::new();
+        let token = tool.cancel_for_child_with(&harness);
+        let probe = token.clone();
+        let token_w = token.clone();
+        let harness_w = harness.clone();
+        let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let exited_w = exited.clone();
+        let watcher = tokio::spawn(async move {
+            tokio::select! {
+                _ = harness_w.cancelled() => {}
+                _ = token_w.cancelled() => {}
+            }
+            exited_w.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async move {
+            let _hold = token;
+            panic!("simulated runtime.run panic (no guard)");
+        }))
+        .await;
+        assert!(result.is_err(), "arm1: scope must have panicked");
+
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !probe.is_cancelled(),
+            "arm1 control: without guard, token must NOT be cancelled on unwind"
+        );
+        assert!(
+            !exited.load(std::sync::atomic::Ordering::SeqCst),
+            "arm1 control: without guard, bridge watcher must remain parked"
+        );
+
+        harness.cancel();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            watcher,
+        )
+        .await;
+    }
+
+    // ─── Arm 2: WITH guard → watcher must exit ───────────────────────
+    {
+        let harness = CancellationToken::new();
+        let token = tool.cancel_for_child_with(&harness);
+        let probe = token.clone();
+        let token_w = token.clone();
+        let harness_w = harness.clone();
+        let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let exited_w = exited.clone();
+        let watcher = tokio::spawn(async move {
+            tokio::select! {
+                _ = harness_w.cancelled() => {}
+                _ = token_w.cancelled() => {}
+            }
+            exited_w.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let token_g = token;
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async move {
+            let _guard = CancelGuard::new(token_g);
+            panic!("simulated runtime.run panic (with guard)");
+        }))
+        .await;
+        assert!(result.is_err(), "arm2: scope must have panicked");
+
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            watcher,
+        )
+        .await
+        .expect("arm2: watcher must exit well before the timeout");
+        assert!(
+            probe.is_cancelled(),
+            "arm2: guard must have cancelled the bridge token on unwind"
+        );
+        assert!(
+            exited.load(std::sync::atomic::Ordering::SeqCst),
+            "arm2: bridge watcher must have exited"
+        );
+    }
+}

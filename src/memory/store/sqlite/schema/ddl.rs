@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS dream_reports (
     finished_at     INTEGER NOT NULL,
     duration_ms     INTEGER NOT NULL,
     synthesis_count INTEGER NOT NULL DEFAULT 0,
+    notes_consolidated INTEGER NOT NULL DEFAULT 0,
+    notes_woven        INTEGER NOT NULL DEFAULT 0,
+    notes_archived     INTEGER NOT NULL DEFAULT 0,
+    feedback_distilled INTEGER NOT NULL DEFAULT 0,
     errors          TEXT,
     namespace       TEXT NOT NULL DEFAULT 'owner'
 );

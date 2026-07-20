@@ -46,6 +46,12 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     }
     let dest_path = plugins_dir.join(repo_name);
 
+    if let Err(reason) =
+        crate::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path)
+    {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, reason);
+    }
+
     if dest_path.exists() {
         return JsonRpcResponse::error(
             request.id,
@@ -56,6 +62,15 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
     match git2::Repository::clone(&params.url, &dest_path) {
         Ok(_) => {
+            // Catch clones whose destination resolved outside the
+            // authoritative plugins root (e.g. via a symlinked parent that
+            // was missed at install time).
+            if let Err(reason) =
+                crate::extension::ensure_plugin_root_within_authoritative(&plugins_dir, &dest_path)
+            {
+                let _ = std::fs::remove_dir_all(&dest_path);
+                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, reason);
+            }
             // Validate the installed plugin via AdapterRegistry
             let registry = AdapterRegistry::with_defaults();
             match registry.parse_dir(&dest_path) {

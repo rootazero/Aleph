@@ -79,6 +79,7 @@ impl ClawHubClient {
     pub fn with_registry(url: &str) -> Result<Self> {
         let ua = format!("aleph/{}", env!("ALEPH_VERSION"));
         let http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(REQUEST_TIMEOUT)
             .user_agent(ua)
             .build()
@@ -365,6 +366,12 @@ impl ClawHubClient {
             return Ok(resp);
         }
 
+        if status.is_redirection() {
+            return Err(AlephError::network(format!(
+                "ClawHub {context} rejected redirect response: HTTP {status}"
+            )));
+        }
+
         let err_msg = match status.as_u16() {
             404 => format!("Skill not found on ClawHub ({context})"),
             403 => "Skill blocked by ClawHub (malware detected)".to_string(),
@@ -405,6 +412,34 @@ impl ClawHubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn clawhub_redirect_is_rejected_without_second_hop() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let second_hop = MockServer::start().await;
+        let registry = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/search"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/internal", second_hop.uri()).as_str(),
+            ))
+            .mount(&registry)
+            .await;
+
+        let client = ClawHubClient::with_registry(&registry.uri()).unwrap();
+        let result = client.search("test", 1).await;
+        let requests = second_hop
+            .received_requests()
+            .await
+            .expect("wiremock must record requests");
+        let error = result.expect_err("redirect must be rejected").to_string();
+
+        assert!(error.contains("302"), "unexpected error: {error}");
+        assert!(requests.is_empty(), "redirect target received a request");
+    }
 
     #[test]
     fn test_is_newer_version_semver() {

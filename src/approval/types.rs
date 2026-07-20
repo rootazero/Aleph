@@ -90,6 +90,8 @@ pub struct ActionRequest {
     pub action_type: ActionType,
     /// The target of the action: URL, app bundle id, shell command, etc.
     pub target: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_target: String,
     /// Identifier for the agent making the request.
     pub agent_id: String,
     /// Human-readable description of the action's purpose.

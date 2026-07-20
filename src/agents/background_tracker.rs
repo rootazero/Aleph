@@ -77,6 +77,11 @@ pub(crate) const fn progress_activity(kind: ProgressKind) -> &'static str {
 /// timeout prefix is matched exactly (mirrors `runtime.rs`) so a wrapped inner
 /// "connection timed out" is not misclassified as a hard timeout.
 ///
+/// Cancellation is classified by the **exact** producer form coming out of
+/// `subagent_spawner::spawn`, which wraps `HarnessError::Cancelled`
+/// (`#[error("cancelled")]`, lowercase) as `"sub-agent failed: cancelled"`.
+/// Any looser substring match (e.g. a tool message that happens to mention
+/// "cancel") must NOT be classified as Cancelled — it is a plain failure.
 /// Single source for both the stored completed lifecycle (cold-start
 /// `flat_nodes`) and the live `Settled` tree event — `spawn.rs` reuses it.
 pub(crate) fn lifecycle_from_outcome(outcome: &CompletedOutcome) -> NodeLifecycle {
@@ -85,7 +90,7 @@ pub(crate) fn lifecycle_from_outcome(outcome: &CompletedOutcome) -> NodeLifecycl
         CompletedOutcome::Err(msg) => {
             if msg.starts_with("Sub-agent timed out") {
                 NodeLifecycle::TimedOut
-            } else if msg.contains("cancel") || msg.contains("Cancel") {
+            } else if msg == "sub-agent failed: cancelled" {
                 NodeLifecycle::Cancelled
             } else {
                 NodeLifecycle::Failed
@@ -1272,5 +1277,58 @@ mod tests {
             tracker.wait_any(&ids, Duration::from_millis(10)).await,
             WaitAnyOutcome::NotFound
         ));
+    }
+
+    #[test]
+    fn lifecycle_classifies_strict_against_producer_form() {
+        // The single real cancellation producer is
+        // `subagent_spawner::spawn` wrapping `HarnessError::Cancelled`
+        // (`#[error("cancelled")]` per `harness/trait_def.rs`), which yields
+        // exactly the string `"sub-agent failed: cancelled"`. Only that
+        // exact form must classify as Cancelled — any error message that
+        // merely contains the substring "cancel" (e.g. a wrapped provider
+        // detail or a tool message) is a plain failure.
+        use crate::agents::background_tracker::lifecycle_from_outcome;
+
+        let real_cancel = CompletedOutcome::Err("sub-agent failed: cancelled".into());
+        assert_eq!(
+            lifecycle_from_outcome(&real_cancel),
+            NodeLifecycle::Cancelled,
+            "exact producer form must classify as Cancelled"
+        );
+
+        let timeout = CompletedOutcome::Err("Sub-agent timed out after 30s".into());
+        assert_eq!(
+            lifecycle_from_outcome(&timeout),
+            NodeLifecycle::TimedOut,
+            "wall-clock timeout prefix must still classify as TimedOut"
+        );
+
+        // Substring "cancel" inside an ordinary failure must NOT flip to
+        // Cancelled — that's the misclassification the strict form fixes.
+        let substring_cancel = CompletedOutcome::Err(
+            "sub-agent failed: tool returned a message about cancel handshake".into(),
+        );
+        assert_eq!(
+            lifecycle_from_outcome(&substring_cancel),
+            NodeLifecycle::Failed,
+            "loose substring match must not become Cancelled"
+        );
+
+        // Capitalised variants of unrelated errors are still failures.
+        let capital = CompletedOutcome::Err("sub-agent failed: tool Cancel was hit".into());
+        assert_eq!(
+            lifecycle_from_outcome(&capital),
+            NodeLifecycle::Failed,
+            "capitalised 'Cancel' in an unrelated failure must not become Cancelled"
+        );
+
+        // And a plain unrelated failure stays Failed.
+        let plain = CompletedOutcome::Err("sub-agent failed: provider 503".into());
+        assert_eq!(
+            lifecycle_from_outcome(&plain),
+            NodeLifecycle::Failed,
+            "unrelated failure must remain Failed"
+        );
     }
 }

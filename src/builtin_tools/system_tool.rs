@@ -19,6 +19,7 @@ use crate::tools::AlephTool;
 pub struct SystemTool {
     platform: Arc<dyn aleph_desktop::DesktopPlatform>,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+    clipboard_enabled: bool,
 }
 
 impl SystemTool {
@@ -26,6 +27,7 @@ impl SystemTool {
         Self {
             platform,
             approval_policy: None,
+            clipboard_enabled: true,
         }
     }
 
@@ -38,6 +40,11 @@ impl SystemTool {
     /// notifications are always allowed.
     pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
         self.approval_policy = Some(policy);
+        self
+    }
+
+    pub fn with_clipboard_enabled(mut self, enabled: bool) -> Self {
+        self.clipboard_enabled = enabled;
         self
     }
 
@@ -57,6 +64,7 @@ impl SystemTool {
         let request = ActionRequest {
             action_type,
             target,
+            display_target: String::new(),
             agent_id,
             context,
             timestamp: chrono::Utc::now(),
@@ -158,6 +166,22 @@ Examples:
     type Output = SystemOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if !self.clipboard_enabled
+            && matches!(args.action.as_str(), "clipboard_read" | "clipboard_write")
+        {
+            return Ok(SystemOutput {
+                success: false,
+                data: None,
+                message: Some(
+                    "Clipboard actions (clipboard_read / clipboard_write) are \
+                     disabled by configuration (UnifiedToolsConfig.clipboard.enabled = \
+                     false). Set [unified_tools.native.clipboard] enabled = true (or omit \
+                     the section) to allow them."
+                        .to_string(),
+                ),
+            });
+        }
+
         let sys = match self.platform.system() {
             Some(s) => s,
             None => {
@@ -580,5 +604,197 @@ mod tests {
         assert!(!out.success);
         assert!(out.message.unwrap().contains("requires"));
         assert!(opened.lock().unwrap().is_empty());
+    }
+
+    struct CountingSystem {
+        opens: Arc<Mutex<Vec<String>>>,
+        reads: Arc<Mutex<usize>>,
+        writes: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl SystemCapability for CountingSystem {
+        async fn launch_app(&self, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn quit_app(&self, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn list_running_apps(&self) -> DesktopResult<Vec<AppInfo>> {
+            unimplemented!()
+        }
+        async fn send_notification(&self, _: &str, _: &str) -> DesktopResult<()> {
+            unimplemented!()
+        }
+        async fn clipboard_read(&self) -> DesktopResult<ClipboardContent> {
+            *self.reads.lock().unwrap() += 1;
+            Ok(ClipboardContent {
+                text: Some("clip".into()),
+                has_image: false,
+                image_base64: None,
+            })
+        }
+        async fn clipboard_write(&self, text: &str) -> DesktopResult<()> {
+            self.writes.lock().unwrap().push(text.to_string());
+            Ok(())
+        }
+        async fn system_info(&self) -> DesktopResult<SystemInfo> {
+            unimplemented!()
+        }
+        async fn open_path(&self, target: &str) -> DesktopResult<()> {
+            self.opens.lock().unwrap().push(target.to_string());
+            Ok(())
+        }
+    }
+
+    struct CountingPlatform {
+        sys: CountingSystem,
+    }
+
+    impl DesktopPlatform for CountingPlatform {
+        fn platform_name(&self) -> &str {
+            "counting"
+        }
+        fn screen(&self) -> Option<&dyn aleph_desktop::traits::ScreenCapability> {
+            None
+        }
+        fn pim(&self) -> Option<&dyn aleph_desktop::traits::PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            Some(&self.sys)
+        }
+        fn automation(&self) -> Option<&dyn aleph_desktop::traits::AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn aleph_desktop::traits::PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn aleph_desktop::traits::MediaCapability> {
+            None
+        }
+    }
+
+    fn build_system_tool(enabled: bool) -> (SystemTool, Arc<Mutex<usize>>, Arc<Mutex<Vec<String>>>) {
+        let reads = Arc::new(Mutex::new(0));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let platform = Arc::new(CountingPlatform {
+            sys: CountingSystem {
+                opens: Arc::new(Mutex::new(Vec::new())),
+                reads: Arc::clone(&reads),
+                writes: Arc::clone(&writes),
+            },
+        });
+        let mut tool = SystemTool::new(platform);
+        if !enabled {
+            tool = tool.with_clipboard_enabled(false);
+        }
+        (tool, reads, writes)
+    }
+
+    #[tokio::test]
+    async fn system_read_is_refused_and_mock_records_zero_when_disabled() {
+        let (tool, reads, _writes) = build_system_tool(false);
+        let out = tool
+            .call(SystemArgs {
+                action: "clipboard_read".into(),
+                app_name: None,
+                path: None,
+                title: None,
+                body: None,
+            })
+            .await
+            .unwrap();
+        assert!(!out.success, "clipboard_read must refuse when disabled");
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("disabled") || msg.contains("clipboard"),
+            "refusal must explain the master switch: {msg}"
+        );
+        assert_eq!(*reads.lock().unwrap(), 0, "system clipboard_read must not be called");
+    }
+
+    #[tokio::test]
+    async fn system_write_is_refused_and_mock_records_zero_when_disabled() {
+        let (tool, _reads, writes) = build_system_tool(false);
+        let out = tool
+            .call(SystemArgs {
+                action: "clipboard_write".into(),
+                app_name: None,
+                path: None,
+                title: None,
+                body: Some("hi".into()),
+            })
+            .await
+            .unwrap();
+        assert!(!out.success, "clipboard_write must refuse when disabled");
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("disabled") || msg.contains("clipboard"),
+            "refusal must explain the master switch: {msg}"
+        );
+        assert!(
+            writes.lock().unwrap().is_empty(),
+            "system clipboard_write must not be called"
+        );
+    }
+
+    #[tokio::test]
+    async fn system_read_flows_through_by_default_preserving_existing_behavior() {
+        let reads = Arc::new(Mutex::new(0));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let platform = Arc::new(CountingPlatform {
+            sys: CountingSystem {
+                opens: Arc::new(Mutex::new(Vec::new())),
+                reads: Arc::clone(&reads),
+                writes: Arc::clone(&writes),
+            },
+        });
+        let tool = SystemTool::new(platform);
+        let out = tool
+            .call(SystemArgs {
+                action: "clipboard_read".into(),
+                app_name: None,
+                path: None,
+                title: None,
+                body: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.success,
+            "clipboard_read must work by default (current behavior), got: {:?}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn system_write_flows_through_by_default_preserving_existing_behavior() {
+        let reads = Arc::new(Mutex::new(0));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let platform = Arc::new(CountingPlatform {
+            sys: CountingSystem {
+                opens: Arc::new(Mutex::new(Vec::new())),
+                reads: Arc::clone(&reads),
+                writes: Arc::clone(&writes),
+            },
+        });
+        let tool = SystemTool::new(platform);
+        let out = tool
+            .call(SystemArgs {
+                action: "clipboard_write".into(),
+                app_name: None,
+                path: None,
+                title: None,
+                body: Some("hi".into()),
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.success,
+            "clipboard_write must work by default, got: {:?}",
+            out.message
+        );
+        assert_eq!(writes.lock().unwrap().clone(), vec!["hi".to_string()]);
     }
 }

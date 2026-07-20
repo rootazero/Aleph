@@ -309,6 +309,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "governance_metrics",
+        description: "Read-only governance reality probe for the loop-governance audit ring: recent user-correction count and dreaming activity (by pipeline_type) from the memory DB, in-core. Replaces the old sqlite3 ~/.aleph/data probes.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "note_orient",
         description: "Fetch a compact orientation snapshot of the memory wiki: SCHEMA, index, and recent log entries",
         requires_config: true,
@@ -1119,6 +1124,7 @@ pub fn create_tool_boxed(
         "memory_reflect"
         | "recall_context"
         | "memory_trace"
+        | "governance_metrics"
         | "note_orient"
         | "note_schema"
         | "user_profile"

@@ -143,6 +143,7 @@ impl BrowserBackend for PlaywrightCliBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         let mut args: Vec<&str> = Vec::new();
         if !self.headless {
@@ -168,6 +169,7 @@ impl BrowserBackend for PlaywrightCliBackend {
     async fn navigate(&self, _tab_id: &str, url: &str) -> Result<(), BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         let _ = self.run(&["goto", url], self.nav_timeout()).await?;
         Ok(())

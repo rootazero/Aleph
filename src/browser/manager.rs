@@ -322,14 +322,14 @@ impl ProfileManager {
     }
 
     /// Validate a URL against the SSRF policy.
-    pub fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.check_url(url)
+    pub async fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
+        self.ssrf_guard.check_url(url).await
     }
 
     /// Validate an agent-initiated navigation target: SSRF policy plus
     /// secret-exfiltration scanning. Use this for `goto`/`open`.
-    pub fn check_navigation(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.check_navigation(url)
+    pub async fn check_navigation(&self, url: &str) -> Result<(), PolicyViolation> {
+        self.ssrf_guard.check_navigation(url).await
     }
 
     /// Redact embedded credentials from page-derived `text` before it is

@@ -13,28 +13,30 @@
 | heartbeat 服务开关 | `~/.aleph/config.toml` `[heartbeat] enabled = true` | ✅ 已翻，**下次 daemon 重启生效** |
 | Dreaming×用户纠正 反指标探针 | — | ⏳ 待 daemon 重启后创建（见下） |
 
-## 待办：daemon 重启后创建反指标探针
+## 待办：创建 Dreaming×用户纠正 反指标看守（改为 watcher cron，非 heartbeat）
 
-运行中 daemon 的 heartbeat 服务因旧配置 `enabled=false` 未装配（工具报 "heartbeat service not configured"）。配置已翻为 true；**下次重启/重新部署后**执行：
+> **更新（2026-07-20）**：原计划用 heartbeat + `bash → sqlite ~/.aleph/data/memory.db` 做 L1 探针。这条路已废——`~/.aleph/data` 在每会话工作区沙箱之外，headless 探针的 bash 会被拒 `cwd outside workspace root`（周审计环首跑的 `cheat` 裁决点名的正是这个）。in-core 只读工具 `governance_metrics` 取代了 sqlite 探针。
+>
+> heartbeat **L1** 也不适合承载它：`governance_metrics` 返回 JSON 对象，`greater_than` 的 `value.as_f64()` 对对象恒 None、永不触发（与旧 JSON 探针同病）。故这个看守改由 **watcher cron（L2 LLM）** 承载——它每 tick 直接调 `governance_metrics` 并以反指标视角裁决，正是 `WATCH_TEMPLATE` 描述的形态。
+
+**下次重启/重新部署后**，用 `loop_graph(action="pair")` 把一个 watcher cron 配到 dreaming 优化环上（watcher 模板已内置「常备信号走 governance_metrics」）：
 
 ```bash
 /Applications/Aleph.app/Contents/MacOS/aleph-server gateway call tools.invoke -p '{
-  "tool_name": "heartbeat_create",
+  "tool_name": "loop_graph",
   "arguments": {
-    "name": "Dreaming×用户纠正 反指标看守：出现新用户纠正时，检查记忆蒸馏(dreaming)是否在优化脱离用户真实需要的指标，结论写 graph-audit note",
-    "probe_tool_name": "bash",
-    "probe_tool_params": {"cmd": "c=$(/usr/bin/sqlite3 \"file:$HOME/.aleph/data/memory.db?mode=ro\" \"SELECT count(*) FROM raw_memories WHERE path LIKE '"'"'aleph://correction/%'"'"' AND created_at > strftime('"'"'%s'"'"','"'"'now'"'"')-90000\"); if [ \"${c:-0}\" -gt 0 ]; then echo \"ALERT corrections_25h=$c\"; else echo \"ok corrections_25h=0\"; fi"},
-    "interval_ms": 86400000,
-    "probe_trigger_condition": {"contains": {"text": "ALERT"}}
+    "action": "pair",
+    "to_id": "daemon:dreaming",
+    "label": "Dreaming×用户纠正 反指标看守",
+    "prompt": "每 tick 调 governance_metrics(window_days=7)：若 dreaming 各 pipeline 的 synthesis_sum 与 corrections 同时在涨（记忆蒸馏可能在优化脱离用户真实需要的指标——Goodhart 偏航），裁决写 graph-audit note 并简短通知用户；否则静默。"
   }
 }'
 ```
 
-要点（来自实测）：
-- **触发条件只能用哨兵词 + `contains`**：bash 探针输出（`CodeExecOutput`）含 `duration_ms` 等每次变化字段，`changed` 等于 `always`；`greater_than` 对整个 JSON 对象 `as_f64()` 恒 None 永不触发。命令自算条件、输出 `ALERT`/`ok` 哨兵。
-- 时间戳单位：`memory.db`（raw_memories/dream_reports）= 秒；`cron.db`（cron_job_runs）= 毫秒。
-- L2 语义由任务 **name** 携带（heartbeat 无自定义 L2 prompt 字段，L2 收到 name + 探针原始输出 + 通用指令）。
-- 在探针创建之前，周审计环第 4 步会点名「看守缺席」——这是机制在正常工作，不是故障。
+要点：
+- **常备信号一律 `governance_metrics`**（corrections + dreaming 分布）/ `cron_manage(action="list")`（cron run_count），**不再 shell sqlite**。
+- 时间戳单位（仅供理解语义）：`memory.db`（raw_memories/dream_reports）= 秒；`cron.db`（cron_job_runs）= 毫秒——工具已内部处理，调用方不需再关心。
+- 在看守创建之前，周审计环第 4 步会点名「看守缺席」——这是机制在正常工作，不是故障。
 
 ## 验证清单（Phase 0 完成标准）
 

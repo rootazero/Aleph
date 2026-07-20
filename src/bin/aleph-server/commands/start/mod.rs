@@ -2680,13 +2680,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     start_webchat_server(args, &final_bind, final_port).await;
 
+    let endpoint_url = alephcore::cli::endpoint::build_endpoint_url(
+        addr,
+        full_config.gateway.tls.enabled,
+    );
+
     if !args.daemon {
         let addr_display = format_socket_addr(&final_bind, final_port);
+        let ws_scheme = if full_config.gateway.tls.enabled {
+            "wss"
+        } else {
+            "ws"
+        };
         println!();
         println!("Aleph Server:");
-        println!("  - URL:       http://{addr_display}");
-        println!("  - WebSocket: ws://{addr_display}/ws");
-        println!("  - Panel UI:  http://{addr_display}/");
+        println!("  - URL:       {endpoint_url}");
+        println!("  - WebSocket: {ws_scheme}://{addr_display}/ws");
+        println!("  - Panel UI:  {endpoint_url}/");
         println!();
     }
 
@@ -2714,7 +2724,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
     if let Some(dir) = ipc_data_dir.as_deref() {
-        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(format!("http://{addr}"));
+        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(endpoint_url);
         if let Err(e) = alephcore::cli::endpoint::write_endpoint(dir, &endpoint) {
             tracing::warn!(error = %e, "failed to write IPC endpoint discovery file");
         }

@@ -1,25 +1,24 @@
 //! Fallback registry — declarative table of alternative tools to try
 //! when a primary tool fails.
 //!
-//! This is the "tool ladder" the LLM is steered towards in
-//! `provider_guidance.rs::TOOL_PERSISTENCE_DOCTRINE`, made concrete as a
-//! lookup table the harness can
-//! consult at error-emission time. The harness DOES NOT auto-invoke
-//! alternatives (R7: LLM stays in control of tool selection); it only
-//! surfaces the suggestions as part of the structured error hint so
-//! the LLM sees them in its next turn.
+//! This is the concrete "tool ladder": a lookup table the harness consults at
+//! error-emission time to surface alternative tools in the structured error
+//! hint. The harness DOES NOT auto-invoke alternatives (R7: LLM stays in
+//! control of tool selection); it only surfaces the suggestions so the LLM
+//! sees them in its next turn.
 //!
-//! ## Why a registry (not pure prompt steering)
+//! ## Why a registry (not prompt steering)
 //!
-//! The doctrine block in `provider_guidance.rs` tells the model "if
-//! search fails, climb the ladder". But the model has to *remember*
-//! the ladder when the failure happens — and ladders vary per tool
-//! family (network → `web_fetch`; file → `file_ops`; bash → check sandbox).
-//! Putting the ladder in the prompt is necessary but not sufficient;
-//! repeating the relevant rung in the `tool_result` error message turns
-//! "remember this general principle" into "here are 3 concrete next
-//! moves." Same idea as claude-code's `is_error: true` flag — the LLM
-//! decides, we just make the decision well-informed.
+//! The former `provider_guidance.rs` persistence doctrine told the model up
+//! front "if search fails, climb the ladder" — a general manual the model had
+//! to *remember* when a failure actually happened. That prose was removed
+//! under §1.1 prune-the-prompt (a capable model persists natively); the
+//! fallback signal now lives ONLY here, surfaced at the moment of failure with
+//! the relevant rung in the `tool_result` error message — "here are 3 concrete
+//! next moves" instead of an upfront principle. This is self-correction built
+//! into the architecture (the error hint) rather than the prompt. Same idea as
+//! claude-code's `is_error: true` flag — the LLM decides, we make the decision
+//! well-informed.
 //!
 //! ## Scope
 //!

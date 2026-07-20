@@ -152,6 +152,13 @@ impl StdioTransport {
             }
             cmd.env(key, value);
         }
+
+        for (name, _) in std::env::vars() {
+            if crate::security::secret_env::is_secret_env(&name) {
+                cmd.env_remove(&name);
+            }
+        }
+
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
@@ -738,5 +745,99 @@ mod tests {
         assert!(transport.is_running().await);
 
         transport.close().await.unwrap();
+    }
+
+    /// Inherited secret-bearing env vars must not reach the spawned child —
+    /// same rule `PlaywrightCliDriver` already enforces. The child reports its
+    /// view via a temp file (stdout is consumed by the JSON-RPC reader loop,
+    /// so a side-channel file is the only way for the test to observe what
+    /// the process actually saw).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_spawn_strips_inherited_secret_env() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let path = tmp.path().to_str().expect("path utf8").to_string();
+
+        std::env::set_var("ALEPH_TEST_STDIO_API_KEY", "topsecret_value");
+
+        let script = format!(
+            "if [ \"${{ALEPH_TEST_STDIO_API_KEY:-}}\" = \"topsecret_value\" ]; then \
+             printf LEAKED > {path}; \
+             else printf STRIPPED > {path}; \
+             fi"
+        );
+
+        let transport = StdioTransport::spawn(
+            "test-strip",
+            "sh",
+            &["-c".to_string(), script],
+            &HashMap::new(),
+            None,
+        )
+        .await
+        .expect("spawn");
+
+        for _ in 0..50 {
+            if let Ok(meta) = std::fs::metadata(tmp.path()) {
+                if meta.len() > 0 {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let _ = transport.close().await;
+        std::env::remove_var("ALEPH_TEST_STDIO_API_KEY");
+
+        let contents = std::fs::read_to_string(tmp.path()).expect("read report");
+        assert_eq!(
+            contents.trim(),
+            "STRIPPED",
+            "inherited secret env must be stripped; got: {contents}"
+        );
+        assert!(!contents.contains("topsecret_value"));
+    }
+
+    /// Non-secret env vars inherited from the parent must remain visible to
+    /// the spawned child — only secret-bearing keys are stripped.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_spawn_preserves_non_secret_inherited_env() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let path = tmp.path().to_str().expect("path utf8").to_string();
+
+        std::env::set_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC", "passthrough_value");
+
+        let script = format!(
+            "printf '%s' \"${{ALEPH_TEST_STDIO_PASSTHROUGH_ABC-(unset)}}\" > {path}"
+        );
+
+        let transport = StdioTransport::spawn(
+            "test-passthrough",
+            "sh",
+            &["-c".to_string(), script],
+            &HashMap::new(),
+            None,
+        )
+        .await
+        .expect("spawn");
+
+        for _ in 0..50 {
+            if let Ok(meta) = std::fs::metadata(tmp.path()) {
+                if meta.len() > 0 {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let _ = transport.close().await;
+        std::env::remove_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC");
+
+        let contents = std::fs::read_to_string(tmp.path()).expect("read report");
+        assert_eq!(
+            contents, "passthrough_value",
+            "non-secret inherited env must pass through; got: {contents}"
+        );
     }
 }

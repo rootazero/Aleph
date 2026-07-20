@@ -16,26 +16,26 @@ impl PromptLayer for RoleLayer {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        // `Cached` is the live main-agent-loop path. The Think→Act role
-        // framing ("observe → decide the SINGLE next action → execute") is
-        // harness scaffolding that complements persona/identity; it belongs in
-        // every prompt, including the cached production one where it was
-        // previously absent. Stable, so it joins the cacheable prefix.
+        // `Cached` is the live main-agent-loop path. This base role framing
+        // complements persona/identity and belongs in every prompt, including
+        // the cached production one where it was previously absent. Stable, so
+        // it joins the cacheable prefix.
         &[
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
-        output.push_str("You are an AI assistant executing tasks step by step.\n\n");
-
-        output.push_str("## Your Role\n");
-        output.push_str("- Observe the current state and history\n");
-        output.push_str("- Decide the SINGLE next action to take\n");
-        output.push_str("- Execute until the task is complete or you need user input\n\n");
+        // Lean: the "Observe → decide the SINGLE next action → execute" cycle
+        // was cut (§1.1 prune-the-prompt). The harness supports parallel tool
+        // dispatch (`act.rs::can_parallel_dispatch`), so "single next action"
+        // was stale and limiting; a capable model runs the loop natively.
+        output.push_str(
+            "You are an AI assistant that works through tasks using the tools available to you, \
+             continuing until the task is complete or you need the user's input.\n\n",
+        );
     }
 }
 
@@ -53,10 +53,12 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        assert!(out.contains("You are an AI assistant executing tasks step by step."));
-        assert!(out.contains("## Your Role"));
-        assert!(out.contains("Observe the current state and history"));
-        assert!(out.contains("SINGLE next action"));
+        assert!(out.contains("You are an AI assistant"));
+        assert!(out.contains("tools available to you"));
+        // The Observe/Decide-SINGLE-action/Execute manual was cut — the harness
+        // supports parallel tool dispatch, so "single next action" was stale.
+        assert!(!out.contains("SINGLE next action"));
+        assert!(!out.contains("## Your Role"));
     }
 
     #[test]
@@ -70,7 +72,6 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         // Core role framing must reach the live cached production path.
         assert!(paths.contains(&AssemblyPath::Cached));
     }

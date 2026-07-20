@@ -167,6 +167,40 @@ pub(crate) fn migrate_dream_reports_drop_legacy_cols(conn: &Connection) -> Resul
     Ok(())
 }
 
+/// Add the notes-era activity counters (`notes_consolidated` / `notes_woven` /
+/// `notes_archived` / `feedback_distilled`) to `dream_reports`.
+///
+/// These give the governance audit ring a reality signal that is non-zero on a
+/// healthy *consolidate* night — `synthesis_count` alone is 0 on every
+/// consolidate run. Existing rows backfill to `DEFAULT 0` (historical activity
+/// is unrecoverable; the signal is forward-looking). Checks column existence
+/// first, so it is fully idempotent on fresh or already-migrated databases.
+pub fn migrate_dream_reports_add_activity_counters(conn: &Connection) -> Result<(), AlephError> {
+    let new_cols = [
+        "notes_consolidated",
+        "notes_woven",
+        "notes_archived",
+        "feedback_distilled",
+    ];
+    let existing: std::collections::BTreeSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .map_err(|e| AlephError::other(format!("pragma: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| AlephError::other(format!("pragma rows: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for col in new_cols {
+        if !existing.contains(col) {
+            let sql = format!("ALTER TABLE dream_reports ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0");
+            conn.execute(&sql, [])
+                .map_err(|e| AlephError::other(format!("add col {col}: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
 /// Add the nullable `relation` column to existing `notes_links` rows.
 ///
 /// Pre-existing edges keep `relation = NULL` (untyped body wikilinks). Typed

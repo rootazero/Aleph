@@ -29,6 +29,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(ddl::DREAM_REPORTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
     migrations::migrate_dream_reports_drop_legacy_cols(conn)?;
+    migrations::migrate_dream_reports_add_activity_counters(conn)?;
 
     conn.execute_batch(ddl::DREAM_STATUS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_status table: {e}")))?;

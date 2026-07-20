@@ -101,7 +101,6 @@ impl PromptLayer for IdentityFilesLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -174,7 +173,7 @@ mod tests {
         let layer = IdentityFilesLayer;
         assert_eq!(layer.name(), "identity_files");
         assert_eq!(layer.priority(), 1730);
-        assert_eq!(layer.paths().len(), 5);
+        assert_eq!(layer.paths().len(), 4);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
         assert!(layer.paths().contains(&AssemblyPath::Soul));
         assert!(layer.paths().contains(&AssemblyPath::Cached));

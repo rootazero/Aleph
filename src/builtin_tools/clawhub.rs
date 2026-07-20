@@ -148,11 +148,8 @@ impl ClawHubTool {
     }
 
     /// Skills installation directory: ~/.aleph/skills/
-    fn skills_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph")
-            .join("skills")
+    fn skills_dir() -> Result<PathBuf> {
+        crate::utils::paths::get_skills_dir()
     }
 
     /// Install a skill from a downloaded ZIP file.
@@ -190,7 +187,7 @@ impl ClawHubTool {
 
         // Validate and sanitize the skill directory name
         let skill_name = sanitize_skill_name(slug)?;
-        let skills_root = Self::skills_dir();
+        let skills_root = Self::skills_dir()?;
         let dest_dir = skills_root.join(skill_name);
 
         // Extract into a staging directory, never the live install dir. On an
@@ -469,7 +466,7 @@ impl AlephTool for ClawHubTool {
                 // via cron_manage on consent.
                 if let Ok(name) = sanitize_skill_name(&slug) {
                     if let Some(notice) =
-                        crate::skill::automation_notice(&Self::skills_dir().join(name))
+                        crate::skill::automation_notice(&Self::skills_dir()?.join(name))
                     {
                         message.push_str("\n\n");
                         message.push_str(&notice);
@@ -493,7 +490,7 @@ impl AlephTool for ClawHubTool {
 
                 // Check installed version (sanitize to prevent path traversal)
                 let skill_name = sanitize_skill_name(&slug)?;
-                let meta_path = Self::skills_dir().join(skill_name).join(".clawhub.json");
+                let meta_path = Self::skills_dir()?.join(skill_name).join(".clawhub.json");
 
                 let local_meta: ClawHubMeta = if meta_path.exists() {
                     let content = tokio::fs::read_to_string(&meta_path).await.map_err(|e| {
@@ -579,9 +576,77 @@ mod tests {
     }
 
     #[test]
-    fn test_skills_dir() {
-        let dir = ClawHubTool::skills_dir();
-        assert!(dir.ends_with(".aleph/skills"));
+    fn aleph_home_is_authoritative_for_install_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let aleph_home = temp.path().join("aleph-home");
+
+        let skills_dir = {
+            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            ClawHubTool::skills_dir().unwrap()
+        };
+
+        assert_eq!(skills_dir, aleph_home.join("skills"));
+    }
+
+    #[tokio::test]
+    async fn aleph_home_is_authoritative_for_update_resolution() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let aleph_home = temp.path().join("aleph-home");
+        let metadata_dir = aleph_home.join("skills/update-skill");
+        std::fs::create_dir_all(&metadata_dir).unwrap();
+        let metadata = ClawHubMeta {
+            slug: "owner/update-skill".to_string(),
+            version: "1.0.0".to_string(),
+            registry: "test".to_string(),
+            installed_at: "2026-07-19T00:00:00Z".to_string(),
+            owner: "owner".to_string(),
+        };
+        std::fs::write(
+            metadata_dir.join(".clawhub.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/skills/owner/update-skill"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "skill": {
+                    "slug": "owner/update-skill",
+                    "displayName": "Update Skill"
+                },
+                "latestVersion": {
+                    "version": "1.0.0"
+                }
+            })))
+            .mount(&server)
+            .await;
+        let tool = ClawHubTool {
+            client: ClawHubClient::with_registry(&server.uri()).unwrap(),
+        };
+
+        let result = {
+            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            tool.call(ClawHubArgs {
+                action: ClawHubAction::Update,
+                query: None,
+                sort: None,
+                limit: None,
+                cursor: None,
+                slug: Some("owner/update-skill".to_string()),
+                version: None,
+            })
+            .await
+        };
+
+        assert!(result.is_ok(), "update resolution failed: {result:?}");
     }
 
     #[test]

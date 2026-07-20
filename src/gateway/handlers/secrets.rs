@@ -19,6 +19,7 @@
 use super::auth::AuthContext;
 use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::secrets::validate_secret_name;
 use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use serde_json::json;
@@ -27,32 +28,6 @@ use tracing::warn;
 const INVALID_PARAMS: i32 = -32602;
 const INTERNAL_ERROR: i32 = -32603;
 const NOT_FOUND: i32 = -32004;
-
-const SECRET_NAME_MAX_LEN: usize = 128;
-
-/// Validate a secret name with the same rules `aleph-server secret`
-/// enforces locally — ASCII alphanumeric plus `_`, `-`, `.`, `:`.
-fn validate_secret_name(name: &str) -> Result<String, String> {
-    let normalized = name.trim();
-    if normalized.is_empty() {
-        return Err("Secret name cannot be empty".to_string());
-    }
-    if normalized.len() > SECRET_NAME_MAX_LEN {
-        return Err(format!(
-            "Secret name must be <= {SECRET_NAME_MAX_LEN} characters"
-        ));
-    }
-    let valid = normalized
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
-    if !valid {
-        return Err(
-            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'"
-                .to_string(),
-        );
-    }
-    Ok(normalized.to_string())
-}
 
 pub async fn handle_secrets_list(
     request: JsonRpcRequest,
@@ -261,7 +236,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_overlength() {
-        let oversized = "a".repeat(SECRET_NAME_MAX_LEN + 1);
+        let oversized = "a".repeat(129);
         assert!(validate_secret_name(&oversized).is_err());
     }
 }

@@ -48,7 +48,7 @@ impl AlephTool for BrowserOpenTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // SSRF + secret-exfiltration check before creating backend
-        if let Err(violation) = self.manager.check_navigation(&args.url) {
+        if let Err(violation) = self.manager.check_navigation(&args.url).await {
             return Ok(BrowserOpenOutput {
                 success: false,
                 tab_id: None,

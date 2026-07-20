@@ -94,6 +94,8 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "memory_timeline",
     "recall_context",
     "recall_events",
+    // Governance audit reality probe (correction + dreaming counts). Pure read.
+    "governance_metrics",
     "user_profile",
     // Session / inbox reads. (`inbox_read` is NOT one: `mark_read` defaults
     // to true, so a read CONSUMES unread state — an auto-retry after a

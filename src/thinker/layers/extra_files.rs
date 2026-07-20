@@ -35,7 +35,6 @@ impl PromptLayer for ExtraFilesLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -87,7 +86,7 @@ mod tests {
         assert_eq!(layer.name(), "extra_files");
         assert_eq!(layer.priority(), 1735);
         assert_eq!(layer.stability(), LayerStability::Dynamic);
-        assert_eq!(layer.paths().len(), 5);
+        assert_eq!(layer.paths().len(), 4);
     }
 
     #[test]

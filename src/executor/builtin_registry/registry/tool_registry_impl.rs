@@ -292,6 +292,22 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Governance audit reality probe — read-only counts (recent user
+            // corrections + dreaming activity) straight from the memory backend,
+            // the in-core replacement for the loop-governance sqlite probes.
+            // Shares the memory_trace_db handle (both gate on config.memory_db).
+            "governance_metrics" => Box::pin(async move {
+                let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "governance_metrics not available: no memory backend configured",
+                    )
+                })?;
+                let tool = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::new(
+                    db.clone(),
+                );
+                tool.call_json(arguments).await
+            }),
+
             // Curated hot memory write tool — resolves a per-agent
             // CuratedMemoryStore via MemoryContextProvider at call time
             // (mirrors the per-call construction pattern used by session_search).

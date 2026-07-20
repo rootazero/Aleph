@@ -152,9 +152,13 @@ mod tests {
             vec![
                 "duration_ms",
                 "errors",
+                "feedback_distilled",
                 "finished_at",
                 "id",
                 "namespace",
+                "notes_archived",
+                "notes_consolidated",
+                "notes_woven",
                 "pipeline_type",
                 "started_at",
                 "synthesis_count",
@@ -162,7 +166,7 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>(),
-            "dream_reports must have exactly the 8 retained columns"
+            "dream_reports must retain the 8 core columns plus the 4 notes-era activity counters"
         );
 
         let row_count: i64 = conn
@@ -249,6 +253,58 @@ mod tests {
         assert!(!cols.contains(&"facts_promoted".to_string()));
         assert!(cols.contains(&"pipeline_type".to_string()));
         assert!(cols.contains(&"synthesis_count".to_string()));
+    }
+
+    #[test]
+    fn migrate_dream_reports_add_activity_counters_idempotent_and_backfills() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Pre-migration schema: only synthesis_count among activity counters.
+        conn.execute_batch(
+            "CREATE TABLE dream_reports (
+                id TEXT PRIMARY KEY,
+                pipeline_type TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                synthesis_count INTEGER NOT NULL DEFAULT 0,
+                errors TEXT,
+                namespace TEXT NOT NULL DEFAULT 'owner'
+            );
+            INSERT INTO dream_reports
+                (id, pipeline_type, started_at, finished_at, duration_ms, synthesis_count)
+                VALUES ('old', 'consolidate', 100, 110, 10, 0);",
+        )
+        .unwrap();
+
+        migrations::migrate_dream_reports_add_activity_counters(&conn).unwrap();
+        migrations::migrate_dream_reports_add_activity_counters(&conn).unwrap(); // idempotent
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for c in [
+            "notes_consolidated",
+            "notes_woven",
+            "notes_archived",
+            "feedback_distilled",
+        ] {
+            assert!(cols.contains(&c.to_string()), "missing column {c}");
+        }
+
+        // Existing row backfilled to DEFAULT 0 (not NULL).
+        let (nc, nw, na, fd): (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT notes_consolidated, notes_woven, notes_archived, feedback_distilled
+                   FROM dream_reports WHERE id = 'old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((nc, nw, na, fd), (0, 0, 0, 0));
     }
 
     fn seed_default_agent_row(conn: &Connection, path: &str, content: &str) {

@@ -270,12 +270,12 @@ const BUDGETED: [&str; 12] = [
 ///
 /// 5072 → 5070 (−2): `stream_llm_call` dropped its `as_http_provider()` downcast
 /// + one-shot fallback branch for a single polymorphic `execute_streaming_dyn`
-/// call. That downcast reached the raw inner `HttpProvider`, skipping the
-/// `ThinkLevelProvider`/`MeteringProvider` decorators on every streamed turn
-/// (declared `think_level` dropped; no `ProviderUsage` emitted). The streaming
-/// side effects moved OUT of the loop into the decorators in `src/providers/`
-/// (trait default + three overrides) — cognition/policy stays outside the
-/// harness (R10). Down-only ratchet: paid down, no 3-question answer required.
+///   call. That downcast reached the raw inner `HttpProvider`, skipping the
+///   `ThinkLevelProvider`/`MeteringProvider` decorators on every streamed turn
+///   (declared `think_level` dropped; no `ProviderUsage` emitted). The streaming
+///   side effects moved OUT of the loop into the decorators in `src/providers/`
+///   (trait default + three overrides) — cognition/policy stays outside the
+///   harness (R10). Down-only ratchet: paid down, no 3-question answer required.
 ///
 /// 5070 → 5008 (−62): removed the `DiminishingReturnsDetector` hard-stop (R10's
 /// "5 不" #3 — the loop must make no completion judgement of its own). Gone from
