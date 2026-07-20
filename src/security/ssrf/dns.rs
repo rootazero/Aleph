@@ -105,6 +105,39 @@ async fn lookup(host: &str, port: u16) -> Result<Vec<SocketAddr>, SsrfError> {
         .map(|stream| stream.collect())
 }
 
+/// Resolves a hostname and returns ALL returned IP addresses, without
+/// policy validation. Used by DNS pinning: the caller validates each IP via
+/// `is_ip_blocked_by_policy` and decides which (if any) to include in the
+/// pin rule. Respects the same `cfg(test)` resolver hook as
+/// [`resolve_and_validate`] so deterministic tests can inject responses.
+pub(crate) async fn lookup_all(host: &str, port: u16) -> Result<Vec<IpAddr>, SsrfError> {
+    // Test-only resolver override (same hook used by resolve_and_validate).
+    #[cfg(test)]
+    {
+        if let Some(ips) = test_hook::lookup(host) {
+            return Ok(ips);
+        }
+    }
+
+    let lookup_addr = format!("{host}:{port}");
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&lookup_addr)
+        .await
+        .map_err(|e| SsrfError::DnsResolutionFailed {
+            host: host.to_string(),
+            reason: e.to_string(),
+        })?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(SsrfError::DnsResolutionFailed {
+            host: host.to_string(),
+            reason: "no addresses returned".to_string(),
+        });
+    }
+
+    Ok(addrs.into_iter().map(|sa| sa.ip()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
