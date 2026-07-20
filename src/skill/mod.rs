@@ -740,12 +740,13 @@ fn is_skill_file(path: &Path) -> bool {
 pub fn default_skill_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    if let Some(home) = dirs::home_dir() {
-        let aleph_skills = home.join(".aleph").join("skills");
+    if let Ok(aleph_skills) = crate::utils::paths::get_skills_dir() {
         if aleph_skills.exists() {
             dirs.push(aleph_skills);
         }
+    }
 
+    if let Ok(home) = crate::utils::paths::get_home_dir() {
         let claude_skills = home.join(".claude").join("skills");
         if claude_skills.exists() {
             dirs.push(claude_skills);
@@ -807,30 +808,25 @@ fn guess_source(path: &Path) -> SkillSource {
 
     let path_str = path.to_string_lossy();
 
-    if path_str.contains(".aleph/skills") {
-        if let Some(home) = dirs::home_dir() {
-            let home_skills = home.join(".aleph").join("skills");
-            if path.starts_with(&home_skills) {
-                // Under ~/.aleph/skills/ — check manifest to distinguish official from user
-                let manifest = CACHED_MANIFEST
-                    .get_or_init(|| crate::bundled::manifest::InstallRegistry::load(&home_skills));
-                if let Some(manifest) = manifest {
-                    if let Ok(relative) = path.strip_prefix(&home_skills) {
-                        if let Some(skill_name) = relative.components().next() {
-                            let name = skill_name.as_os_str().to_string_lossy();
-                            if manifest.is_official(&name) {
-                                return SkillSource::Bundled;
-                            }
+    if let Ok(global_skills) = crate::utils::paths::get_skills_dir() {
+        if path.starts_with(&global_skills) {
+            let manifest = CACHED_MANIFEST
+                .get_or_init(|| crate::bundled::manifest::InstallRegistry::load(&global_skills));
+            if let Some(manifest) = manifest {
+                if let Ok(relative) = path.strip_prefix(&global_skills) {
+                    if let Some(skill_name) = relative.components().next() {
+                        let name = skill_name.as_os_str().to_string_lossy();
+                        if manifest.is_official(&name) {
+                            return SkillSource::Bundled;
                         }
                     }
                 }
-                return SkillSource::Global;
             }
-        } else {
-            tracing::warn!("dirs::home_dir() returned None, defaulting to Global source");
             return SkillSource::Global;
         }
-        // Path contains .aleph/skills but NOT under home → project-level workspace skill
+    }
+
+    if path_str.contains(".aleph/skills") {
         return SkillSource::Workspace;
     }
 
@@ -842,6 +838,29 @@ fn guess_source(path: &Path) -> SkillSource {
 mod tests {
     use super::*;
     use crate::domain::skill::SkillSource;
+
+    #[test]
+    fn aleph_home_is_authoritative_for_default_skill_discovery() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let home = temp_dir.path().join("home");
+        let aleph_home = temp_dir.path().join("aleph-home");
+        let global_aleph = aleph_home.join("skills");
+        let legacy_aleph = home.join(".aleph").join("skills");
+        let global_claude = home.join(".claude").join("skills");
+        std::fs::create_dir_all(&global_aleph).unwrap();
+        std::fs::create_dir_all(&legacy_aleph).unwrap();
+        std::fs::create_dir_all(&global_claude).unwrap();
+
+        let dirs = {
+            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
+            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            default_skill_dirs()
+        };
+
+        assert!(dirs.contains(&global_aleph));
+        assert!(dirs.contains(&global_claude));
+        assert!(!dirs.contains(&legacy_aleph));
+    }
 
     #[test]
     fn api_key_present_reflects_env() {

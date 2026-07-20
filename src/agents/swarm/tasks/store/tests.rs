@@ -674,3 +674,122 @@ async fn list_tasks_orders_by_priority_then_created() {
         ]
     );
 }
+
+#[tokio::test]
+async fn delete_team_tasks_cascades_all_child_tables() {
+    let store = setup_store().await;
+
+    // Team A: two tasks with full child row coverage on one of them.
+    let t_a1 = store
+        .create_task(NewCoordTask {
+            team_id: Some("team-A".into()),
+            subject: "A1".into(),
+            description: String::new(),
+            owner: None,
+            priority: Priority::Normal,
+            blocked_by: Vec::new(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let t_a2 = store
+        .create_task(NewCoordTask {
+            team_id: Some("team-A".into()),
+            subject: "A2".into(),
+            description: String::new(),
+            owner: None,
+            priority: Priority::Normal,
+            // t_a2 depends on t_a1, so both sides of the dep live in team A.
+            blocked_by: vec![t_a1.id.clone()],
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Per-attempt run on t_a1.
+    let run_id = store.start_task_run(&t_a1.id, "worker-A").await.unwrap();
+    store
+        .finish_task_run(
+            &run_id,
+            crate::agents::swarm::tasks::TaskRunStatus::Completed,
+            Some("done".into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Comment on t_a1.
+    store
+        .add_task_comment(&t_a1.id, "author", "body")
+        .await
+        .unwrap();
+
+    // Exit journal on t_a1.
+    store
+        .upsert_task_journal(crate::agents::swarm::tasks::NewTaskExitJournal {
+            task_id: t_a1.id.clone(),
+            agent_id: "worker-A".into(),
+            summary: "exit".into(),
+            decisions: vec!["d1".into()],
+            artifacts_ref: vec!["a1".into()],
+            next_steps: vec!["n1".into()],
+            confidence: Some(80),
+        })
+        .await
+        .unwrap();
+
+    // Team B: a sibling task that must survive team A's delete.
+    let t_b = store
+        .create_task(NewCoordTask {
+            team_id: Some("team-B".into()),
+            subject: "B".into(),
+            description: String::new(),
+            owner: None,
+            priority: Priority::Normal,
+            blocked_by: Vec::new(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    store
+        .add_task_comment(&t_b.id, "author", "untouched")
+        .await
+        .unwrap();
+
+    // Pre-conditions: every child table has rows for t_a1 and team B is intact.
+    assert_eq!(store.list_task_comments(&t_a1.id).await.unwrap().len(), 1);
+    assert_eq!(store.list_task_runs(&t_a1.id).await.unwrap().len(), 1);
+    assert!(store.get_task_journal(&t_a1.id).await.unwrap().is_some());
+    assert!(store
+        .get_dependencies(&t_a2.id)
+        .await
+        .unwrap()
+        .contains(&t_a1.id));
+
+    // Delete team A — single statement should cascade every child table.
+    let n = store.delete_team_tasks("team-A").await.unwrap();
+    assert_eq!(n, 2, "return count = parent rows deleted, not children");
+
+    assert!(store.get_task(&t_a1.id).await.unwrap().is_none());
+    assert!(store.get_task(&t_a2.id).await.unwrap().is_none());
+    assert!(
+        store.list_task_comments(&t_a1.id).await.unwrap().is_empty(),
+        "comments must cascade"
+    );
+    assert!(
+        store.list_task_runs(&t_a1.id).await.unwrap().is_empty(),
+        "runs must cascade"
+    );
+    assert!(
+        store.get_task_journal(&t_a1.id).await.unwrap().is_none(),
+        "journal must cascade"
+    );
+    assert!(
+        store.get_dependencies(&t_a2.id).await.unwrap().is_empty(),
+        "dependencies must cascade on both task_id and depends_on"
+    );
+
+    // Team B untouched.
+    assert!(store.get_task(&t_b.id).await.unwrap().is_some());
+    assert_eq!(store.list_task_comments(&t_b.id).await.unwrap().len(), 1);
+}

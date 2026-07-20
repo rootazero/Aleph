@@ -28,7 +28,6 @@ impl PromptLayer for ProfileLayer {
         // Role / Citation layers were fixed for).
         &[
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -108,7 +107,6 @@ mod tests {
     fn test_profile_paths() {
         let paths = ProfileLayer.paths();
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         assert!(!paths.contains(&AssemblyPath::Basic));
         // Must ride the live main-loop path so AGENTS.md actually reaches the
         // production prompt.

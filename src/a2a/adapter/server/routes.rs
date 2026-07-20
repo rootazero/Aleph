@@ -168,6 +168,42 @@ async fn stream_message_send(
         .and_then(|v| v.as_str())
         .map_or_else(|| uuid::Uuid::new_v4().to_string(), String::from);
 
+    if let Some(push_params) = request.params.get("pushNotificationConfig").cloned() {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct InlinePushConfig {
+            url: String,
+            #[serde(default)]
+            token: Option<String>,
+            #[serde(default)]
+            events: Vec<String>,
+        }
+        match serde_json::from_value::<InlinePushConfig>(push_params) {
+            Ok(inline) => {
+                let push_config =
+                    crate::a2a::service::notification::PushNotificationConfig {
+                        task_id: task_id.clone(),
+                        url: inline.url,
+                        token: inline.token,
+                        events: inline.events,
+                    };
+                if let Err(e) = state.notification.set_config(push_config).await {
+                    return sse_error(JsonRpcResponse::from_a2a_error(
+                        request.id.clone(),
+                        &e,
+                    ));
+                }
+            }
+            Err(e) => {
+                return sse_error(JsonRpcResponse::error(
+                    request.id.clone(),
+                    -32602,
+                    &format!("Invalid params: invalid 'pushNotificationConfig': {e}"),
+                ));
+            }
+        }
+    }
+
     let session_id = request
         .params
         .get("sessionId")
@@ -547,5 +583,293 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("missing"));
+    }
+
+    use std::pin::Pin;
+
+    use futures::Stream;
+    use tower::ServiceExt;
+
+    use crate::a2a::adapter::server::request_processor::A2AServerState;
+    use crate::a2a::domain::security::TrustLevel;
+    use crate::a2a::domain::{
+        A2AMessage, ListTasksParams, ListTasksResult, SecurityScheme,
+    };
+    use crate::a2a::port::authenticator::{
+        A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
+    };
+    use crate::a2a::port::message_handler::A2AMessageHandler;
+    use crate::a2a::port::streaming::A2AStreamingHandler;
+    use crate::a2a::port::task_manager::{A2AResult, A2ATaskManager};
+    use crate::a2a::service::notification::NotificationService;
+
+    struct AllowAllAuth;
+
+    #[async_trait::async_trait]
+    impl A2AAuthenticator for AllowAllAuth {
+        async fn authenticate(
+            &self,
+            _context: &A2AAuthContext,
+        ) -> A2AResult<A2AAuthPrincipal> {
+            Ok(A2AAuthPrincipal {
+                agent_id: None,
+                trust_level: TrustLevel::Local,
+                permissions: vec!["*".to_string()],
+            })
+        }
+
+        async fn authorize(
+            &self,
+            _principal: &A2AAuthPrincipal,
+            _action: &A2AAction,
+        ) -> A2AResult<bool> {
+            Ok(true)
+        }
+
+        fn supported_schemes(&self) -> Vec<SecurityScheme> {
+            vec![]
+        }
+    }
+
+    struct StubTaskManager;
+
+    #[async_trait::async_trait]
+    impl A2ATaskManager for StubTaskManager {
+        async fn create_task(
+            &self,
+            task_id: &str,
+            context_id: &str,
+        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+            Ok(crate::a2a::domain::A2ATask::new(task_id, context_id))
+        }
+
+        async fn get_task(
+            &self,
+            task_id: &str,
+            _history_length: Option<usize>,
+        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
+        }
+
+        async fn update_status(
+            &self,
+            task_id: &str,
+            _state: TaskState,
+            _message: Option<A2AMessage>,
+        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
+        }
+
+        async fn cancel_task(
+            &self,
+            task_id: &str,
+        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
+        }
+
+        async fn list_tasks(
+            &self,
+            _params: ListTasksParams,
+        ) -> A2AResult<ListTasksResult> {
+            Ok(ListTasksResult {
+                tasks: vec![],
+                next_cursor: None,
+            })
+        }
+
+        async fn add_artifact(&self, _task_id: &str, _artifact: Artifact) -> A2AResult<()> {
+            Ok(())
+        }
+    }
+
+    struct StubMessageHandler;
+
+    #[async_trait::async_trait]
+    impl A2AMessageHandler for StubMessageHandler {
+        async fn handle_message(
+            &self,
+            task_id: &str,
+            _message: A2AMessage,
+            _session_id: Option<&str>,
+        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+            Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-msg"))
+        }
+
+        async fn handle_message_stream(
+            &self,
+            _task_id: &str,
+            _message: A2AMessage,
+            _session_id: Option<&str>,
+        ) -> A2AResult<
+            Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>,
+        > {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+    }
+
+    struct StubStreamingHandler;
+
+    #[async_trait::async_trait]
+    impl A2AStreamingHandler for StubStreamingHandler {
+        async fn subscribe_status(
+            &self,
+            _task_id: &str,
+        ) -> A2AResult<
+            Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>,
+        > {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn subscribe_artifacts(
+            &self,
+            _task_id: &str,
+        ) -> A2AResult<
+            Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>,
+        > {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn subscribe_all(
+            &self,
+            _task_id: &str,
+        ) -> A2AResult<
+            Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>,
+        > {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn broadcast_status(
+            &self,
+            _task_id: &str,
+            _update: TaskStatusUpdateEvent,
+        ) -> A2AResult<()> {
+            Ok(())
+        }
+
+        async fn broadcast_artifact(
+            &self,
+            _task_id: &str,
+            _update: TaskArtifactUpdateEvent,
+        ) -> A2AResult<()> {
+            Ok(())
+        }
+    }
+
+    fn build_test_state() -> std::sync::Arc<A2AServerState> {
+        std::sync::Arc::new(A2AServerState {
+            task_manager: std::sync::Arc::new(StubTaskManager),
+            message_handler: std::sync::Arc::new(StubMessageHandler),
+            streaming: std::sync::Arc::new(StubStreamingHandler),
+            authenticator: std::sync::Arc::new(AllowAllAuth),
+            notification: std::sync::Arc::new(NotificationService::new()),
+            card: crate::a2a::domain::AgentCard {
+                id: "test".to_string(),
+                name: "Test".to_string(),
+                version: "0.1.0".to_string(),
+                description: None,
+                provider: None,
+                documentation_url: None,
+                interfaces: vec![],
+                skills: vec![],
+                security: vec![],
+                extensions: vec![],
+                default_input_modes: vec![],
+                default_output_modes: vec![],
+            },
+        })
+    }
+
+    fn stream_request_body(
+        method: &str,
+        task_id: Option<&str>,
+        push_url: Option<&str>,
+    ) -> serde_json::Value {
+        let mut params = serde_json::json!({
+            "message": {
+                "messageId": "m-stream-push",
+                "role": "user",
+                "parts": [{"type": "text", "text": "hi"}]
+            }
+        });
+        if let Some(tid) = task_id {
+            params
+                .as_object_mut()
+                .unwrap()
+                .insert("taskId".to_string(), serde_json::json!(tid));
+        }
+        if let Some(url) = push_url {
+            params.as_object_mut().unwrap().insert(
+                "pushNotificationConfig".to_string(),
+                serde_json::json!({"url": url, "events": ["status-update"]}),
+            );
+        }
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": 1
+        })
+    }
+
+    #[tokio::test]
+    async fn stream_message_send_registers_push_notification_config() {
+        use axum::body::Body;
+        use axum::http::Request;
+
+        let state = build_test_state();
+        let app = a2a_routes(std::sync::Arc::clone(&state));
+
+        let rpc_body = stream_request_body(
+            "message/stream",
+            Some("task-stream-push-1"),
+            Some("https://8.8.8.8/notify"),
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/a2a/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&rpc_body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let stored = state
+            .notification
+            .get_config("task-stream-push-1")
+            .await
+            .expect("get_config should not error")
+            .expect("push config should be registered for streamed task");
+        assert_eq!(stored.url, "https://8.8.8.8/notify");
+        assert_eq!(stored.events, vec!["status-update".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn stream_message_send_without_push_config_does_not_register() {
+        use axum::body::Body;
+        use axum::http::Request;
+
+        let state = build_test_state();
+        let app = a2a_routes(std::sync::Arc::clone(&state));
+
+        let rpc_body = stream_request_body("message/send", Some("task-stream-nopush"), None);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/a2a/stream")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&rpc_body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let stored = state
+            .notification
+            .get_config("task-stream-nopush")
+            .await
+            .expect("get_config should not error");
+        assert!(stored.is_none(), "no push config must be stored");
     }
 }

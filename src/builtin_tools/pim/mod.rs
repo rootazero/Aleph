@@ -86,6 +86,73 @@ impl PimTool {
         }
     }
 
+    fn approval_target(args: &PimArgs) -> String {
+        match args.action.as_str() {
+            "notes_create" => serde_json::json!({
+                "action": "notes_create",
+                "title": args.title,
+                "body": args.body,
+                "folder": args.folder,
+            })
+            .to_string(),
+            "notes_update" => serde_json::json!({
+                "action": "notes_update",
+                "id": args.id,
+                "title": args.title,
+                "body": args.body,
+            })
+            .to_string(),
+            "notes_delete" => serde_json::json!({
+                "action": "notes_delete",
+                "id": args.id,
+            })
+            .to_string(),
+            "calendar_create" => serde_json::json!({
+                "action": "calendar_create",
+                "title": args.title,
+                "calendar_id": args.calendar_id,
+                "start": args.start,
+                "end": args.end,
+                "all_day": args.all_day,
+                "location": args.location,
+            })
+            .to_string(),
+            "calendar_update" => serde_json::json!({
+                "action": "calendar_update",
+                "id": args.id,
+                "title": args.title,
+                "calendar_id": args.calendar_id,
+                "start": args.start,
+                "end": args.end,
+            })
+            .to_string(),
+            "calendar_delete" => serde_json::json!({
+                "action": "calendar_delete",
+                "id": args.id,
+            })
+            .to_string(),
+            "reminders_create" => serde_json::json!({
+                "action": "reminders_create",
+                "title": args.title,
+                "list_id": args.list_id,
+                "due_date": args.due_date,
+                "priority": args.priority,
+            })
+            .to_string(),
+            "reminders_complete" => serde_json::json!({
+                "action": "reminders_complete",
+                "id": args.id,
+            })
+            .to_string(),
+            "reminders_delete" => serde_json::json!({
+                "action": "reminders_delete",
+                "id": args.id,
+            })
+            .to_string(),
+            other => Self::describe_action(other),
+        }
+    }
+
     /// Try to dispatch a PIM action via `DesktopPlatform.pim()`.
     ///
     /// Returns `Some(PimOutput)` if the action was handled, or `None` if the
@@ -364,18 +431,21 @@ impl PimTool {
     /// Returns `None` if the action is allowed (or no policy is configured),
     /// or `Some(PimOutput)` if the action is denied or requires user
     /// confirmation.
-    async fn check_approval(&self, action: &str) -> Option<PimOutput> {
+    async fn check_approval(&self, args: &PimArgs) -> Option<PimOutput> {
+        let action = args.action.as_str();
         if !Self::is_write_action(action) {
             return None;
         }
 
         let policy = self.approval_policy.as_ref()?;
 
-        let target = Self::describe_action(action);
-        let (agent_id, context) = crate::approval::audit_identity("pim", action, &target);
+        let target = Self::approval_target(args);
+        let display_target = Self::describe_action(action);
+        let (agent_id, context) = crate::approval::audit_identity("pim", action, &display_target);
         let request = ActionRequest {
             action_type: ActionType::PimWrite,
             target,
+            display_target,
             agent_id,
             context,
             timestamp: chrono::Utc::now(),
@@ -501,7 +571,7 @@ Mail:
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Check approval for write actions before attempting PIM execution.
-        if let Some(out) = self.check_approval(&args.action).await {
+        if let Some(out) = self.check_approval(&args).await {
             return Ok(out);
         }
 
@@ -521,7 +591,7 @@ Mail:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+    use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy, ConfigApprovalPolicy};
     use crate::sync_primitives::Arc;
     use async_trait::async_trait;
 
@@ -710,5 +780,136 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("not implemented"));
+    }
+
+    struct CapturePolicy {
+        captured: std::sync::Mutex<Vec<ActionRequest>>,
+    }
+
+    #[async_trait]
+    impl ApprovalPolicy for CapturePolicy {
+        async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
+            self.captured.lock().unwrap().push(request.clone());
+            ApprovalDecision::Allow
+        }
+        async fn record(&self, _request: &ActionRequest, _decision: &ApprovalDecision) {}
+    }
+
+    #[tokio::test]
+    async fn notes_create_target_carries_title_body_folder_for_blocklist_matching() {
+        let policy = Arc::new(CapturePolicy {
+            captured: std::sync::Mutex::new(Vec::new()),
+        });
+        let tool = PimTool::new().with_approval_policy(policy.clone());
+
+        let mut args = make_args("notes_create");
+        args.title = Some("Patient SSN 123-45-6789".into());
+        args.body = Some("sensitive medical details".into());
+        args.folder = Some("Archive".into());
+
+        let _ = AlephTool::call(&tool, args).await.unwrap();
+        let captured = policy.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert!(
+            req.target.contains("Patient SSN 123-45-6789"),
+            "notes_create target must include title for blocklist matching, got: {}",
+            req.target
+        );
+        assert!(
+            req.target.contains("sensitive medical details"),
+            "notes_create target must include body for blocklist matching, got: {}",
+            req.target
+        );
+        assert!(
+            req.target.contains("Archive"),
+            "notes_create target must include folder for blocklist matching, got: {}",
+            req.target
+        );
+    }
+
+    #[tokio::test]
+    async fn calendar_create_target_carries_title_and_calendar_id() {
+        let policy = Arc::new(CapturePolicy {
+            captured: std::sync::Mutex::new(Vec::new()),
+        });
+        let tool = PimTool::new().with_approval_policy(policy.clone());
+
+        let mut args = make_args("calendar_create");
+        args.title = Some("Board Meeting - Confidential".into());
+        args.calendar_id = Some("work-2026".into());
+        args.start = Some("2026-04-22T09:00:00Z".parse().unwrap());
+        args.end = Some("2026-04-22T10:00:00Z".parse().unwrap());
+
+        let _ = AlephTool::call(&tool, args).await.unwrap();
+        let captured = policy.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert!(
+            req.target.contains("Board Meeting - Confidential"),
+            "calendar_create target must include title, got: {}",
+            req.target
+        );
+        assert!(
+            req.target.contains("work-2026"),
+            "calendar_create target must include calendar_id, got: {}",
+            req.target
+        );
+    }
+
+    #[tokio::test]
+    async fn reminders_delete_target_carries_id_for_blocklist_matching() {
+        let policy = Arc::new(CapturePolicy {
+            captured: std::sync::Mutex::new(Vec::new()),
+        });
+        let tool = PimTool::new().with_approval_policy(policy.clone());
+
+        let mut args = make_args("reminders_delete");
+        args.id = Some("rm-PROD-9001".into());
+
+        let _ = AlephTool::call(&tool, args).await.unwrap();
+        let captured = policy.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert!(
+            req.target.contains("rm-PROD-9001"),
+            "reminders_delete target must include id for blocklist matching, got: {}",
+            req.target
+        );
+    }
+
+    fn deny_policy_blocking(
+        action_type: ActionType,
+        secret: &str,
+    ) -> Arc<ConfigApprovalPolicy> {
+        use crate::approval::{ConfigApprovalPolicy, PolicyConfig, PolicyRule};
+        use std::collections::HashMap;
+        let pattern = format!("*{secret}*");
+        Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            version: 1,
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type,
+                pattern,
+            }],
+        }))
+    }
+
+    #[tokio::test]
+    async fn pim_blocklist_on_actual_title_actually_blocks() {
+        let policy = deny_policy_blocking(ActionType::PimWrite, "Patient SSN");
+        let tool = PimTool::new().with_approval_policy(policy as Arc<dyn ApprovalPolicy>);
+
+        let mut args = make_args("notes_create");
+        args.title = Some("Patient SSN 999-88-7777".into());
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!out.success);
+        let msg = out.message.as_deref().unwrap_or("");
+        assert!(
+            msg.contains("denied"),
+            "expected denial when blocklist matches PIM title, got: {msg}"
+        );
     }
 }

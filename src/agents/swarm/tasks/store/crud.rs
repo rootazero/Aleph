@@ -332,23 +332,6 @@ pub(super) async fn delete_team_tasks(
     team_id: &str,
 ) -> crate::error::Result<usize> {
     let conn = store.conn.lock().await;
-    for child in [
-        // Dependencies referencing any task in the team (either direction)
-        "DELETE FROM coord_task_dependencies \
-         WHERE task_id IN (SELECT id FROM coord_tasks WHERE team_id = ?1) \
-         OR depends_on IN (SELECT id FROM coord_tasks WHERE team_id = ?1)",
-        // Per-attempt run records
-        "DELETE FROM coord_task_runs \
-         WHERE task_id IN (SELECT id FROM coord_tasks WHERE team_id = ?1)",
-        // Handoff comments
-        "DELETE FROM coord_task_comments \
-         WHERE task_id IN (SELECT id FROM coord_tasks WHERE team_id = ?1)",
-        // Exit journals (one per task, task_id is the PK/FK)
-        "DELETE FROM coord_task_journals \
-         WHERE task_id IN (SELECT id FROM coord_tasks WHERE team_id = ?1)",
-    ] {
-        conn.execute(child, params![team_id]).map_err(db_err)?;
-    }
     let n = conn
         .execute(
             "DELETE FROM coord_tasks WHERE team_id = ?1",

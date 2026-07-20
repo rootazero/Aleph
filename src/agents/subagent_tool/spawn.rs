@@ -156,6 +156,7 @@ impl SubagentTool {
         let tree_agent_id_for_done = tree_agent_id;
         let settle_started = std::time::Instant::now();
         tokio::spawn(async move {
+            let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
                 task,
@@ -332,5 +333,107 @@ impl SubagentTool {
             runtime = runtime.with_strategy(s);
         }
         runtime
+    }
+}
+
+/// RAII guard that cancels its [`CancellationToken`] on `Drop` — including
+/// during a panic unwind. The bridge watcher spawned by
+/// [`SubagentTool::cancel_for_child_with`] parks on
+/// `harness.cancelled() | token.cancelled()`, so without this guard the
+/// foreground / aggregator panic path (where the explicit `.cancel()` after
+/// `runtime.run(...)` is never reached) leaks the parked watcher until the
+/// token happens to be cancelled by something else.
+///
+/// `CancellationToken::drop` does NOT auto-cancel, so the explicit
+/// `.cancel()` in the destructor is the only thing that wakes the bridge
+/// watcher's `token_clone.cancelled()` arm on scope exit.
+#[derive(Debug)]
+pub(super) struct CancelGuard(CancellationToken);
+
+impl CancelGuard {
+    #[must_use]
+    pub(super) fn new(token: CancellationToken) -> Self {
+        Self(token)
+    }
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Normal scope exit must cancel the held token. The bridge watcher
+    /// exits via its `token_clone.cancelled()` arm as a result.
+    #[tokio::test]
+    async fn cancel_guard_cancels_on_scope_exit() {
+        let token = CancellationToken::new();
+        let probe = token.clone();
+        {
+            let _g = CancelGuard::new(token);
+        }
+        assert!(
+            probe.is_cancelled(),
+            "Drop must cancel the held CancellationToken"
+        );
+    }
+
+    /// Panic unwind must also trigger the Drop — the panic path is the
+    /// primary motivation for the guard, because the explicit
+    /// `.cancel()` after `runtime.run(...)` is unreachable on panic.
+    #[tokio::test]
+    async fn cancel_guard_cancels_on_panic_unwind() {
+        let token = CancellationToken::new();
+        let probe = token.clone();
+        let outcome = futures::FutureExt::catch_unwind(
+            std::panic::AssertUnwindSafe(async move {
+                let _g = CancelGuard::new(token);
+                panic!("simulated panic in scope");
+            }),
+        )
+        .await;
+        assert!(outcome.is_err(), "inner future must have panicked");
+        assert!(
+            probe.is_cancelled(),
+            "Drop must fire during panic unwind and cancel the token"
+        );
+    }
+
+    /// The guard's Drop must wake the bridge watcher pattern used by
+    /// `cancel_for_child_with`. We mirror the watcher here (a clone of
+    /// the same select! shape) and confirm it exits within the bounded
+    /// window — without this, the watcher would park indefinitely.
+    #[tokio::test]
+    async fn cancel_guard_drop_wakes_bridge_watcher() {
+        let token = CancellationToken::new();
+        let harness = CancellationToken::new();
+        let probe = Arc::new(AtomicBool::new(false));
+        let token_for_watcher = token.clone();
+        let harness_for_watcher = harness.clone();
+        let watcher_flag = probe.clone();
+        let watcher = tokio::spawn(async move {
+            tokio::select! {
+                _ = harness_for_watcher.cancelled() => {}
+                _ = token_for_watcher.cancelled() => {}
+            }
+            watcher_flag.store(true, Ordering::SeqCst);
+        });
+        {
+            let _g = CancelGuard::new(token);
+        }
+        let joined = tokio::time::timeout(std::time::Duration::from_millis(200), watcher)
+            .await
+            .expect("watcher must exit well before the timeout");
+            joined.expect("watcher task must not panic");
+        assert!(
+            probe.load(Ordering::SeqCst),
+            "bridge watcher must exit when guard drops"
+        );
     }
 }

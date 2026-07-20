@@ -61,6 +61,7 @@ pub(crate) async fn check_browser_approval(
     let request = ActionRequest {
         action_type,
         target: target.to_string(),
+        display_target: String::new(),
         agent_id,
         context,
         timestamp: chrono::Utc::now(),
@@ -126,12 +127,16 @@ fn extract_tab_url(tabs_text: &str, tab_id: &str) -> Option<String> {
 /// Returns `Some(violation)` if the active tab's current http(s) URL is blocked
 /// by the SSRF policy. Non-http schemes (`about:blank`, `chrome://`, …) carry no
 /// network target and are skipped.
-fn current_page_block(manager: &ProfileManager, tabs_text: &str, tab_id: &str) -> Option<String> {
+async fn current_page_block(
+    manager: &ProfileManager,
+    tabs_text: &str,
+    tab_id: &str,
+) -> Option<String> {
     let url = extract_tab_url(tabs_text, tab_id)?;
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return None;
     }
-    manager.check_url(&url).err().map(|v| v.to_string())
+    manager.check_url(&url).await.err().map(|v| v.to_string())
 }
 
 /// Get the active (most recent) tab from the backend, or return an error if none open.
@@ -196,7 +201,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
     let tab_id = parse_active_tab_id(&tabs_text).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
     })?;
-    if let Some(violation) = current_page_block(manager, &tabs_text, &tab_id) {
+    if let Some(violation) = current_page_block(manager, &tabs_text, &tab_id).await {
         return Err(BrowserError::NavigationFailed(format!(
             "current page blocked by SSRF policy ({violation}); \
              navigate to an allowed URL before reading page content"
@@ -315,6 +320,18 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
     } else {
         wrapped
     }
+}
+
+pub(crate) fn process_evaluate_result(
+    manager: &ProfileManager,
+    raw: &str,
+) -> serde_json::Value {
+    let text = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::String(s)) => s,
+        Ok(other) => serde_json::to_string(&other).unwrap_or_else(|_| raw.to_string()),
+        Err(_) => raw.to_string(),
+    };
+    serde_json::Value::String(redact_and_wrap(manager, &text))
 }
 
 /// [`redact_and_wrap`] variant for append-ordered logs (`browser_console` /
@@ -550,27 +567,51 @@ mod tests {
         assert_eq!(super::bound_screenshot_png(junk.clone()), junk);
     }
 
-    #[test]
-    fn current_page_block_flags_internal_http_urls() {
+    #[tokio::test]
+    async fn current_page_block_flags_internal_http_urls() {
         // Default browser SSRF policy blocks private/loopback/link-local.
         let manager = ProfileManager::new(BrowserSystemConfig::default());
+        crate::security::ssrf::dns::test_hook::clear();
+        crate::security::ssrf::dns::test_hook::install({
+            let mut m = std::collections::HashMap::new();
+            m.insert("example.com".to_string(), vec!["8.8.8.8".parse().unwrap()]);
+            m
+        });
 
         // Cloud metadata endpoint reached via redirect → blocked.
         assert!(
             current_page_block(&manager, "1: http://169.254.169.254/latest/meta-data", "1")
+                .await
                 .is_some()
         );
 
         // Loopback → blocked.
-        assert!(current_page_block(&manager, "1: http://127.0.0.1:9000/", "1").is_some());
+        assert!(
+            current_page_block(&manager, "1: http://127.0.0.1:9000/", "1")
+                .await
+                .is_some()
+        );
 
         // Public URL → allowed.
-        assert!(current_page_block(&manager, "1: https://example.com/", "1").is_none());
+        assert!(
+            current_page_block(&manager, "1: https://example.com/", "1")
+                .await
+                .is_none()
+        );
 
         // Non-http schemes carry no network target → skipped.
-        assert!(current_page_block(&manager, "1: about:blank", "1").is_none());
+        assert!(
+            current_page_block(&manager, "1: about:blank", "1")
+                .await
+                .is_none()
+        );
 
         // No matching tab → nothing to check.
-        assert!(current_page_block(&manager, "1: http://127.0.0.1/", "2").is_none());
+        assert!(
+            current_page_block(&manager, "1: http://127.0.0.1/", "2")
+                .await
+                .is_none()
+        );
+        crate::security::ssrf::dns::test_hook::clear();
     }
 }

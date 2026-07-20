@@ -31,21 +31,16 @@ impl PromptLayer for SpecialActionsLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Finishing & Escalation\n");
-        // Universal verification gate (openclaw completion_contract parity):
-        // "run the smallest meaningful gate before declaring done", with a
-        // concrete menu, provider-agnostic. The conceptual "verify before
-        // finalizing" line stays OpenAI-only in provider_guidance.rs.
-        output.push_str(
-            "- Before declaring the task done, run the smallest meaningful verification gate \
-             that fits the work (test/build/lint, re-read the file you wrote, diff your change, \
-             or sample the output); if no gate can run, say why.\n",
-        );
+        // Only the non-inferable deliverable-quality rule + the `ask_user`
+        // pointer stay. The verification-gate menu and the goal-level give-up /
+        // fallback-ladder discipline were cut as how-to a capable model runs
+        // natively (§1.1 prune-the-prompt); they duplicated
+        // `ProviderGuidanceLayer`'s persistence doctrine, now the single home.
         output.push_str(
             "- Your final reply IS the deliverable. Report what was accomplished, key \
              results/findings (data, metrics), files produced and their purpose, and caveats — \
@@ -53,19 +48,7 @@ impl PromptLayer for SpecialActionsLayer {
         );
         output.push_str(
             "- `ask_user`: call it when clarification or a user decision genuinely changes \
-             what you'd do next.\n",
-        );
-        // Goal-level give-up discipline. The method-vs-goal distinction
-        // itself lives once in TOOL_PERSISTENCE_DOCTRINE (priority 810);
-        // here we add the preconditions for conceding the GOAL.
-        output.push_str(
-            "- Declare failure ONLY when the GOAL itself cannot be completed in this \
-             environment — never on first-method failure. Before conceding: try at least TWO \
-             distinct approaches (different tools, sources, or keywords — for web research, \
-             climb the fallback ladder above), and enumerate every method tried and why each \
-             failed (status code, error class, empty result) so the user can verify nothing \
-             was skipped. If the iteration budget is the constraint — not feasibility — \
-             deliver the partial result plus the list of unfinished items instead.\n\n",
+             what you'd do next.\n\n",
         );
 
         // Phase 3 self-evolution path α — direct user-correction signaling.
@@ -111,9 +94,6 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.contains("## Finishing & Escalation"));
-        // Universal verification gate: the model runs the smallest meaningful
-        // check (test/build/lint/diff/re-read) before declaring done.
-        assert!(out.contains("smallest meaningful verification gate"));
         assert!(out.contains("Task completed"));
         // `ask_user` is a real registered tool and may be named as a call
         // target; `complete` / `fail` are NOT tools and must not be taught
@@ -121,14 +101,12 @@ mod tests {
         assert!(out.contains("`ask_user`"));
         assert!(!out.contains("- `complete`"));
         assert!(!out.contains("- `fail`"));
-        // Give-up discipline: goal-level failure only, alternative-method
-        // exhaustion + enumeration required. A single 401 from one source
-        // must NOT be enough to concede.
-        assert!(out.contains("ONLY when the GOAL itself cannot be completed"));
-        assert!(out.contains("at least TWO distinct approaches"));
-        assert!(out.contains("fallback ladder"));
-        // Budget-bound runs deliver partials instead of conceding.
-        assert!(out.contains("partial result"));
+        // The verification-gate / give-up / fallback-ladder how-to was cut as
+        // a cage a capable model doesn't need (§1.1 prune-the-prompt); it
+        // duplicated ProviderGuidanceLayer's persistence doctrine.
+        assert!(!out.contains("verification gate"));
+        assert!(!out.contains("fallback ladder"));
+        assert!(!out.contains("at least TWO distinct approaches"));
     }
 
     #[test]

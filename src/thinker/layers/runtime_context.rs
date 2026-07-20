@@ -24,15 +24,13 @@ impl PromptLayer for RuntimeContextLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        // Phase 2 wiring: ride every non-minimal path. The inject() guard
-        // keeps output empty when no `ResolvedContext` is attached or no
-        // `runtime_context` is set on it, so widening here is a no-op
-        // until Phase 3 threads context in.
+        // Ride every non-minimal path; `ResolvedContext` is threaded on the
+        // Basic / Cached production routes and the inject() guard keeps output
+        // empty when it (or its `runtime_context`) is absent.
         &[
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -83,7 +81,6 @@ mod tests {
         let paths = RuntimeContextLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }

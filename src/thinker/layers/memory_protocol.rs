@@ -46,7 +46,6 @@ impl PromptLayer for MemoryProtocolLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }
@@ -125,7 +124,6 @@ mod tests {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ] {
             assert!(layer.paths().contains(&path), "missing path {path:?}");

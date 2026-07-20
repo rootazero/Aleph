@@ -176,8 +176,8 @@ mod tests {
         let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
         // Both are Stable → they ride part 0 (the cacheable prefix).
         assert!(
-            parts[0].content.contains("## Your Role"),
-            "cached Full prompt must carry the Think->Act role framing"
+            parts[0].content.contains("You are an AI assistant"),
+            "cached Full prompt must carry the base role framing"
         );
         assert!(
             parts[0].content.contains("## Citation Standards"),
@@ -307,7 +307,7 @@ mod tests {
             "cached Full prompt must carry the sub-agent role header"
         );
         assert!(
-            parts[0].content.contains("adversarial verifier"),
+            parts[0].content.contains("Adversarial verifier"),
             "cached Full prompt must carry the sub-agent's verify protocol block"
         );
     }

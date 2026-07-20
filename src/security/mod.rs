@@ -15,6 +15,7 @@ pub mod headers;
 pub mod injection_patterns;
 pub mod runtime_guard;
 pub mod safe_regex;
+pub mod secret_env;
 pub mod secret_equal;
 pub mod ssrf;
 pub mod unicode_guard;

@@ -24,39 +24,11 @@ use std::error::Error;
 use std::io::Write;
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
+use alephcore::secrets::validate_secret_name;
 use alephcore::utils::paths;
 use std::sync::Arc;
 
 use crate::cli::SecretAction;
-
-const SECRET_NAME_MAX_LEN: usize = 128;
-
-/// Validate and normalize a secret name.
-pub fn validate_secret_name(name: &str) -> Result<String, String> {
-    let normalized = name.trim();
-
-    if normalized.is_empty() {
-        return Err("Secret name cannot be empty".to_string());
-    }
-
-    if normalized.len() > SECRET_NAME_MAX_LEN {
-        return Err(format!(
-            "Secret name must be <= {SECRET_NAME_MAX_LEN} characters"
-        ));
-    }
-
-    let valid = normalized
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
-    if !valid {
-        return Err(
-            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'"
-                .to_string(),
-        );
-    }
-
-    Ok(normalized.to_string())
-}
 
 /// Build a `SharedTokenManager` and load the existing token from DB.
 /// Returns an error if no token exists (server must be started at least once).
@@ -96,6 +68,32 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
         return Err("Secret value cannot be empty".into());
     }
     Ok(value)
+}
+
+/// Local idempotent initialization: open the vault manager without requiring
+/// an existing token; if a token (and hence the vault) is already present
+/// the call is a no-op, otherwise we generate a token so subsequent
+/// `secret set`/`get` calls have a master key. The token itself is never
+/// returned — only the ready/no-op status is reported.
+fn init_locked(data_dir: &std::path::Path) -> Result<bool, Box<dyn Error>> {
+    use alephcore::gateway::security::SharedTokenManager;
+    use alephcore::gateway::security::store::SecurityStore;
+
+    let security_store_path = data_dir.join("security.db");
+    let store = std::sync::Arc::new(
+        SecurityStore::open(&security_store_path)
+            .map_err(|e| format!("Failed to open security store: {e}"))?,
+    );
+    let vault_path = data_dir.join("secrets.vault");
+    let manager = SharedTokenManager::new(store, vault_path);
+
+    if manager.try_load_token_from_db().is_some() || manager.has_stored_token() {
+        return Ok(false);
+    }
+    manager
+        .generate_token()
+        .map_err(|e| format!("Failed to initialize vault: {e}"))?;
+    Ok(true)
 }
 
 /// Local fast-path: list secrets while holding the singleton lock.
@@ -232,7 +230,10 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                     method: HttpMethod::Get,
                 },
                 &data_dir,
-                |_lock| list_locked().map_err(|e| anyhow::anyhow!("{e}")),
+                |_lock| -> anyhow::Result<Vec<SecretSummary>> {
+                    init_locked(&data_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+                    list_locked().map_err(|e| anyhow::anyhow!("{e}"))
+                },
                 serde_json::Value::Null,
             )
             .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;

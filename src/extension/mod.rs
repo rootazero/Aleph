@@ -1104,6 +1104,87 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
     )
 }
 
+/// Reject a plugin install destination whose leaf is a symlink (including
+/// dangling ones). `git2::Repository::clone` will dereference symlinks at
+/// the leaf and clone inside the target, which lets a pre-planted symlink
+/// escape the authoritative plugins root.
+///
+/// We intentionally do NOT walk past the immediate parent to check for
+/// symlinks above. System paths (e.g. macOS's `/var` → `/private/var`)
+/// legitimately resolve through symlinks; bounding the walk at `root`
+/// (the caller's authoritative plugins root) keeps the check targeted at
+/// the install boundary. See `ensure_plugin_root_within_authoritative`
+/// for the post-clone canonicalization check that catches parent escapes.
+///
+/// This is a snapshot check at the time of install. Concurrent attackers
+/// can still race the filesystem between the check and the clone. Per
+/// project policy, we do not attempt to defend every local TOCTOU; we make
+/// the common case (pre-planted symlink) fail closed.
+pub fn ensure_plugin_destination_is_safe(
+    root: &std::path::Path,
+    dest_path: &std::path::Path,
+) -> Result<(), String> {
+    if let Ok(meta) = std::fs::symlink_metadata(dest_path) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to clone into symlink at {}",
+                dest_path.display()
+            ));
+        }
+    }
+    if let Some(parent) = dest_path.parent() {
+        let mut current = parent.to_path_buf();
+        loop {
+            if !current.starts_with(root) || current == *root {
+                break;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&current) {
+                if meta.file_type().is_symlink() {
+                    return Err(format!(
+                        "refusing to clone through symlinked parent {}",
+                        current.display()
+                    ));
+                }
+            }
+            match current.parent() {
+                Some(p) if !p.as_os_str().is_empty() => current = p.to_path_buf(),
+                _ => break,
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verify a post-clone directory resolves inside the authoritative plugins
+/// root (after canonicalizing both). Catches a clone whose destination was
+/// reachable through a symlink we missed at install time, or whose root was
+/// later re-linked by some other process.
+pub fn ensure_plugin_root_within_authoritative(
+    root: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    let canonical_root = root.canonicalize().map_err(|e| {
+        format!(
+            "cannot canonicalize plugins root {}: {e}",
+            root.display()
+        )
+    })?;
+    let canonical_dest = dest.canonicalize().map_err(|e| {
+        format!(
+            "cannot canonicalize plugin destination {}: {e}",
+            dest.display()
+        )
+    })?;
+    if !canonical_dest.starts_with(&canonical_root) {
+        return Err(format!(
+            "plugin destination {} is outside authoritative plugins root {}",
+            dest.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -1279,5 +1360,83 @@ mod tests {
                 panic!("Expected ServiceNotFound error, got: {:?}", other);
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_destination_rejects_existing_symlink_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let dest = dir.path().join("plugin");
+        std::os::unix::fs::symlink("/tmp/anywhere", &dest).unwrap();
+        let err = ensure_plugin_destination_is_safe(&root, &dest).unwrap_err();
+        assert!(err.contains("symlink"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_destination_rejects_dangling_symlink_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let dest = dir.path().join("plugin");
+        std::os::unix::fs::symlink("/definitely/does/not/exist/here", &dest).unwrap();
+        assert!(ensure_plugin_destination_is_safe(&root, &dest).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_destination_rejects_symlinked_parent_within_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let target = root.join("real");
+        std::fs::create_dir(&target).unwrap();
+        let linked_parent = root.join("linked");
+        std::os::unix::fs::symlink(&target, &linked_parent).unwrap();
+        let dest = linked_parent.join("plugin");
+        let err = ensure_plugin_destination_is_safe(&root, &dest).unwrap_err();
+        assert!(err.contains("symlinked parent"), "got: {err}");
+    }
+
+    #[test]
+    fn safe_destination_accepts_nonexistent_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let dest = dir.path().join("nope");
+        let res = ensure_plugin_destination_is_safe(&root, &dest);
+        assert!(res.is_ok(), "got: {res:?}");
+    }
+
+    #[test]
+    fn safe_destination_accepts_real_directory_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let dest = dir.path().join("real");
+        std::fs::create_dir(&dest).unwrap();
+        let res = ensure_plugin_destination_is_safe(&root, &dest);
+        assert!(res.is_ok(), "got: {res:?}");
+    }
+
+    #[test]
+    fn root_within_authoritative_accepts_path_inside() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let inside = root.join("child");
+        std::fs::create_dir(&inside).unwrap();
+        assert!(
+            ensure_plugin_root_within_authoritative(&root, &inside).is_ok(),
+            "a directory inside the authoritative root must be accepted"
+        );
+    }
+
+    #[test]
+    fn root_within_authoritative_rejects_outside_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let err = ensure_plugin_root_within_authoritative(&root, &outside).unwrap_err();
+        assert!(err.contains("outside authoritative"), "got: {err}");
     }
 }

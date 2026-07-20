@@ -42,7 +42,6 @@ impl PromptLayer for ToolRuntimeStateLayer {
         &[
             AssemblyPath::Basic,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

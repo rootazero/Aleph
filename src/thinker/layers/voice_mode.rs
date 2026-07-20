@@ -34,34 +34,28 @@ pub struct VoiceModeLayer;
 fn build_voice_guidelines(voice: VoiceContext) -> String {
     // One owned String built once per voice turn; non-voice turns never call
     // this, keeping the prompt byte-identical when voice is off.
-    let mut s = String::with_capacity(768);
+    let mut s = String::with_capacity(512);
+    // Lean framing, not a numbered how-to manual: a capable model writes for
+    // the ear from the signal alone, so the old 5-rule list with digit/currency/
+    // URL counter-examples was cut as a cage (§1.1 prune-the-prompt). Only the
+    // runtime-driven transcription-repair rule below carries a non-inferable
+    // signal (the input is ASR output).
     s.push_str(
         "## Voice Mode\n\
 \n\
-This channel has voice mode enabled — your reply is read aloud as speech. \
-Write for the ear, not the eye:\n\
-\n\
-1. Speak conversationally. Drop markdown, code fences, tables, bullet symbols \
-and emoji — they are read aloud literally and sound like noise.\n\
-2. Render numbers, dates, currency and URLs as they are *spoken* in your reply \
-language, never as written digits or raw symbols (say the words aloud, not \
-\"3,500\", \"$20\", or \"https://example.com\").\n\
-3. Keep replies short and front-load the answer — a listener cannot skim, and an \
-over-long reply is cut off before it finishes. Use natural sentences and \
-paragraphs, not lists.\n\
-4. Narrate tool use briefly so silence is filled (e.g. \"Let me check that…\", \
-\"Found it\").\n\
-5. If something only works in writing — code, a long table, a precise URL — \
-describe it in a sentence and offer to send the text version instead of reading \
-it out.\n",
+This channel has voice mode enabled — your reply is read aloud, so write for the ear: \
+speak conversationally in your reply language, keep it short and front-loaded, and render \
+numbers, dates, currency and URLs in their spoken form (not digits or raw symbols). Skip \
+anything that only works in writing — markdown, code, tables — and offer to send the text \
+version instead.\n",
     );
     if voice.is_transcribed() {
         // Input came from speech-to-text; the transcript may contain artifacts.
         s.push_str(
-            "6. The user's message was transcribed from speech, so it may contain \
-recognition errors, repeated fragments or missing words. Infer the intended \
-meaning and silently repair obvious transcription slips; if the intent is \
-genuinely unclear, ask one short spoken clarifying question rather than guessing.\n",
+            "The user's message was transcribed from speech, so it may contain recognition \
+errors or missing words. Infer the intended meaning and silently repair obvious transcription \
+slips; if the intent is genuinely unclear, ask one short spoken clarifying question rather \
+than guessing.\n",
         );
     }
     s
@@ -80,7 +74,6 @@ impl PromptLayer for VoiceModeLayer {
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

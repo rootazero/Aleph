@@ -202,6 +202,9 @@ impl AlephTool for ArenaQueryTool {
 
             let mut slot_summaries: Vec<SlotSummary> = Vec::new();
             for agent_str in &active_agents {
+                if agent_str != &agent_id {
+                    continue;
+                }
                 let agent = agent_str.clone();
                 let artifacts = handle.list_artifacts(&agent).unwrap_or_default();
                 let slot_status = handle
@@ -526,7 +529,30 @@ mod tests {
         assert_eq!(query_output.arena_id, create_output.arena_id);
         assert_eq!(query_output.goal, "Test query");
         assert_eq!(query_output.status, "Active");
-        assert_eq!(query_output.slots.len(), 2);
+        assert_eq!(query_output.slots.len(), 1);
+        assert_eq!(query_output.slots[0].agent_id, "agent-a");
+    }
+
+    #[tokio::test]
+    async fn test_arena_query_tool_non_participant_rejected() {
+        let manager = make_manager();
+
+        let create_tool = ArenaCreateTool::new(Arc::clone(&manager));
+        let create_args = ArenaCreateArgs {
+            goal: "Test query acl".to_string(),
+            strategy: "peer".to_string(),
+            participants: vec!["agent-a".to_string(), "agent-b".to_string()],
+            coordinator: Some("agent-a".to_string()),
+        };
+        let create_output = AlephTool::call(&create_tool, create_args).await.unwrap();
+
+        let query_tool = ArenaQueryTool::new(Arc::clone(&manager));
+        let query_args = ArenaQueryArgs {
+            arena_id: create_output.arena_id.clone(),
+            agent_id: Some("agent-c".to_string()),
+        };
+        let result = AlephTool::call(&query_tool, query_args).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

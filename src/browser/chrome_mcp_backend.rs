@@ -118,7 +118,18 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
+        // DNS-pin before any tool call so the pin is staged for the next
+        // Chrome launch (defense against rebinding between check_url and
+        // Chrome's own resolver). Playwright CLI path keeps gateway validation
+        // only — pin is Chrome-specific.
+        let pin = self
+            .ssrf_guard
+            .pin_host_resolver_args(url)
+            .await
+            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
+        self.driver.set_pending_launch_pin(&self.profile_name, pin);
         // Hold the per-profile lock across new_page + re-list so a concurrent
         // open on the same profile can't append a tab between the two calls and
         // steal our "newest is last" id. List inline (not via the public
@@ -165,7 +176,19 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
+            .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
+        // DNS-pin: see open_tab. Re-staged on every navigate so the pin tracks
+        // the latest target hostname within the session. (Process-wide flag —
+        // Chrome's --host-resolver-rules applies to its whole lifetime, so a
+        // mid-session host change is a known residual TOCTOU window that
+        // check_url still validates at navigation time.)
+        let pin = self
+            .ssrf_guard
+            .pin_host_resolver_args(url)
+            .await
+            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
+        self.driver.set_pending_launch_pin(&self.profile_name, pin);
         self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
             .await?;
         Ok(())

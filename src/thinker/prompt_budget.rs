@@ -3,26 +3,6 @@
 //! Prevents system prompt bloat by enforcing character limits and
 //! head/tail-truncating the dynamic suffix to fit the model's window.
 
-/// Rough characters-per-token ratio for English-ish text. **Legacy
-/// reporting-only approximation**: new code that has the source text in hand
-/// must use `context::budget::pressure::estimate_tokens_smart` instead (the
-/// crate's single-source prose ratio, `DEFAULT_PROSE_RATIO`). This constant no
-/// longer participates in any budget math — [`window_char_budget`] derives
-/// its tokens→chars conversion from `pressure::DEFAULT_PROSE_RATIO`. It
-/// survives only because [`estimate_tokens`]'s caller here
-/// ([`render_truncation_notice`]) has just a character count, not the
-/// original text, so content-aware estimation isn't available to it.
-pub const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
-
-/// Estimate a token count from a character count via
-/// [`CHARS_PER_TOKEN_ESTIMATE`]. A reporting aid, not a hard accounting tool —
-/// used only where the caller has a char count and no source text (see the
-/// constant's doc comment).
-#[must_use]
-pub const fn estimate_tokens(chars: usize) -> usize {
-    chars / CHARS_PER_TOKEN_ESTIMATE
-}
-
 /// Fraction of the model's usable context window allotted to the assembled
 /// system prompt before clamping. `0.10` keeps a 200k-token window at the
 /// historical 80k-char ceiling (`200_000 * 0.10 * 3.5 = 70_000`, floor-clamped
@@ -211,7 +191,12 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
     if mode == TruncationWarning::Off || saved_chars == 0 {
         return None;
     }
-    let approx_tokens = estimate_tokens(saved_chars);
+    // Single-source the char→token conversion on the crate-wide prose ratio
+    // (`pressure::DEFAULT_PROSE_RATIO`); this notice only has a char count, not
+    // the removed text, so content-aware estimation isn't available — but it
+    // must not diverge from every other estimate the way the old `/4` did.
+    let approx_tokens =
+        (saved_chars as f64 / crate::context::budget::pressure::DEFAULT_PROSE_RATIO) as usize;
     Some(format!(
         "\n\n<system-reminder>\n\
          Your per-request context was trimmed by ~{saved_chars} characters (~{approx_tokens} \
@@ -323,13 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn estimate_tokens_uses_chars_per_token_ratio() {
-        assert_eq!(estimate_tokens(0), 0);
-        assert_eq!(estimate_tokens(4 * 1000), 1000);
-        assert_eq!(CHARS_PER_TOKEN_ESTIMATE, 4);
-    }
-
-    #[test]
     fn truncate_short_content_unchanged() {
         let content = "Hello, world!";
         let result = truncate_with_head_tail(content, 100, 0.7, 0.2);
@@ -398,9 +376,10 @@ mod tests {
         assert!(notice.contains("<system-reminder>"));
         assert!(notice.contains("4096"));
         assert!(notice.contains("trimmed"));
-        // Reports the approximate token cost too (4096 / 4 = 1024).
+        // Reports the approximate token cost too (4096 / 3.5 ≈ 1170,
+        // single-sourced on the crate-wide prose ratio, not the old /4).
         assert!(
-            notice.contains("1024"),
+            notice.contains("1170"),
             "notice should report ~tokens: {notice}"
         );
     }
