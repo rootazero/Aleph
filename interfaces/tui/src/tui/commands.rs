@@ -15,7 +15,6 @@ use aleph_client::AlephClient;
 
 use super::app::{self, AppState};
 use super::command_tree;
-use super::cost;
 use super::slash::{self, LocalCommand, ToolProgressMode};
 
 /// Fire a message to the agent via `agent.run`.
@@ -220,6 +219,8 @@ struct UsageReply {
     tokens: u64,
     #[serde(default)]
     messages: u64,
+    #[serde(default)]
+    cost_usd: Option<f64>,
 }
 
 async fn execute_usage(state: &mut AppState, client: &AlephClient) {
@@ -233,22 +234,24 @@ async fn execute_usage(state: &mut AppState, client: &AlephClient) {
     }
 }
 
-fn format_usage(state: &AppState, u: &UsageReply) -> String {
-    let mut lines = vec![format!(
-        "Session usage — messages: {}  input: {}  output: {}  total: {}",
-        u.messages, u.input_tokens, u.output_tokens, u.tokens
-    )];
-    match cost::estimate_cost(&state.model_name, u.input_tokens, u.output_tokens) {
-        Some(c) => lines.push(format!(
-            "Cost estimate ({}): ${:.4} (in) + ${:.4} (out) = ${:.4}",
-            state.model_name, c.input_usd, c.output_usd, c.total_usd
-        )),
-        None => lines.push(format!(
-            "Cost: n/a (no pricing entry for {})",
-            state.model_name
-        )),
+/// Render the `/usage` cost line from the daemon-computed figure. Pure so it
+/// is unit-testable; the TUI no longer owns any pricing (R4).
+fn cost_line(model: &str, cost_usd: Option<f64>) -> String {
+    match cost_usd {
+        Some(usd) => format!("Cost estimate ({model}): ${usd:.4}"),
+        None => format!("Cost: n/a (no pricing entry for {model})"),
     }
-    lines.join("\n")
+}
+
+fn format_usage(state: &AppState, u: &UsageReply) -> String {
+    vec![
+        format!(
+            "Session usage — messages: {}  input: {}  output: {}  total: {}",
+            u.messages, u.input_tokens, u.output_tokens, u.tokens
+        ),
+        cost_line(&state.model_name, u.cost_usd),
+    ]
+    .join("\n")
 }
 
 /// Response shape for `session.compact` RPC.
@@ -493,6 +496,20 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
         .nth(max_chars)
         .map_or(text.len(), |(idx, _)| idx);
     format!("{}...", &text[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_line_renders_amount_and_na() {
+        assert_eq!(
+            cost_line("claude-sonnet-4-6", Some(1.2345)),
+            "Cost estimate (claude-sonnet-4-6): $1.2345"
+        );
+        assert!(cost_line("mystery-model", None).contains("n/a"));
+    }
 }
 
 // ---------------------------------------------------------------------------
