@@ -58,6 +58,7 @@
 - **原则**: 被移除的中间件的"智慧"不是丢弃，而是迁移到 system prompt 模板中
 - **实现**: 主循环的 LLM 一次调用自然覆盖所有判断（意图理解 + 工具选择 + 安全评估 + 完成度判断）
 - **效果**: 零额外 LLM 调用，零中间件税，模型推理能力完整释放
+- **精简原则 (prune-the-prompt)**: 智慧迁进 prompt ≠ 把 prompt 写厚。模型越强越需要**更少方向/约束/示例**——few-shot 会变笼子（模型模仿范例而非理解问题空间），低密度冗余稀释注意力；新模型发布后第一件事是**修剪上下文**，把验证/自我纠错建进**架构（运行时信号）**而非 prompt。加 prompt 字节前先问：这是模型**做不到的运行时事实**，还是我在**教强模型怎么思考**？后者别进 prompt。详见 [HARNESS_PHILOSOPHY.md §8](docs/reference/HARNESS_PHILOSOPHY.md)
 
 ### R10. 薄 Harness 哲学，笨循环编排核心 (Thin Harness, Dumb Loop)
 
