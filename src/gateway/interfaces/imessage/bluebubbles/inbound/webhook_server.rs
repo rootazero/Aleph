@@ -60,9 +60,9 @@ pub async fn handle_webhook(
         // Group mention gating is enforced downstream in the inbound router's
         // permission layer (single source of truth), so it applies uniformly to
         // both this webhook path and the catch-up poll path. Here we only drop
-        // what can never be a routable inbound: our own echoes, tapbacks, and
-        // records with no GUID.
-        if !m.is_from_me && !m.is_tapback && !m.guid.is_empty() {
+        // what can never be a routable inbound: our own echoes, remove-tapbacks,
+        // and records with no GUID (add-tapbacks surface as reactions).
+        if m.is_routable() {
             let dup = {
                 state
                     .dedup
@@ -153,5 +153,54 @@ mod tests {
         let msg = rx.try_recv().expect("inbound emitted");
         assert_eq!(msg.text, "hi");
         assert_eq!(msg.sender_id.as_str(), "+1");
+    }
+
+    #[tokio::test]
+    async fn add_tapback_emits_reaction_inbound() {
+        let st = crate::gateway::channel::ChannelState::new(10);
+        let mut rx = st.inbound_subscribe();
+        let app = Router::new()
+            .route("/wh", post(handle_webhook))
+            .with_state(state(st.sender()));
+        // An "add love" tapback against message g-target.
+        let body = r#"{"type":"new-message","data":{"guid":"react-1","associatedMessageType":2000,"associatedMessageGuid":"g-target","isFromMe":false,"chatGuid":"iMessage;-;+1","handle":{"address":"+1"}}}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/wh?password=secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let msg = rx.try_recv().expect("reaction inbound emitted");
+        assert_eq!(msg.text, "Reacted with: ❤️");
+        assert_eq!(msg.reply_to.as_ref().map(|r| r.as_str()), Some("g-target"));
+    }
+
+    #[tokio::test]
+    async fn remove_tapback_emits_nothing() {
+        let st = crate::gateway::channel::ChannelState::new(10);
+        let mut rx = st.inbound_subscribe();
+        let app = Router::new()
+            .route("/wh", post(handle_webhook))
+            .with_state(state(st.sender()));
+        let body = r#"{"type":"new-message","data":{"guid":"unreact-1","associatedMessageType":3000,"associatedMessageGuid":"g-target","isFromMe":false,"chatGuid":"iMessage;-;+1","handle":{"address":"+1"}}}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/wh?password=secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert!(rx.try_recv().is_err(), "remove tapback must not emit");
     }
 }

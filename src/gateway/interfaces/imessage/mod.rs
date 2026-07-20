@@ -20,6 +20,7 @@
 pub mod bluebubbles;
 pub mod config;
 mod db;
+pub mod reaction;
 mod sender;
 mod target;
 

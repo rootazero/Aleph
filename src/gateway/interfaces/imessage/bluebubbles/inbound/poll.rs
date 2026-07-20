@@ -37,7 +37,9 @@ pub async fn run_catchup_poll(
         let cursor = newest_cursor(&msgs, after);
         for raw in &msgs {
             if let Some(m) = map_webhook_record(raw) {
-                if m.is_from_me || m.is_tapback || m.guid.is_empty() {
+                // Drop echoes, remove-tapbacks, and GUID-less records; normal
+                // messages and add-tapbacks (surfaced as reactions) route on.
+                if !m.is_routable() {
                     continue;
                 }
                 let dup = {
