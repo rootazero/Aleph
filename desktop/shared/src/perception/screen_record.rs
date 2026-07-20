@@ -79,6 +79,28 @@ fn sck_region_rect(
     })
 }
 
+/// Confirm a recording actually produced a non-empty file. `timed_out` is the
+/// delegate-wait timeout flag. A timeout, a missing file, or a zero-byte file
+/// is a failure — the `SCRecordingOutput` path previously returned `Ok` in all
+/// three cases (false success). Pure over the filesystem so it is unit-testable.
+#[cfg(any(target_os = "macos", test))]
+fn verify_recording_output(path: &std::path::Path, timed_out: bool) -> Result<()> {
+    if timed_out {
+        return Err(DesktopError::ScreenCapture(
+            "recording did not signal completion within 15s".into(),
+        ));
+    }
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        Ok(_) => Err(DesktopError::ScreenCapture(
+            "recording finished but the output file is empty".into(),
+        )),
+        Err(e) => Err(DesktopError::ScreenCapture(format!(
+            "recording finished but the output file is missing: {e}"
+        ))),
+    }
+}
+
 // SCRecordingOutput delegate — defined at module scope to avoid ObjC
 // class re-registration panic on repeated calls.
 #[cfg(target_os = "macos")]
@@ -455,9 +477,10 @@ fn sc_recording_output_record(
     let guard = lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _result = cvar
+    let (_guard, wait_res) = cvar
         .wait_timeout_while(guard, Duration::from_secs(15), |finished| !*finished)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let timed_out = wait_res.timed_out();
 
     // Check for recording errors
     if let Some(err_msg) = error_slot
@@ -469,6 +492,10 @@ fn sc_recording_output_record(
             "Recording failed: {err_msg}"
         )));
     }
+
+    // The delegate never signalling completion, or an absent/empty file, means
+    // no usable recording — do not report success (matches the CLI/ffmpeg paths).
+    verify_recording_output(output_path, timed_out)?;
 
     debug!("Screen recording complete: {}", output_path.display());
 
@@ -979,5 +1006,34 @@ mod tests {
                 out_h: 1600
             })
         );
+    }
+
+    #[test]
+    fn verify_recording_output_ok_for_nonempty_file() {
+        let dir = std::env::temp_dir().join(format!("aleph_rec_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("ok.mp4");
+        std::fs::write(&f, b"data").unwrap();
+        assert!(super::verify_recording_output(&f, false).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_recording_output_err_on_timeout() {
+        let f = std::path::Path::new("/nonexistent/whatever.mp4");
+        assert!(super::verify_recording_output(f, true).is_err());
+    }
+
+    #[test]
+    fn verify_recording_output_err_on_missing_or_empty() {
+        assert!(
+            super::verify_recording_output(std::path::Path::new("/no/such.mp4"), false).is_err()
+        );
+        let dir = std::env::temp_dir().join(format!("aleph_rec_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("empty.mp4");
+        std::fs::write(&f, b"").unwrap();
+        assert!(super::verify_recording_output(&f, false).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
