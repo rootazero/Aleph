@@ -274,9 +274,24 @@ impl MoaManageTool {
                     data: Some(serde_json::json!({ "preset": name, "one_shot": one_shot })),
                 })
             }
-            Err(_msg) => Ok(MoaManageOutput {
+            Err(msg) => Ok(MoaManageOutput {
                 success: false,
-                message: NO_PRESET_GUIDANCE.to_string(),
+                // Audit AW2: a RESOLVED-but-invalid preset (hand-edited: empty
+                // slot, recursive, duplicate slots, bad timeout/temperature) now
+                // returns a SPECIFIC arm-time validation error from
+                // `activation::resolve_or_err`. Surface it so the user fixes the
+                // broken preset instead of being wrongly told to create a new
+                // one — the four other arm sites (select_model / slash / chat.send)
+                // already pass `msg` through. The generic guidance is kept only
+                // for the genuinely-missing cases (no `[moa]` section / preset
+                // not found), which `on_with_no_presets_configured_gives_guidance`
+                // locks in (that error reads "no [moa] section configured", not
+                // "invalid").
+                message: if msg.contains("is invalid and cannot be armed") {
+                    msg
+                } else {
+                    NO_PRESET_GUIDANCE.to_string()
+                },
                 data: None,
             }),
         }
@@ -700,6 +715,52 @@ mod tests {
             out.message
         );
         clear_session_moa(&key);
+    }
+
+    #[tokio::test]
+    async fn on_with_invalid_preset_surfaces_specific_error() {
+        // Audit AW2: arming an EXISTING-but-invalid preset must report the
+        // SPECIFIC validation failure (so the user fixes it), NOT the generic
+        // "no presets configured — create one" guidance meant for missing ones.
+        let _guard = moa_config_test_lock();
+        let mut moa = MoaToml::default();
+        let mut broken = solo_preset();
+        broken.advisor_timeout_secs = 0; // invalid: must be >= 1
+        moa.presets.insert("broken".to_string(), broken);
+        store_moa_config(Some(moa));
+
+        let ctx = test_ctx("moa-test-invalid-preset");
+        let key = ctx.session_key.to_key_string();
+        let out = TURN_CONTEXT
+            .scope(ctx, async {
+                MoaManageTool::default()
+                    .call(MoaManageArgs::On {
+                        preset: Some("broken".to_string()),
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert!(!out.success);
+        assert!(
+            out.message.contains("is invalid and cannot be armed"),
+            "{}",
+            out.message
+        );
+        assert!(
+            out.message.contains("advisor_timeout_secs must be >= 1"),
+            "{}",
+            out.message
+        );
+        // Must NOT mask the real reason behind the generic guidance.
+        assert!(
+            !out.message.contains("no [moa] presets configured"),
+            "{}",
+            out.message
+        );
+        clear_session_moa(&key);
+        store_moa_config(None);
     }
 
     #[tokio::test]

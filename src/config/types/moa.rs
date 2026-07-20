@@ -136,7 +136,12 @@ impl MoaToml {
             // out-of-range value reaches the API verbatim; the aggregator branch
             // is NOT fail-soft, so a bad value there fails the whole turn with an
             // opaque 400. Reject at the config boundary (same 0.0..=2.0 convention
-            // as rig/config.rs) so both write paths fail closed.
+            // as rig/config.rs). NOTE (audit D2): this is the WIDEST range — it
+            // catches gross errors + NaN/Inf, but a provider with a narrower
+            // protocol limit (e.g. anthropic 0.0..=1.0) can still 400 on a value
+            // in (1.0, 2.0]. Per-protocol clamping isn't available here (a MoA
+            // slot carries only a provider key, not the resolved protocol), so
+            // the turn-time 400 is the self-correcting backstop for that band.
             for t in [preset.advisor_temperature, preset.aggregator_temperature]
                 .into_iter()
                 .flatten()
