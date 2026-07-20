@@ -36,7 +36,7 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
         conn.execute_batch("PRAGMA foreign_keys = OFF;")
             .map_err(db_err)?;
 
-        conn.execute_batch(
+        let migration_result = conn.execute_batch(
             r#"
             BEGIN;
 
@@ -75,8 +75,14 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
             COMMIT;
             "#,
-        )
-        .map_err(db_err)?;
+        );
+
+        if let Err(e) = migration_result {
+            // Best-effort rollback so the connection is not left with FK
+            // enforcement disabled and an open transaction.
+            let _ = conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
+            return Err(db_err(e));
+        }
 
         // Re-enable FK enforcement
         conn.execute_batch("PRAGMA foreign_keys = ON;")

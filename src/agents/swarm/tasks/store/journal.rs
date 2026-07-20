@@ -6,6 +6,21 @@ use rusqlite::params;
 use super::helpers::{db_err, now_epoch};
 use super::SqliteCoordTaskStore;
 
+/// Decode a JSON-encoded journal array column. A corrupt payload would
+/// otherwise look like a legitimately empty list — log a warning so the
+/// operator can spot disk/encoding drift instead of silently losing history.
+fn decode_journal_field(task_id: &str, field: &str, raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_else(|e| {
+        tracing::warn!(
+            task_id,
+            field,
+            error = %e,
+            "coord_task_journals: corrupt JSON, treating as empty list"
+        );
+        Vec::new()
+    })
+}
+
 pub(super) async fn upsert_task_journal(
     store: &SqliteCoordTaskStore,
     input: crate::agents::swarm::tasks::NewTaskExitJournal,
@@ -75,10 +90,10 @@ pub(super) async fn get_task_journal(
             let artifacts_raw: String = row.get(4)?;
             let next_raw: String = row.get(5)?;
             let confidence_i: Option<i64> = row.get(6)?;
-            let decisions: Vec<String> = serde_json::from_str(&decisions_raw).unwrap_or_default();
-            let artifacts_ref: Vec<String> =
-                serde_json::from_str(&artifacts_raw).unwrap_or_default();
-            let next_steps: Vec<String> = serde_json::from_str(&next_raw).unwrap_or_default();
+            let decisions = decode_journal_field(task_id, "decisions", &decisions_raw);
+            let artifacts_ref =
+                decode_journal_field(task_id, "artifacts_ref", &artifacts_raw);
+            let next_steps = decode_journal_field(task_id, "next_steps", &next_raw);
             Ok(crate::agents::swarm::tasks::TaskExitJournal {
                 task_id: row.get(0)?,
                 agent_id: row.get(1)?,
@@ -118,12 +133,13 @@ pub(super) async fn list_team_journals(
             let artifacts_raw: String = row.get(4)?;
             let next_raw: String = row.get(5)?;
             let confidence_i: Option<i64> = row.get(6)?;
-            let decisions: Vec<String> = serde_json::from_str(&decisions_raw).unwrap_or_default();
-            let artifacts_ref: Vec<String> =
-                serde_json::from_str(&artifacts_raw).unwrap_or_default();
-            let next_steps: Vec<String> = serde_json::from_str(&next_raw).unwrap_or_default();
+            let row_task_id: String = row.get(0)?;
+            let decisions = decode_journal_field(&row_task_id, "decisions", &decisions_raw);
+            let artifacts_ref =
+                decode_journal_field(&row_task_id, "artifacts_ref", &artifacts_raw);
+            let next_steps = decode_journal_field(&row_task_id, "next_steps", &next_raw);
             Ok(crate::agents::swarm::tasks::TaskExitJournal {
-                task_id: row.get(0)?,
+                task_id: row_task_id,
                 agent_id: row.get(1)?,
                 summary: row.get(2)?,
                 decisions,
