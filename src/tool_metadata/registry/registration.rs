@@ -305,11 +305,21 @@ impl ToolRegistrar {
     ///
     /// Only rules with ^/ prefix patterns are registered as tools.
     ///
+    /// Routed through `ConflictResolver` so a custom rule whose canonical
+    /// name (or any future alias) collides with a higher-priority builtin /
+    /// MCP / plugin tool gets renamed instead of silently coexisting in the
+    /// flat namespace. Multiple custom rules resolving to the same name are
+    /// still distinguished by `rule_index` in the id.
+    ///
     /// # Arguments
     ///
     /// * `rules` - Routing rules from config.toml
-    pub async fn register_custom_commands(&self, rules: &[RoutingRuleConfig]) {
-        let mut tools = self.tools.write().await;
+    /// * `conflict_resolver` - The catalog's conflict resolver
+    pub async fn register_custom_commands(
+        &self,
+        rules: &[RoutingRuleConfig],
+        conflict_resolver: &ConflictResolver,
+    ) {
         let mut count = 0;
 
         for (index, rule) in rules.iter().enumerate() {
@@ -359,7 +369,7 @@ impl ToolRegistrar {
                 tool = tool.with_routing_system_prompt(prompt.clone());
             }
 
-            tools.insert(id, tool);
+            conflict_resolver.register_with_conflict_resolution(tool).await;
             count += 1;
         }
 
