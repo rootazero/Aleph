@@ -94,12 +94,14 @@ pub async fn run_wait_visual(
             };
         }
 
-        // Byte equality on the encoded image is enough: identical pixels
-        // produce identical PNG output (the encoder is deterministic), and
-        // for JPEG, identical input yields identical output too. Subpixel
-        // jitter (animated cursor, blinking caret) will show up as a diff
-        // and prevent false-positive stability — the caller's timeout is
-        // the safety net for genuinely animated UIs.
+        // Byte equality on the encoded image is enough when the encoder is
+        // deterministic (PNG, BMP). JPEG and WebP encoders are typically
+        // non-deterministic due to IDCT/Huffman optimizations — identical
+        // pixels produce different bytes on each poll and `matched` stays
+        // false even for a fully static UI. The caller's `timeout_ms` is
+        // the safety net in that case. Subpixel jitter (animated cursor,
+// blinking caret) shows up as a diff and correctly prevents
+        // false-positive stability on deterministic formats.
         let matched = match last_b64.as_ref() {
             Some(prev) => *prev == shot.image_base64,
             None => false,
