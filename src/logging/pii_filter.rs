@@ -2,37 +2,33 @@
 ///
 /// This layer intercepts tracing events and scrubs PII before they are
 /// written to log files or console output.
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use aleph_logging::scrub_pii;
 use tracing::{field::Visit, Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
-/// Tracing layer that scrubs PII from all log messages
-///
-/// **Note:** This type is a placeholder. The actual PII scrubbing is performed
-/// by the formatting layer returned by [`create_pii_scrubbing_layer`].
-/// Use [`create_pii_scrubbing_layer`] for production logging with PII protection.
-///
-/// This struct implements [`Layer`] as a no-op and exists primarily for
-/// backward compatibility and documentation purposes.
+static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Tracing layer that scrubs PII from all log messages — **PASSTHROUGH
+/// ONLY.** The `Layer` trait cannot rewrite event fields, so this struct
+/// cannot do real scrubbing; the actual implementation lives in the
+/// `FormatEvent` returned by [`create_pii_scrubbing_layer`]. New code MUST
+/// use [`create_pii_scrubbing_layer`]; this struct is kept in the public
+/// API only for backward compatibility and the first time its `on_event`
+/// fires it emits a `warn!` so misconfiguration shows up in operator logs.
 pub struct PiiScrubbingLayer;
 
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        // Note: This implementation is a placeholder for the actual scrubbing logic.
-        // In a full implementation, we would:
-        // 1. Extract all field values from the event
-        // 2. Apply scrub_pii to each string field
-        // 3. Re-emit the event with scrubbed values
-        //
-        // However, tracing's event model doesn't support mutation.
-        // The proper approach is to use a custom FormatEvent implementation
-        // that scrubs messages during formatting rather than before.
-        //
-        // For now, we document the intended behavior and will implement
-        // the actual scrubbing in the format layer (see below).
-
-        // This prevents the "unused" warning
         let _ = event;
+        if !PASSTHROUGH_WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "PiiScrubbingLayer is a passthrough — install PII scrubbing via \
+                 create_pii_scrubbing_layer() (a FormatEvent) instead. See the \
+                 note on PiiScrubbingLayer in src/logging/pii_filter."
+            );
+        }
     }
 }
 

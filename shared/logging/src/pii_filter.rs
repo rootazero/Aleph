@@ -2,16 +2,35 @@
 ///
 /// Custom `FormatEvent` implementation that scrubs PII from all log messages
 /// before writing to console or file output.
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::pii::scrub_pii;
 use tracing::{field::Visit, Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
-/// Tracing layer that scrubs PII from all log messages (placeholder)
+static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Tracing layer that scrubs PII from all log messages — **PASSTHROUGH
+/// ONLY.** This type is registered by callers that expected "a layer that
+/// scrubs", but tracing's `Layer` trait cannot rewrite event fields — PII
+/// scrubbing for log lines must run in a `FormatEvent`, which is what
+/// [`create_pii_scrubbing_layer`] installs. This struct is kept in the public
+/// API for backward compatibility only; new code MUST use
+/// [`create_pii_scrubbing_layer`] (or compose it via
+/// `SubscriberExt::with(...)`). The first time this no-op observes an event
+/// it emits a `warn!` so misconfiguration shows up in operator logs.
 pub struct PiiScrubbingLayer;
 
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let _ = event;
+        if !PASSTHROUGH_WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "PiiScrubbingLayer is a passthrough — install PII scrubbing via \
+                 create_pii_scrubbing_layer() (a FormatEvent) instead. See the \
+                 note on PiiScrubbingLayer in aleph_logging::pii_filter."
+            );
+        }
     }
 }
 
