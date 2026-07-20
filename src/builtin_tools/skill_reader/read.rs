@@ -146,6 +146,7 @@ impl ReadSkillTool {
         let mut hits = Vec::new();
         let mut seen_canonical = std::collections::HashSet::new();
         for skills_dir in &self.skills_dirs {
+            // First: the obvious match — directory whose name equals the id.
             let skill_dir = skills_dir.join(skill_id);
             if skill_dir.is_dir() && skill_dir.join("SKILL.md").exists() {
                 let key = fs::canonicalize(&skill_dir).unwrap_or_else(|_| skill_dir.clone());
@@ -153,8 +154,46 @@ impl ReadSkillTool {
                     hits.push(skill_dir);
                 }
             }
+            // Fallback: scan sibling dirs whose SKILL.md frontmatter slugs to
+            // the requested id (manifest `name` may differ from the on-disk
+            // dir, e.g. hub installs). Without this the id the registry /
+            // prompt advertises cannot be resolved by `skill_read`.
+            if let Ok(entries) = std::fs::read_dir(skills_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() || !path.join("SKILL.md").exists() {
+                        continue;
+                    }
+                    if let Some(slug) = skill_md_slug(&path) {
+                        if slug == skill_id && seen_canonical.insert(
+                            fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
+                        ) {
+                            hits.push(path);
+                        }
+                    }
+                }
+            }
         }
         hits
+    }
+
+    /// Read the first `name:` frontmatter line from `<skill_dir>/SKILL.md`
+    /// and return the same slug the registry uses (lowercase, spaces → `-`).
+    /// Returns `None` for any I/O / parse failure so the caller can simply
+    /// skip that directory instead of erroring out of the whole lookup.
+    fn skill_md_slug(skill_dir: &std::path::Path) -> Option<String> {
+        let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).ok()?;
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("name:") {
+                let name = rest.trim().trim_matches(['"', '\'']).trim();
+                if name.is_empty() {
+                    return None;
+                }
+                return Some(name.to_lowercase().replace(' ', "-"));
+            }
+        }
+        None
     }
 
     /// Validate `skill_id` to prevent path traversal attacks
