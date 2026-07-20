@@ -66,6 +66,9 @@ pub async fn run_node_approval(
         agent_id: format!("node:{node_id}"),
         session_key: String::new(),
         reason: (!reason.is_empty()).then(|| reason.to_string()),
+        // Cluster-node approvals are resolved by the center operator (RPC path),
+        // never a channel button, so the originator gate does not apply here.
+        originator_user_id: None,
     };
     let record = manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
     // Register BEFORE publishing so an instantly-resolving operator cannot race

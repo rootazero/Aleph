@@ -27,6 +27,12 @@ pub use dispatch::{
     FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner, Orchestrator,
     TerminateReason,
 };
+// `ExecTier` appears in the public `FlowRequest::exec_tier` field and the
+// `HarnessRunner::run` trait param, so it must be publicly nameable — the crate
+// root keeps `config` private, which would otherwise leave those pub API items
+// referencing an unreachable type (external `HarnessRunner` impls could not name
+// the param). Re-exported here alongside the types that surface it.
+pub use crate::config::types::policies::ExecTier;
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_run_tool::{FlowRunContext, FlowRunDescriptor, FlowRunInput, FlowRunTool};

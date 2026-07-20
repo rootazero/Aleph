@@ -81,7 +81,8 @@ Examples:\n\
     /// Path resolution rules:
     /// 1. Absolute paths (starting with `/`) - used as-is
     /// 2. Home paths (starting with `~`) - expanded to home directory
-    /// 3. Relative paths - resolved via `ToolContext` `output_dir`, or global fallback
+    /// 3. Relative paths - anchored at the per-run `FsScope` base, falling back
+    ///    to the shared `ToolContext` `output_dir`, then a global default
     async fn resolve_output_path(
         &self,
         output_path: &str,
@@ -101,8 +102,17 @@ Examples:\n\
             }
         }
 
-        // For relative paths, resolve from ToolContext
-        let output_dir = if let Some(ref handle) = self.tool_context_handle {
+        // For relative paths, anchor at the per-run `FsScope` task-local first
+        // (per-run truth, immune to a concurrent run rewriting the shared
+        // `ToolContextHandle` mid-run — the same precedence file tools use in
+        // `file_ops::check_and_resolve_path`). A normal run's scope base is
+        // already `<workspace>/output/documents`, so this is identical to the
+        // shared-handle branch below for non-isolated runs; a worktree-isolated
+        // agent anchors at its checkout root, matching where its file writes go.
+        // Falls back to the shared handle, then a global default, outside any scope.
+        let output_dir = if let Some(scope) = crate::tools::fs_scope::current() {
+            scope.base
+        } else if let Some(ref handle) = self.tool_context_handle {
             let ctx = handle.read().await;
             ctx.output_dir.join("documents")
         } else {

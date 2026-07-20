@@ -61,6 +61,15 @@ pub struct ExecApprovalRecord {
     /// instead of blindly retrying. Only ever set on a `Deny`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deny_reason: Option<String>,
+    /// Raw channel user id of the human whose message triggered this approval
+    /// (the "originator"). Set only for channel-originated runs. The channel
+    /// button-callback gate (`ManagerCallbackSink::handle_callback`) refuses a
+    /// resolution from anyone but this user, closing the group-chat bypass where
+    /// any paired member could approve another member's action. Absent on
+    /// records persisted before this field existed and on non-channel approvals
+    /// — both skip the gate (best-effort, preserving prior behaviour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originator_user_id: Option<String>,
 }
 
 impl ExecApprovalRecord {
@@ -108,6 +117,7 @@ impl ExecApprovalRecord {
             // tool-dispatch chokepoint that raised the gate.
             tool_call_id: crate::approval::current_tool_call_id(),
             deny_reason: None,
+            originator_user_id: request.originator_user_id.clone(),
         }
     }
 
@@ -407,6 +417,25 @@ impl ExecApprovalManager {
         }
     }
 
+    /// The originator (raw channel user id) recorded on a **live** pending
+    /// approval, or `None` when the id is unknown / already resolved / expired,
+    /// OR when the record carries no originator (non-channel or legacy record).
+    ///
+    /// The channel button-callback gate
+    /// ([`ManagerCallbackSink::handle_callback`](crate::approval::callback_sink))
+    /// uses this to let only the originator resolve via a button: a `Some` that
+    /// mismatches the clicker is refused; a `None` skips the gate (best-effort,
+    /// preserving the pre-originator behaviour, and letting dead records fall
+    /// through to the normal "expired" reply from [`Self::resolve`]).
+    #[must_use]
+    pub fn record_originator(&self, id: &str) -> Option<String> {
+        let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
+        pending
+            .get(id)
+            .filter(|entry| entry.is_live())
+            .and_then(|entry| entry.record.originator_user_id.clone())
+    }
+
     /// Resolve an unresolved approval for `session_key` by position.
     ///
     /// A channel TEXT reply (`/approve` / `/deny`) carries no request id, so
@@ -493,9 +522,9 @@ impl ExecApprovalManager {
                     .and_then(|ids| ids.get(n.wrapping_sub(1)).cloned());
                 match addressed {
                     Some(id)
-                        if pending
-                            .get(&id)
-                            .is_some_and(|e| e.is_live() && e.record.session_key == session_key) =>
+                        if pending.get(&id).is_some_and(|e| {
+                            e.is_live() && e.record.session_key == session_key
+                        }) =>
                     {
                         id
                     }
@@ -670,6 +699,7 @@ mod tests {
             agent_id: "main".to_string(),
             session_key: "agent:main:main".to_string(),
             reason: None,
+            originator_user_id: None,
         }
     }
 

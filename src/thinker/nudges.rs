@@ -8,14 +8,6 @@
 //! is scaffolding only (R10). Editing the wording here changes model behaviour;
 //! it never changes loop control flow.
 
-/// Ephemeral nudge for the grace turn fired by
-/// `LoopDirective::StopDiminishing` — a single tool-less LLM call framed
-/// around lack of measurable progress. Tools are also stripped at the
-/// request layer (no `.with_tools(...)`), so the model cannot loop further.
-pub const GRACE_NUDGE_DIMINISHING: &str =
-    "You have not been making measurable progress on this task. \
-     Stop calling tools and summarize what you have found so far for the user.";
-
 /// Ephemeral nudge for the grace turn fired when the `max_iterations`
 /// cap trips — same shape as the other nudges but framed around the
 /// iteration limit. Without this turn a runaway that ends on an

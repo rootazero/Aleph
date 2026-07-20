@@ -77,6 +77,9 @@ impl ApprovalRequester for OperatorApprovalRequester {
             // surface (panel pending list) can show WHY the tool is gated,
             // not just what it does.
             reason: (!reason.is_empty()).then(|| reason.to_string()),
+            // Operator/Panel approvals resolve via the `exec.approval.resolve`
+            // RPC, not a channel button, so the originator gate never applies.
+            originator_user_id: None,
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
         // Pairing key for the client: which tool row this card belongs under.

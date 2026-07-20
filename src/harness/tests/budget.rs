@@ -276,7 +276,18 @@ const BUDGETED: [&str; 12] = [
 /// side effects moved OUT of the loop into the decorators in `src/providers/`
 /// (trait default + three overrides) — cognition/policy stays outside the
 /// harness (R10). Down-only ratchet: paid down, no 3-question answer required.
-const CEILING: usize = 5070;
+///
+/// 5070 → 5008 (−62): removed the `DiminishingReturnsDetector` hard-stop (R10's
+/// "5 不" #3 — the loop must make no completion judgement of its own). Gone from
+/// `think.rs`: the `after_turn` consumer, its `output_tokens` read, the
+/// `GraceReason::Diminishing` grace-turn path, and the `use LoopDirective`
+/// import. Deleted outside this budget: the detector, `after_turn`, the
+/// `StopDiminishing` directive and `TurnMetrics` in `src/context/budget/`, and
+/// `GRACE_NUDGE_DIMINISHING` in `src/thinker/nudges.rs`. A genuinely-stuck run
+/// now stops on the harder caps (`max_iterations` / `ToolLoopVerifier` /
+/// consecutive-failure) or the model's own judgement — never a middleware
+/// heuristic. Down-only ratchet: paid down, no 3-question answer required.
+const CEILING: usize = 5008;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

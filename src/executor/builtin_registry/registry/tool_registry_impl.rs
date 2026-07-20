@@ -481,12 +481,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                     // concurrent run of another agent can swap it mid-turn and this
                     // tool would close/create the WRONG session (same rule
                     // recall_context and memory_search scope=current_session follow).
-                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
-                        self.session_context_handle
-                            .as_ref()
-                            .and_then(|h| h.try_read().ok())
-                            .map(|ctx| ctx.session_key_str.clone())
-                    });
+                    let session_key =
+                        crate::tools::turn_context::current_session_key().or_else(|| {
+                            self.session_context_handle
+                                .as_ref()
+                                .and_then(|h| h.try_read().ok())
+                                .map(|ctx| ctx.session_key_str.clone())
+                        });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
                         obj.insert(
                             "__session_key".into(),
@@ -508,12 +509,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let arguments = {
                     let mut args = arguments;
                     // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
-                        self.session_context_handle
-                            .as_ref()
-                            .and_then(|h| h.try_read().ok())
-                            .map(|ctx| ctx.session_key_str.clone())
-                    });
+                    let session_key =
+                        crate::tools::turn_context::current_session_key().or_else(|| {
+                            self.session_context_handle
+                                .as_ref()
+                                .and_then(|h| h.try_read().ok())
+                                .map(|ctx| ctx.session_key_str.clone())
+                        });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
                         obj.insert(
                             "__session_key".into(),
@@ -537,12 +539,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let arguments = {
                     let mut args = arguments;
                     // Prefer the race-free per-turn session key; see session_new above.
-                    let session_key = crate::tools::turn_context::current_session_key().or_else(|| {
-                        self.session_context_handle
-                            .as_ref()
-                            .and_then(|h| h.try_read().ok())
-                            .map(|ctx| ctx.session_key_str.clone())
-                    });
+                    let session_key =
+                        crate::tools::turn_context::current_session_key().or_else(|| {
+                            self.session_context_handle
+                                .as_ref()
+                                .and_then(|h| h.try_read().ok())
+                                .map(|ctx| ctx.session_key_str.clone())
+                        });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
                         obj.insert(
                             "__session_key".into(),
@@ -734,7 +737,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
             "task_update" => Box::pin(async move {
-                let tool = self.task_update_tool.as_ref().ok_or_else(|| AlephError::tool("task_update not available: no CoordTaskStore configured"))?;
+                let tool = self.task_update_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_update not available: no CoordTaskStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "task_list" => Box::pin(async move {
@@ -743,12 +748,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "task_wait" => {
-                Box::pin(async move {
-                    let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore configured"))?;
-                    tool.call_json(arguments).await
-                })
-            }
+            "task_wait" => Box::pin(async move {
+                let tool = self.task_wait_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_wait not available: no CoordTaskStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "task_comment" => Box::pin(async move {
                 let tool = self.task_comment_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("task_comment not available: no CoordTaskStore configured")
@@ -1536,5 +1541,44 @@ mod recall_context_identity_tests {
             .expect("recall_context output carries a fragments array");
         assert_eq!(fragments.len(), 1, "global mirror must remain the fallback");
         assert_eq!(fragments[0]["content"], "the bob chunk");
+    }
+
+    /// `caller_agent_id` prefers the per-turn `TURN_CONTEXT` over the shared,
+    /// mutable `session_context_handle`: a concurrent run rewriting the mirror
+    /// to another agent cannot steal THIS turn's identity mid-call.
+    #[tokio::test]
+    async fn caller_agent_id_prefers_the_turn_over_the_shared_handle() {
+        let mut registry = BuiltinToolRegistry::new().await.unwrap();
+        // Mirror points at "bob" — what a concurrent run's write leaves behind.
+        registry.session_context_handle = Some(Arc::new(RwLock::new(SessionContext {
+            session_key_str: SessionKey::main("bob").to_key_string(),
+            ..Default::default()
+        })));
+
+        let out = TURN_CONTEXT
+            .scope(turn_ctx("alice"), async {
+                registry.caller_agent_id("fallback")
+            })
+            .await;
+        assert_eq!(
+            out, "alice",
+            "the per-turn agent wins over the shared mirror"
+        );
+    }
+
+    /// Outside a turn scope the shared handle stays the identity source, and its
+    /// absence yields the fallback — unchanged pre-fix behaviour.
+    #[tokio::test]
+    async fn caller_agent_id_falls_back_to_handle_then_fallback_without_a_turn() {
+        let mut registry = BuiltinToolRegistry::new().await.unwrap();
+        // No handle, no turn scope → fallback.
+        assert_eq!(registry.caller_agent_id("fallback"), "fallback");
+
+        // Handle set, still no turn scope → parsed from the handle.
+        registry.session_context_handle = Some(Arc::new(RwLock::new(SessionContext {
+            session_key_str: SessionKey::main("bob").to_key_string(),
+            ..Default::default()
+        })));
+        assert_eq!(registry.caller_agent_id("fallback"), "bob");
     }
 }

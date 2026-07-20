@@ -32,10 +32,22 @@ impl BuiltinToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
-    /// Extract caller's `agent_id` from the injected session context handle,
-    /// falling back to `fallback` if the handle is missing, the lock cannot
-    /// be acquired non-blockingly, or the key fails to parse.
+    /// Extract the caller's `agent_id` for the tool call currently executing.
+    ///
+    /// Prefers the per-turn `TURN_CONTEXT` task-local — scoped by the dispatch
+    /// chokepoint ([`ScopedToolService::execute`]) around every tool call — over
+    /// the shared, mutable `session_context_handle`. Both resolve to
+    /// `session_key.agent_id()`, but a concurrent run can overwrite the shared
+    /// handle mid-turn, so reading it would bind this call to the *wrong*
+    /// agent's identity (memory scope, session routing, MCP curated store).
+    /// The handle stays as the fallback for any call site outside a turn scope;
+    /// `fallback` is the last resort when neither source is present or parseable.
+    ///
+    /// [`ScopedToolService::execute`]: crate::tools::scoped::ScopedToolService
     pub(super) fn caller_agent_id(&self, fallback: &str) -> String {
+        if let Some(agent_id) = crate::tools::turn_context::current_agent_id() {
+            return agent_id;
+        }
         self.session_context_handle
             .as_ref()
             .and_then(|h| h.try_read().ok())

@@ -33,6 +33,25 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         // Failed parse means this is not an approval callback — return None so
         // the router lets the request through.
         let (id, decision) = ApprovalBridge::parse_callback(callback_data)?;
+
+        // Originator gate: a channel approval button may only be used by the
+        // person whose message triggered the approval. In a group chat several
+        // paired members see the same inline buttons; without this any of them
+        // could approve (or deny) another member's action — the group-chat
+        // approval bypass. `record_originator` returns `Some` only for a live
+        // record that recorded an originator, so non-channel / legacy records
+        // (`None`) fall through unchanged. Operators resolve via the
+        // `exec.approval.resolve` RPC — a different path — so this channel-only
+        // gate never blocks them.
+        if let Some(originator) = self.manager.record_originator(&id) {
+            if originator != user_id {
+                return Some(ApprovalCallbackResult {
+                    resolved: false,
+                    response_text: "只有发起该操作的用户可以在此审批。".to_string(),
+                });
+            }
+        }
+
         let resolved = self
             .manager
             .resolve(&id, decision, Some(user_id.to_string()));
@@ -64,6 +83,7 @@ mod tests {
             agent_id: "main".to_string(),
             session_key: "telegram:123".to_string(),
             reason: None,
+            originator_user_id: None,
         }
     }
 
@@ -107,5 +127,72 @@ mod tests {
 
         let resolved = waiter.await.unwrap();
         assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    /// Originator gate: a record that recorded an originator may be resolved via
+    /// a channel button ONLY by that user — a different paired member is refused
+    /// (the group-chat approval-bypass fix), while the originator resolves it.
+    #[tokio::test]
+    async fn originator_gate_blocks_a_non_originator() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let mut req = mock_request("rec-orig");
+        req.originator_user_id = Some("alice".to_string());
+        let record = manager.create(&req, 5_000);
+
+        let (id, rx, wait_timeout) = manager.register_pending(record);
+        let m2 = manager.clone();
+        let waiter = {
+            let id = id.clone();
+            tokio::spawn(async move { m2.await_registered(id, rx, wait_timeout).await })
+        };
+
+        let sink = ManagerCallbackSink::new(manager.clone());
+        // Bob (not the originator) taps approve — refused, record stays pending.
+        let out = sink
+            .handle_callback(&format!("approve:{}:once", id), "bob")
+            .await
+            .expect("is an approval callback");
+        assert!(
+            !out.resolved,
+            "a non-originator must not resolve the approval"
+        );
+
+        // Alice (the originator) taps approve — resolves normally.
+        let out = sink
+            .handle_callback(&format!("approve:{}:once", id), "alice")
+            .await
+            .expect("is an approval callback");
+        assert!(out.resolved, "the originator resolves the approval");
+
+        let resolved = waiter.await.unwrap();
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    /// A record with no originator (non-channel / legacy) keeps the prior
+    /// behaviour: any paired user may resolve — the gate is a no-op.
+    #[tokio::test]
+    async fn no_originator_record_is_resolvable_by_anyone() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        // `mock_request` leaves `originator_user_id = None`.
+        let record = manager.create(&mock_request("rec-legacy"), 5_000);
+
+        let (id, rx, wait_timeout) = manager.register_pending(record);
+        let m2 = manager.clone();
+        let waiter = {
+            let id = id.clone();
+            tokio::spawn(async move { m2.await_registered(id, rx, wait_timeout).await })
+        };
+
+        let sink = ManagerCallbackSink::new(manager.clone());
+        let out = sink
+            .handle_callback(&format!("approve:{}:once", id), "anyone")
+            .await
+            .expect("is an approval callback");
+        assert!(
+            out.resolved,
+            "a no-originator record stays resolvable by anyone"
+        );
+
+        let _ = waiter.await.unwrap();
     }
 }
