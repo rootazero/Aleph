@@ -22,7 +22,7 @@
 | 4 | cli routing R4 | `interfaces/cli/src/main.rs:583` marketplace-vs-direct 判据在 shell | ✅ |
 | 5 | uuid R3 | `shared/protocol/src/jsonrpc.rs:303` + `auth.rs:154/184/207` | ✅ |
 | 6 | screen_record region | `desktop/shared/src/perception/screen_record.rs:220`（**仅 macOS** `SCContentFilter` 抓全屏） | ⏸ macOS |
-| 7 | webview_perms Linux 腿 | `desktop/shell/src/webview_perms.rs:53`（授全部 UserMedia 含摄像头、无 origin 校验） | ⏸ Linux |
+| 7 | webview_perms Linux 腿 | `desktop/shell/src/webview_perms.rs:53`（授全部 UserMedia 含摄像头、无 origin 校验） | ✅ Linux（2026-07-20 补，见 ⑦） |
 
 ---
 
@@ -94,7 +94,38 @@
 
 **⑥ screen_record region（macOS-only）**：`SCContentFilter` 抓全屏、忽略 `config.region`。方案：`SCStreamConfiguration::setSourceRect(CGRect)` 从 `region` 裁剪，`width/height` 设为 region 尺寸×scale。Linux/Windows 已正确处理 region。留待 macOS 实现+真机验证。
 
-**⑦ webview_perms Linux 腿**：`grant_linux` 授全部 UserMedia（含摄像头）、无 origin 校验。方案：仅当 `is_for_audio_device() && !is_for_video_device()` 且 `webview.uri()` 经 `is_internal` 校验时 `allow()`。Linux-only，在 Windows 上连编译都排除。**代码亦留待 Linux 机器**（避免落地本机无法编译校验的代码；代价是 Linux 侧暂留“授摄像头”缺口）。
+**⑦ webview_perms Linux 腿**：原计划留待 Linux 机器；**2026-07-20 已在 Linux 开发机落地并编译校验**，详见下方「⑦（已落地）」。
+
+---
+
+## ⑦（已落地，Linux 真机）webview_perms Linux 腿 — audio-only + origin 门
+
+**问题**：`grant_linux`（`webview_perms.rs:53`）对**任意** `UserMediaPermissionRequest` 无条件 `request.allow()`——既授摄像头（video device），又不校验请求来源 origin。这是 Windows 腿（`grant_windows` 已有 mic-kind 判定 + `is_internal` origin 门）在 Linux 侧的对称缺口。
+
+**API 前置（已在 webkit2gtk 2.0.2 核实存在）**：
+- `UserMediaPermissionRequest::is_for_audio_device() -> bool` / `is_for_video_device() -> bool`
+- `WebViewExt::uri(&webview) -> Option<glib::GString>`（permission 回调首参 `webview` 即当前页，其 uri 即请求 origin）
+- `PermissionRequestExt::allow()` / `deny()`
+- `crate::external_link::is_internal(&Url)`——“是否 Panel 面”的导航 SSOT，Windows 腿已复用（DRY，P2/P5）
+
+**方案**：把 `grant_linux` 的 `connect_permission_request` 回调从“无条件 allow”改为两道门（结构对齐 Windows 腿）：
+1. `downcast_ref::<UserMediaPermissionRequest>()` 失败（非 UserMedia）→ `return false` 交默认处理（不变）。
+2. UserMedia 命中，算两道门：
+   - **audio-only 门**：`is_for_audio_device() && !is_for_video_device()`——Panel 语音按钮永不需要摄像头，任何含 video 的请求整体拒绝。
+   - **origin 门**：`WebViewExt::uri(webview)` → `tauri::Url::parse` → `external_link::is_internal`。
+3. 两门皆过 → `request.allow()`；否则 → `tracing::warn!(audio_only, origin_ok)` + `request.deny()`（**显式拒绝**，可审计，不依赖 WebKitGTK 随版本变化的 unhandled 默认行为——与 Windows 腿 withhold-and-log 一致）。回调返回 `true`（已处理）。
+4. `SettingsExt::set_enable_media_stream(true)` 保留（不开 getUserMedia 根本不可用）。
+
+**锁定决策（brainstorm 2026-07-20）**：
+- 门校验失败一律**显式 `deny()` + `warn`**（含：请求含 video / 来源非 Panel origin / `uri()` 返回 `None` 无法解析）——不选“return false 交默认”，因默认行为随 WebKitGTK 版本漂移，安全属性不可托底。
+- `uri()` 为 `None` 归入 origin_ok=false 分支（与 Windows 腿“origin 无法解析则 withhold”对称）。
+
+**改动范围**：仅 `grant_linux` 一个已 `#[cfg(target_os="linux")]` 门控的函数体，无新增文件、无新增依赖（`webkit2gtk` 已在依赖树）。
+
+**验证**：
+- `cargo check -p aleph-shell`（在本 Linux 开发机——正是当初把本项延后至此的触发条件；这是本项唯一能真编译校验的平台）。
+- 手动冒烟：Panel 语音按钮仍能取麦克风（无回归）；构造含 video 的 getUserMedia 或非 Panel origin 请求确认被 `deny`。
+- **不写自动化单测**：GTK permission 回调需活的 WebKitGTK webview + 真实 permission 事件，无法在无 GUI 的 test harness 中有意义地构造；不伪造覆盖率。
 
 ---
 
@@ -107,4 +138,4 @@
 
 ## 未决小点
 
-⑦ Linux 腿代码是否现在盲写：倾向**留到 Linux 机器**（与“Windows 可验证优先”一致，不落地无法编译校验的代码）。
+~~⑦ Linux 腿代码是否现在盲写：倾向**留到 Linux 机器**~~ — **已决**：2026-07-20 会话即在 Linux 开发机上，本项从“延后（设计先行）”提升为「⑦（已落地，Linux 真机）」，编译校验 `cargo check -p aleph-shell`。仅剩 **#6 macOS setSourceRect** 延后（无 macOS 环境，不盲写无法编译校验的代码）。
