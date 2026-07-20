@@ -19,7 +19,6 @@ impl PromptLayer for ToolsLayer {
         &[
             AssemblyPath::Basic,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

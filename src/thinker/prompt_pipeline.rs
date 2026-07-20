@@ -6,7 +6,7 @@
 use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
-    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
+    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer,
     IdentityFilesLayer, LanguageLayer, McpInstructionsLayer, MemoryProtocolLayer,
     MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
     ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
@@ -207,7 +207,6 @@ impl PromptPipeline {
             Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
-            Box::new(HeartbeatLayer),
             Box::new(OperationalGuidelinesLayer),
             Box::new(MultiStepConductLayer),
             Box::new(ProviderGuidanceLayer),
@@ -398,7 +397,10 @@ mod tests {
         // `mcp_list_resources`/`mcp_list_prompts` tools (doubled, verbatim ids
         // that do round-trip; R7/R10 static partition, no prompt-layer — as
         // MODEL_PERCEIVABLE_ECOSYSTEM.md already declared).
-        assert_eq!(pipeline.layer_count(), 40);
+        // → 39: HeartbeatLayer removed (§1.1 prune-the-prompt) — a pure
+        // progress-reporting how-to with a `[step N/total]` format template,
+        // redundant with MultiStepConductLayer's narration guidance.
+        assert_eq!(pipeline.layer_count(), 39);
     }
 
     #[test]
@@ -447,7 +449,6 @@ mod mode_tests {
             "environment",
             "runtime_capabilities",
             "protocol_tokens",
-            "heartbeat",
             "operational_guidelines",
             "provider_guidance",
             "session_budget",

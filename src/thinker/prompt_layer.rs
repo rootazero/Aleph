@@ -46,8 +46,6 @@ pub enum AssemblyPath {
     Hydration,
     /// Soul-enriched prompt — includes identity / personality.
     Soul,
-    /// Context-aware prompt — includes environment / security context.
-    Context,
     /// Pre-cached prompt — used when prompt caching is active.
     Cached,
 }
@@ -155,27 +153,6 @@ impl<'a> LayerInput<'a> {
         }
     }
 
-    /// Input for the `Context` path — config + resolved context.
-    #[must_use]
-    pub const fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self {
-            config,
-            tools: None,
-            context: Some(ctx),
-            mode: PromptMode::Full,
-            identity_files: None,
-            has_session_summaries: false,
-            agent_def: None,
-            mcp_instructions: None,
-            curated_memory_envelope: None,
-            chain_context: None,
-            behavior_name: None,
-            model_behavior_delta: None,
-            iteration_cap: None,
-            extra_files: None,
-        }
-    }
-
     /// Set the prompt mode for this assembly.
     #[must_use]
     pub const fn with_mode(mut self, mode: PromptMode) -> Self {
@@ -260,12 +237,10 @@ impl<'a> LayerInput<'a> {
 
     /// Attach an optional `ResolvedContext` to this input.
     ///
-    /// Used by the Basic / Hydration / Soul entry points so the Phase 2
-    /// widened layers (security, `operational_guidelines`, `protocol_tokens`,
-    /// `runtime_context`) can consume context on every assembly path
-    /// without forcing a switch to the dedicated `Context` route. The
-    /// `Context` path's `LayerInput::context` constructor already sets
-    /// this field, so callers on that path leave it alone.
+    /// Threaded by every production entry point (Basic / Cached) so the
+    /// Phase 2 widened layers (security, `operational_guidelines`,
+    /// `protocol_tokens`, `runtime_context`) can consume context on any
+    /// assembly path. `None` leaves those layers silent.
     #[must_use]
     pub const fn with_resolved_context_opt(mut self, ctx: Option<&'a ResolvedContext>) -> Self {
         self.context = ctx;

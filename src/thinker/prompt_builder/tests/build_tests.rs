@@ -28,23 +28,14 @@ fn test_thinking_guidance_enabled() {
     let builder = PromptBuilder::new(config);
     let prompt = builder.build_system_prompt(&[]);
 
-    // Should contain thinking transparency section
+    // Compressed under §1.1 prune-the-prompt: the Observation→Analysis→
+    // Planning→Decision framework and the confidence/alternatives sample
+    // phrasings were cut as a reasoning cage; only the directive remains.
     assert!(prompt.contains("## Thinking Transparency"));
-    assert!(prompt.contains("Reasoning Flow"));
-
-    // Should contain the four reasoning phases (inline in the flow bullet)
-    assert!(prompt.contains("Observation"));
-    assert!(prompt.contains("Analysis"));
-    assert!(prompt.contains("Planning"));
-    assert!(prompt.contains("Decision"));
-
-    // Should contain uncertainty guidance
-    assert!(prompt.contains("Expressing Uncertainty"));
-    assert!(prompt.contains("I'm confident"));
-    assert!(prompt.contains("I'm not sure"));
-
-    // Should contain alternatives guidance
-    assert!(prompt.contains("Acknowledging Alternatives"));
+    assert!(prompt.contains("reasoning visible"));
+    assert!(prompt.contains("confidence"));
+    assert!(!prompt.contains("Reasoning Flow"));
+    assert!(!prompt.contains("Acknowledging Alternatives"));
 }
 
 #[test]
@@ -52,7 +43,7 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
     // Phase 3 wiring: `PromptBuilder::with_resolved_context(...)` must
     // thread a `ResolvedContext` into the `Basic` assembly path so the
     // Phase 2 widened layers fire on the harness route (which calls
-    // `build_system_prompt`, not `build_system_prompt_with_context`).
+    // `build_system_prompt`).
     //
     // The harness-bridge default is `Background` paradigm + permissive
     // security — under those settings `OperationalGuidelinesLayer` must
@@ -73,8 +64,8 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
         "OperationalGuidelinesLayer must emit on Basic path when resolved_context is attached"
     );
     assert!(
-        prompt.contains("### Diagnostics"),
-        "Diagnostics sub-section missing from operational guidelines"
+        prompt.contains("Never autonomously restart"),
+        "operational guidelines must retain the never-restart safety rail"
     );
     // SecurityLayer always renders a "Security Level: …" note (sandbox
     // baseline) even under permissive — that's the documented envelope
@@ -104,23 +95,21 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
 }
 
 #[test]
-fn phase3_with_behavior_name_openai_emits_guidance_on_basic_path() {
-    // `PromptBuilder::with_behavior_name(...)` must thread the resolved
-    // governance behavior into the `Basic` assembly path so
-    // `ProviderGuidanceLayer` selects the right baseline block. The harness
-    // bridge sources the name from `resolve_behavior` (override > behavior_hint
-    // > protocol auto-mapping). Without a threaded delta, a non-anthropic
-    // behavior still emits the shared baseline blocks.
-    let builder = PromptBuilder::new(PromptConfig::default()).with_behavior_name("openai");
+fn phase3_with_behavior_name_openai_emits_delta_on_basic_path() {
+    // `ProviderGuidanceLayer` no longer hardcodes a shared tool-use /
+    // persistence baseline (§1.1 prune-the-prompt); it emits only the per-family
+    // `.md` delta threaded via `with_model_behavior_delta`. With a delta and a
+    // behavior name, it surfaces on the `Basic` assembly path.
+    let builder = PromptBuilder::new(PromptConfig::default())
+        .with_behavior_name("openai")
+        .with_model_behavior_delta(Some("## OpenAI Family\nAct, don't ask".to_string()));
     let prompt = builder.build_system_prompt(&[]);
     assert!(
-        prompt.contains("## Tool-Use Enforcement"),
-        "OpenAI protocol must surface tool-use enforcement on Basic path"
+        prompt.contains("Act, don't ask"),
+        "OpenAI family delta must surface on the Basic path"
     );
-    assert!(
-        prompt.contains("## Execution Discipline"),
-        "OpenAI protocol must surface execution discipline on Basic path"
-    );
+    // The old hardcoded baseline is gone.
+    assert!(!prompt.contains("## Tool-Use Enforcement"));
 }
 
 #[test]
@@ -336,7 +325,7 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
         timezone: "UTC".to_string(),
     });
 
-    let prompt = builder.build_system_prompt_with_context(&ctx);
+    let prompt = builder.with_resolved_context(ctx).build_system_prompt(&[]);
 
     // Runtime context should be present
     assert!(prompt.contains("## Runtime Environment"));
@@ -368,7 +357,7 @@ fn test_build_system_prompt_with_context_no_runtime_context() {
     // runtime_context should be None by default
     assert!(ctx.runtime_context.is_none());
 
-    let prompt = builder.build_system_prompt_with_context(&ctx);
+    let prompt = builder.with_resolved_context(ctx).build_system_prompt(&[]);
 
     // Runtime context section should NOT be present
     assert!(!prompt.contains("## Runtime Environment"));
@@ -401,7 +390,17 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         timezone: "Asia/Shanghai".to_string(),
     });
 
-    let prompt = builder.build_system_prompt_with_context(&resolved);
+    // Cached is the production path where every enhancement layer fires
+    // (CitationStandardsLayer is Soul+Cached, not Basic); join the stable +
+    // dynamic parts to inspect the full assembled prompt.
+    let parts = builder
+        .with_resolved_context(resolved)
+        .build_system_prompt_cached_with_mode(&[], crate::thinker::prompt_mode::PromptMode::Full);
+    let prompt = parts
+        .iter()
+        .map(|p| p.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // 1. RuntimeContext should be present
     assert!(
@@ -430,8 +429,8 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         "Missing operational guidelines"
     );
     assert!(
-        prompt.contains("### Diagnostics"),
-        "Missing diagnostics sub-section in operational guidelines"
+        prompt.contains("Never autonomously restart"),
+        "operational guidelines must retain the never-restart safety rail"
     );
 
     // 4. Citation standards should be present (always injected)
@@ -440,12 +439,12 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         "Missing citation standards"
     );
     assert!(
-        prompt.contains("citation is mandatory"),
+        prompt.contains("never fabricate a source"),
         "Missing citation requirement"
     );
 
     // Standard sections should still be present
-    assert!(prompt.contains("Your Role"), "Missing role section");
+    assert!(prompt.contains("You are an AI assistant"), "Missing role section");
 
     // Verify ordering: Environment -> Protocol -> Guidelines -> Citations -> RuntimeContext(dynamic)
     let env_pos = prompt.find("## Environment").unwrap();
@@ -549,7 +548,17 @@ fn test_interactive_prompt_minimal_token_overhead() {
         timezone: "UTC".to_string(),
     });
 
-    let prompt = builder.build_system_prompt_with_context(&resolved);
+    // Cached is the production path where every enhancement layer fires
+    // (CitationStandardsLayer is Soul+Cached, not Basic); join the stable +
+    // dynamic parts to inspect the full assembled prompt.
+    let parts = builder
+        .with_resolved_context(resolved)
+        .build_system_prompt_cached_with_mode(&[], crate::thinker::prompt_mode::PromptMode::Full);
+    let prompt = parts
+        .iter()
+        .map(|p| p.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // 1. RuntimeContext SHOULD be present (always injected when provided)
     assert!(
@@ -587,10 +596,10 @@ fn test_interactive_prompt_minimal_token_overhead() {
         "Citation standards should be present in WebRich mode"
     );
     assert!(
-        prompt.contains("citation is mandatory"),
+        prompt.contains("never fabricate a source"),
         "Citation requirement should be present in WebRich mode"
     );
 
     // Standard sections should be present
-    assert!(prompt.contains("Your Role"), "Missing role section");
+    assert!(prompt.contains("You are an AI assistant"), "Missing role section");
 }

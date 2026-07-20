@@ -18,7 +18,6 @@ impl PromptLayer for ToolUsageGrammarLayer {
             AssemblyPath::Basic,
             AssemblyPath::Hydration,
             AssemblyPath::Soul,
-            AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
     }

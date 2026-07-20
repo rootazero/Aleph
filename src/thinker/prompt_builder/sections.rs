@@ -81,7 +81,7 @@ impl PromptBuilder {
         }
     }
 
-    /// Append language setting section (test-only; pipeline uses LanguageSettingLayer)
+    /// Append language setting section (test-only; pipeline uses LanguageLayer)
     #[cfg(test)]
     pub(crate) fn append_language_setting(&self, prompt: &mut String) {
         if let Some(lang) = &self.config.language {

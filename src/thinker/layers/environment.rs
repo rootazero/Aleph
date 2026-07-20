@@ -19,7 +19,6 @@ const ENVIRONMENT_PATHS: &[AssemblyPath] = &[
     AssemblyPath::Basic,
     AssemblyPath::Hydration,
     AssemblyPath::Soul,
-    AssemblyPath::Context,
     AssemblyPath::Cached,
 ];
 
@@ -141,7 +140,6 @@ mod tests {
         let paths = EnvironmentLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
         assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
