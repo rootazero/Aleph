@@ -24,8 +24,6 @@ pub struct ParsedCommand {
     pub tool_id: String,
     /// Arguments after the command name
     pub arguments: Option<String>,
-    /// Full original input
-    pub full_input: String,
     /// Command-specific context
     pub context: CommandContext,
 }
@@ -102,7 +100,6 @@ impl CommandParser {
             command_name: resolved.tool.name.clone(),
             tool_id: resolved.tool.id.clone(),
             arguments: resolved.arguments,
-            full_input: resolved.raw_input,
             context,
         })
     }
