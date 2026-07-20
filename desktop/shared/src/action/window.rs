@@ -489,7 +489,7 @@ fn macos_window_list() -> Result<Vec<WindowInfo>> {
 
 #[cfg(target_os = "macos")]
 fn macos_focus_window(window_id: u64) -> Result<()> {
-    // Find the PID for this window by scanning the window list
+    // Find the PID (and bounds) for this window by scanning the window list.
     let windows = macos_window_list()?;
     let window = windows.iter().find(|w| w.id == window_id).ok_or_else(|| {
         DesktopError::WindowFailed(format!("No window found with id {window_id}"))
@@ -498,19 +498,33 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
     let pid = window.pid as i32;
 
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
-    match app {
-        Some(app) => {
-            #[allow(deprecated)]
-            // ActivateIgnoringOtherApps deprecated in macOS 14 but still functional
-            app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-            info!(window_id, pid, "Window focused (macOS)");
-            Ok(())
-        }
-        None => Err(DesktopError::WindowFailed(format!(
+    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+        return Err(DesktopError::WindowFailed(format!(
             "No application found with PID {pid}"
-        ))),
+        )));
+    };
+    #[allow(deprecated)]
+    // ActivateIgnoringOtherApps deprecated in macOS 14 but still functional.
+    app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+
+    // Bring the *specific* window forward, not just whatever the app had
+    // frontmost. Best-effort: without a match / Accessibility permission we have
+    // still activated the app (the prior behavior), so never hard-fail here.
+    match window.bounds.as_ref() {
+        Some(bounds) => match super::window_ax::raise_window(window.pid, bounds) {
+            Ok(true) => info!(window_id, pid, "Specific window raised via AX (macOS)"),
+            Ok(false) => info!(
+                window_id,
+                pid, "No AX window match; app activated only (macOS)"
+            ),
+            Err(e) => tracing::warn!(window_id, "AX raise error: {e}; app activated only"),
+        },
+        None => info!(
+            window_id,
+            pid, "No window bounds; app activated only (macOS)"
+        ),
     }
+    Ok(())
 }
 
 /// Set a window's position and/or size via the `System Events` Accessibility
@@ -550,6 +564,25 @@ fn macos_set_window_bounds(
             ))
         }
     };
+
+    // Precise path: resolve the exact CGWindowID to its AX window (by geometry)
+    // and set position/size there. Falls through to the osascript-by-title path
+    // below when AX can't resolve/authorize the window (no match / no perm).
+    if let Some(bounds) = window.bounds.as_ref() {
+        match super::window_ax::set_window_geometry(pid, bounds, position, size) {
+            Ok(true) => {
+                info!(window_id, pid, "Window bounds updated via AX (macOS)");
+                return Ok(());
+            }
+            Ok(false) => { /* no AX match — fall through to osascript */ }
+            Err(e) => {
+                tracing::warn!(
+                    window_id,
+                    "AX set-bounds error: {e}; falling back to osascript"
+                );
+            }
+        }
+    }
 
     let script = format!(
         r#"on run argv
