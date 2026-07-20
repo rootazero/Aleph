@@ -48,8 +48,16 @@ pub fn proposals_dir() -> PathBuf {
 /// the skill ids **sorted** and joined by `-`. Sorting (not observed order)
 /// makes the same skill SET map to the same name regardless of sequence, so a
 /// second observation of `[b, a]` collides with a draft of `[a, b]`.
+///
+/// Skill ids are sanitised before joining because the resulting name must
+/// round-trip through `store::list_at` (which keys on the on-disk `file_stem`
+/// after `sanitise_name` rewriting). Joining raw ids like `["git status",
+/// "code review"]` would yield `"metaskill-git status-code review"`, which
+/// the file system rewrites to `"metaskill-git_status-code_review"` and
+/// thereafter never matches the in-memory canonical_name — silently defeating
+/// the proposal dedup gate.
 pub fn canonical_name(skills: &[String]) -> String {
-    let mut sorted: Vec<&str> = skills.iter().map(String::as_str).collect();
+    let mut sorted: Vec<String> = skills.iter().map(|s| sanitise_name(s)).collect();
     sorted.sort_unstable();
     sorted.dedup();
     let joined = sorted.join("-");
@@ -226,6 +234,24 @@ mod tests {
         assert!(n.len() <= MAX_NAME_LEN);
         // Did not panic and is valid UTF-8 by construction.
         assert!(n.starts_with(PROPOSAL_PREFIX));
+    }
+
+    #[test]
+    fn canonical_name_sanitises_skills_so_it_round_trips_through_store() {
+        // Skills with whitespace / special chars must sanitise the same way
+        // the on-disk filename stem does, otherwise dedup against list_at
+        // (which keys on file_stem) silently fails.
+        let raw: Vec<String> = ["git status", "code review"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let n = canonical_name(&raw);
+        let expected = format!("{PROPOSAL_PREFIX}{}", sanitise_name("code review"));
+        let expected = format!("{expected}-{}", sanitise_name("git status"));
+        assert_eq!(n, expected);
+        // The same chain re-ordered must dedup identically.
+        let reordered: Vec<String> = raw.iter().rev().cloned().collect();
+        assert_eq!(canonical_name(&reordered), n);
     }
 
     #[test]
