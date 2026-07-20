@@ -278,30 +278,31 @@ pub fn render_loop_halt(
 
 /// Classify a raw execution error string into the appropriate i18n message key,
 /// then translate it.
+///
+/// Substring matches use word boundaries (`\b…\b`) or whole-token equality so a
+/// stray occurrence inside another word (e.g. an HTTP `429` echoing out of a
+/// request id, or "connection" inside "disconnection_policy") does not
+/// misclassify the error. This is the kind of regex/keyword classifier R8
+/// flags — it is intentionally narrow (HTTP-status + a few provider
+/// idioms) and the fallback is `ErrGeneric`, so any unmodelled error
+/// degrades to the safe "show the raw message" path instead of a wrong label.
 #[must_use]
 pub fn format_execution_error(error: &str, locale: Locale) -> String {
     let lower = error.to_lowercase();
 
-    let msg = if lower.contains("429")
-        || lower.contains("too many requests")
-        || lower.contains("rate limit")
-        || lower.contains("usage_limit")
+    let msg = if contains_phrase(&lower, &["429", "too many requests", "rate limit", "usage_limit"])
     {
         Msg::ErrRateLimit
-    } else if lower.contains("401")
-        || lower.contains("unauthorized")
-        || lower.contains("invalid api key")
-    {
+    } else if contains_phrase(&lower, &["401", "unauthorized", "invalid api key"]) {
         Msg::ErrAuth
-    } else if lower.contains("timeout") || lower.contains("timed out") {
+    } else if contains_phrase(&lower, &["timeout", "timed out"]) {
         Msg::ErrTimeout
-    } else if lower.contains("connection") || lower.contains("network") || lower.contains("dns") {
+    } else if contains_phrase(&lower, &["connection refused", "network", "dns "]) {
         Msg::ErrNetwork
-    } else if lower.contains("500")
-        || lower.contains("internal server error")
-        || lower.contains("503")
-        || lower.contains("service unavailable")
-    {
+    } else if contains_phrase(
+        &lower,
+        &["500", "internal server error", "503", "service unavailable"],
+    ) {
         Msg::ErrServiceUnavailable
     } else {
         let detail = truncate_error(error, 200);
@@ -309,6 +310,34 @@ pub fn format_execution_error(error: &str, locale: Locale) -> String {
     };
 
     t(msg, locale)
+}
+
+/// True if `lower` contains ANY of the supplied phrases as a whole-token
+/// substring — i.e. preceded by a non-alphanumeric (or start of string) AND
+/// followed by a non-alphanumeric (or end of string). This avoids the
+/// `lower.contains("connection")` foot-gun where "disconnection_policy"
+/// would match.
+fn contains_phrase(lower: &str, phrases: &[&str]) -> bool {
+    phrases.iter().any(|p| {
+        let needle = *p;
+        let bytes = lower.as_bytes();
+        let needle_bytes = needle.as_bytes();
+        if needle_bytes.is_empty() || needle_bytes.len() > bytes.len() {
+            return false;
+        }
+        let mut start = 0usize;
+        while let Some(pos) = lower[start..].find(needle) {
+            let abs = start + pos;
+            let before_ok = abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
+            let end = abs + needle_bytes.len();
+            let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return true;
+            }
+            start = abs + 1;
+        }
+        false
+    })
 }
 
 /// Truncate error message at a char boundary for display.

@@ -98,10 +98,22 @@ pub(crate) fn store_gateway_token(token: &str) -> Result<(), String> {
 /// Drop any persisted Gateway token. Called when switching to a target that
 /// carries no token (a different remote, or Local), so one remote's token is
 /// never presented to another or to the local daemon. Best-effort: a missing
-/// file is already the desired state.
+/// file is already the desired state. Any other IO error is logged at warn
+/// so the operator can see why a token from a previous remote might still be
+/// on disk — without that visibility the old credential gets presented to
+/// the new gateway on the next reconnect.
 fn remove_gateway_token() {
-    if let Some(marker) = gateway_token_marker() {
-        let _ = std::fs::remove_file(marker);
+    let Some(marker) = gateway_token_marker() else {
+        return;
+    };
+    match std::fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            "could not remove Gateway token at {}: {e}; \
+             the prior remote's credential may still be presented to the next target",
+            marker.display()
+        ),
     }
 }
 

@@ -352,12 +352,20 @@ mod imp {
     }
 
     /// Resolve the top-level window to root a query at: the first visible
-    /// top-level window of `pid`, or the foreground window when `pid` is `None`
-    /// (or no window of `pid` is visible).
+    /// top-level window of `pid`, or the foreground window when `pid` is `None`.
+    /// When `pid` is given but no visible window exists for it, return
+    /// `NotAvailable` rather than silently falling back to the foreground
+    /// window — that would let a caller asking for accessibility reads on
+    /// PID A be quietly served an unrelated, foreground application B.
     fn resolve_root_hwnd(pid: Option<i32>) -> Result<HWND> {
         if let Some(pid) = pid {
-            if let Some(hwnd) = top_window_for_pid(pid as u32) {
-                return Ok(hwnd);
+            match top_window_for_pid(pid as u32) {
+                Some(hwnd) => return Ok(hwnd),
+                None => {
+                    return Err(DesktopError::NotAvailable(format!(
+                        "no visible top-level window for pid {pid} to root the accessibility query"
+                    )));
+                }
             }
         }
         // SAFETY: documented Win32 call; the returned handle is validated below.

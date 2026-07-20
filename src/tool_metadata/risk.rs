@@ -1,7 +1,17 @@
 //! Risk evaluation for tool execution
 //!
-//! This module provides risk assessment based on text pattern matching,
-//! used to determine whether user confirmation is required.
+//! ⚠️ **R8 NOTE**: This module's pattern-matching risk heuristic is an
+//! architectural redline violation — Aleph's redlines forbid regex-based
+//! classification of user intent (R8 reserves regex for machine formats
+//! like JSON / URLs / file globs; intent classification belongs to the
+//! LLM via prompt). Patterns like `\b(api|http|request)\b` mis-fire on
+//! benign text ("Read a book" / "run a marathon"), producing both
+//! false-negatives (high-risk requests that don't match any keyword) and
+//! false-positives (low-risk requests that do). This file is kept
+//! because `tests/world/dispatcher_ctx.rs` still references
+//! `RiskEvaluator`; new consumers MUST call the LLM for risk gating
+//! instead of using `matches_high_risk_pattern`. Follow-up: remove this
+//! module + its test once `dispatcher_ctx` is rewritten.
 
 use regex::Regex;
 use std::sync::OnceLock;

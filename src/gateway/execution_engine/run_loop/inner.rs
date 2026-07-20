@@ -123,25 +123,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             });
         }
 
-        // Write workspace-scoped output paths to tool context handle. With a
-        // project override active, tool artifacts land under `<project>/output/`
-        // — same convention used for agent workspaces, just rooted at the
-        // user-picked project.
-        if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
-            match crate::tools::ToolContext::from_workspace(&effective_workspace) {
-                Ok(ctx) => {
-                    let mut tc = tc_handle.write().await;
-                    *tc = ctx;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to create ToolContext from workspace {}: {}",
-                        effective_workspace.display(),
-                        e
-                    );
-                }
-            }
-        }
+        // Deliberately NO per-run write to the shared `ToolContextHandle`. That
+        // mutation was the last cross-run contamination vector: two concurrent
+        // runs with different workspaces clobbered each other's handle, and an
+        // FsScope-absent reader then saw whichever run wrote last. The per-run
+        // `FsScope` published in `run_agent_loop` (see `run_loop/mod.rs`) already
+        // carries THIS run's workspace artifact dir — derived from the same
+        // `override > agent workspace` fallback as `effective_workspace` — and is
+        // *preferred* over the handle at the resolution chokepoint
+        // (`expand_input_path`). The write therefore only ever affected the
+        // FsScope-absent fallback, where the deterministic construction-time
+        // default is safer than a last-writer race. The handle stays as that
+        // read-only fallback; runs no longer mutate it. (`effective_workspace`
+        // still feeds `default_working_dir` below.)
 
         // === Pre-compute values reusable across retry attempts ===
 

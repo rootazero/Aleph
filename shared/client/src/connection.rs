@@ -267,9 +267,16 @@ impl AlephClient {
             id: Some(Value::String(id.clone())),
         };
 
+        // Serialise BEFORE registering the pending entry: a serde failure
+        // here used to leak the oneshot sender (registered next) for the
+        // lifetime of the client because the `?` returned while the entry
+        // was still in the map.
+        let json = serde_json::to_string(&request)?;
+        debug!("Sending: {}", json);
+
         let (tx, rx) = oneshot::channel();
 
-        // Register pending request
+        // Register pending request (only after serialise has succeeded).
         {
             let mut pending = self.pending.write().await;
             pending.insert(id.clone(), PendingRequest { tx });
@@ -278,8 +285,6 @@ impl AlephClient {
         // Send request. Hold the write lock only for the send, then release it
         // before touching `pending` so we never nest `write` -> `pending` and
         // invert the lock order used by `handle_message` (`pending` -> `write`).
-        let json = serde_json::to_string(&request)?;
-        debug!("Sending: {}", json);
         let send_result = {
             let mut write = self.write.lock().await;
             write.send(Message::Text(json.into())).await

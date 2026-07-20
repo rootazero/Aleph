@@ -502,6 +502,13 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
+        // NOTE: the read guard is held across the await on `channel.edit`
+        // because `Channel::edit` returns a future that borrows `&self`.
+        // Releasing the guard before the await requires the trait to
+        // return an owned (Box<dyn Future>) future, which would need a
+        // breaking change to every `Channel` impl. Documented risk:
+        // a slow adapter edit can block stop_channel / health; mitigated
+        // by the per-adapter `editing` capability gate.
         let channel = channel_arc.read().await;
         channel.edit(conversation_id, message_id, new_text).await
     }
@@ -518,6 +525,9 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
+        // NOTE: the read guard is held across the await on `channel.react`
+        // (see `edit` for the trait-borrow rationale). The same `Channel`
+        // trait is involved.
         let channel = channel_arc.read().await;
         channel.react(conversation_id, message_id, reaction).await
     }
@@ -531,6 +541,7 @@ impl ChannelRegistry {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
+        // NOTE: guard held across await (see `edit`).
         let channel = channel_arc.read().await;
         channel.send_typing(conversation_id).await
     }
@@ -567,18 +578,40 @@ impl ChannelRegistry {
                 channel_id
             );
             let mut rx = receiver;
-            while let Ok(message) = rx.recv().await {
-                // Record liveness before forwarding: a channel that is
-                // delivering messages is healthy regardless of subscribers.
-                health.write().await.record_event();
-                info!(
-                    "[Forwarder] Forwarding message from channel {} (text: {:?})",
-                    channel_id,
-                    message.text.chars().take(50).collect::<String>()
-                );
-                if let Err(e) = inbound_tx.send(message) {
-                    error!(error = ?e, "Failed to forward message — no subscribers, continuing");
-                    // Don't break: subscribers may join later
+            loop {
+                match rx.recv().await {
+                    Ok(message) => {
+                        // Record liveness before forwarding: a channel that is
+                        // delivering messages is healthy regardless of subscribers.
+                        health.write().await.record_event();
+                        info!(
+                            "[Forwarder] Forwarding message from channel {} (text: {:?})",
+                            channel_id,
+                            message.text.chars().take(50).collect::<String>()
+                        );
+                        if let Err(e) = inbound_tx.send(message) {
+                            error!(error = ?e, "Failed to forward message — no subscribers, continuing");
+                            // Don't break: subscribers may join later
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        // Slow consumer: skip ahead instead of killing the
+                        // forwarder. Previously the loop bound
+                        // `while let Ok(...)` exited on any Err, which
+                        // permanently killed this channel's inbound until
+                        // the next registry restart.
+                        warn!(
+                            channel = %channel_id,
+                            skipped = skipped,
+                            "Channel forwarder lagged; resuming from latest message"
+                        );
+                        health.write().await.record_event();
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel sender was dropped (channel removed). Exit.
+                        info!(channel = %channel_id, "Channel forwarder exiting (sender closed)");
+                        break;
+                    }
                 }
             }
 

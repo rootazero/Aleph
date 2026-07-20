@@ -54,6 +54,7 @@ impl ChannelApprovalBridge {
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
         session_key: &str,
+        originator: Option<&str>,
         timeout_ms: u64,
     ) -> crate::sandbox::exec_approval::ApprovalResponse {
         #[cfg(test)]
@@ -83,6 +84,11 @@ impl ChannelApprovalBridge {
             agent_id: crate::approval::audit_identity("tool", tool_name, reason).0,
             session_key: record_session_key,
             reason: Some(reason.to_string()),
+            // The human who triggered this tool call. Stamped onto the record so
+            // the channel button-callback gate refuses a resolution from anyone
+            // but them (group-chat approval-bypass fix). `None` when the run has
+            // no channel originator — the gate then no-ops.
+            originator_user_id: originator.map(str::to_string),
         };
 
         let record = approval_manager.create(&request, timeout_ms);

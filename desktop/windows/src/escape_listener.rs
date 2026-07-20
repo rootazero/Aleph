@@ -143,7 +143,12 @@ impl EscapeAbort for WindowsEscapeListener {
                 // `SetWindowsHookExW` and not yet unhooked.
                 let _ = unsafe { UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void)) };
             }
+            // Clear BEFORE dropping: any in-flight `keyboard_hook_proc`
+            // that has already loaded LISTENER_PTR into a local would
+            // otherwise dereference the freed `ListenerState` (UAF).
+            // Yield to let that callback observe the zero, then drop.
             LISTENER_PTR.store(0, Ordering::SeqCst);
+            std::thread::yield_now();
             let _ = self
                 .state
                 .lock()

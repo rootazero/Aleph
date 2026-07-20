@@ -302,6 +302,7 @@ impl DirectoryScanner {
             &self.aleph_home.join(PLUGINS_DIR),
             &mut discovered,
             DiscoverySource::AlephGlobal,
+            10,
         );
         trace!("Discovered {} plugins", discovered.len());
         Ok(discovered)
@@ -320,9 +321,10 @@ impl DirectoryScanner {
             &self.aleph_home.join(PLUGINS_DIR),
             &mut discovered,
             DiscoverySource::AlephGlobal,
+            10,
         );
         for parent in extra_parents {
-            self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project);
+            self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project, 20);
         }
         trace!(
             "Discovered {} plugins ({} extra parents)",
@@ -340,6 +342,7 @@ impl DirectoryScanner {
         plugins_dir: &Path,
         discovered: &mut Vec<DiscoveredPath>,
         source: DiscoverySource,
+        priority: u32,
     ) {
         if !plugins_dir.is_dir() {
             return;
@@ -365,7 +368,7 @@ impl DirectoryScanner {
 
             if has_plugin_manifest(&path) {
                 // Direct plugin directory
-                discovered.push(DiscoveredPath::new(path, source, 10));
+                discovered.push(DiscoveredPath::new(path, source, priority));
             } else if let Ok(sub_entries) = std::fs::read_dir(&path) {
                 // Check subdirectories (monorepo layout)
                 for sub_entry in sub_entries {
@@ -380,7 +383,7 @@ impl DirectoryScanner {
                         continue;
                     }
                     if has_plugin_manifest(&sub_path) {
-                        discovered.push(DiscoveredPath::new(sub_path, source, 10));
+                        discovered.push(DiscoveredPath::new(sub_path, source, priority));
                     }
                 }
             }

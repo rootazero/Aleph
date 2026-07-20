@@ -21,6 +21,7 @@ fn request(id: &str) -> ApprovalRequest {
         agent_id: "main".to_string(),
         session_key: "telegram:123456".to_string(),
         reason: None,
+        originator_user_id: None,
     }
 }
 

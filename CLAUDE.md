@@ -66,7 +66,7 @@
 
 - **薄 Harness 哲学 (Thin Harness)**: Aleph 采纳 Anthropic 流派，运行时极简、信任模型。Harness 是脚手架不是认知层。**模型越强，Harness 越薄** — 优秀的 Harness 必须通过"面向未来测试 (Future-Proof Test)"：换更强的模型，性能自然提升，无需修改 Harness 代码
 - **笨循环 (Dumb Loop)**: `src/harness/` 仅承载 Think→Act 轮次调度，**不参与任何推理**。所有智能决策（意图理解、工具选择、安全评估、完成度判断）由 LLM 一次推理调用自然完成
-- **核心边界**: `src/harness/` 锁 **12 文件**；行数由 `src/harness/tests/budget.rs` 的棘轮守（实测非手算、只减不增、增必答下方 3 问），当前 **5070 行**（2026-07-18 −2＝流式旁路修复：`stream_llm_call` 弃 `as_http_provider()` 降级分支、改多态 `execute_streaming_dyn`，副作用下沉 `src/providers/` 装饰器，见 budget.rs::CEILING；Batch 6，2026-07-17：两侧同日从 5035 出发、合并实测 5072——上调 +80＝ambient 审批关联 + 完成序 live 事件；删除 −42＝test-only `run_turn` 簇外迁 `tests/harness_ext.rs` + 恒零 `consecutive_errors` trace 字段删除；3 问作答在 budget.rs）。旧的 ~4900 系一次手算口径事故（生产 `impl` 中间的缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，**已退休**——红线是棘轮机制本身，不是那个具体数字：
+- **核心边界**: `src/harness/` 锁 **12 文件**；行数由 `src/harness/tests/budget.rs` 的棘轮守（实测非手算、只减不增、增必答下方 3 问），当前 **5008 行**（2026-07-20 −62＝移除 `DiminishingReturnsDetector` 硬停 [R10 5-不 #3：loop 不做完成度判断]，`think.rs` 弃 `after_turn` 消费点、detector/`StopDiminishing`/`TurnMetrics` 删自 `src/context/budget/`，见 budget.rs::CEILING；2026-07-18 −2＝流式旁路修复：`stream_llm_call` 弃 `as_http_provider()` 降级分支、改多态 `execute_streaming_dyn`，副作用下沉 `src/providers/` 装饰器，见 budget.rs::CEILING；Batch 6，2026-07-17：两侧同日从 5035 出发、合并实测 5072——上调 +80＝ambient 审批关联 + 完成序 live 事件；删除 −42＝test-only `run_turn` 簇外迁 `tests/harness_ext.rs` + 恒零 `consecutive_errors` trace 字段删除；3 问作答在 budget.rs）。旧的 ~4900 系一次手算口径事故（生产 `impl` 中间的缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，**已退休**——红线是棘轮机制本身，不是那个具体数字：
   - 顶层 (8)：`mod.rs` / `agent.rs` / `deps.rs` / `trait_def.rs` / `callback.rs` / `chain_context.rs` / `trace.rs` / `trace_sink.rs`
   - `agent/` 子目录 (4)：`think.rs` / `act.rs` / `guardrails.rs` / `prompt.rs`（Task 8/9/10 把 `agent.rs` 按 Think/Act/Guardrails/Prompt 拆分为四个子职责）
 - **行数增长红线**：任何新增 LOC 必须先回答"加代码前必答 3 问"（脚手架 vs 认知 / 模型升级后是否还需要 / 是否有真实消费者）。新增文件需在 PR 描述里说明为何无法装进现有 12 个文件之一
@@ -188,7 +188,7 @@
 
 **A3 · 状态可重建，趋向纯 Reducer (Reconstructible State, Toward a Pure Reducer, F5+F12)**
 > **方向性承诺**：执行状态应尽量可从**单一持久源**重建；每轮 Think 趋向"对持久 context 的纯 reduce"（`prompt.rs` 已逐轮重建裸消息）。新增有状态机件时，优先让其状态可观测、可重建。
-> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / `budget.rs` 行数棘轮（当前 5070），或把业务状态搬进笨循环。具体统一方案先走"加代码前必答 3 问"，列为 backlog 评估（见审计文档 B §P2-1）。
+> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / `budget.rs` 行数棘轮（当前 5008），或把业务状态搬进笨循环。具体统一方案先走"加代码前必答 3 问"，列为 backlog 评估（见审计文档 B §P2-1）。
 > 关联：R10、P4（依赖倒置）。锚点：`src/harness/trait_def.rs::TurnState`、`src/looping/`、`src/goal/`、`src/agents/swarm/tasks/store/`。
 > ↳ 采纳·非红线（方向性原则，落地需独立评估）
 

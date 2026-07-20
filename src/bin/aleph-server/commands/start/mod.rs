@@ -1358,7 +1358,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
-        let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir(), 10);
+        let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir()?, 10);
         // Wire the vault so a `health_check` provider patch (self_config
         // verify / Panel config.patch) can probe live reachability with the
         // same `ai:<name>` key resolution the connectivity doctor uses.

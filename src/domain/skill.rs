@@ -62,6 +62,12 @@ impl SkillId {
             Some((prefix, name)) => !prefix.is_empty() && !name.is_empty() && !name.contains(':'),
         }
     }
+
+    /// Check whether the ID is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl fmt::Display for SkillId {

@@ -39,6 +39,7 @@
 //! so there is no `Arc` cycle.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -255,6 +256,12 @@ fn backoff_delay(cfg: &DeliveryQueueConfig, attempt: u32) -> Duration {
 pub struct DeliveryStore {
     conn: Mutex<Connection>,
     config: DeliveryQueueConfig,
+    /// Runtime half of the single-drainer invariant that keeps [`claim_due`]'s
+    /// non-atomic SELECT correct (see its `# Concurrency` docs). Flipped `true`
+    /// by the first [`spawn_drain`] via [`Self::try_claim_drainer`]; a second
+    /// spawn on the same store is refused loudly instead of racing the first
+    /// drainer into duplicate deliveries.
+    drain_spawned: AtomicBool,
 }
 
 impl DeliveryStore {
@@ -298,12 +305,22 @@ impl DeliveryStore {
         Ok(Self {
             conn: Mutex::new(conn),
             config,
+            drain_spawned: AtomicBool::new(false),
         })
     }
 
     /// Access the queue tuning this store was built with.
     pub const fn config(&self) -> &DeliveryQueueConfig {
         &self.config
+    }
+
+    /// Attempt to become the sole drainer for this store. Returns `true` for the
+    /// first caller and `false` for every subsequent one — the runtime half of
+    /// the single-drainer invariant [`claim_due`](Self::claim_due) relies on.
+    /// [`spawn_drain`] calls this so a second drain task can never race the
+    /// first into duplicate claims.
+    fn try_claim_drainer(&self) -> bool {
+        !self.drain_spawned.swap(true, Ordering::SeqCst)
     }
 
     /// Lock the connection, recovering from poisoning (P7: lock safety).
@@ -349,6 +366,19 @@ impl DeliveryStore {
     ///
     /// Rows whose payload no longer deserializes (schema drift, corruption) are
     /// dropped in place so a poison record can never wedge the queue forever.
+    ///
+    /// # Concurrency
+    ///
+    /// This claim is a plain SELECT — it does **not** lease or mark rows, so a
+    /// row stays visible to any concurrent `claim_due` until [`drain_once`]
+    /// settles it (delete / reschedule / dead-letter). Correctness therefore
+    /// rests on a **single-drainer invariant**: exactly one [`drain_loop`] runs
+    /// per store (one [`spawn_drain`] at boot, guarded against a second spawn by
+    /// [`try_claim_drainer`](Self::try_claim_drainer)), and it awaits each
+    /// `drain_once` to completion before the next tick. Two concurrent drainers
+    /// would double-claim and double-deliver; if a second drainer is ever
+    /// introduced, give this a real row lease (e.g. a `claimed_until` column
+    /// updated in the same transaction as the SELECT) *before* doing so.
     pub fn claim_due(&self, now: i64, limit: usize) -> rusqlite::Result<Vec<DeliveryRecord>> {
         let conn = self.guard();
 
@@ -727,7 +757,19 @@ pub async fn drain_loop(registry: Arc<ChannelRegistry>, store: Arc<DeliveryStore
 }
 
 /// Spawn [`drain_loop`] on the current Tokio runtime.
+///
+/// Enforces the single-drainer invariant [`DeliveryStore::claim_due`] relies on:
+/// the first call for a given store wins the drainer slot; any later call is a
+/// loud no-op rather than a second drainer racing the first into duplicate
+/// claims (`claim_due` is a plain SELECT with no row lease).
 pub fn spawn_drain(registry: Arc<ChannelRegistry>, store: Arc<DeliveryStore>) {
+    if !store.try_claim_drainer() {
+        warn!(
+            "delivery queue: a drain task is already running for this store; \
+             refusing to spawn a second drainer (claim_due is not lease-atomic)"
+        );
+        return;
+    }
     tokio::spawn(drain_loop(registry, store));
 }
 
@@ -746,6 +788,17 @@ mod tests {
 
     fn msg(text: &str) -> OutboundMessage {
         OutboundMessage::text("conv-1", text)
+    }
+
+    /// The single-drainer invariant `claim_due` relies on: only the first caller
+    /// wins the drainer slot, so `spawn_drain` can never start a second drainer
+    /// that would double-claim the same rows.
+    #[test]
+    fn only_one_drainer_can_claim_the_store() {
+        let s = store();
+        assert!(s.try_claim_drainer(), "first caller wins the drainer slot");
+        assert!(!s.try_claim_drainer(), "second caller is refused");
+        assert!(!s.try_claim_drainer(), "and stays refused");
     }
 
     #[test]

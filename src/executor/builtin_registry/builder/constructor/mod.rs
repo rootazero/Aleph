@@ -246,7 +246,18 @@ impl BuiltinToolRegistry {
         // Store fetch-docs tool (scaffold — no CatalogCache dep; always constructed)
         let hub_fetch_docs_tool = crate::builtin_tools::hub::HubFetchDocsTool;
 
-        // Build platform-specific DesktopPlatform
+        // Build platform-specific DesktopPlatform.
+        //
+        // NOT an R1 violation, despite naming a platform crate here: this is the
+        // dependency-injection composition root (P4 — "构造时注入"). `src`
+        // depends only on the `aleph_desktop::DesktopPlatform` capability trait;
+        // the actual platform-API calls (AppKit / windows-rs / …) live entirely
+        // inside the `aleph_desktop_{macos,linux,windows}` crates behind that
+        // trait object. Selecting the concrete impl at the startup composition
+        // root is exactly where a DI seam is supposed to bind a trait to its
+        // implementation — moving this construction behind an IPC boundary would
+        // add a transport layer for in-process capabilities with no R1 benefit.
+        // (Evaluated 2026-07-20; keep as-is.)
         let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
             #[cfg(target_os = "macos")]
             {

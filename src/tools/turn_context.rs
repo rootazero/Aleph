@@ -83,6 +83,39 @@ task_local! {
     pub static TURN_CONTEXT: TurnContext;
 }
 
+tokio::task_local! {
+    /// Raw channel user id of the human whose message triggered the current
+    /// run — the approval "originator".
+    ///
+    /// Unlike [`TURN_CONTEXT`] (scoped per-agent at the tool-dispatch
+    /// chokepoint), this is one value for the whole run tree, so it is scoped
+    /// once at the run-loop boundary alongside `FsScope` / agent-id /
+    /// project-root (`run_agent_loop`). `None` for non-channel runs (cron,
+    /// internal, Panel) and for spawned subagents that do not re-publish it —
+    /// a missing originator makes the approval-originator gate a no-op, so the
+    /// behaviour degrades to the pre-existing "any paired user" rule. Read by
+    /// the channel approval bridge so a pending record can carry it to the
+    /// button-callback gate (`ManagerCallbackSink::handle_callback`).
+    pub static TURN_ORIGINATOR: Option<String>;
+}
+
+/// Run `fut` with `originator` visible to [`current_originator`] for the
+/// lifetime of the future. Publishing `None` explicitly keeps a nested run from
+/// leaking an outer run's originator.
+pub async fn with_originator<F, T>(originator: Option<String>, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    TURN_ORIGINATOR.scope(originator, fut).await
+}
+
+/// The originating channel user id of the current run, or `None` outside a
+/// scope / for non-channel runs.
+#[must_use]
+pub fn current_originator() -> Option<String> {
+    TURN_ORIGINATOR.try_with(Clone::clone).ok().flatten()
+}
+
 /// Returns the current turn's routing context, or `None` outside a turn scope.
 #[must_use]
 pub fn current_turn_context() -> Option<TurnContext> {

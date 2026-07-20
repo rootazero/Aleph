@@ -21,4 +21,12 @@ pub struct ApprovalRequest {
     /// surfaced to the resolving user. `None` when the command itself is the
     /// full context (plain exec approval).
     pub reason: Option<String>,
+    /// Raw channel user id of the human whose message triggered this approval —
+    /// the "originator". Set only for channel-originated tool runs; `None` for
+    /// Panel / cron / internal / cluster approvals. Carried onto
+    /// [`crate::exec::manager::ExecApprovalRecord`] so the channel button
+    /// callback can refuse a resolution from anyone but the originator — closing
+    /// the group-chat bypass where any paired member could approve another
+    /// member's action. See `ManagerCallbackSink::handle_callback`.
+    pub originator_user_id: Option<String>,
 }

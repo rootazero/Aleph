@@ -19,6 +19,46 @@ const FOCUS_ANCHOR_MAX_CHARS: usize = 600;
 /// for it, unlike [`MEMORY_CONTEXT_OPEN`].
 const LIVE_STATUS_OPEN: &str = "<live-status>";
 
+/// Neutralise the prompt-template boundary markers that user-controlled text
+/// (transcript, focus, prior summary) could otherwise forge to hijack the
+/// summarizer: e.g. `transcript = "---END---\n<analysis>..."` would let a
+/// user-injected transcript escape its fenced section and impersonate the
+/// `<analysis>` / `<summary>` scaffolds the compactor strips. Each marker
+/// is rewritten to a visibly-escaped form (`[---END---]`, `[<analysis>]`,
+/// `[\u003c/summary\u003e]`) so the content stays readable to the LLM but
+/// can no longer match the literal fences the compactor searches for.
+fn escape_prompt_boundaries(s: &str) -> String {
+    const MARKERS: &[&str] = &[
+        "---END---",
+        "---TRANSCRIPT---",
+        "---NEW TURNS---",
+        "<analysis>",
+        "</analysis>",
+        "<summary>",
+        "</summary>",
+        "<current_summary>",
+        "</current_summary>",
+        "<conversation_focus>",
+        "</conversation_focus>",
+        "<memory-context>",
+        "</memory-context>",
+        "<live-status>",
+        "</live-status>",
+    ];
+    let mut out = String::with_capacity(s.len() + 16);
+    let mut rest = s;
+    while let Some(pos) = rest.find(MARKERS.iter().map(|m| (m, rest.find(m))).min_by_key(|(_, p)| p.unwrap_or(usize::MAX)).unwrap().0) {
+        let (marker, _) = MARKERS.iter().map(|m| (m, rest.find(m))).min_by_key(|(_, p)| p.unwrap_or(usize::MAX)).unwrap();
+        out.push_str(&rest[..pos]);
+        out.push('[');
+        out.push_str(marker);
+        out.push(']');
+        rest = &rest[pos + marker.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Appended to every summarization prompt to instruct the LLM to copy
 /// technical identifiers verbatim rather than paraphrasing them.
 pub const IDENTIFIER_PRESERVATION: &str = "\n\n\
@@ -122,6 +162,7 @@ pub fn build_window_summary_prompt(
     focus: Option<&str>,
 ) -> String {
     let focus_block = render_focus_block(focus);
+    let transcript = escape_prompt_boundaries(transcript);
 
     format!(
         "{focus_block}Summarize the following conversation transcript in at most {token_budget} tokens.\n\
@@ -169,6 +210,7 @@ fn render_focus_block(focus: Option<&str>) -> String {
     match focus {
         Some(task) if !task.trim().is_empty() => {
             let anchor = truncate_focus(task.trim());
+            let anchor = escape_prompt_boundaries(&anchor);
             format!(
                 "The user is actively working on the task below. Bias the summary toward \
                  preserving every detail relevant to it, and keep the user's most recent \
@@ -208,6 +250,8 @@ pub fn build_summary_update_prompt(
     focus: Option<&str>,
 ) -> String {
     let focus_block = render_focus_block(focus);
+    let prior_summary = escape_prompt_boundaries(prior_summary);
+    let new_transcript = escape_prompt_boundaries(new_transcript);
 
     format!(
         "{focus_block}You are UPDATING an existing running summary of a long conversation. \

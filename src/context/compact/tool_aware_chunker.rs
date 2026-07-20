@@ -110,13 +110,22 @@ pub struct ToolAwareChunker {
     /// Maximum tokens allowed in a single chunk.
     pub chunk_token_limit: usize,
     /// Characters-per-token ratio used for token estimation.
+    ///
+    /// `ratio` must be `> 0.0`. A non-positive value would either yield
+    /// `usize::MAX` (division by zero) or saturate the unsigned conversion
+    /// (`< 0.0` yields 0), either of which silently disables the chunker's
+    /// token-limit logic.
     pub token_ratio: f64,
 }
 
 impl ToolAwareChunker {
     /// Create a new chunker with the given token limit and estimation ratio.
+    ///
+    /// Panics if `token_ratio <= 0.0` (would silently disable the token-limit
+    /// logic via division-by-zero or saturating-cast).
     #[must_use]
-    pub const fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
+    pub fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
+        assert!(token_ratio > 0.0, "token_ratio must be > 0.0");
         Self {
             chunk_token_limit,
             token_ratio,

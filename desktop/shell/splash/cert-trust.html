@@ -40,7 +40,11 @@
       '</div>' +
       '<div class="row"><button class="trust" id="trust">信任并连接</button><button class="cancel" id="cancel">取消</button></div>';
     document.getElementById('trust').onclick = async () => {
-      try { await invoke('approve_cert', { host: p.host }); } catch (e) { alert('信任失败: ' + e); }
+      // Pass the fingerprint the user actually saw on this page so the
+      // Rust side can confirm the pending record still matches. If a
+      // newer TLS challenge for the same host arrived in the meantime,
+      // approve_cert will refuse and ask the user to reload the page.
+      try { await invoke('approve_cert', { host: p.host, fingerprint: p.fingerprint }); } catch (e) { alert('信任失败: ' + e); }
     };
     document.getElementById('cancel').onclick = async () => {
       await invoke('reject_cert');

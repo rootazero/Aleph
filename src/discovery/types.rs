@@ -23,12 +23,6 @@ impl DiscoverySource {
     pub const fn is_read_only(&self) -> bool {
         matches!(self, Self::ClaudeGlobal | Self::Project)
     }
-
-    /// Whether this source is from Claude Code
-    #[must_use]
-    pub const fn is_claude_source(&self) -> bool {
-        matches!(self, Self::ClaudeGlobal | Self::Project)
-    }
 }
 
 /// A directory to scan for components

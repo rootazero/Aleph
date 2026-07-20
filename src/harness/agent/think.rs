@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
 use super::AgentHarness;
-use crate::context::budget::LoopDirective;
 use crate::context::compact::rescue::{self, RescueCx, RescueHost};
 use crate::guardrails::SessionInputScreen;
 use crate::harness::callback::HarnessCallback;
@@ -66,8 +65,6 @@ const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: u32 = 3;
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraceReason {
-    /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
-    Diminishing,
     /// `max_iterations` cap reached in the outer loop.
     MaxIterations,
     /// Per-model `steer_max` cap reached — model kept finishing with steps left.
@@ -85,7 +82,6 @@ pub(crate) enum GraceReason {
 impl GraceReason {
     const fn nudge(self) -> &'static str {
         match self {
-            Self::Diminishing => crate::thinker::nudges::GRACE_NUDGE_DIMINISHING,
             Self::MaxIterations => crate::thinker::nudges::GRACE_NUDGE_MAX_ITERATIONS,
             Self::VerifierVeto => crate::thinker::nudges::GRACE_NUDGE_VERIFIER_VETO,
             Self::ConsecutiveFailureCap => crate::thinker::nudges::GRACE_NUDGE_FAILURE_CAP,
@@ -799,13 +795,6 @@ impl AgentHarness {
                 callback.on_context_usage(occupancy, self.total_tokens());
             }
         }
-        // Cycle 3 — OUTPUT tokens only (not total), required by
-        // DiminishingReturnsDetector's window threshold semantics.
-        let output_tokens = response
-            .usage
-            .as_ref()
-            .map_or(0, |u| u.output_tokens as usize);
-
         // Calibrate the context-budget token estimator against the provider's
         // ground-truth prompt size. `last_pressure` (set by `before_turn`, or
         // refreshed by `note_compaction_effect`) is the calibrated estimate of
@@ -1102,57 +1091,6 @@ impl AgentHarness {
                 total_tokens: turn_tokens as usize,
             };
             result = Ok(TurnStep::cont(executed));
-        }
-
-        // Cycle 3 — wire DiminishingReturnsDetector. `after_turn` had zero
-        // production callsites before this commit. Skipped on a verifier veto:
-        // a veto is already a guardrail intervention and must not also feed the
-        // diminishing-returns window. StopDiminishing reuses the Task-5
-        // grace-turn helper to give the user a terminal summary, mirroring
-        // the other forced-stop paths. R10-safe: no new directive variant, no new
-        // decision category — `StopDiminishing` already existed.
-        //
-        // The veto flag is the 3rd element of `result`; `verdict` was moved
-        // into the if-let binding above and is no longer in scope.
-        let is_verifier_veto = matches!(&result, Ok(step) if step.vetoed);
-        if !is_verifier_veto {
-            let after_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
-                let mut guard = budget.lock().await;
-                Some(guard.after_turn(crate::context::budget::TurnMetrics {
-                    output_tokens,
-                    productive: metrics_for_trace.productive,
-                }))
-            } else {
-                None
-            };
-            if matches!(after_directive, Some(LoopDirective::StopDiminishing)) {
-                self.hit_limit.store(true, Ordering::Relaxed);
-                // Every other cap path records its exit cause; without this
-                // the run reported whatever reason was last set (usually the
-                // default `Completed`) despite exiting on diminishing returns.
-                self.set_terminate_reason(
-                    crate::orchestrator::dispatch::TerminateReason::DiminishingReturns,
-                );
-                self.fire_boundary_grace_turn(
-                    session_id,
-                    callback,
-                    iterations,
-                    GraceReason::Diminishing,
-                    parent_cancel,
-                )
-                .await;
-                self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
-                    iteration: iterations,
-                    outcome: crate::harness::trace::LoopTraceTurnOutcome::Stop,
-                    metrics: metrics_for_trace.clone(),
-                });
-                return Ok(TurnStep {
-                    state: TurnState::Done,
-                    executed: metrics_for_trace.executed_tool_calls,
-                    vetoed: false,
-                    split_child: None,
-                });
-            }
         }
 
         self.emit(|| crate::harness::trace::LoopTraceEvent::TurnCompleted {
@@ -1619,14 +1557,6 @@ mod tests {
         assert!(super::may_stream_deltas(Some(&registry), true));
         // Still gated on the HTTP seam.
         assert!(!super::may_stream_deltas(Some(&registry), false));
-    }
-
-    #[test]
-    fn grace_reason_diminishing_uses_diminishing_nudge() {
-        assert_eq!(
-            GraceReason::Diminishing.nudge(),
-            crate::thinker::nudges::GRACE_NUDGE_DIMINISHING
-        );
     }
 
     #[test]
