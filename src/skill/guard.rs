@@ -129,6 +129,13 @@ static PATTERN_SET: Lazy<RegexSet> = Lazy::new(|| {
     })
 });
 
+/// Per-file byte cap for the install-time guard scan. Skill bodies are
+/// markdown + shell snippets well under 1 MiB; anything bigger is almost
+/// certainly a binary blob that the scanner has no business materializing
+/// into a `String` for regex matching. Prevents a malicious skill bundle
+/// from OOM-ing the scanner before any verdict is rendered.
+pub const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Scan one file's content. `file` is used only for finding labels.
 pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
     let text = String::from_utf8_lossy(content);
@@ -242,6 +249,20 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
+                // Reject oversized files before reading so a malicious
+                // bundle cannot OOM the scanner via a multi-GB blob.
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if size > MAX_SCAN_BYTES {
+                    verdicts.push(ScanVerdict {
+                        level: ThreatLevel::Caution,
+                        findings: vec![Finding {
+                            file: label,
+                            pattern_id: "oversized_file",
+                            level: ThreatLevel::Caution,
+                        }],
+                    });
+                    continue;
+                }
                 if let Ok(content) = std::fs::read(&path) {
                     verdicts.push(scan_content(&label, &content));
                 }

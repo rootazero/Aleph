@@ -417,6 +417,38 @@ impl RawMemoryStore for SqliteMemoryBackend {
 }
 
 // ---------------------------------------------------------------------------
+// Inherent audit readers (governance metrics)
+// ---------------------------------------------------------------------------
+
+impl SqliteMemoryBackend {
+    /// Count raw memories whose `path` starts with `path_prefix` and were
+    /// created after `since_created_at` (`created_at > since`, epoch **seconds**).
+    /// Counts across all agents — this is the audit-wide reality probe behind
+    /// the governance loop's "近N天用户真实纠正数" check
+    /// (`path LIKE 'aleph://correction/%'`), read in-core so the audit sensor
+    /// never has to reach `~/.aleph/data` through the workspace sandbox. A
+    /// `SELECT count(*)` (no row materialisation), sibling to the agent-scoped
+    /// [`RawMemoryStore::get_raw_by_path_prefix_since`] fetch.
+    pub fn count_raw_by_path_prefix_since(
+        &self,
+        path_prefix: &str,
+        since_created_at: i64,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+        let pattern = like_prefix_pattern(path_prefix);
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM raw_memories \
+                 WHERE path LIKE ?1 ESCAPE '\\' AND created_at > ?2",
+                params![pattern, since_created_at],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("count_raw_by_path_prefix_since: {e}")))?;
+        Ok(count.max(0) as usize)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -627,6 +659,55 @@ mod tests {
             .await
             .unwrap();
         assert!(other.is_empty());
+    }
+
+    #[tokio::test]
+    async fn count_by_path_prefix_since_counts_across_agents_after_watermark() {
+        let backend = make_backend();
+
+        let mut old = RawMemory::new("old".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://correction/c1")
+            .with_agent("main");
+        old.created_at = 1000;
+
+        let mut fresh_main = RawMemory::new("fresh".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://correction/c2")
+            .with_agent("main");
+        fresh_main.created_at = 3000;
+
+        // A second agent's correction — the audit-wide count must include it
+        // (the count reader is deliberately NOT agent-scoped, unlike the fetch).
+        let mut fresh_other =
+            RawMemory::new("fresh-other".to_string(), RawMemorySource::SessionCompressed)
+                .with_path("aleph://correction/c3")
+                .with_agent("other-agent");
+        fresh_other.created_at = 3000;
+
+        // A non-correction path after the watermark must be excluded by prefix.
+        let mut noise = RawMemory::new("noise".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://note/n1")
+            .with_agent("main");
+        noise.created_at = 3000;
+
+        for m in [&old, &fresh_main, &fresh_other, &noise] {
+            backend.insert_raw_memory(m).await.unwrap();
+        }
+
+        // Watermark 2000 (strictly greater): both fresh corrections across the
+        // two agents count; the old one and the note are excluded.
+        assert_eq!(
+            backend
+                .count_raw_by_path_prefix_since("aleph://correction/", 2000)
+                .unwrap(),
+            2
+        );
+        // From epoch: all three corrections; note still excluded by prefix.
+        assert_eq!(
+            backend
+                .count_raw_by_path_prefix_since("aleph://correction/", 0)
+                .unwrap(),
+            3
+        );
     }
 
     #[tokio::test]

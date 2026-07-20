@@ -157,25 +157,10 @@ pub enum LoopDirective {
     /// terminate merely because the context filled up. See
     /// `context::compact::fit::compact_to_fit`.
     CompactToFit,
-    /// Diminishing returns detected — inject a notice and stop tool execution.
-    StopDiminishing,
     /// In-place compaction is not keeping pressure down — split the session:
     /// continue the run in a fresh child session (epoch + 1) seeded with a
     /// summary + fresh tail. See `context::compact::session_split`.
     SplitSession,
-}
-
-// =============================================================================
-// TurnMetrics
-// =============================================================================
-
-/// Metrics collected after each turn for diminishing returns detection.
-#[derive(Debug, Clone)]
-pub struct TurnMetrics {
-    /// Number of output tokens the LLM produced this turn.
-    pub output_tokens: usize,
-    /// Whether the turn was considered productive (tools ran without errors).
-    pub productive: bool,
 }
 
 // =============================================================================
@@ -262,49 +247,6 @@ impl CompactionCircuitBreaker {
 }
 
 // =============================================================================
-// DiminishingReturnsDetector
-// =============================================================================
-
-/// Sliding window detector for unproductive turns.
-///
-/// Uses a bounded `VecDeque` to avoid unbounded memory growth in long loops.
-#[derive(Debug)]
-struct DiminishingReturnsDetector {
-    window_size: usize,
-    threshold: usize,
-    history: std::collections::VecDeque<TurnMetrics>,
-}
-
-impl DiminishingReturnsDetector {
-    fn new(window_size: usize, threshold: usize) -> Self {
-        // Clamp to >=1: a window of 0 would evaluate (and could fire
-        // StopDiminishing) on the very first turn, since `len() < 0` is never
-        // true. Matches the `.max(1)` idiom used elsewhere in this module.
-        let window_size = window_size.max(1);
-        Self {
-            window_size,
-            threshold,
-            history: std::collections::VecDeque::with_capacity(window_size),
-        }
-    }
-
-    /// Record a turn's metrics and return true if diminishing returns detected.
-    fn record(&mut self, metrics: TurnMetrics) -> bool {
-        if self.history.len() >= self.window_size {
-            self.history.pop_front();
-        }
-        self.history.push_back(metrics);
-        if self.history.len() < self.window_size {
-            return false;
-        }
-        let total_output: usize = self.history.iter().map(|m| m.output_tokens).sum();
-        let any_productive = self.history.iter().any(|m| m.productive);
-        // Diminishing if: no productive turns AND total output below threshold
-        !any_productive && total_output < self.threshold
-    }
-}
-
-// =============================================================================
 // ContextBudget
 // =============================================================================
 
@@ -318,7 +260,6 @@ pub struct ContextBudget {
     token_estimate_ratio: f64,
     fresh_tail_count: usize,
     circuit_breaker: CompactionCircuitBreaker,
-    diminishing: DiminishingReturnsDetector,
     /// Last computed pressure snapshot, saved by `before_turn()`.
     last_pressure: Option<ContextPressure>,
     /// Number of session splits that have already occurred in this run.
@@ -343,10 +284,6 @@ impl ContextBudget {
             token_estimate_ratio: config.token_estimate_ratio,
             fresh_tail_count: config.fresh_tail_count,
             circuit_breaker: CompactionCircuitBreaker::new(config.circuit_breaker_max),
-            diminishing: DiminishingReturnsDetector::new(
-                config.diminishing_window,
-                config.diminishing_threshold,
-            ),
             last_pressure: None,
             split_count: 0,
             max_splits: config.max_splits,
@@ -610,18 +547,6 @@ impl ContextBudget {
         self.split_count = self.split_count.saturating_add(1);
         self.circuit_breaker.reset();
     }
-
-    /// Record post-turn metrics and return a directive if diminishing returns detected.
-    pub fn after_turn(&mut self, metrics: TurnMetrics) -> LoopDirective {
-        if self.diminishing.record(metrics) {
-            tracing::warn!(
-                target: "context_budget",
-                "Diminishing returns detected — requesting stop"
-            );
-            return LoopDirective::StopDiminishing;
-        }
-        LoopDirective::Continue
-    }
 }
 
 // =============================================================================
@@ -781,74 +706,6 @@ mod tests {
         cb.record_compaction();
         cb.reset();
         assert!(!cb.record_compaction()); // reset, so starts from 1
-    }
-
-    #[test]
-    fn test_diminishing_returns_not_enough_history() {
-        let mut dr = DiminishingReturnsDetector::new(4, 500);
-        // Only 2 unproductive turns — not enough for window of 4
-        assert!(!dr.record(TurnMetrics {
-            output_tokens: 10,
-            productive: false
-        }));
-        assert!(!dr.record(TurnMetrics {
-            output_tokens: 10,
-            productive: false
-        }));
-    }
-
-    #[test]
-    fn test_diminishing_returns_triggers() {
-        let mut dr = DiminishingReturnsDetector::new(4, 500);
-        for _ in 0..4 {
-            dr.record(TurnMetrics {
-                output_tokens: 50,
-                productive: false,
-            });
-        }
-        // Window of 4 unproductive turns with 200 total tokens < 500 threshold
-        // The 4th call already returned the result, let's check with a 5th
-        let triggered = dr.record(TurnMetrics {
-            output_tokens: 50,
-            productive: false,
-        });
-        assert!(triggered);
-    }
-
-    #[test]
-    fn test_diminishing_returns_productive_resets() {
-        let mut dr = DiminishingReturnsDetector::new(4, 500);
-        for _ in 0..3 {
-            dr.record(TurnMetrics {
-                output_tokens: 10,
-                productive: false,
-            });
-        }
-        // One productive turn in window prevents triggering
-        let triggered = dr.record(TurnMetrics {
-            output_tokens: 10,
-            productive: true,
-        });
-        assert!(!triggered);
-    }
-
-    #[test]
-    fn test_after_turn_diminishing() {
-        let config = ContextBudgetConfig {
-            diminishing_window: 2,
-            diminishing_threshold: 100,
-            ..default_config()
-        };
-        let mut budget = ContextBudget::new(&config);
-        budget.after_turn(TurnMetrics {
-            output_tokens: 10,
-            productive: false,
-        });
-        let directive = budget.after_turn(TurnMetrics {
-            output_tokens: 10,
-            productive: false,
-        });
-        assert_eq!(directive, LoopDirective::StopDiminishing);
     }
 
     // --- before_turn pressure path tests ---

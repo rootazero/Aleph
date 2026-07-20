@@ -15,10 +15,24 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
     // Validate shell argument: allowlist of safe characters to prevent command injection.
     // Permits alphanumeric, `-`, `_`, `.`, `/`, `@`, `:`, `+`, `=`, `~` (common in
     // package names, Go import paths, and filesystem paths).
+    //
+    // For `Download` kind the package is interpolated unquoted as `-o <path>` in
+    // the curl command, so it must additionally reject path-traversal: a `..`
+    // segment would let a malicious manifest write the download outside the
+    // intended install directory.
     fn is_safe_shell_arg(s: &str) -> bool {
         !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-_./:@+=~".contains(c))
+    }
+
+    fn is_safe_path_arg(s: &str) -> bool {
+        if !is_safe_shell_arg(s) {
+            return false;
+        }
+        // Reject any `..` segment — naive path-segment scanning is enough for
+        // an output-path allowlist; this isn't a full canonical-path check.
+        s.split(['/', '\\']).all(|seg| seg != "..")
     }
 
     if !is_safe_shell_arg(&spec.package) {
@@ -47,6 +61,14 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
                 return None;
             }
             if !url.starts_with("http://") && !url.starts_with("https://") {
+                return None;
+            }
+            // The output path (`-o`) is interpolated unquoted into the curl
+            // command, so it must also pass path-traversal safety — the same
+            // allowlist above permits `.` and `/`, which would let a manifest
+            // set package: "../../tmp/payload" and write outside the install
+            // directory.
+            if !is_safe_path_arg(&spec.package) {
                 return None;
             }
             Some(format!("curl -fsSL -o {} '{}'", spec.package, url))

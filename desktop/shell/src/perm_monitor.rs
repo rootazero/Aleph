@@ -121,20 +121,30 @@ mod macos {
         };
 
         // Find the aleph-bridge binary next to the shell executable.
+        // The macOS bundle ships the helper as CamelCase `AlephBridge` (the
+        // bundle's own executable). Look for that first, then fall back to
+        // lowercase for non-bundled installs (PATH layout).
         let bridge_bin = match std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|p| p.join("aleph-bridge")))
+            .and_then(|exe| exe.parent().map(|p| p.join("AlephBridge")))
         {
             Some(p) if p.exists() => p,
-            _ => {
-                // Fallback: try PATH.
-                if let Some(p) = find_in_path("aleph-bridge") {
-                    p
-                } else {
-                    tracing::debug!("aleph-bridge not found — skipping permission check");
-                    return false;
+            _ => match std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| p.join("aleph-bridge")))
+            {
+                Some(p) if p.exists() => p,
+                _ => {
+                    if let Some(p) = find_in_path("AlephBridge")
+                        .or_else(|| find_in_path("aleph-bridge"))
+                    {
+                        p
+                    } else {
+                        tracing::debug!("aleph-bridge not found — skipping permission check");
+                        return false;
+                    }
                 }
-            }
+            },
         };
 
         match Command::new(&bridge_bin)

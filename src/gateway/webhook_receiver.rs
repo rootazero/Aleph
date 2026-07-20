@@ -210,33 +210,44 @@ async fn webhook_endpoint(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // Step 1: Verify signature
+// Step 1: Verify signature
     if !state.handler.verify(&headers, &body) {
         warn!(path = %state.handler.path(), "Webhook signature verification failed");
-        return (StatusCode::FORBIDDEN, "Forbidden: invalid signature");
+        return (StatusCode::FORBIDDEN, String::from("Forbidden: invalid signature"));
     }
 
-    // Step 2: Parse payload into messages
-    match state.handler.handle(&headers, body).await {
-        Ok(messages) => {
-            for msg in messages {
-                if let Err(e) = state.inbound_tx.send(msg).await {
-                    warn!(
-                        path = %state.handler.path(),
-                        error = %e,
-                        "Failed to forward inbound message"
+// Step 2: Parse payload into messages
+        match state.handler.handle(&headers, body).await {
+            Ok(messages) => {
+                let mut dropped = 0usize;
+                for msg in messages {
+                    if let Err(e) = state.inbound_tx.send(msg).await {
+                        dropped += 1;
+                        warn!(
+                            path = %state.handler.path(),
+                            error = %e,
+                            "Failed to forward inbound message (channel backpressure)"
+                        );
+                    }
+                }
+                if dropped > 0 {
+                    // Return 503 so upstream retries; silently returning 200
+                    // would let an attacker flood the receiver and quietly
+                    // suppress inbound messages without any operator signal.
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Dropped {dropped} messages due to backpressure"),
                     );
                 }
+                (StatusCode::OK, String::from("ok"))
             }
-            (StatusCode::OK, "ok")
-        }
         Err(e) => {
             warn!(
                 path = %state.handler.path(),
                 error = %e,
                 "Webhook handler error"
             );
-            (StatusCode::BAD_REQUEST, "Bad request")
+            (StatusCode::BAD_REQUEST, String::from("Bad request"))
         }
     }
 }

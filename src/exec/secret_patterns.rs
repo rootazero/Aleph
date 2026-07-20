@@ -5,24 +5,24 @@
 
 use regex::Regex;
 
-pub struct SecretPattern {
+pub(crate) struct SecretPattern {
     pub regex: Regex,
     pub replacement: &'static str,
 }
 
-pub struct LeakPatternDef {
+pub(crate) struct LeakPatternDef {
     pub name: &'static str,
     pub regex: Regex,
     pub action: super::leak_detector::LeakAction,
 }
 
-pub struct LeakDetectorAssets {
+pub(crate) struct LeakDetectorAssets {
     pub prefixes: Vec<&'static str>,
     pub patterns: Vec<LeakPatternDef>,
 }
 
 #[must_use]
-pub fn secret_masker_patterns() -> Vec<SecretPattern> {
+pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
             regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
@@ -100,7 +100,7 @@ pub fn secret_masker_patterns() -> Vec<SecretPattern> {
 }
 
 #[must_use]
-pub fn leak_detector_assets() -> LeakDetectorAssets {
+pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
     let prefixes = vec![
         "sk-",
         "AIza",

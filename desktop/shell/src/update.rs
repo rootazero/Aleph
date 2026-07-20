@@ -191,6 +191,13 @@ pub struct Updater {
     /// Session latch: set when the user dismisses the in-window banner (`×`).
     /// In-memory only, so a fresh launch re-shows the banner (spec §5).
     dismissed: Mutex<bool>,
+    /// Session latch: set while an Apply is in-flight (download + install +
+    /// restart). Guards against a second concurrent apply — the tray menu,
+    /// the in-window banner, and a stray navigation can all trigger Apply,
+    /// and without this latch a rapid double-click would start two downloads
+    /// and two installer invocations and have the second race past the first
+    /// restart.
+    applying: Mutex<bool>,
 }
 
 impl Updater {
@@ -255,6 +262,22 @@ pub fn check_now(app: &AppHandle) {
 /// Download, install, and restart into the staged update — the user has
 /// explicitly asked for it, so the restart is expected.
 pub fn apply_staged_update(app: &AppHandle) {
+    // Latch against a second concurrent apply. A user double-clicks "Restart
+    // to update" in the tray, the in-window banner also navigates here, and
+    // the macOS menu does the same — without this latch two parallel
+    // downloaders race and a second installer races past the first restart.
+    {
+        let updater = app.state::<Updater>();
+        let mut applying = updater
+            .applying
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *applying {
+            tracing::debug!("apply_staged_update already in flight — ignoring duplicate");
+            return;
+        }
+        *applying = true;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         // Package-manager installs (Linux .deb / .rpm) can't be self-installed

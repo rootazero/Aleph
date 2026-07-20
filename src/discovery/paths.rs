@@ -36,10 +36,6 @@ pub const SKILL_FILE: &str = "SKILL.md";
 pub const AGENT_FILE: &str = "agent.md";
 
 /// Hook configuration
-pub const HOOKS_DIR: &str = "hooks";
-pub const HOOKS_FILE: &str = "hooks.json";
-
-/// MCP configuration
 pub const MCP_CONFIG_FILE: &str = ".mcp.json";
 
 // =============================================================================
@@ -61,16 +57,6 @@ pub fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
 }
 
-/// Get the Aleph skills directory (~/.aleph/skills/)
-pub fn aleph_skills_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aleph_home_dir()?.join(SKILLS_DIR))
-}
-
-/// Get the Aleph commands directory (~/.aleph/commands/)
-pub fn aleph_commands_dir() -> DiscoveryResult<PathBuf> {
-    Ok(aleph_home_dir()?.join(COMMANDS_DIR))
-}
-
 /// Get the Aleph agents directory (~/.aleph/agents/)
 pub fn aleph_agents_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(AGENTS_DIR))
@@ -81,7 +67,6 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(PLUGINS_DIR))
 }
 
-/// Get the global config file path (~/.aleph/aleph.jsonc)
 /// Find the git root directory from a starting path
 ///
 /// Traverses upward until finding a .git directory or reaching filesystem root.

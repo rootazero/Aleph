@@ -6,14 +6,14 @@
 use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
-    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GuidelinesLayer, HeartbeatLayer,
-    IdentityFilesLayer, LanguageLayer, McpInstructionsLayer, MemoryProtocolLayer,
-    MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer,
-    ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer,
-    SessionBudgetLayer, SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer,
-    SpecialActionsLayer, StandingGoalLayer, StrategyLayer, StrategyPointerLayer,
-    ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer, ToolUsageGrammarLayer, ToolsLayer,
-    VoiceModeLayer,
+    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GraphTopologyLayer,
+    GuidelinesLayer, HeartbeatLayer, IdentityFilesLayer, LanguageLayer, McpInstructionsLayer,
+    MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
+    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
+    SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer,
+    StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer,
+    ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
 };
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -233,6 +233,7 @@ impl PromptPipeline {
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(TimerLoopLayer),
+            Box::new(GraphTopologyLayer),
             Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(StrategyPointerLayer),
@@ -398,7 +399,9 @@ mod tests {
         // `mcp_list_resources`/`mcp_list_prompts` tools (doubled, verbatim ids
         // that do round-trip; R7/R10 static partition, no prompt-layer — as
         // MODEL_PERCEIVABLE_ECOSYSTEM.md already declared).
-        assert_eq!(pipeline.layer_count(), 40);
+        // → 41 (GraphTopologyLayer @1753 Dynamic — tells a governed session
+        // its place in the loop-graph governance topology, 2026-07-19).
+        assert_eq!(pipeline.layer_count(), 41);
     }
 
     #[test]
@@ -626,11 +629,15 @@ mod stability_tests {
         // (2026-07-17) — its eager resource/prompt index emitted single-prefix
         // ids that did not round-trip through the two-strip read path; discovery
         // converged on the on-demand mcp_list_resources/mcp_list_prompts tools.
+        // → 16: GraphTopologyLayer (@1753) — session-scoped governance
+        // topology; deterministic bytes (graph rows only, no clocks), so the
+        // Dynamic classification is about content ownership, not volatility.
+        assert!(dynamic_names.contains(&"graph_topology"));
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            15,
-            "Exactly 15 dynamic layers expected"
+            16,
+            "Exactly 16 dynamic layers expected"
         );
     }
 

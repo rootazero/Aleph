@@ -155,6 +155,48 @@ async fn test_chinese_pdf_generation() {
     let _ = fs::remove_file(&output_path);
 }
 
+/// The per-run `FsScope` task-local wins over the shared `ToolContextHandle`,
+/// so a concurrent run rewriting the shared slot cannot redirect this run's PDF.
+#[tokio::test]
+async fn resolve_output_path_prefers_fs_scope_over_shared_handle() {
+    use crate::tools::fs_scope::{with_fs_scope, FsScope};
+    use std::path::PathBuf;
+
+    // Shared handle points at run A's workspace (as a concurrent run could have
+    // stomped it mid-turn); the active run's scope is run B and must win.
+    let handle =
+        crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(crate::tools::ToolContext {
+            output_dir: PathBuf::from("/run-a/output"),
+        }));
+    let tool = PdfGenerateTool::new().with_tool_context(handle);
+
+    let scope = FsScope::workspace(PathBuf::from("/run-b/output/documents"));
+    let resolved = with_fs_scope(Some(scope), tool.resolve_output_path("report.pdf"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resolved,
+        PathBuf::from("/run-b/output/documents/report.pdf")
+    );
+}
+
+/// Outside any run scope, resolution falls back to the shared handle — the
+/// pre-scope behaviour, preserved for callers with no published `FsScope`.
+#[tokio::test]
+async fn resolve_output_path_falls_back_to_shared_handle_without_scope() {
+    use std::path::PathBuf;
+
+    let handle =
+        crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(crate::tools::ToolContext {
+            output_dir: PathBuf::from("/ws/output"),
+        }));
+    let tool = PdfGenerateTool::new().with_tool_context(handle);
+
+    let resolved = tool.resolve_output_path("report.pdf").await.unwrap();
+    assert_eq!(resolved, PathBuf::from("/ws/output/documents/report.pdf"));
+}
+
 #[test]
 fn test_wrap_text_cjk() {
     // CJK characters should be counted as 2 units wide

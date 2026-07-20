@@ -262,10 +262,17 @@ impl GroupChatExecutor {
             // them; otherwise these resolve to `None` and the request is identical
             // to using the provider's defaults.
             let provider = self.resolve_provider(persona);
-            let think_level = persona
-                .thinking_level
-                .as_deref()
-                .and_then(|level| level.parse::<ThinkLevel>().ok());
+            let think_level = match persona.thinking_level.as_deref() {
+                Some(level) => Some(level.parse::<ThinkLevel>().unwrap_or_else(|_| {
+                    tracing::warn!(
+                        persona = %persona.name,
+                        level = %level,
+                        "invalid thinking_level on persona; ignoring"
+                    );
+                    ThinkLevel::default()
+                })),
+                None => None,
+            };
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
                 provider

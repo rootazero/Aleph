@@ -206,6 +206,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "loop_graph",
+            crate::builtin_tools::LoopGraphTool::DESCRIPTION,
+            schema::<crate::builtin_tools::loop_graph_manage::LoopGraphArgs>("loop_graph"),
+        );
+        reg(
+            tools,
             "strategy",
             crate::builtin_tools::StrategyTool::DESCRIPTION,
             schema::<crate::builtin_tools::strategy_manage::StrategyArgs>("strategy"),

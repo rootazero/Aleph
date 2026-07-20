@@ -54,12 +54,6 @@ pub enum DiscoveryError {
 
     #[error("Home directory not found")]
     HomeDirNotFound,
-
-    #[error("Git root not found from: {0}")]
-    GitRootNotFound(PathBuf),
-
-    #[error("Parse error in {path}: {message}")]
-    ParseError { path: PathBuf, message: String },
 }
 
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;

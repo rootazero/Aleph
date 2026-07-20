@@ -155,24 +155,33 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // agent-scoped tools (skill_list / skill_read) can resolve this agent's
         // `~/.aleph/agents/<id>/skills` directory. Mirrors the project-root
         // scope below; `None` outside this scope keeps non-agent paths intact.
+        // Originating channel user id (raw sender) for the approval-originator
+        // gate. Read before `request` is moved into the loop below; published as
+        // a run-tree-wide task-local next to `FsScope`/agent-id so the channel
+        // approval bridge can stamp it onto a pending record. `None` for
+        // non-channel runs — the gate then degrades to the prior behaviour.
+        let originator = request.metadata.get("originator_user_id").cloned();
         let mut result = crate::agents::with_agent_id(
             Some(agent.id().to_string()),
             crate::projects::with_project_root(
                 request.workspace_override.clone(),
                 crate::tools::fs_scope::with_fs_scope(
                     Some(fs_scope),
-                    self.run_agent_loop_inner(
-                        run_id,
-                        request,
-                        agent.clone(),
-                        emitter,
-                        deadline,
-                        trace_task_id,
-                        cancel_token,
-                        extension_manager,
-                        hook_executor.clone(),
-                        hook_session_id.clone(),
-                        occupancy_out,
+                    crate::tools::turn_context::with_originator(
+                        originator,
+                        self.run_agent_loop_inner(
+                            run_id,
+                            request,
+                            agent.clone(),
+                            emitter,
+                            deadline,
+                            trace_task_id,
+                            cancel_token,
+                            extension_manager,
+                            hook_executor.clone(),
+                            hook_session_id.clone(),
+                            occupancy_out,
+                        ),
                     ),
                 ),
             ),

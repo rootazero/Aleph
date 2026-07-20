@@ -16,6 +16,8 @@ pub enum SessionError {
     NotFound(SessionId),
     #[error("actor shutdown")]
     ActorShutdown,
+    #[error("actor shutdown timed out — old actor may still be running, refusing to spawn replacement")]
+    ShutdownTimeout,
     #[error("storage error: {0}")]
     Storage(String),
     #[error("serialization: {0}")]

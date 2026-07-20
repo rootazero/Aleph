@@ -103,6 +103,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Standing-goal tool instance (persistent objective, R8).
     pub(crate) goal_tool: crate::builtin_tools::GoalTool,
+    pub(crate) loop_graph_tool: crate::builtin_tools::LoopGraphTool,
     /// Loop tool instance (in-session timer loop, R8). In-memory only.
     pub(crate) loop_tool: crate::builtin_tools::LoopTool,
     /// Strategy tool instance (persistent planner output, R8).

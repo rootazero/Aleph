@@ -612,6 +612,15 @@ impl ExtensionManager {
     pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
         self.reload_count.fetch_add(1, Ordering::SeqCst);
 
+        // Hold load_guard for the entire reload so a concurrent
+        // `ensure_loaded` cannot interleave its own `load_all` between the
+        // cache reset below and the `load_all` we run at the end. Without
+        // this, two concurrent loads can race: each will see
+        // `loaded = false`, both will execute `load_all`, and the second
+        // will double-initialize `cache_state` / `active_plugin_tools` /
+        // `plugin_tool_revision`.
+        let _guard = self.load_guard.lock().await;
+
         {
             let mut state = self.cache_state.write().await;
             state.loaded = false;

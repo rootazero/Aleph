@@ -109,14 +109,28 @@ impl MessageCoalescer {
         let conversation_id = msg.conversation_id.as_str().to_owned();
 
         // Choose the buffer key: media_group_id takes precedence.
+        //
+        // Scope the key by SENDER as well as conversation. In a group chat
+        // several people post into one conversation; keying only on the
+        // conversation would coalesce their messages into a single buffer, and
+        // `merge()` keeps only the first fragment's `sender_id`/`sender_name` —
+        // so everyone's text would be attributed to whoever happened to send
+        // first. Folding `sender_id` into the key isolates each sender, so a
+        // merged message only ever carries one person's fragments and its
+        // attribution stays correct. In a 1:1 chat there is a single human
+        // sender, so this is a no-op there.
         let is_media_group = msg.meta_media_group_id().is_some();
+        let sender = msg.sender_id.as_str();
         let key = if let Some(mg) = msg.meta_media_group_id() {
             // Scope the media-group key to the conversation: Telegram's
             // media_group_id is not globally unique across chats, so an
-            // unscoped key can merge fragments from different conversations.
-            format!("mg:{conversation_id}:{mg}")
+            // unscoped key can merge fragments from different conversations. A
+            // media group is inherently single-sender (one user's album), but
+            // fold `sender` in too for symmetry and defence against adapters
+            // that reuse a media_group_id across senders.
+            format!("mg:{conversation_id}:{sender}:{mg}")
         } else {
-            format!("cv:{}", msg.conversation_id.as_str())
+            format!("cv:{conversation_id}:{sender}")
         };
 
         let text_len = msg.text.len();
@@ -375,6 +389,69 @@ mod tests {
             "should pick lexicographically max id"
         );
         assert_eq!(merged.conversation_id.as_str(), "chat-a");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test (#8): distinct senders in one group conversation must NOT merge —
+    // otherwise `merge()` keeps only the first fragment's sender and everyone's
+    // text is misattributed to whoever posted first.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn distinct_senders_in_a_group_do_not_merge() {
+        let cfg = CoalescingConfig {
+            debounce_ms: 0, // expire immediately
+            ..Default::default()
+        };
+        let coalescer = MessageCoalescer::new(cfg);
+
+        let mut alice = make_msg("1", "group-x", "from alice");
+        alice.sender_id = UserId::new("alice");
+        alice.is_group = true;
+        let mut bob = make_msg("2", "group-x", "from bob");
+        bob.sender_id = UserId::new("bob");
+        bob.is_group = true;
+
+        coalescer.push(alice);
+        coalescer.push(bob);
+
+        let mut results = coalescer.tick();
+        assert_eq!(
+            results.len(),
+            2,
+            "two senders in one conversation must not coalesce into one message"
+        );
+        // Each single-fragment message keeps its own sender attribution.
+        results.sort_by(|a, b| a.sender_id.as_str().cmp(b.sender_id.as_str()));
+        assert_eq!(results[0].sender_id.as_str(), "alice");
+        assert_eq!(results[0].text, "from alice");
+        assert_eq!(results[1].sender_id.as_str(), "bob");
+        assert_eq!(results[1].text, "from bob");
+    }
+
+    /// A single sender's consecutive messages in a group still coalesce — the
+    /// per-sender key only isolates *different* people.
+    #[test]
+    fn same_sender_in_a_group_still_merges() {
+        let cfg = CoalescingConfig {
+            debounce_ms: 0,
+            ..Default::default()
+        };
+        let coalescer = MessageCoalescer::new(cfg);
+
+        let mut m1 = make_msg("1", "group-x", "part one");
+        m1.sender_id = UserId::new("alice");
+        m1.is_group = true;
+        let mut m2 = make_msg("2", "group-x", "part two");
+        m2.sender_id = UserId::new("alice");
+        m2.is_group = true;
+
+        coalescer.push(m1);
+        coalescer.push(m2);
+
+        let results = coalescer.tick();
+        assert_eq!(results.len(), 1, "one sender's burst still coalesces");
+        assert_eq!(results[0].text, "part one\npart two");
+        assert_eq!(results[0].sender_id.as_str(), "alice");
     }
 
     // -----------------------------------------------------------------------

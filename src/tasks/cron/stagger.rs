@@ -52,7 +52,10 @@ pub fn compute_staggered_next(
         // windows to land strictly after `now_ms` — a single-window advance
         // only covers up to one window of lag.
         let lag = now_ms - staggered;
-        let windows = lag / stagger_ms + 1;
+        // saturating_add on the ceiling protects against the pathological
+        // (stagger_ms = 1, lag = i64::MAX) edge case where `windows + 1`
+        // would otherwise wrap to i64::MIN.
+        let windows = lag.saturating_div(stagger_ms).saturating_add(1);
         staggered.saturating_add(windows.saturating_mul(stagger_ms))
     }
 }

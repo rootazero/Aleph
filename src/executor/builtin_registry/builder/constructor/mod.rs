@@ -246,7 +246,18 @@ impl BuiltinToolRegistry {
         // Store fetch-docs tool (scaffold — no CatalogCache dep; always constructed)
         let hub_fetch_docs_tool = crate::builtin_tools::hub::HubFetchDocsTool;
 
-        // Build platform-specific DesktopPlatform
+        // Build platform-specific DesktopPlatform.
+        //
+        // NOT an R1 violation, despite naming a platform crate here: this is the
+        // dependency-injection composition root (P4 — "构造时注入"). `src`
+        // depends only on the `aleph_desktop::DesktopPlatform` capability trait;
+        // the actual platform-API calls (AppKit / windows-rs / …) live entirely
+        // inside the `aleph_desktop_{macos,linux,windows}` crates behind that
+        // trait object. Selecting the concrete impl at the startup composition
+        // root is exactly where a DI seam is supposed to bind a trait to its
+        // implementation — moving this construction behind an IPC boundary would
+        // add a transport layer for in-process capabilities with no R1 benefit.
+        // (Evaluated 2026-07-20; keep as-is.)
         let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
             #[cfg(target_os = "macos")]
             {
@@ -397,6 +408,25 @@ impl BuiltinToolRegistry {
         );
         crate::goal::init_global(goal_store.clone());
         let goal_tool = crate::builtin_tools::GoalTool::new(goal_store);
+
+        // Loop-graph governance store: explicit topology over the
+        // self-improvement loops. Its OWN small DB — deliberately outside
+        // every optimizer's writable domain (dreaming must never be able to
+        // rewrite who watches it). Globalized for the doctor check + future
+        // post-run trigger consumers.
+        let loop_graph_store = Arc::new(
+            crate::loop_graph::LoopGraphStore::open(
+                &crate::utils::paths::get_data_dir()
+                    .map_err(|e| AlephError::other(format!("loop_graph store data dir: {e}")))?
+                    .join("loop_graph.db"),
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph store open: {e}")))?,
+        );
+        crate::loop_graph::init_global(loop_graph_store.clone());
+        crate::loop_graph::service::init_cron_trigger(config.cron_service.clone());
+        let loop_graph_tool = crate::builtin_tools::LoopGraphTool::new(loop_graph_store)
+            .with_cron_service(config.cron_service.clone())
+            .with_team_store(config.team_store.clone());
 
         // Loop subsystem — in-memory only (never tasks.db); cleared on restart.
         let loop_registry = Arc::new(crate::looping::LoopRegistry::default());
@@ -968,6 +998,7 @@ impl BuiltinToolRegistry {
             loop_tool: loop_tool
                 .with_session_key_handle(memory_session_key_handle.clone())
                 .with_planner_provider(config.planner_provider.clone()),
+            loop_graph_tool,
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),

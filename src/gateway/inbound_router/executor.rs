@@ -245,6 +245,16 @@ impl InboundMessageRouter {
             ctx.message.channel_id.as_str().to_string(),
         );
         metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
+        // Raw (un-normalized) originating sender id — the approval "originator".
+        // The channel button-approval callback compares the clicker's RAW id
+        // against this, so unlike `sender_id` above it must NOT be normalized;
+        // it lets a pending approval refuse resolution from anyone but the person
+        // who triggered it (closes the group-chat approval bypass). Consumed via
+        // `TURN_ORIGINATOR` → the channel approval bridge → the record.
+        metadata.insert(
+            "originator_user_id".to_string(),
+            ctx.message.sender_id.as_str().to_string(),
+        );
         metadata.insert(
             "conversation_id".to_string(),
             ctx.message.conversation_id.as_str().to_string(),

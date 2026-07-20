@@ -155,17 +155,30 @@ impl ExecTier {
     /// `true` when this *call* must ask because of its arguments, whatever the
     /// name-keyed rules said. See [`DESTRUCTIVE_FILE_OPS`].
     ///
-    /// Only `Auto` needs it: `Ask` already gates `file_ops` wholesale (it is
-    /// not idempotent) and `Full` never asks.
+    /// Only `Auto` needs it: `Ask` already gates these tools wholesale (they
+    /// are not idempotent) and `Full` never asks (its documented contract —
+    /// the residual "model writes a root reference under Full" risk is the
+    /// same trust decision Full makes everywhere, noted in GRAPH_LAYER.md).
     #[must_use]
     pub fn asks_for_arguments(self, name: &str, input: &Value) -> bool {
-        if self != Self::Auto || name != "file_ops" {
+        if self != Self::Auto {
             return false;
         }
-        input
-            .get("operation")
-            .and_then(Value::as_str)
-            .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op))
+        match name {
+            "file_ops" => input
+                .get("operation")
+                .and_then(Value::as_str)
+                .is_some_and(|op| DESTRUCTIVE_FILE_OPS.contains(&op)),
+            // Loop-graph governance: any write touching a `root:` or `frozen:`
+            // node pauses for the person. Root references are human-supplied
+            // BY DEFINITION (the store already enforces origin=human); this
+            // argument-level ask is the channel that makes "a human confirmed
+            // the exact text" true, and a background session with no approval
+            // transport fails closed — the machine is structurally unable to
+            // touch the graph's ground.
+            "loop_graph" => loop_graph_touches_protected(input),
+            _ => false,
+        }
     }
 
     /// One model-facing line describing this tier's approval regime, for the
@@ -246,6 +259,26 @@ pub fn effective_permission(
 /// `destructiveHint` — free coverage of destructive MCP tools) plus a small
 /// curated set of builtin families whose name *is* their contract, because
 /// Aleph itself defines them.
+/// A `loop_graph` call that writes to (or unlinks from) a `root:` or
+/// `frozen:` node. Read actions (`list`/`status`/`gc`…) and writes to
+/// ordinary loop/anchor nodes never match — the gate is exactly the graph's
+/// ground layer, nothing wider.
+fn loop_graph_touches_protected(input: &Value) -> bool {
+    let is_write = input
+        .get("action")
+        .and_then(Value::as_str)
+        .is_some_and(|a| matches!(a, "node" | "drop_node" | "link" | "unlink"));
+    if !is_write {
+        return false;
+    }
+    ["id", "from_id", "to_id"].iter().any(|k| {
+        input
+            .get(*k)
+            .and_then(Value::as_str)
+            .is_some_and(|v| v.starts_with("root:") || v.starts_with("frozen:"))
+    })
+}
+
 fn is_destructive(facts: ToolFacts<'_>) -> bool {
     facts.requires_approval
         || facts.name.ends_with("_delete")
@@ -478,6 +511,42 @@ mod tests {
         assert!(!auto.asks_for_arguments("file_ops", &json!({})));
         // Other tools are unaffected by the argument filter.
         assert!(!auto.asks_for_arguments("bash", &json!({"operation": "delete"})));
+    }
+
+    #[test]
+    fn loop_graph_root_and_frozen_writes_ask_under_auto() {
+        let auto = ExecTier::Auto;
+        // Writes touching the graph's ground layer pause for the person.
+        for (action, key) in [
+            ("node", "id"),
+            ("drop_node", "id"),
+            ("link", "from_id"),
+            ("link", "to_id"),
+            ("unlink", "from_id"),
+        ] {
+            for prefix in ["root:aleph", "frozen:budget-ratchet"] {
+                assert!(
+                    auto.asks_for_arguments("loop_graph", &json!({"action": action, key: prefix})),
+                    "loop_graph {action} on {prefix} must ask under Auto"
+                );
+            }
+        }
+        // Ordinary loop/anchor writes and all read actions run freely.
+        assert!(!auto.asks_for_arguments(
+            "loop_graph",
+            &json!({"action": "node", "id": "daemon:dreaming"})
+        ));
+        assert!(!auto.asks_for_arguments(
+            "loop_graph",
+            &json!({"action": "link", "from_id": "cron:w", "to_id": "goal:s"})
+        ));
+        for action in ["status", "list", "gc", "enable_audit", "pair"] {
+            assert!(!auto.asks_for_arguments("loop_graph", &json!({"action": action})));
+        }
+        // Ask gates the tool wholesale by the name-keyed rule; Full never asks
+        // (its documented contract).
+        assert!(!ExecTier::Full
+            .asks_for_arguments("loop_graph", &json!({"action": "node", "id": "root:aleph"})));
     }
 
     /// The documented precedence end-to-end THROUGH the merge every turn runs:

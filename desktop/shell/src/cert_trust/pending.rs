@@ -61,14 +61,19 @@ pub fn get_pending_cert(state: tauri::State<'_, PendingCert>) -> Option<PendingC
     })
 }
 
-/// Pin the pending cert for `host` and reload the remote target. `host` must
-/// match the pending record (guards against a stale page approving a different
-/// cert than the one being shown).
+/// Pin the pending cert for `host` and reload the remote target. Both `host`
+/// and `fingerprint` must match the pending record — the UI shows the user
+/// exactly the fingerprint it captured at page-load, so the approval must
+/// confirm THAT fingerprint was the one reviewed. Without the fingerprint
+/// check, a second TLS challenge for the same host could overwrite the
+/// pending record before the user clicks Approve, letting them pin a
+/// certificate they were never shown (auth bypass).
 #[tauri::command]
 pub fn approve_cert(
     app: tauri::AppHandle,
     state: tauri::State<'_, PendingCert>,
     host: String,
+    fingerprint: String,
 ) -> Result<(), String> {
     let record = {
         let mut guard = state
@@ -76,10 +81,10 @@ pub fn approve_cert(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match guard.take() {
-            Some(r) if r.host == host => r,
+            Some(r) if r.host == host && r.fp == fingerprint => r,
             Some(other) => {
                 *guard = Some(other);
-                return Err("pending cert host mismatch".into());
+                return Err("pending cert host or fingerprint mismatch — the displayed certificate changed; reload the trust page to review the new one".into());
             }
             None => return Err("no pending cert".into()),
         }

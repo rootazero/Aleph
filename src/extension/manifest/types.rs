@@ -174,13 +174,21 @@ impl AuthorInfo {
 /// Supports both string format ("Name <email> (url)") and object format.
 impl From<&str> for AuthorInfo {
     fn from(s: &str) -> Self {
-        // Parse npm author string: "Name <email> (url)"
+        // Parse npm author string: "Name <email> (url)".
+        //
+        // Use `find` (leftmost) rather than `rfind`: the LAST `(` could
+        // belong to a name segment in parentheses, e.g.
+        // "Note (about X) <real@email.com>" — `rfind('(')` would return
+        // the position of "about" and the email stage would then mis-extract.
+        // Likewise "x (y) <z>" would lose the email because rfind('>') on
+        // the remaining "x (y)" finds nothing.
         let mut info = Self::default();
         let mut remaining = s.trim();
 
-        // Extract URL (last)
-        if let Some(start) = remaining.rfind('(') {
-            if let Some(end) = remaining.rfind(')') {
+        // Extract URL (leftmost `(...)`).
+        if let Some(start) = remaining.find('(') {
+            if let Some(end) = remaining[start..].find(')') {
+                let end = start + end;
                 if start < end {
                     info.url = Some(remaining[start + 1..end].trim().to_string());
                     remaining = remaining[..start].trim();
@@ -188,9 +196,10 @@ impl From<&str> for AuthorInfo {
             }
         }
 
-        // Extract email
-        if let Some(start) = remaining.rfind('<') {
-            if let Some(end) = remaining.rfind('>') {
+        // Extract email (leftmost `<...>`).
+        if let Some(start) = remaining.find('<') {
+            if let Some(end) = remaining[start..].find('>') {
+                let end = start + end;
                 if start < end {
                     info.email = Some(remaining[start + 1..end].trim().to_string());
                     remaining = remaining[..start].trim();

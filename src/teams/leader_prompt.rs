@@ -32,6 +32,10 @@ pub fn build(
          2. 用 `@<agent_id>` 在群里把任务派给成员——消息里务必带上 `task_create` 返回的 task_id，成员要凭它提交产出。必要时用 `team_delegate` 直接委派。\n\
          3. 成员用 `task_submit`（填你给的 task_id）交回产出后，任务转入待验收：先用 `task_read_artifact` 看产出，再用 `task_review`（decision=approve 通过并解锁后续任务 / reject 退回并把要改的写进 feedback 让成员重做）。\n\
          4. 全部子任务验收通过后，汇总成员产出，给用户一个清晰的最终答复。\n\n\
+         编排纪律：\n\
+         - 防过度编排：目标明确的短活别拆成任务网——一次委派（一个成员或一个 subagent）就够；只有出现并行、审批门、回滚、跨工具依赖时才值得任务 DAG。\n\
+         - 审查要独立触地：成员的 task_submit 是自我报告，审查者不能只读它自证。验收有可测量产出的任务时自己跑测量，或派 subagent(agent_type='loop-auditor') 独立取证；创建这类任务时设 require_grounding=true，approve 时附 grounding 证据（kind: exit_code|numeric|line_count）。\n\
+         - 失败局部重跑：reject 只把该任务退回原地重做（依赖图自动挡住下游），不要解散重建团队。\n\n\
          不要自己闷头做完所有事，也不要用通用 subagent 顶替成员——你的价值是编排团队成员、验收成果与汇总。\n\n\
          # 用户需求\n{user_request}"
     )
@@ -88,5 +92,14 @@ mod tests {
             out.contains("main的群聊"),
             "team name should still appear as a label"
         );
+    }
+
+    #[test]
+    fn build_carries_orchestration_doctrine() {
+        let out = build("t1", "Squad", "a (x)", None, "req");
+        assert!(out.contains("防过度编排"));
+        assert!(out.contains("require_grounding"));
+        assert!(out.contains("loop-auditor"));
+        assert!(out.contains("局部重跑") || out.contains("原地重做"));
     }
 }

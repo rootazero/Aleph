@@ -31,6 +31,7 @@ async fn default_agent_roundtrip() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
+            exec_tier: None,
         })
         .await
         .expect("dispatch");

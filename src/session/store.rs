@@ -410,13 +410,27 @@ impl SessionEventStore for SqliteEventStore {
         let conn = self.conn.lock().await;
         // `retired_at IS NULL` makes this idempotent: a second retire of the
         // same range matches nothing and reports 0 newly-retired events.
-        let retired = conn
+        //
+        // Both the UPDATE and the FTS DELETE must run in the same transaction
+        // or a partial failure (e.g. disk-full mid-statement) leaves the rows
+        // marked retired while their content stays in the BM25 mirror — exactly
+        // the leak this method exists to prevent.
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
+            SessionError::Storage(format!("retire_from BEGIN failed: {e}"))
+        })?;
+
+        let retired = match conn
             .execute(
                 "UPDATE session_events SET retired_at = ?3
                  WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
                 params![session_key, from_val, at],
-            )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
+            ) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(SessionError::Storage(e.to_string()));
+            }
+        };
 
         // Drop the retired events from the BM25 mirror as well, or `recall_events`
         // would hand the model the very content the user just cleared. The FTS
@@ -424,12 +438,16 @@ impl SessionEventStore for SqliteEventStore {
         // not violate the append-only guarantee. Unlike the best-effort insert in
         // `append`, this failure is propagated: a half-retire that leaves cleared
         // content searchable is exactly the leak this method exists to prevent.
-        conn.execute(
+        if let Err(e) = conn.execute(
             "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
             params![session_key, from_val],
-        )
-        .map_err(|e| SessionError::Storage(e.to_string()))?;
+        ) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(SessionError::Storage(e.to_string()));
+        }
 
+        conn.execute_batch("COMMIT")
+            .map_err(|e| SessionError::Storage(format!("retire_from COMMIT failed: {e}")))?;
         Ok(retired)
     }
 

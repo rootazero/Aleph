@@ -112,15 +112,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<String, ExecutionError> {
-        // Write workspace-scoped output paths (same as run_agent_loop)
-        if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
-            let workspace_path = agent.workspace();
-            if let Ok(ctx) = crate::tools::ToolContext::from_workspace(workspace_path) {
-                let mut tc = tc_handle.write().await;
-                *tc = ctx;
-            }
-        }
-
+        // Deliberately NO per-run write to the shared `ToolContextHandle`: the
+        // per-run `FsScope` published around the tool call below (the
+        // `with_fs_scope` wrapper) carries this run's workspace artifact dir and
+        // is preferred over the handle at path resolution, so a write here would
+        // be a redundant cross-run mutation of a shared anchor.
         let mode: serde_json::Value = serde_json::from_str(mode_json)
             .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {e}")))?;
 
@@ -263,8 +259,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             })
             .await;
 
-        // Execute the tool directly
-        match self.tool_registry.execute_tool(tool_id, arguments).await {
+        // Execute the tool directly. Publish this run's `FsScope` for the call
+        // so file / pdf tools anchor relative output at THIS run's workspace
+        // artifact dir instead of the shared `ToolContextHandle` — which a
+        // concurrent run (the full agent loop or another slash command) can
+        // rewrite mid-execution. Mirrors the scope `run_agent_loop` publishes;
+        // the fast path has no worktree / project-override notion, so a plain
+        // workspace scope over `agent.workspace()` is the sole per-run anchor
+        // (this path no longer writes the shared handle).
+        let fs_scope =
+            crate::tools::fs_scope::FsScope::workspace(agent.workspace().join("output/documents"));
+        let execution = crate::tools::fs_scope::with_fs_scope(
+            Some(fs_scope),
+            self.tool_registry.execute_tool(tool_id, arguments),
+        );
+        match execution.await {
             Ok(result) => {
                 // Extract _media from tool output and push to pending_media buffer
                 if let Some(media_val) = result.get("_media") {

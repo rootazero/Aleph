@@ -40,16 +40,19 @@ impl ConfigBackup {
         }
     }
 
-    /// Returns the default backup directory: `~/.aleph/backups/`
-    #[must_use]
-    pub fn default_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| {
-                tracing::warn!("HOME not set, falling back to current directory for backups");
-                PathBuf::from(".")
-            })
-            .join(".aleph")
-            .join("backups")
+    /// Returns the default backup directory: `<config_dir>/backups/`.
+    ///
+    /// Resolves through [`crate::utils::paths::get_config_dir`], so it honours
+    /// the `ALEPH_HOME` override and the same HOME/USERPROFILE resolution used
+    /// for every other piece of Aleph state. Errors when no home directory can
+    /// be determined — backups must never silently scatter into the process CWD
+    /// (the old `PathBuf::from(".")` fallback made rollback targets un-findable,
+    /// their location drifting with wherever the daemon happened to be launched).
+    ///
+    /// # Errors
+    /// Returns an error when no home directory can be resolved.
+    pub fn default_dir() -> Result<PathBuf> {
+        Ok(crate::utils::paths::get_config_dir()?.join("backups"))
     }
 
     /// Create a timestamped snapshot of the given config file
@@ -333,6 +336,37 @@ mod tests {
         let backup = ConfigBackup::new(tmp.path().join("backups"), 5);
         let err = backup.resolve(None).unwrap_err().to_string();
         assert!(err.contains("No config backups available"));
+    }
+
+    #[test]
+    fn test_default_dir_honors_aleph_home() {
+        // `default_dir` resolves off the process-global `ALEPH_HOME`; serialise
+        // through the crate-wide guard so parallel env-touching tests can't
+        // observe each other's override (single source of ALEPH_HOME exclusion).
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = TempDir::new().unwrap();
+        let prev = std::env::var_os("ALEPH_HOME");
+        // SAFETY: guarded single mutator; restored before the test returns.
+        // rust-doctor-disable-next-line unsafe-block-audit
+        unsafe {
+            std::env::set_var("ALEPH_HOME", home.path());
+        }
+
+        // ALEPH_HOME points directly at the `.aleph` data dir, so backups land
+        // at `<ALEPH_HOME>/backups` — never the process CWD.
+        let dir = ConfigBackup::default_dir().unwrap();
+        assert_eq!(dir, home.path().join("backups"));
+
+        // SAFETY: same guarded invariant; restore the prior value.
+        // rust-doctor-disable-next-line unsafe-block-audit
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ALEPH_HOME", v),
+                None => std::env::remove_var("ALEPH_HOME"),
+            }
+        }
     }
 
     #[test]

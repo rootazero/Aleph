@@ -44,6 +44,12 @@ pub struct CameraClipConfig {
 impl CameraClipConfig {
     #[must_use]
     pub const fn clamped(mut self) -> Self {
+        // `f64::clamp` panics on NaN; the on-macOS path passes this
+        // through to `Duration::from_secs_f64`, so guard non-finite
+        // values first to avoid a runtime panic on bad JSON.
+        if !self.duration_secs.is_finite() {
+            self.duration_secs = 3.0;
+        }
         self.duration_secs = self.duration_secs.clamp(0.25, 60.0);
         self
     }
@@ -101,6 +107,12 @@ pub struct AudioRecordConfig {
 impl AudioRecordConfig {
     #[must_use]
     pub const fn clamped(mut self) -> Self {
+        // `f64::clamp` panics on NaN; the on-macOS path passes this
+        // through to `Duration::from_secs_f64`, so guard non-finite
+        // values first to avoid a runtime panic on bad JSON.
+        if !self.duration_secs.is_finite() {
+            self.duration_secs = 5.0;
+        }
         self.duration_secs = self.duration_secs.clamp(0.25, 300.0);
         self
     }

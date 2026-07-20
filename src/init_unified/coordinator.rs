@@ -11,6 +11,28 @@ use tracing::{info, warn};
 
 const CONFIG_SUBDIRS: &[&str] = &["logs", "cache", "output", "skills", "models"];
 
+/// Translate a `tokio::task::JoinError` from a `spawn_blocking` into a
+/// human-readable `InitError`, attributing the cause to a named phase.
+fn join_error_to_init_error(phase: &str, e: tokio::task::JoinError) -> InitError {
+    let label = phase.to_string();
+    let msg = if e.is_panic() {
+        if let Ok(payload) = e.try_into_panic() {
+            if let Some(s) = payload.downcast_ref::<String>() {
+                format!("{label} init task panicked: {s}")
+            } else if let Some(s) = payload.downcast_ref::<&str>() {
+                format!("{label} init task panicked: {s}")
+            } else {
+                format!("{label} init task panicked (unknown payload)")
+            }
+        } else {
+            format!("{label} init task panicked")
+        }
+    } else {
+        format!("{label} init task cancelled: {e}")
+    };
+    InitError::new(phase, msg)
+}
+
 /// Initialization phase identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitPhase {
@@ -241,7 +263,9 @@ impl InitializationCoordinator {
                 InitPhase::Skills => self.rollback_skills(pre_existing, &mut errors).await,
                 InitPhase::Runtimes => self.rollback_runtimes(pre_existing, &mut errors).await,
                 InitPhase::Database => self.rollback_database(pre_existing, &mut errors).await,
-                InitPhase::Config => self.rollback_config(),
+                InitPhase::Config => {
+                    warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
+                }
                 InitPhase::Directories => {
                     self.rollback_directories(pre_existing, &mut errors).await
                 }
@@ -308,11 +332,6 @@ impl InitializationCoordinator {
                 }
             }
         }
-    }
-
-    fn rollback_config(&self) {
-        // Skip: config.toml may pre-exist; deleting it could destroy user configuration.
-        warn!("Skipping config rollback to avoid deleting pre-existing user configuration");
     }
 
     async fn rollback_directories(
@@ -450,24 +469,7 @@ impl InitializationCoordinator {
                 .map_err(|e| format!("{e}"))
         })
         .await
-        .map_err(|e| {
-            let msg = if e.is_panic() {
-                if let Ok(payload) = e.try_into_panic() {
-                    if let Some(s) = payload.downcast_ref::<String>() {
-                        format!("Database init task panicked: {s}")
-                    } else if let Some(s) = payload.downcast_ref::<&str>() {
-                        format!("Database init task panicked: {s}")
-                    } else {
-                        "Database init task panicked (unknown payload)".to_string()
-                    }
-                } else {
-                    "Database init task panicked".to_string()
-                }
-            } else {
-                format!("Database init task cancelled: {e}")
-            };
-            InitError::new("database", msg)
-        })?
+        .map_err(|e| join_error_to_init_error("database", e))?
         .map_err(|e| InitError::new("database", format!("Failed to create database: {e}")))?;
 
         info!("Memory database initialized");
@@ -502,24 +504,7 @@ impl InitializationCoordinator {
         let dir = runtimes_dir.clone();
         tokio::task::spawn_blocking(move || migrate_from_legacy(&dir).and_then(|l| l.persist()))
             .await
-            .map_err(|e| {
-                let msg = if e.is_panic() {
-                    if let Ok(payload) = e.try_into_panic() {
-                        if let Some(s) = payload.downcast_ref::<String>() {
-                            format!("Runtime init task panicked: {s}")
-                        } else if let Some(s) = payload.downcast_ref::<&str>() {
-                            format!("Runtime init task panicked: {s}")
-                        } else {
-                            "Runtime init task panicked (unknown payload)".to_string()
-                        }
-                    } else {
-                        "Runtime init task panicked".to_string()
-                    }
-                } else {
-                    format!("Runtime init task cancelled: {e}")
-                };
-                InitError::new("runtimes", msg)
-            })?
+            .map_err(|e| join_error_to_init_error("runtimes", e))?
             .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {e}")))?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");

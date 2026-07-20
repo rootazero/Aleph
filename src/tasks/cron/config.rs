@@ -470,7 +470,8 @@ impl CronJob {
     ///
     /// Used when handing off results to the shared delivery pipeline.
     #[must_use]
-    pub fn to_delivery_payload(
+    #[allow(dead_code)]
+    fn to_delivery_payload(
         &self,
         output: String,
     ) -> crate::tasks::shared::delivery::DeliveryPayload {

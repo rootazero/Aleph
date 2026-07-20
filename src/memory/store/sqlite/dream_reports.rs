@@ -27,6 +27,21 @@ pub struct PersistedDreamReport {
     pub namespace: String,
 }
 
+/// One `GROUP BY pipeline_type` bucket of dream activity within a time window.
+/// The governance audit loop reads this in-core instead of shelling out to
+/// `sqlite3` — same numbers the old `SELECT pipeline_type, count(*),
+/// sum(synthesis_count) ... GROUP BY pipeline_type` probe produced, but without
+/// punching a hole in the workspace sandbox for `~/.aleph/data`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DreamPipelineStat {
+    /// Pipeline that ran (e.g. `full`, `consolidation`, `decay`).
+    pub pipeline_type: String,
+    /// Number of runs of this pipeline in the window.
+    pub runs: u64,
+    /// Total memories synthesised across those runs (`sum(synthesis_count)`).
+    pub synthesis_sum: i64,
+}
+
 // ---------------------------------------------------------------------------
 // DreamReportStore impl on SqliteMemoryBackend
 // ---------------------------------------------------------------------------
@@ -98,6 +113,54 @@ impl SqliteMemoryBackend {
             results.push(
                 row.map_err(|e| AlephError::config(format!("recent_dream_reports row: {e}")))?,
             );
+        }
+        Ok(results)
+    }
+
+    /// Dream activity grouped by `pipeline_type` for runs started after
+    /// `since_started_at` (inclusive-exclusive: `started_at > since`). Powers the
+    /// governance audit's "dreaming 近N天" reality probe. `started_at` is in
+    /// **epoch seconds** (memory.db convention). Buckets are ordered by
+    /// `pipeline_type` for deterministic output.
+    pub fn dream_report_distribution_since(
+        &self,
+        since_started_at: i64,
+    ) -> Result<Vec<DreamPipelineStat>, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT pipeline_type, count(*) AS runs, \
+                 COALESCE(sum(synthesis_count), 0) AS synthesis_sum \
+                 FROM dream_reports \
+                 WHERE started_at > ?1 \
+                 GROUP BY pipeline_type \
+                 ORDER BY pipeline_type ASC",
+            )
+            .map_err(|e| {
+                AlephError::config(format!("dream_report_distribution_since prepare: {e}"))
+            })?;
+
+        let rows = stmt
+            .query_map(params![since_started_at], |row| {
+                Ok(DreamPipelineStat {
+                    pipeline_type: row.get("pipeline_type")?,
+                    runs: row.get::<_, i64>("runs")?.max(0) as u64,
+                    synthesis_sum: row.get("synthesis_sum")?,
+                })
+            })
+            .map_err(|e| {
+                AlephError::config(format!("dream_report_distribution_since query: {e}"))
+            })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| {
+                AlephError::config(format!("dream_report_distribution_since row: {e}"))
+            })?);
         }
         Ok(results)
     }
@@ -187,5 +250,68 @@ mod tests {
 
         let ts = store.latest_dream_report_ts().unwrap();
         assert_eq!(ts, Some(5000));
+    }
+
+    fn report_of(id: &str, pipeline: &str, started: i64, synthesis: u32) -> PersistedDreamReport {
+        PersistedDreamReport {
+            id: id.to_string(),
+            pipeline_type: pipeline.to_string(),
+            started_at: started,
+            finished_at: started + 10,
+            duration_ms: 10,
+            synthesis_count: synthesis,
+            errors: None,
+            namespace: "owner".to_string(),
+        }
+    }
+
+    #[test]
+    fn distribution_groups_by_pipeline_and_sums_synthesis() {
+        let store = setup();
+        // Two `full` runs (synthesis 2 + 3 = 5) and one `decay` run (0) after the
+        // watermark; one stale `full` run at/below it must be excluded.
+        store
+            .insert_dream_report(&report_of("stale", "full", 100, 9))
+            .unwrap();
+        store
+            .insert_dream_report(&report_of("a", "full", 1001, 2))
+            .unwrap();
+        store
+            .insert_dream_report(&report_of("b", "full", 1002, 3))
+            .unwrap();
+        store
+            .insert_dream_report(&report_of("c", "decay", 1003, 0))
+            .unwrap();
+
+        let dist = store.dream_report_distribution_since(1000).unwrap();
+
+        // Ordered by pipeline_type: decay before full.
+        assert_eq!(
+            dist,
+            vec![
+                DreamPipelineStat {
+                    pipeline_type: "decay".to_string(),
+                    runs: 1,
+                    synthesis_sum: 0,
+                },
+                DreamPipelineStat {
+                    pipeline_type: "full".to_string(),
+                    runs: 2,
+                    synthesis_sum: 5,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn distribution_empty_when_nothing_in_window() {
+        let store = setup();
+        store
+            .insert_dream_report(&report_of("old", "full", 100, 1))
+            .unwrap();
+        assert!(store
+            .dream_report_distribution_since(1000)
+            .unwrap()
+            .is_empty());
     }
 }

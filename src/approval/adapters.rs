@@ -168,6 +168,10 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
             return ApprovalOutcome::Denied.into();
         };
 
+        // The originating channel user (raw sender), published run-tree-wide by
+        // `run_agent_loop`. Threaded onto the pending record so only this user
+        // can resolve it via a channel button (group-chat approval-bypass fix).
+        let originator = crate::tools::turn_context::current_originator();
         self.bridge
             .request_for_tool(
                 &self.approval_manager,
@@ -175,6 +179,7 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 &channel_id,
                 &conversation_id,
                 &session_key,
+                originator.as_deref(),
                 self.timeout_ms,
             )
             .await

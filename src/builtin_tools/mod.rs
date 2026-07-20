@@ -51,9 +51,11 @@ pub mod gateway_route;
 pub mod generation;
 pub mod goal;
 pub mod google_meet;
+pub mod governance_metrics;
 pub mod heartbeat_manage;
 pub mod hub;
 pub mod list_models;
+pub mod loop_graph_manage;
 pub mod loop_manage;
 pub mod mcp_login;
 pub mod mcp_prompt;
@@ -174,6 +176,7 @@ pub use heartbeat_manage::{
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
+pub use loop_graph_manage::{LoopGraphAction, LoopGraphArgs, LoopGraphOutput, LoopGraphTool};
 pub use loop_manage::{LoopAction, LoopArgs, LoopOutput, LoopTool};
 pub use mcp_login::{McpLoginArgs, McpLoginOutput, McpLoginTool};
 pub use mcp_prompt::{

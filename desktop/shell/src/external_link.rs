@@ -31,21 +31,22 @@ use tauri::Url;
 /// on whatever port) and thus safe to navigate the hosting webview to.
 const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
 
-/// The currently-configured remote Gateway host, if any. `is_internal` treats
-/// it as internal so in-Panel navigations on the remote origin are not
-/// misrouted to the OS browser. Loopback is always internal regardless.
-static REMOTE_HOST: RwLock<Option<String>> = RwLock::new(None);
+/// The currently-configured remote Gateway origin (scheme + host + port),
+/// if any. `is_internal` treats it as internal so in-Panel navigations on
+/// the remote origin are not misrouted to the OS browser. Loopback is
+/// always internal regardless. Storing the full origin (not just the host)
+/// closes a bypass where a different scheme/port on the same host — e.g.
+/// an unrelated `https://gw.example.com` on the same box as the configured
+/// `http://gw.example.com:9000` — would also load inside the Panel webview.
+static REMOTE_ORIGIN: RwLock<Option<String>> = RwLock::new(None);
 
 /// Update the remote origin allow-list. Pass the remote target's URL when
 /// switching to a remote Gateway, or `None` when returning to Local.
 pub fn set_remote_host(url: Option<Url>) {
-    let host = url.and_then(|u| {
-        u.host_str()
-            .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
-    });
-    *REMOTE_HOST
+    let origin = url.and_then(|u| u.origin().ok());
+    *REMOTE_ORIGIN
         .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = host;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = origin;
 }
 
 /// Injected into every document: redirect `target="_blank"` anchor clicks
@@ -84,12 +85,14 @@ pub fn is_internal(url: &Url) -> bool {
                 if LOOPBACK_HOSTS.contains(&host) || host == "tauri.localhost" {
                     return true;
                 }
-                // Allow the currently-configured remote Gateway origin.
-                REMOTE_HOST
+                // Allow the currently-configured remote Gateway origin —
+                // full origin match (scheme + host + port) so a different
+                // scheme/port on the same host cannot piggy-back.
+                REMOTE_ORIGIN
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .as_deref()
-                    == Some(host)
+                    == Some(url.origin().as_str())
             }
             None => false,
         },
@@ -189,11 +192,11 @@ mod tests {
     #[test]
     fn remote_origin_becomes_internal_when_set() {
         // Use TEST-NET-3 (203.0.113.x) — not used in any other test,
-        // avoiding concurrent REMOTE_HOST pollution with outside_origins_are_external.
+        // avoiding concurrent REMOTE_ORIGIN pollution with outside_origins_are_external.
         // default: a routable host is external
         assert!(!internal("http://203.0.113.7:18790/chat"));
         set_remote_host(Some(Url::parse("http://203.0.113.7:18790").unwrap()));
-        // now the configured remote host is internal, loopback still internal,
+        // now the configured remote origin is internal, loopback still internal,
         // and an unrelated origin stays external
         assert!(internal("http://203.0.113.7:18790/chat"));
         assert!(internal("http://127.0.0.1:18790/"));
@@ -201,5 +204,26 @@ mod tests {
         // clearing reverts
         set_remote_host(None);
         assert!(!internal("http://203.0.113.7:18790/chat"));
+    }
+
+    #[test]
+    fn different_scheme_or_port_on_remote_host_stays_external() {
+        // Set a remote origin on plain http; the same host on a different
+        // scheme (https) or a different port must NOT be auto-trusted —
+        // otherwise content from an unrelated service on the same machine
+        // would load inside the Panel webview. (Regression test for the
+        // host-only allow-list bypass.)
+        set_remote_host(Some(Url::parse("http://203.0.113.99:18790").unwrap()));
+        assert!(
+            !internal("https://203.0.113.99:18790/chat"),
+            "https on the configured remote host must not piggy-back"
+        );
+        assert!(
+            !internal("http://203.0.113.99:9000/chat"),
+            "different port on the configured remote host must not piggy-back"
+        );
+        // Same origin still internal.
+        assert!(internal("http://203.0.113.99:18790/chat"));
+        set_remote_host(None);
     }
 }

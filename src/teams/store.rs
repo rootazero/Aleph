@@ -14,6 +14,14 @@ use super::types::{
 };
 use crate::error::AlephError;
 
+/// Maximum bytes for a team's protocol text. The protocol is rendered
+/// verbatim into the leader's system prompt at startup, so an unbounded
+/// value would let whoever can call `set_protocol` inject arbitrary
+/// instructions into the leader context. 32 KiB is well above any
+/// real operating protocol and well below anything a model would read
+/// in full anyway.
+pub(super) const MAX_PROTOCOL_LEN: usize = 32 * 1024;
+
 // ---------------------------------------------------------------------------
 // FromSql implementations — propagate parse errors instead of unwrap_or_default
 // ---------------------------------------------------------------------------
@@ -676,6 +684,12 @@ impl TeamStore for SqliteTeamStore {
             let t = p.trim();
             if t.is_empty() {
                 None
+            } else if t.len() > MAX_PROTOCOL_LEN {
+                // Cap protocol text. The value is interpolated verbatim into
+                // the leader's system prompt at render time, so an unbounded
+                // string gives whoever can call set_protocol an arbitrary
+                // prompt-injection sink against the leader.
+                Some(t[..MAX_PROTOCOL_LEN].to_string())
             } else {
                 Some(t.to_string())
             }

@@ -176,11 +176,11 @@ pub enum TerminateReason {
     /// distinct from `Completed` (clean exit) and `EmptyResponseExhausted`
     /// (no content at all).
     MaxOutputTokensExhausted,
-    /// The context-budget `after_turn` window flagged diminishing returns
-    /// (`LoopDirective::StopDiminishing`): recent turns kept spending tokens
-    /// without productive tool output, so the loop stopped early after a
-    /// grace turn. Same subsystem as `ContextBudgetExhausted` but a
-    /// different signal — productivity, not prompt size.
+    /// Retired signal, kept for i18n / summary back-compat only. The
+    /// context-budget diminishing-returns hard-stop was removed (R10: the
+    /// harness must not make its own completion judgement — the model, plus
+    /// the harder caps `max_iterations` / `ToolLoopVerifier` / the
+    /// consecutive-failure cap, govern instead). No longer produced by the loop.
     DiminishingReturns,
     /// The provider returned a context-window overflow (`prompt_too_long`
     /// / 413) and the harness attempted reactive compaction, but either
