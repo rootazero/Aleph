@@ -6,6 +6,7 @@ pub mod api;
 pub mod config;
 pub mod inbound;
 pub mod outbound;
+pub mod staging;
 
 pub use config::BlueBubblesConfig;
 
@@ -92,19 +93,6 @@ impl BlueBubblesChannel {
     }
 }
 
-/// Compile mention wake-word patterns; skip and warn on invalid regex.
-fn compile_patterns(raw: &[String]) -> Vec<regex::Regex> {
-    raw.iter()
-        .filter_map(|p| match regex::Regex::new(p) {
-            Ok(re) => Some(re),
-            Err(e) => {
-                tracing::warn!("invalid mention pattern {:?}: {e}", p);
-                None
-            }
-        })
-        .collect()
-}
-
 #[async_trait]
 impl Channel for BlueBubblesChannel {
     fn info(&self) -> &ChannelInfo {
@@ -129,11 +117,8 @@ impl Channel for BlueBubblesChannel {
         // rejects read-receipt POSTs without private-api, so don't fire them needlessly.
         let private_api = self.server_caps.read().await.private_api;
 
-        let patterns = compile_patterns(&self.config.mention_patterns);
         let state = inbound::webhook_server::WebhookState {
             password: self.config.password.clone(),
-            require_mention: self.config.require_mention,
-            mention_patterns: Arc::new(patterns),
             sender: self.channel_state.sender(),
             api: Arc::new(self.api.clone()),
             dedup: self.dedup.clone(),
@@ -159,6 +144,14 @@ impl Channel for BlueBubblesChannel {
         }
 
         self.running.store(true, Ordering::SeqCst);
+
+        // Sweep any attachments left over from a previous run on connect. The
+        // catch-up poll (below, when enabled) keeps sweeping on its interval;
+        // this start-time pass covers webhook-only setups and restarts.
+        let swept = staging::sweep_stale(staging::RETENTION);
+        if swept > 0 {
+            tracing::debug!("BlueBubbles: swept {swept} stale staged attachment(s)");
+        }
 
         if let Some(tracker) = &self.offset_tracker {
             self.poll_handle = Some(tokio::spawn(inbound::poll::run_catchup_poll(
@@ -291,8 +284,6 @@ mod tests {
             webhook_path: "/bluebubbles-webhook".into(),
             poll_interval_secs: 30,
             send_read_receipts: true,
-            require_mention: false,
-            mention_patterns: vec![],
         }
     }
 

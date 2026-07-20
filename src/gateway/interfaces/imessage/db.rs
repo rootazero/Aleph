@@ -125,6 +125,18 @@ impl MessagesDb {
         })
     }
 
+    /// Test-only constructor over an already-open connection (e.g. in-memory),
+    /// so the polling/filtering logic can be exercised without a real chat.db.
+    #[cfg(test)]
+    fn from_conn(conn: Connection) -> Self {
+        Self {
+            conn,
+            last_message_rowid: 0,
+            include_attachments: true,
+            max_attachment_size: 0,
+        }
+    }
+
     /// Configure attachment handling (from `IMessageConfig`).
     pub const fn set_attachment_policy(
         &mut self,
@@ -148,7 +160,14 @@ impl MessagesDb {
         self.last_message_rowid
     }
 
-    /// Poll for new messages since the last poll
+    /// Poll for new messages since the last poll.
+    ///
+    /// The `associated_message_type = 0` and `item_type = 0` filters drop
+    /// tapbacks/reactions (2000–3005) and group-action system rows (participant
+    /// added/removed, group renamed, etc.) at the source, matching the
+    /// BlueBubbles path's `is_tapback` skip. Without them these rows arrive as
+    /// junk text (e.g. `Loved "…"`, `You named the conversation …`) and trigger
+    /// spurious agent turns.
     pub fn poll_new_messages(&mut self) -> SqliteResult<Vec<InboundMessage>> {
         let sql = r#"
             SELECT
@@ -164,6 +183,8 @@ impl MessagesDb {
             LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
             WHERE m.ROWID > ?1
               AND m.is_from_me = 0
+              AND m.associated_message_type = 0
+              AND m.item_type = 0
             ORDER BY m.ROWID ASC
             LIMIT 100
         "#;
@@ -460,6 +481,52 @@ mod tests {
     fn test_resolve_attachment_path_missing() {
         // A non-existent path resolves to None (don't hand the agent a dead path).
         assert!(resolve_attachment_path("/nonexistent/aleph/imsg/attachment.heic").is_none());
+    }
+
+    /// Build a minimal in-memory chat.db subset with the columns
+    /// `poll_new_messages` reads, so filtering can be verified end-to-end.
+    fn seed_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT);
+            CREATE TABLE chat_message_join (message_id INTEGER, chat_id INTEGER);
+            CREATE TABLE message (
+                ROWID INTEGER PRIMARY KEY,
+                guid TEXT, text TEXT, handle_id INTEGER, date INTEGER,
+                is_from_me INTEGER, cache_has_attachments INTEGER,
+                associated_message_type INTEGER, item_type INTEGER
+            );
+            INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage');
+            -- normal inbound message (kept)
+            INSERT INTO message VALUES (10,'g-normal','hello',1,0,0,0,0,0);
+            -- tapback / reaction (dropped: associated_message_type != 0)
+            INSERT INTO message VALUES (11,'g-tapback','Loved "hello"',1,0,0,0,2000,0);
+            -- group-action system row (dropped: item_type != 0)
+            INSERT INTO message VALUES (12,'g-sysevt','You named the conversation',1,0,0,0,0,1);
+            -- outbound echo (dropped: is_from_me = 1)
+            INSERT INTO message VALUES (13,'g-fromme','my own reply',1,0,1,0,0,0);
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn poll_filters_tapbacks_system_rows_and_self() {
+        let mut db = MessagesDb::from_conn(seed_db());
+        let msgs = db.poll_new_messages().unwrap();
+        // Only the one normal inbound message survives the WHERE filters.
+        assert_eq!(msgs.len(), 1, "expected only the normal message, got {msgs:?}");
+        assert_eq!(msgs[0].text, "hello");
+        assert_eq!(msgs[0].id.as_str(), "g-normal");
+        // The watermark tracks the last *matched* row (10), not the last scanned
+        // ROWID (13): the trailing tapback/system/self rows are excluded by the
+        // WHERE clause and so never advance it — identical to how the
+        // pre-existing `is_from_me = 0` filter already behaved. This is safe:
+        // SQLite applies the WHERE filter before LIMIT, so a later real message
+        // is still returned even when many filtered rows sit in between.
+        assert_eq!(db.last_rowid(), 10);
     }
 
     #[test]

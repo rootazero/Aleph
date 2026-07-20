@@ -21,8 +21,6 @@ use crate::gateway::interfaces::imessage::bluebubbles::inbound::mapper::{
 #[derive(Clone)]
 pub struct WebhookState {
     pub password: String,
-    pub require_mention: bool,
-    pub mention_patterns: Arc<Vec<regex::Regex>>,
     pub sender: InboundMessageSender,
     pub api: Arc<BlueBubblesApi>,
     pub dedup: Arc<StdMutex<BbDedup>>,
@@ -59,15 +57,12 @@ pub async fn handle_webhook(
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     if let Some(m) = map_webhook_record(&payload) {
+        // Group mention gating is enforced downstream in the inbound router's
+        // permission layer (single source of truth), so it applies uniformly to
+        // both this webhook path and the catch-up poll path. Here we only drop
+        // what can never be a routable inbound: our own echoes, tapbacks, and
+        // records with no GUID.
         if !m.is_from_me && !m.is_tapback && !m.guid.is_empty() {
-            // Group mention gating: drop group messages that don't match a wake pattern.
-            if m.is_group
-                && state.require_mention
-                && !state.mention_patterns.iter().any(|re| re.is_match(&m.text))
-            {
-                return Ok(Json(serde_json::json!({ "status": "ok" }))); // silently ignored
-            }
-
             let dup = {
                 state
                     .dedup
@@ -103,8 +98,6 @@ mod tests {
     fn state(tx: crate::gateway::channel::InboundMessageSender) -> WebhookState {
         WebhookState {
             password: "secret".into(),
-            require_mention: false,
-            mention_patterns: std::sync::Arc::new(vec![]),
             sender: tx,
             api: std::sync::Arc::new(
                 crate::gateway::interfaces::imessage::bluebubbles::api::BlueBubblesApi::new(
