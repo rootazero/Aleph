@@ -30,7 +30,8 @@ pub(super) async fn run_oneshot_command(
         .arg(prompt)
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
 
     for (key, val) in env {
         cmd.env(key, val);
