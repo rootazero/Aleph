@@ -15,6 +15,14 @@ use super::SqliteMemoryBackend;
 // ---------------------------------------------------------------------------
 
 /// A persisted dream pipeline execution report.
+///
+/// The activity counters (`notes_consolidated` / `notes_woven` /
+/// `notes_archived` / `feedback_distilled`) mirror the same-named fields of the
+/// in-flight `DreamReport`. They exist so the governance audit ring has a
+/// reality signal that is non-zero on a healthy *consolidate* night —
+/// `synthesis_count` alone is 0 on every consolidate run (the `NoteSynthesis`
+/// stage lives only in the rarer `Synthesize` pipeline), which made the old
+/// `synthesis_sum`-only probe a false-negative machine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedDreamReport {
     pub id: String,
@@ -23,6 +31,16 @@ pub struct PersistedDreamReport {
     pub finished_at: i64,
     pub duration_ms: i64,
     pub synthesis_count: u32,
+    /// Notes merged/consolidated by `NoteConsolidate` (consolidate + synthesize).
+    pub notes_consolidated: u32,
+    /// Orphan notes woven into the link graph by `NoteWeave` (consolidate path).
+    pub notes_woven: u32,
+    /// Notes archived by `NoteDecay` (consolidate path).
+    pub notes_archived: u32,
+    /// Feedback rules distilled from user corrections by `FeedbackDistill`
+    /// (runs on BOTH consolidate and synthesize). This is the counter-metric the
+    /// Dreaming×correction Goodhart check pairs against `corrections`.
+    pub feedback_distilled: u32,
     pub errors: Option<String>,
     pub namespace: String,
 }
@@ -39,7 +57,17 @@ pub struct DreamPipelineStat {
     /// Number of runs of this pipeline in the window.
     pub runs: u64,
     /// Total memories synthesised across those runs (`sum(synthesis_count)`).
+    /// Note: 0 on consolidate runs by design — read the counters below for the
+    /// distillation actually done on a consolidate night.
     pub synthesis_sum: i64,
+    /// Total notes consolidated across those runs (`sum(notes_consolidated)`).
+    pub consolidated_sum: i64,
+    /// Total orphan notes woven across those runs (`sum(notes_woven)`).
+    pub woven_sum: i64,
+    /// Total notes archived across those runs (`sum(notes_archived)`).
+    pub archived_sum: i64,
+    /// Total feedback rules distilled across those runs (`sum(feedback_distilled)`).
+    pub feedback_distilled_sum: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -57,8 +85,9 @@ impl SqliteMemoryBackend {
         conn.execute(
             "INSERT INTO dream_reports \
              (id, pipeline_type, started_at, finished_at, duration_ms, \
-              synthesis_count, errors, namespace) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+              synthesis_count, notes_consolidated, notes_woven, notes_archived, \
+              feedback_distilled, errors, namespace) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 report.id,
                 report.pipeline_type,
@@ -66,6 +95,10 @@ impl SqliteMemoryBackend {
                 report.finished_at,
                 report.duration_ms,
                 report.synthesis_count,
+                report.notes_consolidated,
+                report.notes_woven,
+                report.notes_archived,
+                report.feedback_distilled,
                 report.errors,
                 report.namespace,
             ],
@@ -88,7 +121,8 @@ impl SqliteMemoryBackend {
         let mut stmt = conn
             .prepare(
                 "SELECT id, pipeline_type, started_at, finished_at, duration_ms, \
-                 synthesis_count, errors, namespace \
+                 synthesis_count, notes_consolidated, notes_woven, notes_archived, \
+                 feedback_distilled, errors, namespace \
                  FROM dream_reports ORDER BY started_at DESC LIMIT ?1",
             )
             .map_err(|e| AlephError::config(format!("recent_dream_reports prepare: {e}")))?;
@@ -102,6 +136,10 @@ impl SqliteMemoryBackend {
                     finished_at: row.get("finished_at")?,
                     duration_ms: row.get("duration_ms")?,
                     synthesis_count: row.get("synthesis_count")?,
+                    notes_consolidated: row.get("notes_consolidated")?,
+                    notes_woven: row.get("notes_woven")?,
+                    notes_archived: row.get("notes_archived")?,
+                    feedback_distilled: row.get("feedback_distilled")?,
                     errors: row.get("errors")?,
                     namespace: row.get("namespace")?,
                 })
@@ -134,7 +172,11 @@ impl SqliteMemoryBackend {
         let mut stmt = conn
             .prepare(
                 "SELECT pipeline_type, count(*) AS runs, \
-                 COALESCE(sum(synthesis_count), 0) AS synthesis_sum \
+                 COALESCE(sum(synthesis_count), 0) AS synthesis_sum, \
+                 COALESCE(sum(notes_consolidated), 0) AS consolidated_sum, \
+                 COALESCE(sum(notes_woven), 0) AS woven_sum, \
+                 COALESCE(sum(notes_archived), 0) AS archived_sum, \
+                 COALESCE(sum(feedback_distilled), 0) AS feedback_distilled_sum \
                  FROM dream_reports \
                  WHERE started_at > ?1 \
                  GROUP BY pipeline_type \
@@ -150,6 +192,10 @@ impl SqliteMemoryBackend {
                     pipeline_type: row.get("pipeline_type")?,
                     runs: row.get::<_, i64>("runs")?.max(0) as u64,
                     synthesis_sum: row.get("synthesis_sum")?,
+                    consolidated_sum: row.get("consolidated_sum")?,
+                    woven_sum: row.get("woven_sum")?,
+                    archived_sum: row.get("archived_sum")?,
+                    feedback_distilled_sum: row.get("feedback_distilled_sum")?,
                 })
             })
             .map_err(|e| {
@@ -204,6 +250,10 @@ mod tests {
             finished_at: finished,
             duration_ms: finished - started,
             synthesis_count: 1,
+            notes_consolidated: 2,
+            notes_woven: 3,
+            notes_archived: 4,
+            feedback_distilled: 5,
             errors: None,
             namespace: "owner".to_string(),
         }
@@ -226,6 +276,10 @@ mod tests {
         assert_eq!(r.finished_at, 2000);
         assert_eq!(r.duration_ms, 1000);
         assert_eq!(r.synthesis_count, 1);
+        assert_eq!(r.notes_consolidated, 2);
+        assert_eq!(r.notes_woven, 3);
+        assert_eq!(r.notes_archived, 4);
+        assert_eq!(r.feedback_distilled, 5);
         assert!(r.errors.is_none());
         assert_eq!(r.namespace, "owner");
     }
@@ -260,6 +314,10 @@ mod tests {
             finished_at: started + 10,
             duration_ms: 10,
             synthesis_count: synthesis,
+            notes_consolidated: 0,
+            notes_woven: 0,
+            notes_archived: 0,
+            feedback_distilled: 0,
             errors: None,
             namespace: "owner".to_string(),
         }
@@ -293,14 +351,52 @@ mod tests {
                     pipeline_type: "decay".to_string(),
                     runs: 1,
                     synthesis_sum: 0,
+                    consolidated_sum: 0,
+                    woven_sum: 0,
+                    archived_sum: 0,
+                    feedback_distilled_sum: 0,
                 },
                 DreamPipelineStat {
                     pipeline_type: "full".to_string(),
                     runs: 2,
                     synthesis_sum: 5,
+                    consolidated_sum: 0,
+                    woven_sum: 0,
+                    archived_sum: 0,
+                    feedback_distilled_sum: 0,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn distribution_sums_activity_counters() {
+        // The consolidate path produces 0 synthesis but real distillation work.
+        // The audit's reality signal must sum those counters, not just synthesis.
+        let store = setup();
+        let mut a = report_of("a", "consolidate", 1001, 0);
+        a.notes_consolidated = 3;
+        a.notes_woven = 1;
+        a.notes_archived = 2;
+        a.feedback_distilled = 1;
+        let mut b = report_of("b", "consolidate", 1002, 0);
+        b.notes_consolidated = 4;
+        b.notes_woven = 0;
+        b.notes_archived = 5;
+        b.feedback_distilled = 2;
+        store.insert_dream_report(&a).unwrap();
+        store.insert_dream_report(&b).unwrap();
+
+        let dist = store.dream_report_distribution_since(1000).unwrap();
+        assert_eq!(dist.len(), 1);
+        let s = &dist[0];
+        assert_eq!(s.pipeline_type, "consolidate");
+        assert_eq!(s.runs, 2);
+        assert_eq!(s.synthesis_sum, 0);
+        assert_eq!(s.consolidated_sum, 7);
+        assert_eq!(s.woven_sum, 1);
+        assert_eq!(s.archived_sum, 7);
+        assert_eq!(s.feedback_distilled_sum, 3);
     }
 
     #[test]
