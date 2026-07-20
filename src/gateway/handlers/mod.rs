@@ -307,7 +307,7 @@ impl HandlerRegistry {
 
         // Plugin handlers (singular — canonical CC-compatible namespace)
         registry.register("plugin.list", plugins::handle_list);
-        registry.register("plugin.install", plugins::handle_install);
+        registry.register("plugin.install", plugins::handle_install_unified);
         registry.register("plugin.installFromZip", plugins::handle_install_from_zip);
         registry.register("plugin.uninstall", plugins::handle_uninstall);
         registry.register("plugin.update", plugins::handle_update);

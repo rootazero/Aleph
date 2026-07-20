@@ -578,21 +578,18 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
         // Lifecycle (server-connected)
         PluginAction::List => plugins_cmd::list(server_url, json).await,
         PluginAction::Install { source, scope } => {
-            // A bare plugin name routes to the marketplace; URLs, paths, and zip
-            // refs go to the direct installer.
-            let looks_like_marketplace =
-                !source.contains('/') && !source.contains('.') && !source.contains(':');
-            if looks_like_marketplace {
-                // The marketplace handler honors an install scope
-                // ("user" | "project" | "local"); forward the CLI flag so
-                // `--scope` is no longer silently dropped. Direct git/zip
-                // installs always land in user scope (the daemon's install
-                // handlers take no scope), so the flag only applies here.
+            // Local-file / GitHub sources need client-side I/O (read the zip,
+            // fetch the release) and stay here. Everything else is forwarded
+            // raw to the daemon, which owns the marketplace-vs-git-url
+            // classification (R4: the shell no longer decides).
+            if source.starts_with("github:") || source.ends_with(".zip") {
+                plugins_cmd::install(server_url, &source, json).await
+            } else {
                 let (client, _events) = AlephClient::connect(server_url).await?;
                 let result: serde_json::Value = client
                     .call(
-                        "plugin.marketplace.install",
-                        Some(serde_json::json!({ "name": source, "scope": scope })),
+                        "plugin.install",
+                        Some(serde_json::json!({ "source": source, "scope": scope })),
                     )
                     .await?;
                 if json {
@@ -602,8 +599,6 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
                 }
                 client.close().await?;
                 Ok(())
-            } else {
-                plugins_cmd::install(server_url, &source, json).await
             }
         }
         PluginAction::Uninstall { name, .. } => {
