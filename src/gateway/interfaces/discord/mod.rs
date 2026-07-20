@@ -376,7 +376,7 @@ impl EventHandler for Handler {
         // A prefix always triggers; a mention triggers only when respond_to_mentions
         // is on. `respond_to_mentions = false` must restrict to prefix-only, NOT
         // disable the guard (which would make the bot answer every guild message).
-        if !is_dm && !has_prefix && !(mentioned && self.config.respond_to_mentions) {
+        if !(is_dm || has_prefix || (mentioned && self.config.respond_to_mentions)) {
             return;
         }
 

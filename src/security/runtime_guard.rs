@@ -315,7 +315,7 @@ impl RuntimeSecurityGuard {
         let mut ordered: Vec<(&String, &String)> = resolved_map.iter().collect();
         ordered.sort_by_key(|(raw, _)| std::cmp::Reverse(raw.len()));
         for (raw, value) in &ordered {
-            current_text = current_text.replace(*raw, *value);
+            current_text = current_text.replace(*raw, value);
         }
 
         // Assemble final result
