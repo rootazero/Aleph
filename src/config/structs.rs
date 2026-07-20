@@ -103,21 +103,21 @@ pub struct Config {
     /// Smart conversation flow configuration
     #[serde(default)]
     #[deprecated(
-        since = "2026.07.20",
+        since = "2026.7.20",
         note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
     )]
     pub smart_flow: SmartFlowConfig,
     /// Smart matching configuration (semantic detection system)
     #[serde(default)]
     #[deprecated(
-        since = "2026.07.20",
+        since = "2026.7.20",
         note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
     )]
     pub smart_matching: SmartMatchingConfig,
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
     #[deprecated(
-        since = "2026.07.20",
+        since = "2026.7.20",
         note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
     )]
     pub dispatcher: DispatcherConfigToml,
@@ -141,7 +141,7 @@ pub struct Config {
     /// Sub-agent synchronization configuration
     #[serde(default)]
     #[deprecated(
-        since = "2026.07.20",
+        since = "2026.7.20",
         note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
     )]
     pub subagent: SubAgentConfig,
@@ -169,7 +169,7 @@ pub struct Config {
     /// Skill evolution configuration (Skill Compiler - Phase 10)
     #[serde(default)]
     #[deprecated(
-        since = "2026.07.20",
+        since = "2026.7.20",
         note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
     )]
     pub evolution: EvolutionConfig,
@@ -419,6 +419,7 @@ pub struct FullConfig {
 }
 
 impl From<Config> for FullConfig {
+    #[allow(deprecated)]
     fn from(config: Config) -> Self {
         let providers = config
             .providers
@@ -448,6 +449,7 @@ impl From<Config> for FullConfig {
 // =============================================================================
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             default_hotkey: crate::config::types::general::default_hotkey(), // Legacy field, kept for backward compatibility
