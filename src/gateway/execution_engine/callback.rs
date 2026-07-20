@@ -1,6 +1,6 @@
 //! Callback adapter that bridges `AgentLoop` events to Gateway `StreamEvents`.
 
-use crate::sync_primitives::{Arc, AtomicU32, AtomicU64, Mutex, Ordering};
+use crate::sync_primitives::{Arc, AtomicU32, Mutex, Ordering};
 
 /// Persists trace events to the state database.
 pub(super) struct TracePersistence {
@@ -63,30 +63,12 @@ impl TracePersistence {
 
 /// Shared state for the stream callback.
 pub(super) struct StreamCallbackState {
-    #[allow(dead_code)] // reserved for stream sequencing wiring
-    seq: AtomicU64,
-    #[allow(dead_code)] // reserved for stream sequencing wiring
-    chunk_index: AtomicU32,
     trace_persistence: Option<Arc<TracePersistence>>,
 }
 
 impl StreamCallbackState {
     pub(super) const fn new(trace_persistence: Option<Arc<TracePersistence>>) -> Self {
-        Self {
-            seq: AtomicU64::new(0),
-            chunk_index: AtomicU32::new(0),
-            trace_persistence,
-        }
-    }
-
-    #[allow(dead_code)] // reserved for stream sequencing wiring
-    pub(super) fn next_seq(&self) -> u64 {
-        self.seq.fetch_add(1, Ordering::SeqCst) + 1
-    }
-
-    #[allow(dead_code)] // reserved for stream sequencing wiring
-    pub(super) fn next_chunk_index(&self) -> u32 {
-        self.chunk_index.fetch_add(1, Ordering::SeqCst)
+        Self { trace_persistence }
     }
 
     pub(super) fn persist_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
