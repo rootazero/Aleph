@@ -25,25 +25,14 @@
 //! dm_allowed = true
 //! ```
 
-pub mod account_pool;
 pub mod api;
 pub mod config;
-pub mod handlers;
 pub mod permissions;
 pub mod resolver;
 pub mod security;
 
-pub use account_pool::DiscordAccountPool;
-pub use config::{DiscordChannelConfig, DiscordChannelSettings, DiscordConfig, IntentsConfig};
-pub use handlers::{
-    AgentId, ApprovalError, ApprovalQueue, ApprovalStatus, InteractionError, InteractionHandler,
-    InteractionResult, PendingExec, StreamingError, StreamingHandler, StreamingPreview,
-    ThreadBindingError, ThreadBindingHandler, ThreadInfo,
-};
-pub use resolver::{
-    AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,
-    ResolvedChannel, ResolvedChannelSettings,
-};
+pub use config::{DiscordConfig, IntentsConfig};
+pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -108,14 +97,8 @@ impl ThreadBinding {
 pub struct DiscordChannel {
     /// Channel information
     info: ChannelInfo,
-    /// Configuration (legacy flat config)
+    /// Configuration
     config: DiscordConfig,
-    /// Account pool for multi-bot-instance support
-    account_pool: Option<DiscordAccountPool>,
-    /// Account resolver for channel-to-account mapping
-    account_resolver: Option<AccountResolver>,
-    /// Settings resolver for per-channel config override
-    settings_resolver: Option<ChannelSettingsResolver>,
     /// Unified channel state (status + inbound sender/receiver)
     channel_state: ChannelState,
     /// Shutdown signal sender
@@ -127,7 +110,7 @@ pub struct DiscordChannel {
 }
 
 impl DiscordChannel {
-    /// Create a new Discord channel (legacy constructor)
+    /// Create a new Discord channel.
     pub fn new(id: impl Into<String>, config: DiscordConfig) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
@@ -137,15 +120,9 @@ impl DiscordChannel {
             capabilities: Self::capabilities(),
         };
 
-        let channel_config: DiscordChannelConfig = config.clone().into();
-        let account_resolver = AccountResolver::new(&channel_config);
-
         Self {
             info,
-            config: config.clone(),
-            account_pool: None,
-            account_resolver: Some(account_resolver),
-            settings_resolver: Some(ChannelSettingsResolver::new(channel_config)),
+            config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             http: None,
@@ -157,33 +134,6 @@ impl DiscordChannel {
         let mut channel = Self::new(id, config);
         channel.test_mode = true;
         channel
-    }
-
-    /// Create a new Discord channel with nested config (multi-account support)
-    pub fn with_config(id: impl Into<String>, channel_config: DiscordChannelConfig) -> Self {
-        let info = ChannelInfo {
-            id: ChannelId::new(id),
-            name: "Discord".to_string(),
-            channel_type: "discord".to_string(),
-            status: ChannelStatus::Disconnected,
-            capabilities: Self::capabilities(),
-        };
-
-        let account_resolver = AccountResolver::new(&channel_config);
-        let account_pool = DiscordAccountPool::new(channel_config.clone());
-        let settings_resolver = ChannelSettingsResolver::new(channel_config.clone());
-
-        Self {
-            info,
-            config: DiscordConfig::default(),
-            account_pool: Some(account_pool),
-            account_resolver: Some(account_resolver),
-            settings_resolver: Some(settings_resolver),
-            channel_state: ChannelState::new(100),
-            shutdown_tx: None,
-            http: None,
-            test_mode: false,
-        }
     }
 
     /// Get Discord-specific capabilities
@@ -245,58 +195,6 @@ impl DiscordChannel {
             .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))
     }
 
-    /// Resolve settings for a channel using the nested config hierarchy.
-    ///
-    /// This method uses the settings resolver to apply the override chain:
-    /// default -> account -> guild -> channel
-    pub fn resolve_settings(
-        &self,
-        channel_id: u64,
-        guild_id: Option<u64>,
-    ) -> Result<DiscordChannelSettings, DiscordChannelError> {
-        let account_resolver = self
-            .account_resolver
-            .as_ref()
-            .ok_or(DiscordChannelError::NotConfigured)?;
-
-        let settings_resolver = self
-            .settings_resolver
-            .as_ref()
-            .ok_or(DiscordChannelError::NotConfigured)?;
-
-        let account_id = account_resolver
-            .resolve_account(channel_id)
-            .or_else(|| guild_id.and_then(|g| account_resolver.resolve_account_by_guild(g)))
-            .ok_or(DiscordChannelError::ChannelNotInAnyAccount(channel_id))?;
-
-        let resolved = settings_resolver.resolve(&account_id, guild_id, Some(channel_id));
-        Ok(resolved.settings)
-    }
-
-    /// Get the account pool for multi-account management.
-    #[must_use]
-    pub const fn account_pool(&self) -> Option<&DiscordAccountPool> {
-        self.account_pool.as_ref()
-    }
-
-    /// Get the settings resolver.
-    #[must_use]
-    pub const fn settings_resolver(&self) -> Option<&ChannelSettingsResolver> {
-        self.settings_resolver.as_ref()
-    }
-}
-
-/// Discord channel specific errors
-#[derive(Debug, thiserror::Error)]
-pub enum DiscordChannelError {
-    #[error("channel not configured for nested config")]
-    NotConfigured,
-
-    #[error("channel {0} is not in any account")]
-    ChannelNotInAnyAccount(u64),
-
-    #[error("account not found: {0}")]
-    AccountNotFound(String),
 }
 
 /// Event handler for Discord gateway events

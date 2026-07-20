@@ -96,7 +96,7 @@ Aleph 孤立的 `StreamingHandler` 实现的却是 **presence 追踪**（用户�
 
 **熵减**：删除 `handlers/approval.rs`（`ApprovalQueue`）+ `handlers/interaction.rs`（`InteractionHandler`）——真实审批走 `ApprovalCallbackSink`，二者冗余。
 
-> ⚠️ **偏离预览说明**：AskUserQuestion 预览曾写"保留复用 ApprovalQueue"。深挖后发现真实审批基础设施是 `ApprovalCallbackSink`，`ApprovalQueue` 是与之重复的孤立实现。"连线真实路径"的正解是接 sink 而非复活孤立队列，故改为**删除 ApprovalQueue**。请在 review 时确认此精化。
+> ✅ **决策已确认（2026-07-20）**：真实审批基础设施是 `ApprovalCallbackSink`，`ApprovalQueue` 与之重复。"连线真实路径"的正解是接 sink，故**删除 ApprovalQueue + InteractionHandler**。
 
 ### 3.3 Typing 生命周期（打磨）
 
@@ -107,11 +107,7 @@ Aleph 孤立的 `StreamingHandler` 实现的却是 **presence 追踪**（用户�
 
 ### 3.4 Thread 绑定去重（连线 + 熵减）
 
-**二选一（实现时定，倾向 A）**：
-- **A（推荐，最小熵减）**：删除 `handlers/thread.rs::ThreadBindingHandler` + `AgentId`（sub-agent participants 无消费者），保留 `Handler` 内联 `thread_bindings` + 本地 `ThreadBinding`（已连线、够用）。→ 纯删死代码。
-- **B（预览倾向的"复用 ThreadBindingHandler"）**：用 `ThreadBindingHandler` 替换 `Handler` 内联 map，删本地重复 `ThreadBinding` struct。→ 连线组件但引入 sub-agent 未用字段。
-
-> A 更符合 R10 YAGNI。请在 review 时择一（默认 A）。
+> ✅ **决策已确认（2026-07-20）：方案 A**。删除 `handlers/thread.rs::ThreadBindingHandler` + `AgentId`（sub-agent participants 无消费者），保留 `Handler` 内联 `thread_bindings` + 本地 `ThreadBinding`（已连线、够用）。纯删死代码，最符 R10 YAGNI。
 
 ---
 
