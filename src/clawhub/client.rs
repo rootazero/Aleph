@@ -31,6 +31,11 @@ const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Maximum download size (100 MiB) to prevent memory exhaustion.
 const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
+/// Maximum size of a JSON catalog response (8 MiB) — search/browse/detail
+/// responses are all KB-scale; anything larger is either a malformed server
+/// or an amplification attack. Enforced before `resp.json()` so the body is
+/// never fully materialized in memory.
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
 
 /// Percent-encode a slug for use in URL path segments.
 /// Encodes everything except alphanumerics, `-`, `_`, `.`, `~`, and `/` (slug separator).
@@ -107,8 +112,28 @@ impl ClawHubClient {
 
         let resp = Self::check_status(resp, context).await?;
 
-        resp.json()
+        // Cap the body before handing it to `resp.json()` so an oversized or
+        // adversarial response can't materialize fully in memory. Honest
+        // Content-Length is rejected early; the streaming path enforces the
+        // same cap incrementally as a defense against missing/dishonest
+        // Content-Length headers.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_JSON_BYTES as u64 {
+                return Err(AlephError::network(format!(
+                    "ClawHub {context} response exceeds {MAX_JSON_BYTES} byte cap"
+                )));
+            }
+        }
+        let bytes = resp
+            .bytes()
             .await
+            .map_err(|e| AlephError::network(format!("ClawHub {context} read error: {e}")))?;
+        if bytes.len() > MAX_JSON_BYTES {
+            return Err(AlephError::network(format!(
+                "ClawHub {context} response exceeds {MAX_JSON_BYTES} byte cap"
+            )));
+        }
+        serde_json::from_slice(&bytes)
             .map_err(|e| AlephError::network(format!("ClawHub {context} parse error: {e}")))
     }
 
