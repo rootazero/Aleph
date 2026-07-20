@@ -231,10 +231,10 @@ impl ConfigApprovalPolicy {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
-                    "Approval policy file not found at {}. Using permissive defaults.",
+                    "Approval policy file not found at {}. Using safe defaults (all actions require approval).",
                     path.display()
                 );
-                Self::permissive_default()
+                Self::safe_default()
             }
             Err(e) => {
                 error!(
@@ -280,12 +280,9 @@ impl ConfigApprovalPolicy {
     ///
     /// Every action type defaults to [`ApprovalDecision::Allow`].
     ///
-    /// This is the production no-config default: the tools that hold an
-    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`, `AutomationTool`) emit
-    /// `Desktop*`/`PimWrite` action types, so an all-`Allow` desktop default
-    /// keeps autonomous desktop/PIM/automation behavior unchanged from when no
-    /// policy was wired at all. Dropping a `~/.aleph/approval-policy.json` is
-    /// the explicit opt-in to tighten this (e.g. `desktop_automation: ask`).
+    /// No longer reachable from `load_from` (missing files now use
+    /// `safe_default`), but retained for explicit opt-in and tests.
+    #[allow(dead_code)]
     fn permissive_default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);

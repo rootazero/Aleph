@@ -248,23 +248,39 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_load_missing_file_returns_permissive_default() {
-        // Use a path in a temp directory that does not exist.
+    async fn test_load_missing_file_returns_safe_default() {
         let temp_path = std::env::temp_dir().join("aleph-test-approval-nonexistent");
         let policy = ConfigApprovalPolicy::load_from(temp_path.join("policy.json"));
 
         let req = make_request(ActionType::BrowserNavigate, "https://example.com");
-        assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "Missing policy file must escalate to Ask (safe default), not silently Allow"
+        );
 
-        // Desktop actions are Allow under the permissive no-config default —
-        // this is the byte-identical contract for the only policy-holding tools
-        // (DesktopTool / PimTool), which emit Desktop* action types. Regressing
-        // these to Ask would silently break autonomous desktop/PIM execution.
         let req = make_request(ActionType::DesktopClick, "click(10,20)");
-        assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "Missing policy file must escalate DesktopClick to Ask"
+        );
 
         let req = make_request(ActionType::DesktopLaunchApp, "com.apple.Safari");
-        assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "Missing policy file must escalate DesktopLaunchApp to Ask"
+        );
+
+        let req = make_request(ActionType::DesktopAutomation, "rm -rf /");
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "Missing policy file must escalate DesktopAutomation to Ask"
+        );
+
+        let req = make_request(ActionType::PimWrite, "delete all notes");
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "Missing policy file must escalate PimWrite to Ask"
+        );
     }
 
     // -----------------------------------------------------------------------
