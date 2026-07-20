@@ -102,24 +102,30 @@ impl RpcPrompter {
     /// Send a step and wait for answer
     pub async fn prompt(&self, step: WizardStep) -> Result<Value, WizardSessionError> {
         let (tx, rx) = oneshot::channel();
+        let step_id = step.id.clone();
 
         // Register pending answer
         {
             let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
-            answers.insert(step.id.clone(), PendingAnswer { sender: tx });
+            answers.insert(step_id.clone(), PendingAnswer { sender: tx });
         }
 
-        // Send step
-        self.step_tx
-            .send(step.clone())
-            .await
-            .map_err(|_| WizardSessionError::Internal("Channel closed".to_string()))?;
+        // Send step; on failure the pending sender would otherwise leak in
+        // the answers map for the rest of the session, so remove it first.
+        if self.step_tx.send(step.clone()).await.is_err() {
+            let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
+            answers.remove(&step_id);
+            return Err(WizardSessionError::Internal("Channel closed".to_string()));
+        }
 
         debug!(step_id = %step.id, "Waiting for answer");
 
         // Wait for answer.  If the sender is dropped without sending,
         // treat it as an internal error (the flow task may have panicked
-        // or the channel was closed unexpectedly).
+        // or the channel was closed unexpectedly). The PendingAnswer entry
+        // is removed by `Session::answer` on success and intentionally
+        // left in place on cancellation/error so a duplicate answer()
+        // surfaces `StepNotFound` rather than silently swallowing.
         rx.await.map_err(|_| {
             WizardSessionError::Internal(
                 "Answer channel closed unexpectedly (flow may have panicked)".to_string(),
