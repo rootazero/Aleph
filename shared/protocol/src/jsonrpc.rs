@@ -71,7 +71,7 @@ impl JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: method.into(),
             params,
-            id: Some(Value::String(uuid_v4())),
+            id: Some(Value::String(crate::ids::next_id())),
         }
     }
 
@@ -296,12 +296,8 @@ impl ToolCallResult {
 }
 
 // ============================================================================
-// Helper Functions
+// Tests
 // ============================================================================
-
-fn uuid_v4() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
 
 #[cfg(test)]
 mod tests {
