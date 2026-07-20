@@ -28,7 +28,7 @@
 use crate::sync_primitives::Arc;
 
 use super::types::{DesktopArgs, DesktopOutput, MouseButton};
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use aleph_desktop::system_types::AppInfo;
 use aleph_protocol::desktop_bridge::methods::ax::{
     AxActionResult, AxLocator, PerformActionParams, SetValueParams,

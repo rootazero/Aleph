@@ -341,11 +341,7 @@ impl TeamStore for SqliteTeamStore {
             // `idx_teams_name_active` partial UNIQUE index is the source of
             // this constraint.
             rusqlite::Error::SqliteFailure(err, _)
-                if err.code == rusqlite::ErrorCode::ConstraintViolation
-                    && err
-                        .message
-                        .to_ascii_lowercase()
-                        .contains("idx_teams_name_active") =>
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
                 crate::error::AlephError::invalid_input(format!(
                     "a team named '{}' already exists",
