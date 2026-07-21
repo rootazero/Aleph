@@ -119,7 +119,12 @@ pub struct SelfConfigTool {
     agent_dir: PathBuf,
     agent_id: String,
     config: Option<Arc<RwLock<Config>>>,
-    config_patcher: Option<Arc<ConfigPatcher>>,
+    // `OnceLock` (not `Option<T>`) so the registry can late-bind the patcher
+    // through `Arc<BuiltinToolRegistry>` (no `&mut self` available post-wrap).
+    // Hot-path read is a single pointer-load (`OnceLock::get`); the previous
+    // shape silently never received the patcher in production because the
+    // boot path clones the registry Arc before injecting it.
+    config_patcher: Arc<std::sync::OnceLock<Arc<ConfigPatcher>>>,
 }
 
 impl SelfConfigTool {
@@ -131,7 +136,7 @@ impl SelfConfigTool {
             agent_dir,
             agent_id,
             config: None,
-            config_patcher: None,
+            config_patcher: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -140,16 +145,18 @@ impl SelfConfigTool {
         self
     }
 
-    pub fn with_patcher(mut self, patcher: Arc<ConfigPatcher>) -> Self {
-        self.config_patcher = Some(patcher);
+    pub fn with_patcher(self, patcher: Arc<ConfigPatcher>) -> Self {
+        let _ = self.config_patcher.set(patcher);
         self
     }
 
     /// Late-bind a `ConfigPatcher` after construction. Called from
     /// `BuiltinToolRegistry::set_config_patcher` once the patcher exists
     /// (it is built after the registry in `start::register_agent_handlers`).
-    pub fn set_patcher(&mut self, patcher: Arc<ConfigPatcher>) {
-        self.config_patcher = Some(patcher);
+    /// Idempotent: a second set silently no-ops (`OnceLock::set` returns Err
+    /// when the cell is already populated).
+    pub fn set_patcher(&self, patcher: Arc<ConfigPatcher>) {
+        let _ = self.config_patcher.set(patcher);
     }
 }
 
@@ -384,7 +391,7 @@ impl SelfConfigTool {
         dry_run: bool,
         verify: bool,
     ) -> Result<SelfConfigOutput> {
-        let patcher = match &self.config_patcher {
+        let patcher = match self.config_patcher.get() {
             Some(p) => p,
             None => {
                 return Ok(SelfConfigOutput {
@@ -523,7 +530,7 @@ impl SelfConfigTool {
 
     /// List config.toml backup snapshots so the agent can pick a restore point.
     async fn list_backups(&self) -> Result<SelfConfigOutput> {
-        let patcher = match &self.config_patcher {
+        let patcher = match self.config_patcher.get() {
             Some(p) => p,
             None => {
                 return Ok(SelfConfigOutput {
@@ -564,7 +571,7 @@ impl SelfConfigTool {
         timestamp: Option<String>,
         dry_run: bool,
     ) -> Result<SelfConfigOutput> {
-        let patcher = match &self.config_patcher {
+        let patcher = match self.config_patcher.get() {
             Some(p) => p,
             None => {
                 return Ok(SelfConfigOutput {
@@ -785,7 +792,7 @@ mod tests {
             agent_dir: dir.to_path_buf(),
             agent_id: "test-agent".to_string(),
             config: None,
-            config_patcher: None,
+            config_patcher: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -965,7 +972,7 @@ mod tests {
             agent_dir: nested.clone(),
             agent_id: "test-agent".to_string(),
             config: None,
-            config_patcher: None,
+            config_patcher: Arc::new(std::sync::OnceLock::new()),
         };
 
         let result = AlephTool::call(

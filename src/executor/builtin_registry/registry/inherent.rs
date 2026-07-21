@@ -40,22 +40,18 @@ impl BuiltinToolRegistry {
 /// returns "patcher not available", even though their schema is advertised
 /// to the LLM.
 ///
-/// The registry is shared through `Arc`, so callers pass `&mut Arc<Self>`;
-/// `Arc::get_mut` succeeds only when the caller is the sole owner (the
-/// case at startup, right after the registry was built). When the Arc is
-/// already shared the setter is a no-op — log a warning rather than panic.
+/// Takes `&self` (not `&mut Arc<Self>`) so the call works through the
+/// already-shared `Arc` the boot path moves into `ExecutionEngine::new`.
+/// `Arc::get_mut` only succeeds on a sole-owner Arc and silently no-ops
+/// otherwise, so the tools' `config_patcher` field is `OnceLock`-backed to
+/// allow late binding through `&self`.
     pub fn set_config_patcher(
-        registry: &mut Arc<Self>,
+        &self,
         patcher: Arc<crate::config::patcher::ConfigPatcher>,
     ) {
-        if let Some(reg) = Arc::get_mut(registry) {
-            reg.self_config_tool.set_patcher(Arc::clone(&patcher));
-            reg.moa_manage_tool.set_patcher(Arc::clone(&patcher));
-        } else {
-            tracing::warn!(
-                "ConfigPatcher could not be late-bound: BuiltinToolRegistry Arc is already shared"
-            );
-        }
+        self.self_config_tool.set_patcher(Arc::clone(&patcher));
+        self.moa_manage_tool.set_patcher(Arc::clone(&patcher));
+        tracing::info!("ConfigPatcher late-bound into self_config + moa tools");
     }
 
     /// Extract the caller's `agent_id` for the tool call currently executing.
