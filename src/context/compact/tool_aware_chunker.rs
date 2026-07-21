@@ -121,14 +121,26 @@ pub struct ToolAwareChunker {
 impl ToolAwareChunker {
     /// Create a new chunker with the given token limit and estimation ratio.
     ///
-    /// Panics if `token_ratio <= 0.0` (would silently disable the token-limit
-    /// logic via division-by-zero or saturating-cast).
+    /// Falls back to the conservative default of `0.25` (chars-per-token
+    /// heuristic) when `token_ratio <= 0.0` or is non-finite. The previous
+    /// `assert!` would panic the agent loop on a misconfigured caller
+    /// (e.g. a future MCP / Skill injecting a ratio override) — degrade
+    /// gracefully instead of crashing the run.
     #[must_use]
     pub fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
-        assert!(token_ratio > 0.0, "token_ratio must be > 0.0");
+        const DEFAULT_RATIO: f64 = 0.25;
+        let ratio = if token_ratio.is_finite() && token_ratio > 0.0 {
+            token_ratio
+        } else {
+            tracing::warn!(
+                provided = token_ratio,
+                "ToolAwareChunker: token_ratio out of range; falling back to default 0.25"
+            );
+            DEFAULT_RATIO
+        };
         Self {
             chunk_token_limit,
-            token_ratio,
+            token_ratio: ratio,
         }
     }
 
