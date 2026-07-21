@@ -206,6 +206,22 @@ impl GroupChatExecutor {
             build_fallback_plan(&session.participants)
         });
 
+        // Warn when a mentioned persona was dropped by the coordinator — a valid
+        // mention that the coordinator chose to exclude leaves the caller with
+        // no feedback. Detection is cheap (linear over typically < 10 targets /
+        // respondents) so we don't bother with a HashSet.
+        for target in targets {
+            if !plan.respondents.iter().any(|r| r.persona_id == *target)
+                && session.participants.iter().any(|p| &p.id == target)
+            {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    target = %target,
+                    "mentioned persona not included in coordinator plan"
+                );
+            }
+        }
+
         // Step 3b: Optionally include coordinator plan as a visible message
         let mut messages = Vec::new();
         let mut seq_offset = 0u32;
