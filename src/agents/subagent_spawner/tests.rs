@@ -322,6 +322,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -363,6 +364,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -400,6 +402,7 @@ mod tests {
                     cancel: CancellationToken::new(),
                     isolation: None,
                     strategy: None,
+                    session_mode: None,
                 },
             ),
         )
@@ -424,6 +427,7 @@ mod tests {
                     cancel: CancellationToken::new(),
                     isolation: None,
                     strategy: None,
+                    session_mode: None,
                 },
             ),
         )
@@ -465,6 +469,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -493,6 +498,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -517,6 +523,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let err = spawn(&base, req).await.expect_err("spawn should time out");
@@ -551,6 +558,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -600,6 +608,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -669,6 +678,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -696,6 +706,7 @@ mod tests {
             cancel,
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
         assert!(req.isolation.is_none());
     }
@@ -836,6 +847,7 @@ mod tests {
             cancel,
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
         let err = spawn(&base, req).await.expect_err("must fail loud");
         assert!(
@@ -910,6 +922,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -1028,6 +1041,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");
@@ -1162,12 +1176,45 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: Some("Objective: weld it.\nGuardrails:\n- no shortcuts"),
+            session_mode: None,
         };
         let _ = spawn(&base, req).await.expect("spawn ok");
 
         let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
         assert!(captured.contains("<strategy>"));
         assert!(captured.contains("weld it."));
+    }
+
+    /// The parent's usage mode is welded into the child prompt through the
+    /// same post-pipeline seam as the strategy, so a chat/code-mode child
+    /// knows why families are missing from its inherited surface — and that
+    /// `tool_search` promotes them. `None` (and Work, which the wiring site
+    /// skips) keeps the prompt byte-identical.
+    #[tokio::test]
+    async fn spawn_request_mode_reaches_inline_system_prompt() {
+        let provider = Arc::new(SystemPromptCapture(Mutex::new(None)));
+        let base = make_base(provider.clone());
+        let agent = agent_with_allowed("explore", vec![]);
+
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do the thing",
+            context_summary: None,
+            model: None,
+            timeout_secs: 30,
+            cancel: CancellationToken::new(),
+            isolation: None,
+            strategy: None,
+            session_mode: Some(crate::config::types::policies::SessionMode::Chat),
+        };
+        let _ = spawn(&base, req).await.expect("spawn ok");
+
+        let captured = provider.0.lock().unwrap().clone().expect("captured prompt");
+        assert!(captured.contains("Usage mode: chat"));
+        assert!(captured.contains("tool_search"));
+        // The child line must NOT carry the user-switching contract — that
+        // belongs to the parent conversation, not an ephemeral child session.
+        assert!(!captured.contains("session_set_mode"));
     }
 
     #[tokio::test]
@@ -1185,6 +1232,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
         let _ = spawn(&base, req).await.expect("spawn ok");
 
@@ -1219,6 +1267,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -1269,6 +1318,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         let result = spawn(&base, req).await.expect("spawn ok");
@@ -1311,6 +1361,7 @@ mod tests {
             cancel: CancellationToken::new(),
             isolation: None,
             strategy: None,
+            session_mode: None,
         };
 
         spawn(&base, req).await.expect("spawn ok");

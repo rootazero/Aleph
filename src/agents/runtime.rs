@@ -142,6 +142,9 @@ pub struct AgentRuntime {
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
     /// map (the `new()` default) means every spawn uses `provider`.
     provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    /// Parent run's usage mode, applied to every spawn (skipped for Work by
+    /// the wiring site — identity partition, byte-identical child prompt).
+    session_mode: Option<crate::config::types::policies::SessionMode>,
     /// Welded strategy `<strategy>` body applied to every spawn's
     /// `AgentRuntimeConfig`. `None` (the `new()` default) keeps the legacy
     /// no-strategy path.
@@ -190,6 +193,7 @@ impl AgentRuntime {
             plugin_registry: None,
             provider_overrides: HashMap::new(),
             strategy: None,
+            session_mode: None,
             routing_store: None,
             default_max_iterations: None,
             parallel_tool_concurrency: None,
@@ -216,6 +220,16 @@ impl AgentRuntime {
     #[must_use]
     pub fn with_strategy(mut self, strategy: String) -> Self {
         self.strategy = Some(strategy);
+        self
+    }
+
+    /// Wire the parent run's usage mode inherited by every spawn.
+    #[must_use]
+    pub const fn with_session_mode(
+        mut self,
+        mode: crate::config::types::policies::SessionMode,
+    ) -> Self {
+        self.session_mode = Some(mode);
         self
     }
 
@@ -511,6 +525,7 @@ impl AgentRuntime {
             cancel: self.cancel_token.clone(),
             isolation: config.agent_def.isolation.clone(),
             strategy: self.strategy.as_deref().or(config.strategy.as_deref()),
+            session_mode: self.session_mode,
         };
         spawn(&base, req).await
     }

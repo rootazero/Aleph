@@ -1,6 +1,7 @@
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
-use crate::api::tool_permissions::{TierPreset, ToolPermissionsApi};
+use crate::api::tool_permissions::{ModePreset, TierPreset, ToolPermissionsApi};
 use crate::components::exec_tier_labels::{tier_desc, tier_label, FULL_TIER};
+use crate::components::mode_labels::{mode_desc, mode_label};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
@@ -38,6 +39,14 @@ pub fn PoliciesView() -> impl IntoView {
     let tier_saving = RwSignal::new(false);
     let tier_error = RwSignal::new(Option::<String>::None);
     let tier_applied = RwSignal::new(false);
+
+    // Global usage-mode state — the tier's third twin ([policies] mode).
+    // Presets come from Core (`builtin_modes()`), never from here.
+    let modes = RwSignal::new(Vec::<ModePreset>::new());
+    let global_mode = RwSignal::new(String::new());
+    let mode_saving = RwSignal::new(false);
+    let mode_error = RwSignal::new(Option::<String>::None);
+    let mode_applied = RwSignal::new(false);
 
     // Load tool permissions + schema
     let dash = state;
@@ -82,6 +91,8 @@ pub fn PoliciesView() -> impl IntoView {
 
             exec_tier.set(perms.exec_tier);
             tiers.set(perms.tiers);
+            global_mode.set(perms.mode);
+            modes.set(perms.modes);
             default_perm.set(perms.default.clone());
             original_default.set(perms.default);
             groups.set(schema.groups);
@@ -90,6 +101,26 @@ pub fn PoliciesView() -> impl IntoView {
             tp_loading.set(false);
         });
     });
+
+    // Apply a global default mode. Partial update — nothing else on the
+    // permission surface is touched. Sessions with an explicit override keep
+    // it; follow-global sessions pick the new default up on their next turn.
+    let apply_mode = move |id: String| {
+        mode_saving.set(true);
+        mode_error.set(None);
+        mode_applied.set(false);
+        spawn_local(async move {
+            match ToolPermissionsApi::set_mode(&dash, &id).await {
+                Ok(resp) => {
+                    global_mode.set(resp.mode);
+                    modes.set(resp.modes);
+                    mode_applied.set(true);
+                }
+                Err(e) => mode_error.set(Some(format!("Failed to apply mode: {e}"))),
+            }
+            mode_saving.set(false);
+        });
+    };
 
     let set_tool_perm = move |tool_name: String, level: String| {
         tool_perms.update(|map| {
@@ -274,6 +305,55 @@ pub fn PoliciesView() -> impl IntoView {
                         }
                     })}
                 </div>
+
+                // Global Usage Mode — the tier's third twin. Shapes the tool
+                // PRESENTATION surface only (never permissions); a per-session
+                // pill override always wins over this default.
+                <Show when=move || !modes.get().is_empty()>
+                <div class="space-y-3">
+                    <div>
+                        <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.mode_title)}</h2>
+                        <p class="text-xs text-text-tertiary mt-1">
+                            {t!(i18n, settings.policies.mode_global_desc)}
+                        </p>
+                    </div>
+
+                    {move || mode_error.get().map(|e| view! {
+                        <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+                    })}
+                    <Show when=move || mode_applied.get()>
+                        <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">
+                            {t!(i18n, settings.policies.mode_applied)}
+                        </div>
+                    </Show>
+
+                    <div class="flex gap-2">
+                        {move || modes.get().into_iter().map(|preset| {
+                            let id = preset.id.clone();
+                            let id_click = id.clone();
+                            let selected = Signal::derive(move || global_mode.get() == id);
+                            view! {
+                                <button
+                                    disabled=move || mode_saving.get()
+                                    on:click=move |_| apply_mode(id_click.clone())
+                                    class=move || if selected.get() {
+                                        "flex-1 text-left p-3 rounded-xl border-2 border-primary bg-primary-subtle transition-colors disabled:opacity-50"
+                                    } else {
+                                        "flex-1 text-left p-3 rounded-xl border border-border bg-surface-raised hover:bg-surface-sunken transition-colors disabled:opacity-50"
+                                    }
+                                >
+                                    <div class="text-sm font-semibold text-text-primary mb-0.5">
+                                        {mode_label(i18n, &preset.id)}
+                                    </div>
+                                    <p class="text-[11px] leading-snug text-text-secondary">
+                                        {mode_desc(i18n, &preset.id)}
+                                    </p>
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                </div>
+                </Show>
 
                 // Tool Permissions Section — advanced overrides layered on top of
                 // the tier preset above.

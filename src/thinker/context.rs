@@ -247,7 +247,7 @@ pub struct ResolvedContext {
     pub strategy_guardrails: Option<String>,
     /// Voice context for this session, rendered by `VoiceModeLayer`
     /// (priority 1710) as the spoken-reply guidelines. Populated in the harness
-    /// bridge from `voice::session_mode` (written by the gateway inbound
+    /// bridge from `voice::voice_mode` (written by the gateway inbound
     /// router). [`VoiceContext::Off`] keeps the section absent — the prompt is
     /// byte-identical for non-voice turns.
     #[serde(skip, default)]

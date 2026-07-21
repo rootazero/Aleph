@@ -801,7 +801,7 @@ async fn resolve_prompt_context(
     // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
     // leaves the prompt byte-identical; the `transcribed` bit distinguishes
     // a spoken-only turn from one whose input was ASR-transcribed.
-    resolved_context.voice = match crate::gateway::voice::session_mode::get(session_key_str) {
+    resolved_context.voice = match crate::gateway::voice::voice_mode::get(session_key_str) {
         None => crate::thinker::context::VoiceContext::Off,
         Some(false) => crate::thinker::context::VoiceContext::Spoken,
         Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,

@@ -464,6 +464,14 @@ pub struct ChatState {
     /// composer's mode pill owns reads/writes. Session-scoped → rides along
     /// in [`SessionSnapshot`].
     pub session_mode: RwSignal<Option<String>>,
+    /// The global `[policies] mode` default, mirrored from
+    /// `config.get_tool_permissions` by the mode pill's fetch. Lets the
+    /// right-rail mode dispatch (`events.rs`) resolve the EFFECTIVE mode for
+    /// sessions that follow the global default — not just session-explicit
+    /// overrides. Global, not session-scoped: survives `clear_session()` and
+    /// stays out of [`SessionSnapshot`]. `None` = not yet fetched (older core
+    /// or pre-connect) → dispatch falls back to pre-mode behavior.
+    pub global_mode: RwSignal<Option<String>>,
     /// Run IDs whose final assistant reply should be spoken aloud — the
     /// voice-loop turns started from the composer mic button. `events.rs` pops
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
@@ -531,6 +539,7 @@ impl ChatState {
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
+            global_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),

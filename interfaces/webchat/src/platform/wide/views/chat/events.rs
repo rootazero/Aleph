@@ -74,12 +74,19 @@ pub(crate) fn apply_trace_event(
                 //   work → once a plan exists, the Plan/progress surface is
                 //          the home view; before the first plan lands, fall
                 //          back to the tool detail.
-                //   code / follow-global → live-follow the tool detail
+                //   code / unknown → live-follow the tool detail
                 //          (pre-mode behavior, byte-identical default).
-                // Keyed off the session's explicit override only — a
-                // follow-global session keeps the default behavior.
+                // Keyed off the EFFECTIVE mode: the session's explicit
+                // override, else the global `[policies] mode` default the
+                // pill's fetch mirrored into `chat.global_mode` — so a
+                // follow-global session gets its mode's behavior too.
+                // `None` (older core / pre-connect) keeps the default.
                 if is_foreground {
-                    match chat.session_mode.get_untracked().as_deref() {
+                    let effective = chat
+                        .session_mode
+                        .get_untracked()
+                        .or_else(|| chat.global_mode.get_untracked());
+                    match effective.as_deref() {
                         Some("chat") => {}
                         Some("work") if chat.plan.get_untracked().is_some() => {
                             workspace.follow_plan(run_id);

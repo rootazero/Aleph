@@ -424,7 +424,7 @@ pub async fn build_run_request(
     // turn. Same registry the channel inbound path writes
     // (`inbound_router::executor`); channel sessions use distinct keys, so
     // the unconditional per-turn recompute here cannot clobber them.
-    crate::gateway::voice::session_mode::set(
+    crate::gateway::voice::voice_mode::set(
         &session_key_str,
         params.voice_input,
         params.voice_input,
@@ -932,7 +932,7 @@ mod tests {
         };
         let result = manager.start_run(voice_params).await.unwrap();
         assert_eq!(
-            crate::gateway::voice::session_mode::get(&result.session_key),
+            crate::gateway::voice::voice_mode::get(&result.session_key),
             Some(true),
             "a voice turn must mark the session voice-active with transcribed input"
         );
@@ -956,7 +956,7 @@ mod tests {
         let result2 = manager.start_run(typed_params).await.unwrap();
         assert_eq!(result2.session_key, result.session_key);
         assert_eq!(
-            crate::gateway::voice::session_mode::get(&result.session_key),
+            crate::gateway::voice::voice_mode::get(&result.session_key),
             None,
             "a typed turn must clear the voice-mode flag"
         );

@@ -342,6 +342,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::extension::PermissionAction;
 
         let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, agent).await;
+        // The permissions resolver above persists a request-carried tier onto
+        // the session as a side effect (stamp-on-carry). The mode and
+        // think-level twins carry the same contract, and a fast-path dispatch
+        // is the turn: run their resolvers too (values unused here — the fast
+        // path builds no tool surface and no prompt) so a mode/thinking pick
+        // riding a slash message is not silently dropped.
+        let _ = self.resolve_turn_mode(request).await;
+        let _ = self.resolve_turn_think_level(request).await;
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 

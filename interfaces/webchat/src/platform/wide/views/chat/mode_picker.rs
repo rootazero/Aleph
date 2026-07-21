@@ -35,15 +35,19 @@ pub fn ModePicker() -> impl IntoView {
 
     let open = RwSignal::new(false);
     let modes: RwSignal<Vec<ModePreset>> = RwSignal::new(Vec::new());
-    let global_mode = RwSignal::new(String::new());
 
     // The global default mode + the selectable ids (same RPC the tier pill
-    // uses — the response carries both dials).
+    // uses — the response carries both dials). The global default lands in
+    // the SHARED `chat.global_mode` signal — the right-rail mode dispatch
+    // (`events.rs`) reads it to resolve the effective mode of follow-global
+    // sessions. An older core ships no `mode` field (decoder defaults to
+    // "") → `None`, and `modes` stays empty → the pill hides entirely.
     let load = move || {
         spawn_local(async move {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
-                    global_mode.set(cfg.mode);
+                    chat.global_mode
+                        .set(Some(cfg.mode).filter(|m| !m.is_empty()));
                     modes.set(cfg.modes);
                 }
                 Err(e) => {
@@ -66,7 +70,8 @@ pub fn ModePicker() -> impl IntoView {
     let effective = Memo::new(move |_| {
         chat.session_mode
             .get()
-            .unwrap_or_else(|| global_mode.get())
+            .or_else(|| chat.global_mode.get())
+            .unwrap_or_default()
     });
 
     let persist = move |session_key: String, mode: Option<String>| {
@@ -88,6 +93,9 @@ pub fn ModePicker() -> impl IntoView {
     };
 
     view! {
+        // An older core without the mode dial returns no presets — render
+        // nothing rather than an icon-only pill with a blank label.
+        <Show when=move || !modes.get().is_empty()>
         <div class="relative">
             <button
                 on:click=move |_| {
@@ -150,7 +158,7 @@ pub fn ModePicker() -> impl IntoView {
                             {t!(i18n, settings.policies.mode_follow_global)}
                         </span>
                         <span class="text-text-tertiary text-[10px] font-mono">
-                            {move || mode_label(i18n, &global_mode.get())}
+                            {move || mode_label(i18n, &chat.global_mode.get().unwrap_or_default())}
                         </span>
                     </button>
 
@@ -193,5 +201,6 @@ pub fn ModePicker() -> impl IntoView {
                 </div>
             </Show>
         </div>
+        </Show>
     }
 }

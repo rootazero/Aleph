@@ -39,13 +39,13 @@ pub const MODE_SESSION_KEY: &str = "session_mode";
 
 /// Dev-focused tools *subtracted* from the schema-resident core set in Chat
 /// mode. They stay listed (name + description) and callable; only their full
-/// schema moves behind a `get_tool_schema` round-trip. `subagent` and
-/// `get_tool_schema` are never subtracted — see `default_core_tools`'s
-/// snapshot-exemption invariant.
+/// schema moves behind a `get_tool_schema` round-trip. (`code_check` is not
+/// here — chat *defers* it entirely, see `CHAT_DEFER_FAMILIES`, so a core
+/// subtraction would be dead.) `subagent` and `get_tool_schema` are never
+/// subtracted — see `default_core_tools`'s snapshot-exemption invariant.
 const CHAT_CORE_SUBTRACT: &[&str] = &[
     "bash",
     "code_exec",
-    "code_check",
     "file_write",
     "file_edit",
     "file_ops",
@@ -55,18 +55,24 @@ const CHAT_CORE_SUBTRACT: &[&str] = &[
 /// whatever `[tools] core` configures).
 const CODE_CORE_ADD: &[&str] = &["apply_patch", "ctx_search"];
 
-/// Tool-name prefixes deferred out of the initial tool list in Chat mode.
-/// A prefix matches whole families (`desktop` → every `desktop_*` tool); an
-/// entry equal to a full name matches just that tool. Everything here remains
-/// discoverable + promotable via `tool_search`.
-const CHAT_DEFER_PREFIXES: &[&str] = &[
+/// Tool *families* deferred out of the initial tool list in Chat mode. An
+/// entry matches at an `_` word boundary: `desktop` catches `desktop` and
+/// every `desktop_*` tool but never `desktops`; `loop` catches `loop` and
+/// `loop_graph`. Everything here remains discoverable + promotable via
+/// `tool_search`. MCP-qualified names (`{server}__{tool}`) are exempt from
+/// these tables — see `defers_tool`.
+///
+/// Deliberate keeps (audited 2026-07-21): `media_understand` stays listed
+/// (users paste images into chat), the `agent_*` management family stays
+/// (R8 conversational management), and `system`/`pim` stay (their desktop
+/// dependency is an implementation detail, not their register).
+const CHAT_DEFER_FAMILIES: &[&str] = &[
     "desktop",
-    "browser_",
-    "team_",
-    "task_",
-    "node_",
-    "arena_",
-    "media",
+    "browser",
+    "team",
+    "task",
+    "node",
+    "arena",
     "image_generate",
     "video_generate",
     "audio_generate",
@@ -74,37 +80,48 @@ const CHAT_DEFER_PREFIXES: &[&str] = &[
     "pdf_generate",
     "cron_manage",
     "automation",
-    "heartbeat_",
+    "heartbeat",
     "goal",
     "loop",
     "workflow",
     "google_meet",
-    "hub_",
+    "hub",
     "clawhub",
     "skill_install",
     "skill_manage",
-    "a2a_",
-    "acp_",
+    "a2a",
+    "acp",
     "gateway_route",
     "apply_patch",
     "code_check",
     "strategy",
     "vault_store",
+    "session_collaborate",
+    "session_turn",
 ];
 
-/// Tool-name prefixes deferred in Code mode: the desktop / media / meeting
+/// Exact tool names deferred in Chat mode — entries whose *family* must not
+/// be caught wholesale: `media`/`media_send` are deferred but
+/// `media_understand` (multimodal analysis of user-pasted images/audio)
+/// must stay listed, so a `media` family entry would over-catch.
+const CHAT_DEFER_EXACT: &[&str] = &["media", "media_send"];
+
+/// Tool families deferred in Code mode: the desktop / generation / meeting
 /// families, which have no place in a development session's initial surface.
 /// Browser tools stay resident (dev-server preview), as do team/task tools
-/// (multi-agent development).
-const CODE_DEFER_PREFIXES: &[&str] = &[
+/// (multi-agent development) and `media_understand` (screenshot debugging).
+const CODE_DEFER_FAMILIES: &[&str] = &[
     "desktop",
-    "media",
     "image_generate",
     "video_generate",
     "audio_generate",
     "speech_generate",
     "google_meet",
 ];
+
+/// Exact tool names deferred in Code mode (same `media_understand` carve-out
+/// as chat).
+const CODE_DEFER_EXACT: &[&str] = &["media", "media_send"];
 
 /// Meta / lifeline tools that must never be deferred in any mode: deferring
 /// the discovery mechanism itself (or the human channel, or the R8 tool that
@@ -116,6 +133,14 @@ const NEVER_DEFER: &[&str] = &[
     "session_set_mode",
     "self_config",
 ];
+
+/// Whether family `entry` matches tool `name` at an `_` word boundary:
+/// equal, or `name` continues past the entry with an underscore (`desktop`
+/// matches `desktop` and `desktop_som`, never `desktops`).
+fn matches_family(entry: &str, name: &str) -> bool {
+    name.strip_prefix(entry)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('_'))
+}
 
 /// Session usage mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -167,15 +192,28 @@ impl SessionMode {
     #[must_use]
     pub fn effective_core_tools(self, configured: &[String]) -> Vec<String> {
         let disabled = configured.is_empty() || configured.iter().any(|c| c == "*");
-        if disabled || self == Self::Work {
+        if disabled {
             return configured.to_vec();
         }
         match self {
-            Self::Chat => configured
-                .iter()
-                .filter(|c| !CHAT_CORE_SUBTRACT.contains(&c.as_str()))
-                .cloned()
-                .collect(),
+            Self::Work => configured.to_vec(),
+            Self::Chat => {
+                let subtracted: Vec<String> = configured
+                    .iter()
+                    .filter(|c| !CHAT_CORE_SUBTRACT.contains(&c.as_str()))
+                    .cloned()
+                    .collect();
+                // A configured core that is a subset of the subtraction list
+                // would drain to empty — which downstream reads as the
+                // "disclosure disabled" sentinel, giving chat MORE resident
+                // schema than work. The escape hatch must stay
+                // operator-explicit: fall back to the configured set.
+                if subtracted.is_empty() {
+                    configured.to_vec()
+                } else {
+                    subtracted
+                }
+            }
             Self::Code => {
                 let mut core = configured.to_vec();
                 for extra in CODE_CORE_ADD {
@@ -185,24 +223,29 @@ impl SessionMode {
                 }
                 core
             }
-            Self::Work => unreachable!("handled above"),
         }
     }
 
     /// Whether this mode defers `name` out of the model's initial tool list.
     /// Static, content-blind, name-keyed — and always overridable by the
     /// model via `tool_search` promotion.
+    ///
+    /// Family entries match at an `_` word boundary (never mid-word), and
+    /// MCP-qualified names (`{server}__{tool}`) are exempt entirely: an
+    /// operator's server id (`goal_tracker`, `media_kit`, …) must not collide
+    /// with a builtin family word. MCP deferral has its own dedicated knob
+    /// (`[tools] defer_mcp_tools`).
     #[must_use]
     pub fn defers_tool(self, name: &str) -> bool {
-        if NEVER_DEFER.contains(&name) {
+        if NEVER_DEFER.contains(&name) || name.contains("__") {
             return false;
         }
-        let prefixes = match self {
-            Self::Chat => CHAT_DEFER_PREFIXES,
+        let (families, exact) = match self {
+            Self::Chat => (CHAT_DEFER_FAMILIES, CHAT_DEFER_EXACT),
             Self::Work => return false,
-            Self::Code => CODE_DEFER_PREFIXES,
+            Self::Code => (CODE_DEFER_FAMILIES, CODE_DEFER_EXACT),
         };
-        prefixes.iter().any(|p| name.starts_with(p))
+        exact.contains(&name) || families.iter().any(|f| matches_family(f, name))
     }
 
     /// One model-facing line describing this mode's register and surface, for
@@ -224,15 +267,45 @@ impl SessionMode {
             Self::Work => {
                 "Usage mode: work — multi-step productivity work (documents, research, \
                  channels, scheduling, media). The full standard tool surface is available; \
-                 plan visibly and aim for a concrete deliverable. The user picks the mode; \
+                 plan visibly, aim for a concrete deliverable, and prefer finished outputs \
+                 in plain language over technical process detail. The user picks the mode; \
                  call `session_set_mode` only when they ask to switch."
             }
             Self::Code => {
                 "Usage mode: code — a software development session. Dev tools (bash, \
                  code_exec, file editing, apply_patch) carry full schemas; desktop/media \
                  tool families are deferred but discoverable via `tool_search`. Verify your \
-                 changes with checks or tests where practical. The user picks the mode; \
+                 changes with checks or tests where practical; technical detail (diffs, \
+                 commands, logs) is welcome in replies. The user picks the mode; \
                  call `session_set_mode` only when they ask to switch."
+            }
+        }
+    }
+
+    /// Shortened mode line for SUBAGENT prompts: a spawned child inherits the
+    /// parent's partitioned tool surface (same core set, same deferred
+    /// families), so it must be told the register and that `tool_search`
+    /// promotes — but not the user-switching contract (`session_set_mode`
+    /// belongs to the parent conversation, not an ephemeral child session).
+    /// Lives beside [`Self::prompt_line`] so the two cannot drift (R9).
+    /// `Work` is the identity partition — callers skip the weld entirely.
+    #[must_use]
+    pub const fn subagent_prompt_line(self) -> &'static str {
+        match self {
+            Self::Chat => {
+                "Usage mode: chat — a lightweight conversation session. Heavy tool \
+                 families (desktop, browser, media, teams, automation) are deferred from \
+                 your tool list but discoverable via `tool_search` when genuinely needed."
+            }
+            Self::Work => {
+                "Usage mode: work — multi-step productivity work. The full standard \
+                 tool surface is available."
+            }
+            Self::Code => {
+                "Usage mode: code — a software development session. Dev tools carry \
+                 full schemas; desktop/media tool families are deferred but discoverable \
+                 via `tool_search`. Verify your changes with checks or tests where \
+                 practical."
             }
         }
     }
@@ -333,6 +406,20 @@ mod tests {
         }
     }
 
+    /// The inverse guard: a configured core that happens to be a subset of
+    /// CHAT_CORE_SUBTRACT must not drain to empty — empty is the "disclosure
+    /// disabled" sentinel downstream, which would give chat MORE resident
+    /// schema than work (the exact opposite of its intent).
+    #[test]
+    fn chat_subtraction_never_drains_core_to_empty() {
+        let configured = cfg(&["bash", "file_edit"]);
+        assert_eq!(
+            SessionMode::Chat.effective_core_tools(&configured),
+            configured,
+            "a fully-subtracted core must fall back to the configured set"
+        );
+    }
+
     #[test]
     fn chat_mode_defers_heavy_families() {
         for name in [
@@ -342,6 +429,7 @@ mod tests {
             "team_create",
             "task_create",
             "node_invoke",
+            "media",
             "media_send",
             "image_generate",
             "cron_manage",
@@ -349,6 +437,9 @@ mod tests {
             "loop_graph",
             "workflow",
             "apply_patch",
+            "code_check",
+            "session_collaborate",
+            "session_turn",
         ] {
             assert!(
                 SessionMode::Chat.defers_tool(name),
@@ -366,6 +457,7 @@ mod tests {
             "session_send",
             "skill_read",
             "bash", // collapsed out of core, but still listed
+            "media_understand", // users paste images into chat — carve-out
         ] {
             assert!(
                 !SessionMode::Chat.defers_tool(name),
@@ -379,11 +471,48 @@ mod tests {
         for name in ["desktop_som", "media_send", "image_generate", "google_meet"] {
             assert!(SessionMode::Code.defers_tool(name));
         }
-        for name in ["browser_navigate", "team_create", "bash", "apply_patch"] {
+        for name in [
+            "browser_navigate",
+            "team_create",
+            "bash",
+            "apply_patch",
+            "media_understand", // screenshot debugging — carve-out
+        ] {
             assert!(
                 !SessionMode::Code.defers_tool(name),
                 "code must keep `{name}` listed"
             );
+        }
+    }
+
+    /// Family entries match only at an `_` word boundary: `goal` must not
+    /// catch `goals_list`, `desktop` must not catch `desktops`.
+    #[test]
+    fn family_matching_stops_at_word_boundary() {
+        assert!(SessionMode::Chat.defers_tool("goal"));
+        assert!(SessionMode::Chat.defers_tool("goal_review"));
+        assert!(!SessionMode::Chat.defers_tool("goals_list"));
+        assert!(!SessionMode::Chat.defers_tool("desktops"));
+        assert!(!SessionMode::Chat.defers_tool("automations_helper"));
+    }
+
+    /// MCP-qualified names (`{server}__{tool}`) are exempt from the builtin
+    /// tables — an operator's server id must not collide with a family word.
+    /// MCP deferral has its own knob (`[tools] defer_mcp_tools`).
+    #[test]
+    fn mcp_qualified_names_are_exempt() {
+        for mode in [SessionMode::Chat, SessionMode::Code] {
+            for name in [
+                "goal_tracker__list",
+                "desktop__click",
+                "media_kit__render",
+                "workflow__run",
+            ] {
+                assert!(
+                    !mode.defers_tool(name),
+                    "{mode:?} must not defer MCP tool `{name}`"
+                );
+            }
         }
     }
 

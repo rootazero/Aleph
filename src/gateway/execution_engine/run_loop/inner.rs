@@ -221,7 +221,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Mode-effective schema-resident core set, fed to both
         // `build_request_tool_service` call sites and the SchemaLookupTool
         // registration gate below. Work returns the configured set unchanged.
-        let mode_core_tools = session_mode.effective_core_tools(&self.config.core_tools);
+        let mut mode_core_tools = session_mode.effective_core_tools(&self.config.core_tools);
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -733,6 +733,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     allowed_names
                         .insert(crate::tools::tool_search::ToolSearchTool::NAME.to_string());
                 }
+                // tool_search joins the collapsed-but-unsnapshotted class
+                // (registered AFTER the get_tool_schema snapshot above, like
+                // subagent/get_tool_schema — see `default_core_tools`'s
+                // invariant): keep it schema-resident so the rewriter never
+                // points the model at a snapshot lookup that must miss. Only
+                // when disclosure is active — pushing into an empty core set
+                // would flip the operator's escape hatch back on.
+                if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(
+                    &mode_core_tools,
+                ) {
+                    let ts = crate::tools::tool_search::ToolSearchTool::NAME;
+                    if !mode_core_tools.iter().any(|c| c == ts) {
+                        mode_core_tools.push(ts.to_string());
+                    }
+                }
             }
 
             let loop_registry = Arc::new(loop_registry_inner);
@@ -1006,6 +1021,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .await
                 {
                     t = t.with_strategy(crate::strategy::render_strategy_summary(&s));
+                }
+                // The child's tool surface is built from the parent's mode
+                // partition (`parent_view_for_children` above), so tell the
+                // child which mode that was. Work is the identity partition —
+                // skip the weld to keep those child prompts byte-identical.
+                if session_mode != crate::config::types::policies::SessionMode::Work {
+                    t = t.with_session_mode(session_mode);
                 }
                 Arc::new(t)
             };

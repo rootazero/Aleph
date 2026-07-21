@@ -76,6 +76,21 @@ impl ToolPermissionsApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
+    /// Set the global default usage mode. Partial update, mirror of
+    /// [`Self::set_exec_tier`] for the mode twin.
+    pub async fn set_mode(
+        state: &DashboardState,
+        mode_id: &str,
+    ) -> Result<ToolPermissionsResponse, String> {
+        let result = state
+            .rpc_call(
+                "config.update_tool_permissions",
+                json!({ "mode": mode_id }),
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
     pub async fn update_global(
         state: &DashboardState,
         default: &str,

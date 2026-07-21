@@ -431,6 +431,29 @@ pub fn ChatSidebar() -> impl IntoView {
     // and never trigger a self-refresh (no clobbering of streaming state).
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
+    // Keep the composer pills honest against the store: the model's
+    // `session_set_mode` (or a patch from another surface) emits
+    // `run.session_updated` → `reload_for_event` refreshes `sessions` → this
+    // effect writes the refreshed per-session overrides back into the signals
+    // the pills and the right-rail mode dispatch read. A local pick is not
+    // clobbered: the pill's own `sessions.patch` write triggers the same
+    // refresh, which round-trips the just-picked value.
+    Effect::new(move |_| {
+        let list = sessions.get();
+        let Some(key) = chat.session_key.get_untracked() else {
+            return;
+        };
+        let Some(row) = list.iter().find(|s| s.key == key) else {
+            return;
+        };
+        if chat.session_mode.get_untracked() != row.mode {
+            chat.session_mode.set(row.mode.clone());
+        }
+        if chat.session_exec_tier.get_untracked() != row.exec_tier {
+            chat.session_exec_tier.set(row.exec_tier.clone());
+        }
+    });
+
     let subscription_id = dashboard.subscribe_events(move |event| {
         if event.topic == "run.running_set_changed" {
             let seq = event
@@ -1401,6 +1424,11 @@ pub fn ChatSidebar() -> impl IntoView {
                                         .clone()
                                         .unwrap_or_else(|| t_string!(i18n, chat.new_chat).to_string());
                                     let subtitle = format_session_subtitle(&session);
+                                    // Mode facet: only an explicit per-session
+                                    // override earns a badge — follow-global
+                                    // rows stay clean (the global default is
+                                    // not a per-row fact worth repeating).
+                                    let mode_badge = session.mode.clone();
                                     let do_rename = do_rename.clone();
                                     let do_delete = do_delete.clone();
 
@@ -1535,6 +1563,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                                             <div class="truncate font-medium text-xs">
                                                                 {label}
                                                             </div>
+                                                            {mode_badge.map(|m| view! {
+                                                                <span class="shrink-0 px-1 py-px rounded border border-border
+                                                                             text-[9px] font-mono text-text-tertiary uppercase">
+                                                                    {m}
+                                                                </span>
+                                                            })}
                                                         </div>
                                                         <div class="truncate text-[10px] text-text-tertiary mt-0.5">
                                                             {subtitle}

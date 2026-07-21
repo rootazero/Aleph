@@ -57,10 +57,13 @@ impl SessionSetModeTool {
 impl AlephTool for SessionSetModeTool {
     const NAME: &'static str = "session_set_mode";
     const DESCRIPTION: &'static str =
-        "Switch this session's usage mode: 'chat' (lightweight conversation), \
-         'work' (multi-step productivity, default), or 'code' (software \
-         development). Each mode presents a different tool surface; the switch \
-         takes effect on the next turn. Use only when the user asks to switch.";
+        "Switch this session's usage mode: 'chat' (quick Q&A and conversation, \
+         no artifacts), 'work' (multi-step productivity and deliverables — the \
+         default), or 'code' (repo-focused software engineering). Each mode \
+         presents a different tool surface; the switch takes effect on the \
+         NEXT turn, so finish or end the current turn after switching. Call it \
+         only when the user asks to switch; you may *suggest* a switch when \
+         the task clearly outgrows the current mode.";
 
     type Args = SessionSetModeArgs;
     type Output = SessionSetModeOutput;
