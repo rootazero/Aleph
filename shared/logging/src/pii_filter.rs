@@ -135,7 +135,6 @@ impl Visit for StringVisitor {
                 .unwrap_or(&formatted);
             self.message.push_str(trimmed);
         } else {
-            use std::fmt::Write;
             let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
         }
     }
