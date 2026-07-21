@@ -64,7 +64,7 @@ pub fn migrate_all_secrets_to_vault(cfg: &mut Config, vault: &SharedTokenManager
     // 7. Voice streaming: voice.streaming.api_key → voice_streaming:api_key
     let voice_migrated = migrate_voice_streaming(cfg, vault);
     if voice_migrated > 0 {
-        sections_to_save.push("voice");
+        sections_to_save.push("voice_local");
     }
 
     let total = ai_migrated
@@ -250,14 +250,14 @@ fn migrate_channels(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
 // ── Voice streaming ─────────────────────────────────────────────────────────
 
 fn migrate_voice_streaming(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
-    let api_key = &cfg.voice.streaming.api_key;
+    let api_key = &cfg.voice_local.streaming.api_key;
     if api_key.is_empty() {
         return 0;
     }
     match vault.store_secret("voice_streaming:api_key", api_key) {
         Ok(_) => {
             tracing::info!("Migrated voice.streaming.api_key to vault");
-            cfg.voice.streaming.api_key = String::new();
+            cfg.voice_local.streaming.api_key = String::new();
             1
         }
         Err(e) => {
