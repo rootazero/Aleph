@@ -228,14 +228,16 @@ fn plugin_agent_to_def(
         def = def.with_description(desc.clone());
     }
     if let Some(tools) = &reg.tools {
-        let allowed: Vec<String> = tools
+        let mut allowed: Vec<String> = tools
             .iter()
             .filter_map(|(t, &ok)| ok.then_some(t.clone()))
             .collect();
-        let denied: Vec<String> = tools
+        let mut denied: Vec<String> = tools
             .iter()
             .filter_map(|(t, &ok)| (!ok).then_some(t.clone()))
             .collect();
+        allowed.sort();
+        denied.sort();
         if !allowed.is_empty() {
             def = def.with_allowed_tools(allowed);
         }
@@ -455,17 +457,27 @@ impl ExtensionManager {
 
         // Collect all plugin directories from discovery
         let plugin_dirs = self.collect_plugin_dirs()?;
+        *self.hook_executor.write().await =
+            HookExecutor::empty().with_consent(ShellHookConsent::shared());
 
         // Clear and rebuild registry
         {
             let mut registry = self.plugin_registry.write().await;
             registry.clear();
+            let mut registered_plugin_ids = std::collections::HashSet::new();
 
-            for dir_path in &plugin_dirs {
+            for dir_path in plugin_dirs.iter().rev() {
                 match self.adapter_registry.parse_dir(dir_path) {
                     Ok(output) => {
+                        if !registered_plugin_ids.insert(output.plugin_id.clone()) {
+                            continue;
+                        }
                         // Build plugin record from adapter output
-                        let record = PluginRecord::from_adapter_output(&output, dir_path.clone());
+                        let mut record =
+                            PluginRecord::from_adapter_output(&output, dir_path.clone());
+                        if let Ok(manifest) = manifest::parse_manifest_from_dir_sync(dir_path) {
+                            record.kind = manifest.kind;
+                        }
                         let plugin_id = output.plugin_id.clone();
                         registry.register_plugin(record);
 
@@ -697,11 +709,9 @@ impl ExtensionManager {
         watch_dirs: Option<Vec<PathBuf>>,
         notify_cb: Option<Box<dyn Fn(ExtensionChangeEvent) + Send + Sync>>,
     ) -> ExtensionResult<()> {
-        {
-            let guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.is_some() {
-                return Ok(());
-            }
+        let mut watcher_guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        if watcher_guard.is_some() {
+            return Ok(());
         }
 
         let manager = Arc::clone(self);
@@ -782,8 +792,7 @@ impl ExtensionManager {
             .start()
             .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
 
-        let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some(Arc::new(watcher));
+        *watcher_guard = Some(Arc::new(watcher));
         Ok(())
     }
 
@@ -899,8 +908,19 @@ impl ExtensionManager {
     /// Reads `HookRegistration` entries from the registry and converts them
     /// to `HookConfig` entries that `HookExecutor` understands.
     async fn sync_hooks_from_registry(&self) {
-        let registry = self.plugin_registry.read().await;
-        let hook_regs = registry.list_hooks();
+        let hook_regs: Vec<HookRegistration> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_hooks()
+                .into_iter()
+                .filter(|hook| {
+                    registry
+                        .get_plugin(&hook.plugin_id)
+                        .is_some_and(|plugin| plugin.status.is_active())
+                })
+                .cloned()
+                .collect()
+        };
 
         let mut executor = self.hook_executor.write().await;
         // HookExecutor was already reset (via load_all's clear path or reload).
@@ -1070,7 +1090,10 @@ impl ExtensionManager {
         let permissions = output.permissions.clone();
 
         // Build updated plugin record
-        let record = PluginRecord::from_adapter_output(&output, root_dir);
+        let mut record = PluginRecord::from_adapter_output(&output, root_dir.clone());
+        if let Ok(manifest) = manifest::parse_manifest_from_dir_sync(&root_dir) {
+            record.kind = manifest.kind;
+        }
 
         // Atomically unregister old capabilities and register new ones
         let mut registry = self.plugin_registry.write().await;

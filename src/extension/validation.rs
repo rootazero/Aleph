@@ -71,13 +71,13 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
             .push("Plugin ID contains spaces — consider using kebab-case".to_string());
     }
 
-    // 4. Check entry file exists
-    let entry_path = plugin_dir.join(&manifest.entry);
-    if !entry_path.exists() {
-        result.warnings.push(format!(
+    match manifest.entry_path() {
+        Ok(entry_path) if !entry_path.exists() => result.warnings.push(format!(
             "Entry file not found: {} (run build first?)",
             manifest.entry.display()
-        ));
+        )),
+        Ok(_) => {}
+        Err(e) => result.errors.push(e.to_string()),
     }
 
     // 5. Check for duplicate tool names (V2 tools from TOML manifest)

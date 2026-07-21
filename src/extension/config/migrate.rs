@@ -113,10 +113,15 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
         None
     };
 
-    // Write the new TOML file
-    std::fs::write(&target_path, toml_with_header).map_err(|e| {
-        ExtensionError::config_parse(&target_path, format!("Failed to write TOML file: {e}"))
-    })?;
+    if let Err(e) = std::fs::write(&target_path, toml_with_header) {
+        if let Some(backup) = &backup_path {
+            let _ = std::fs::rename(backup, &target_path);
+        }
+        return Err(ExtensionError::config_parse(
+            &target_path,
+            format!("Failed to write TOML file: {e}"),
+        ));
+    }
 
     Ok(MigrationResult {
         source: jsonc_path.to_path_buf(),
@@ -218,8 +223,11 @@ pub fn migrate_directory(
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            // Recursively process subdirectories
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_dir() {
             let sub_results = migrate_directory(&path, dry_run)?;
             results.extend(sub_results);
         }

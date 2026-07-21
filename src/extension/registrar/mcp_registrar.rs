@@ -205,7 +205,10 @@ impl McpScope {
             for spec in &agent_def.mcp_servers {
                 match spec {
                     McpServerSpec::Reference { name } => {
-                        if reg.get_plugin(name).is_none() {
+                        if !reg
+                            .get_plugin(name)
+                            .is_some_and(|plugin| plugin.status.is_active())
+                        {
                             return Err(McpScopeError::ReferenceNotFound(name.clone()));
                         }
                         for tool in reg.list_tools_for_plugin(name) {
@@ -263,22 +266,22 @@ impl McpScope {
         self.tools.clone()
     }
 
-    /// Explicit shutdown. Marks each `InlineMcpHandle` as cleaned, then calls
-    /// `proc.close()` on each inline handle. First failure surfaces as
-    /// `InlineShutdown`; all handles still have `mark_cleaned()` called first
-    /// to suppress Drop safety-net log spam. Trace event added in Task 9.
+    /// Explicit shutdown. Calls `proc.close()` on each inline handle and marks
+    /// successful closes as cleaned. First failure surfaces as `InlineShutdown`;
+    /// failed handles retain the Drop safety-net.
     pub async fn shutdown(self) -> Result<(), McpScopeError> {
         let agent_id = self.agent_id.clone();
         let trace_sink = self.trace_sink.clone();
         let mut shutdown_errors: Vec<(String, String)> = Vec::new();
 
         for h in &self.inline_handles {
-            h.mark_cleaned();
             if let Some(proc) = h.process.as_ref() {
                 if let Err(e) = proc.close().await {
                     shutdown_errors.push((h.name.clone(), e.to_string()));
+                    continue;
                 }
             }
+            h.mark_cleaned();
         }
 
         if let Some(sink) = trace_sink.as_ref() {

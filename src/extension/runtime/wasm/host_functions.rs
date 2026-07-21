@@ -141,6 +141,8 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
             scope
                 .spawn(
                     || -> Result<(u16, HashMap<String, String>, Vec<u8>), String> {
+                        use std::io::Read;
+
                         let client = reqwest::blocking::Client::builder()
                             .timeout(timeout)
                             .build()
@@ -163,10 +165,13 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                                 (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
                             })
                             .collect();
-                        let bytes = resp
-                            .bytes()
+                        let mut bytes = Vec::new();
+                        let response_cap = u64::try_from(max_response_bytes)
+                            .map_or(u64::MAX, |size| size.saturating_add(1));
+                        resp.take(response_cap)
+                            .read_to_end(&mut bytes)
                             .map_err(|e| format!("failed to read response: {e}"))?;
-                        Ok((status, headers, bytes.to_vec()))
+                        Ok((status, headers, bytes))
                     },
                 )
                 .join()

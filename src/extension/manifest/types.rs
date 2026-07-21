@@ -380,28 +380,27 @@ impl PluginManifest {
     /// Returns an error if the entry path contains traversal components
     /// or escapes the root directory.
     pub fn entry_path(&self) -> Result<PathBuf, ExtensionError> {
-        // Check for path traversal in the entry itself
         let entry_str = self.entry.to_string_lossy();
-        if entry_str.contains("..") {
+        if self.entry.is_absolute() || entry_str.contains("..") {
             return Err(ExtensionError::Runtime(format!(
-                "Path traversal (..) not allowed in plugin entry: {entry_str}"
+                "Path traversal not allowed in plugin entry: {entry_str}"
             )));
         }
 
-        let resolved = if self.entry.is_absolute() {
-            self.entry.clone()
-        } else {
-            self.root_dir.join(&self.entry)
-        };
+        let resolved = self.root_dir.join(&self.entry);
 
-        // If the resolved path exists, verify it doesn't escape root_dir via symlinks
         if resolved.exists() && !self.root_dir.as_os_str().is_empty() {
-            if let (Ok(canonical_entry), Ok(canonical_root)) =
-                (resolved.canonicalize(), self.root_dir.canonicalize())
-            {
-                if !canonical_entry.starts_with(&canonical_root) {
+            match (resolved.canonicalize(), self.root_dir.canonicalize()) {
+                (Ok(canonical_entry), Ok(canonical_root)) => {
+                    if !canonical_entry.starts_with(&canonical_root) {
+                        return Err(ExtensionError::Runtime(format!(
+                            "Plugin entry path escapes root directory: {canonical_entry:?} is not within {canonical_root:?}"
+                        )));
+                    }
+                }
+                _ => {
                     return Err(ExtensionError::Runtime(format!(
-                        "Plugin entry path escapes root directory: {canonical_entry:?} is not within {canonical_root:?}"
+                        "Unable to verify plugin entry path: {resolved:?}"
                     )));
                 }
             }

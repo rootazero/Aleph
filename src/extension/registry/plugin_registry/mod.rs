@@ -4,7 +4,7 @@
 //! a comprehensive registry of all plugins and their registered components:
 //! tools, hooks, services, in-chat commands, skills, agents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::types::{
     AgentRegistration, HookRegistration, PluginDiagnostic, ServiceRegistration, SkillRegistration,
@@ -74,6 +74,9 @@ impl PluginRegistry {
     ///
     /// If a plugin with the same ID already exists, it will be replaced.
     pub fn register_plugin(&mut self, record: PluginRecord) {
+        if self.plugins.contains_key(&record.id) {
+            self.unregister_plugin(&record.id);
+        }
         self.plugins.insert(record.id.clone(), record);
     }
 
@@ -180,21 +183,38 @@ impl PluginRegistry {
     /// Get a tool by name.
     #[must_use]
     pub fn get_tool(&self, name: &str) -> Option<&ToolRegistration> {
-        self.tools.get(name)
+        if name.contains(':') {
+            return self.tools.get(name);
+        }
+        self.tools
+            .values()
+            .filter(|tool| tool.name == name)
+            .filter(|tool| {
+                self.plugins
+                    .get(&tool.plugin_id)
+                    .is_some_and(|plugin| plugin.status.is_active())
+            })
+            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
     /// List all registered tools.
     #[must_use]
     pub fn list_tools(&self) -> Vec<&ToolRegistration> {
-        self.tools.values().collect()
+        let mut seen = HashSet::new();
+        self.tools
+            .values()
+            .filter(|tool| seen.insert((tool.plugin_id.as_str(), tool.name.as_str())))
+            .collect()
     }
 
     /// List tools from a specific plugin.
     #[must_use]
     pub fn list_tools_for_plugin(&self, plugin_id: &str) -> Vec<&ToolRegistration> {
+        let mut seen = HashSet::new();
         self.tools
             .values()
-            .filter(|t| t.plugin_id == plugin_id)
+            .filter(|tool| tool.plugin_id == plugin_id)
+            .filter(|tool| seen.insert(tool.name.as_str()))
             .collect()
     }
 
@@ -240,8 +260,9 @@ impl PluginRegistry {
     pub fn register_service(&mut self, service: ServiceRegistration) {
         let plugin_id = service.plugin_id.clone();
         let service_id = service.id.clone();
+        let namespaced_key = format!("{plugin_id}:{service_id}");
 
-        self.services.insert(service_id.clone(), service);
+        self.services.insert(namespaced_key, service);
 
         // Update plugin record
         if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
@@ -254,7 +275,16 @@ impl PluginRegistry {
     /// Get a service by ID.
     #[must_use]
     pub fn get_service(&self, id: &str) -> Option<&ServiceRegistration> {
-        self.services.get(id)
+        if let Some(service) = self.services.get(id) {
+            return Some(service);
+        }
+        let mut matches = self.services.values().filter(|service| service.id == id);
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            None
+        } else {
+            Some(first)
+        }
     }
 
     /// List all registered services.
@@ -290,13 +320,28 @@ impl PluginRegistry {
     /// Get a skill by name.
     #[must_use]
     pub fn get_skill(&self, name: &str) -> Option<&SkillRegistration> {
-        self.skills.get(name)
+        if name.contains(':') {
+            return self.skills.get(name);
+        }
+        self.skills
+            .values()
+            .filter(|skill| skill.name == name)
+            .filter(|skill| {
+                self.plugins
+                    .get(&skill.plugin_id)
+                    .is_some_and(|plugin| plugin.status.is_active())
+            })
+            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
     /// List all registered skills.
     #[must_use]
     pub fn list_skills(&self) -> Vec<&SkillRegistration> {
-        self.skills.values().collect()
+        let mut seen = HashSet::new();
+        self.skills
+            .values()
+            .filter(|skill| seen.insert((skill.plugin_id.as_str(), skill.name.as_str())))
+            .collect()
     }
 
     // =========================================================================
@@ -322,13 +367,28 @@ impl PluginRegistry {
     /// Get an agent by name.
     #[must_use]
     pub fn get_agent(&self, name: &str) -> Option<&AgentRegistration> {
-        self.agents.get(name)
+        if name.contains(':') {
+            return self.agents.get(name);
+        }
+        self.agents
+            .values()
+            .filter(|agent| agent.name == name)
+            .filter(|agent| {
+                self.plugins
+                    .get(&agent.plugin_id)
+                    .is_some_and(|plugin| plugin.status.is_active())
+            })
+            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
     }
 
     /// List all registered agents.
     #[must_use]
     pub fn list_agents(&self) -> Vec<&AgentRegistration> {
-        self.agents.values().collect()
+        let mut seen = HashSet::new();
+        self.agents
+            .values()
+            .filter(|agent| seen.insert((agent.plugin_id.as_str(), agent.name.as_str())))
+            .collect()
     }
 
     // =========================================================================
@@ -401,21 +461,20 @@ impl PluginRegistry {
         RegistryStats {
             plugins: self.plugins.len(),
             active_plugins: self.list_active_plugins().len(),
-            tools: self.tools.len(),
+            tools: self.list_tools().len(),
             hooks: self.hooks.len(),
             services: self.services.len(),
-            // Commands and skills share one store, split by `skill_type`.
             commands: self
-                .skills
-                .values()
+                .list_skills()
+                .into_iter()
                 .filter(|s| s.skill_type == crate::extension::types::SkillType::Command)
                 .count(),
             skills: self
-                .skills
-                .values()
+                .list_skills()
+                .into_iter()
                 .filter(|s| s.skill_type == crate::extension::types::SkillType::Skill)
                 .count(),
-            agents: self.agents.len(),
+            agents: self.list_agents().len(),
             diagnostics: self.diagnostics.len(),
         }
     }

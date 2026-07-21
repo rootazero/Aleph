@@ -29,8 +29,12 @@ pub fn resolve_conflicts(candidates: Vec<PluginCandidate>) -> ResolvedPlugins {
                 active.push(candidate);
             }
         } else {
-            // Sort by priority (highest first)
-            group.sort_by_key(|x| std::cmp::Reverse(x.origin.priority()));
+            group.sort_by(|a, b| {
+                b.origin
+                    .priority()
+                    .cmp(&a.origin.priority())
+                    .then_with(|| a.source.cmp(&b.source))
+            });
 
             let winner = group.remove(0);
             info!(
@@ -44,6 +48,9 @@ pub fn resolve_conflicts(candidates: Vec<PluginCandidate>) -> ResolvedPlugins {
             overridden.extend(group);
         }
     }
+
+    active.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.source.cmp(&b.source)));
+    overridden.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.source.cmp(&b.source)));
 
     ResolvedPlugins { active, overridden }
 }

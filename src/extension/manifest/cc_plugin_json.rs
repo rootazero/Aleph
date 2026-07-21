@@ -211,6 +211,10 @@ pub fn parse_cc_plugin_json_content(
     };
 
     let repository = json.repository.and_then(|r| r.into_url());
+    let wasm_capabilities = aleph_ext
+        .as_ref()
+        .and_then(|ext| ext.capabilities.as_ref())
+        .and_then(crate::extension::manifest::toml_types::convert_wasm_capabilities);
 
     let manifest = PluginManifest {
         id: plugin_id,
@@ -236,7 +240,7 @@ pub fn parse_cc_plugin_json_content(
         services_v2: None,
         prompt_v2: None,
         capabilities_v2: None,
-        wasm_capabilities: None,
+        wasm_capabilities,
         wasm_resource_limits: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,

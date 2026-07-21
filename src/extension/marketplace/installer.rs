@@ -171,8 +171,19 @@ fn stage_plugin_copy(
     })?;
 
     let staging = install_dir.join(format!(".tmp-install-{plugin_name}"));
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
+    if let Ok(metadata) = std::fs::symlink_metadata(&staging) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Staging path must not be a symlink: '{}'",
+                staging.display()
+            ));
+        }
+        std::fs::remove_dir_all(&staging).map_err(|e| {
+            format!(
+                "Failed to remove stale staging directory '{}': {e}",
+                staging.display()
+            )
+        })?;
     }
     if let Err(e) = copy_dir_recursive(source_path, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
@@ -242,6 +253,15 @@ pub fn verify_plugin_integrity(
 
 /// Recursively copy `src` directory into `dst`, skipping any `.git` directories.
 pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    let source_meta = std::fs::symlink_metadata(src)
+        .map_err(|e| format!("Failed to inspect source '{}': {e}", src.display()))?;
+    if source_meta.file_type().is_symlink() || !source_meta.is_dir() {
+        return Err(format!(
+            "Plugin source must be a real directory: '{}'",
+            src.display()
+        ));
+    }
+
     std::fs::create_dir_all(dst)
         .map_err(|e| format!("Failed to create directory '{}': {e}", dst.display()))?;
 

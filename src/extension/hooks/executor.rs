@@ -38,13 +38,16 @@ const MAX_HOOK_OUTPUT_BYTES: u64 = 64 * 1024;
 /// the truncated text as a best-effort reason.
 pub(crate) async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: u64) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
-    let _ = (&mut r).take(cap).read_to_end(&mut buf).await;
-    let mut truncated = false;
+    let mut truncated = (&mut r).take(cap).read_to_end(&mut buf).await.is_err();
     let mut sink = [0u8; 8192];
     loop {
         match r.read(&mut sink).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(_) => truncated = true,
+            Err(_) => {
+                truncated = true;
+                break;
+            }
         }
     }
     (buf, truncated)
@@ -495,7 +498,7 @@ impl HookExecutor {
 
         // Substitute variables
         let resolved = substitute_variables(command, context, plugin_root);
-        debug!("Executing hook command: {}", resolved);
+        debug!(plugin = plugin_name, event = ?event, "Executing hook command");
 
         // Determine working directory
         let working_dir = context.working_dir.as_ref().unwrap_or(plugin_root);
@@ -624,11 +627,7 @@ impl HookExecutor {
         let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
 
         if !status.success() {
-            warn!(
-                "Hook command exited with status {:?}: {}",
-                status.code(),
-                stderr
-            );
+            warn!("Hook command exited with status {:?}", status.code());
         }
 
         Ok(ActionResult {
@@ -759,14 +758,25 @@ impl HookExecutor {
                             }
                             body_bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
                         }
-                        _ => break,
+                        Ok(None) => break,
+                        Err(e) => {
+                            return Err(ExtensionError::HookExecution(format!(
+                                "Failed to read hook HTTP response: {e}"
+                            )));
+                        }
                     }
                 }
                 // A chunk boundary can land exactly on the cap — probe once
                 // more so "exactly 64KB then more" is not misread as complete.
                 if !body_truncated && body_bytes.len() >= cap {
-                    if let Ok(Some(_)) = resp.chunk().await {
-                        body_truncated = true;
+                    match resp.chunk().await {
+                        Ok(Some(_)) => body_truncated = true,
+                        Ok(None) => {}
+                        Err(e) => {
+                            return Err(ExtensionError::HookExecution(format!(
+                                "Failed to read hook HTTP response: {e}"
+                            )));
+                        }
                     }
                 }
                 if body_truncated {
@@ -777,7 +787,7 @@ impl HookExecutor {
                 }
                 let body = String::from_utf8_lossy(&body_bytes).to_string();
                 if !status.is_success() {
-                    warn!("Hook HTTP {} -> {}: {}", resolved_url, status, body);
+                    warn!("Hook HTTP response returned status {}", status);
                 }
                 Ok(ActionResult {
                     success: status.is_success(),

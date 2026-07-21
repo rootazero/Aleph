@@ -22,11 +22,14 @@ impl ManifestAdapter for CursorAdapter {
 
     fn parse(&self, dir: &Path) -> Result<AdapterOutput> {
         let mut caps = vec![];
-        let mut plugin_id = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let mut plugin_id = crate::extension::manifest::sanitize_plugin_id(
+            dir.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown"),
+        );
+        if plugin_id.is_empty() {
+            plugin_id = "unknown".to_string();
+        }
         let mut name = None;
         let mut version = None;
         let mut description = None;
@@ -66,7 +69,7 @@ impl ManifestAdapter for CursorAdapter {
                     }
                     // Commands are merged into skills following OpenClaw convention
                     if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
-                        if let Ok(c) = parsers::parse_skills_dir(dir, commands, &plugin_id) {
+                        if let Ok(c) = parsers::parse_commands_dir(dir, commands, &plugin_id) {
                             caps.extend(c);
                         }
                     }
@@ -115,7 +118,7 @@ impl ManifestAdapter for CursorAdapter {
         }
         // .cursor/commands/ → skills (commands as skills)
         if !json_has("commands") && dir.join(".cursor/commands").is_dir() {
-            if let Ok(s) = parsers::parse_skills_dir(dir, ".cursor/commands", &plugin_id) {
+            if let Ok(s) = parsers::parse_commands_dir(dir, ".cursor/commands", &plugin_id) {
                 caps.extend(s);
             }
         }

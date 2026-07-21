@@ -44,6 +44,7 @@ impl<'a> CapabilityApi<'a> {
     /// - P0 (Core) and P1 (Important): no permission check
     /// - P2 (Pluggable): permission check if required by the capability
     pub fn register_capability(&mut self, decl: CapabilityDeclaration) -> Result<()> {
+        self.validate_owner(&decl)?;
         let tier = decl.tier();
 
         match tier {
@@ -94,17 +95,39 @@ impl<'a> CapabilityApi<'a> {
         record: PluginRecord,
         new_caps: Vec<CapabilityDeclaration>,
     ) -> Result<()> {
-        // Unregister all existing capabilities for this plugin
-        self.registry.unregister_plugin(&self.plugin_id);
-
-        // Re-register the plugin record
-        self.registry.register_plugin(record);
-
-        // Register all new capabilities
-        for cap in new_caps {
-            self.register_capability(cap)?;
+        for cap in &new_caps {
+            self.validate_owner(cap)?;
+            if let Some(perm) = cap.required_permission() {
+                self.require_permission(&perm)?;
+            }
         }
 
+        self.registry.unregister_plugin(&self.plugin_id);
+        self.registry.register_plugin(record);
+
+        for cap in new_caps {
+            self.dispatch(cap)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_owner(&self, decl: &CapabilityDeclaration) -> Result<()> {
+        let owner = match decl {
+            CapabilityDeclaration::Tool(value) => Some(value.plugin_id.as_str()),
+            CapabilityDeclaration::Hook(value) => Some(value.plugin_id.as_str()),
+            CapabilityDeclaration::Service(value) => Some(value.plugin_id.as_str()),
+            CapabilityDeclaration::Skill(value) => Some(value.plugin_id.as_str()),
+            CapabilityDeclaration::Agent(value) => Some(value.plugin_id.as_str()),
+            CapabilityDeclaration::McpServer(_) => None,
+        };
+        if owner.is_some_and(|owner| owner != self.plugin_id.as_str()) {
+            return Err(anyhow!(
+                "Capability owner does not match plugin '{}': {:?}",
+                self.plugin_id,
+                owner
+            ));
+        }
         Ok(())
     }
 
