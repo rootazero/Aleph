@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-cli"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-client",
  "aleph-logging",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-protocol",
  "async-trait",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-linux"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-macos"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-shell"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "block2 0.6.2",
  "core-foundation 0.10.1",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-desktop-windows"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-desktop",
  "aleph-protocol",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-logging"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "aleph-tui"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aleph-client",
  "aleph-logging",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "alephcore"
-version = "26.7.18"
+version = "26.7.21"
 dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
