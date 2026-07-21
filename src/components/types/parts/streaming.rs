@@ -38,8 +38,24 @@ impl StreamingTextPart {
     }
 
     /// Append delta to content
+    ///
+    /// Caps the accumulated `content` at 16 MiB to prevent a misbehaving
+    /// tool or runaway stream from growing the buffer unboundedly (DoS /
+    /// OOM). The cap mirrors the upper bound on a single part's persisted
+    /// payload elsewhere in the event store; oversize deltas after the cap
+    /// are silently dropped from `content` but still reported via `delta`
+    /// for the live UI to render the most recent chunk.
     pub fn append(&mut self, delta: &str) {
-        self.content.push_str(delta);
+        const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+        if self.content.len() < MAX_CONTENT_BYTES {
+            let remaining = MAX_CONTENT_BYTES - self.content.len();
+            let chunk = if delta.len() > remaining {
+                &delta[..remaining]
+            } else {
+                delta
+            };
+            self.content.push_str(chunk);
+        }
         self.delta = Some(delta.to_string());
     }
 

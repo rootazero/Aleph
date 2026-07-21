@@ -164,7 +164,7 @@ fn test_part_update_data_creation() {
     });
 
     // Test added event
-    let added = PartUpdateData::added("session-1", &tool_call);
+    let added = PartUpdateData::added("session-1", &tool_call).unwrap();
     assert_eq!(added.session_id, "session-1");
     assert_eq!(added.part_id, "call-789");
     assert_eq!(added.part_type, "tool_call");
@@ -174,7 +174,7 @@ fn test_part_update_data_creation() {
 
     // Test updated event with delta
     let updated =
-        PartUpdateData::updated("session-1", &tool_call, Some("output chunk".to_string()));
+        PartUpdateData::updated("session-1", &tool_call, Some("output chunk".to_string())).unwrap();
     assert_eq!(updated.event_type, PartEventType::Updated);
     assert_eq!(updated.delta, Some("output chunk".to_string()));
 

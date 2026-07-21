@@ -596,7 +596,7 @@ mod tests {
         });
 
         // Test PartAdded event
-        let added_data = PartUpdateData::added("session-1", &tool_call);
+        let added_data = PartUpdateData::added("session-1", &tool_call).unwrap();
         let event = AlephEvent::PartAdded(added_data.clone());
         assert_eq!(event.event_type(), EventType::PartAdded);
         assert_eq!(event.name(), "PartAdded");

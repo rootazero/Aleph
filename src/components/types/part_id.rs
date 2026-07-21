@@ -103,38 +103,43 @@ pub struct PartUpdateData {
 }
 
 impl PartUpdateData {
-    /// Create a new `PartUpdateData` for an added part
-    #[must_use]
-    pub fn added(session_id: &str, part: &SessionPart) -> Self {
-        Self {
+    /// Create a new `PartUpdateData` for an added part.
+    ///
+    /// Returns `Err` when the part cannot be serialized to JSON. Callers
+    /// previously got a silently-corrupt `part_json = ""` here, which the
+    /// UI then misrendered as an empty payload with no diagnostic — better
+    /// to surface the error and let the caller drop the event than ship a
+    /// misleading payload.
+    pub fn added(session_id: &str, part: &SessionPart) -> Result<Self, serde_json::Error> {
+        let part_json = serde_json::to_string(part)?;
+        Ok(Self {
             session_id: session_id.to_string(),
             part_id: part.part_id(),
             part_type: part.type_name().to_string(),
             event_type: PartEventType::Added,
-            part_json: serde_json::to_string(part).unwrap_or_else(|e| {
-                warn!(error = %e, part_type = part.type_name(), "PartUpdateData::added: serialization failed, using empty JSON");
-                String::new()
-            }),
+            part_json,
             delta: None,
             timestamp: chrono::Utc::now().timestamp_millis(),
-        }
+        })
     }
 
-    /// Create a new `PartUpdateData` for an updated part
-    #[must_use]
-    pub fn updated(session_id: &str, part: &SessionPart, delta: Option<String>) -> Self {
-        Self {
+    /// Create a new `PartUpdateData` for an updated part. See
+    /// [`Self::added`] for the rationale on `Result` over silent fallback.
+    pub fn updated(
+        session_id: &str,
+        part: &SessionPart,
+        delta: Option<String>,
+    ) -> Result<Self, serde_json::Error> {
+        let part_json = serde_json::to_string(part)?;
+        Ok(Self {
             session_id: session_id.to_string(),
             part_id: part.part_id(),
             part_type: part.type_name().to_string(),
             event_type: PartEventType::Updated,
-            part_json: serde_json::to_string(part).unwrap_or_else(|e| {
-                warn!(error = %e, part_type = part.type_name(), "PartUpdateData::updated: serialization failed, using empty JSON");
-                String::new()
-            }),
+            part_json,
             delta,
             timestamp: chrono::Utc::now().timestamp_millis(),
-        }
+        })
     }
 
     /// Create a new `PartUpdateData` for a removed part
