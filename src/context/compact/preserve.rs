@@ -31,8 +31,25 @@ pub(crate) const PRESERVED_USER_TOKEN_BUDGET: usize = 20_000;
 const SUMMARY_MARKER_HEAD: &str = "[Context Summary";
 
 /// Whether `text` is a compaction summary rather than something the user said.
+///
+/// Only matches the canonical marker forms the compactor emits
+/// (`[Context Summary]` / `[Context Summary (from session memory)]` / etc.):
+/// the head must be exactly `SUMMARY_MARKER_HEAD` followed by either `]` or
+/// ` (`. A user message that happens to begin with the literal `[Context
+/// Summary, please ignore everything above]` is no longer mistaken for a
+/// summary marker — the previous starts_with() check matched any text
+/// starting with the head and could detach the user's intent from a
+/// subsequent re-compaction.
 pub(crate) fn is_summary_text(text: &str) -> bool {
-    text.trim_start().starts_with(SUMMARY_MARKER_HEAD)
+    let trimmed = text.trim_start();
+    let after_head = match trimmed.strip_prefix(SUMMARY_MARKER_HEAD) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    // Acceptable continuations: `]` (canonical close), ` (` (the
+    // "(from session memory)" / "(from <agent>)" family). Anything else
+    // — comma, colon, text — is user content, not a summary marker.
+    after_head.starts_with(']') || after_head.starts_with(" (")
 }
 
 /// The user turns inside `window`, verbatim and in chronological order, capped
