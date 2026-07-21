@@ -29,6 +29,7 @@
 //! let request = ActionRequest {
 //!     action_type: ActionType::BrowserNavigate,
 //!     target: "https://github.com".to_string(),
+//!     display_target: "https://github.com".to_string(),
 //!     agent_id: "agent-1".to_string(),
 //!     context: "Opening GitHub".to_string(),
 //!     timestamp: Utc::now(),

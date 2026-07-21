@@ -51,6 +51,7 @@ pub mod helpers;
 pub mod list_tool;
 pub mod new_tool;
 pub mod send_tool;
+pub mod set_mode_tool;
 pub mod set_topic_tool;
 
 pub use helpers::{
@@ -63,4 +64,5 @@ pub use send_tool::{SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, Se
 
 pub use compact_tool::{SessionCompactArgs, SessionCompactOutput, SessionCompactTool};
 pub use new_tool::{SessionNewArgs, SessionNewOutput, SessionNewTool};
+pub use set_mode_tool::{SessionSetModeArgs, SessionSetModeOutput, SessionSetModeTool};
 pub use set_topic_tool::{SessionSetTopicArgs, SessionSetTopicOutput, SessionSetTopicTool};

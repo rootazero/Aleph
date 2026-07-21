@@ -91,6 +91,15 @@ pub struct AgentRunParams {
     /// `execution_engine::turn_permissions`'s precedence tests.
     #[serde(default)]
     pub exec_tier: Option<String>,
+    /// Session usage mode (chat / work / code) chosen in the composer for a
+    /// conversation whose session does not exist yet. Third twin of
+    /// `exec_tier` / `thinking` above: rides the request to govern the first
+    /// turn, is stamped onto the session by `resolve_turn_mode`, and later
+    /// turns read it back from `identity_meta.custom["session_mode"]`.
+    /// Orthogonal to the tier — a mode repartitions the tool presentation
+    /// surface (schema-resident vs deferred), never permissions.
+    #[serde(default)]
+    pub mode: Option<String>,
     /// Marks this run's user input as ASR-transcribed speech (the Panel voice
     /// loop). Wires the session voice-mode registry so `VoiceModeLayer`
     /// injects spoken-reply guidance into this turn's prompt, and applies the
@@ -415,7 +424,7 @@ pub async fn build_run_request(
     // turn. Same registry the channel inbound path writes
     // (`inbound_router::executor`); channel sessions use distinct keys, so
     // the unconditional per-turn recompute here cannot clobber them.
-    crate::gateway::voice::session_mode::set(
+    crate::gateway::voice::voice_mode::set(
         &session_key_str,
         params.voice_input,
         params.voice_input,
@@ -515,6 +524,18 @@ pub async fn build_run_request(
         metadata.insert(
             crate::config::types::policies::EXEC_TIER_SESSION_KEY.to_string(),
             tier.id().to_string(),
+        );
+    }
+
+    // Composer-chosen session mode. Same fail-loud contract as exec_tier: a
+    // silently-ignored unknown id would leave the user in a different mode
+    // than the one the pill shows.
+    if let Some(raw) = params.mode.as_deref() {
+        let mode = crate::config::types::policies::SessionMode::from_id(raw)
+            .ok_or_else(|| format!("unknown mode: {raw}"))?;
+        metadata.insert(
+            crate::config::types::policies::MODE_SESSION_KEY.to_string(),
+            mode.id().to_string(),
         );
     }
 
@@ -864,6 +885,7 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -905,11 +927,12 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: true,
         };
         let result = manager.start_run(voice_params).await.unwrap();
         assert_eq!(
-            crate::gateway::voice::session_mode::get(&result.session_key),
+            crate::gateway::voice::voice_mode::get(&result.session_key),
             Some(true),
             "a voice turn must mark the session voice-active with transcribed input"
         );
@@ -927,12 +950,13 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
         let result2 = manager.start_run(typed_params).await.unwrap();
         assert_eq!(result2.session_key, result.session_key);
         assert_eq!(
-            crate::gateway::voice::session_mode::get(&result.session_key),
+            crate::gateway::voice::voice_mode::get(&result.session_key),
             None,
             "a typed turn must clear the voice-mode flag"
         );
@@ -997,6 +1021,7 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
         manager.start_run(params).await.expect("start_run");
@@ -1095,6 +1120,7 @@ mod tests {
                 model: "claude-opus-4-8".to_string(),
             }),
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -1150,6 +1176,7 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         }
     }
@@ -1202,6 +1229,45 @@ mod tests {
         );
     }
 
+    /// Third twin of the exec-tier pair above: a mode picked before the
+    /// session existed must ride the request into this turn's metadata.
+    #[tokio::test]
+    async fn build_run_request_carries_the_composer_mode() {
+        use crate::config::types::policies::MODE_SESSION_KEY;
+
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            mode: Some("code".to_string()),
+            ..base_params()
+        };
+
+        let request = build_run_request("run-mode".to_string(), &session_key, params, None)
+            .await
+            .expect("build_run_request");
+
+        assert_eq!(
+            request.metadata.get(MODE_SESSION_KEY).map(String::as_str),
+            Some("code"),
+            "a mode picked before the session existed must still govern this turn"
+        );
+    }
+
+    /// An unknown mode id is refused, not ignored — the pill would show one
+    /// partition while the turn silently ran another.
+    #[tokio::test]
+    async fn build_run_request_rejects_an_unknown_mode() {
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        let params = AgentRunParams {
+            mode: Some("game".to_string()),
+            ..base_params()
+        };
+
+        let err = build_run_request("run-bad-mode".to_string(), &session_key, params, None)
+            .await
+            .expect_err("an unknown mode must not silently fall back");
+        assert!(err.contains("game"), "error should name the bad mode: {err}");
+    }
+
     #[tokio::test]
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
@@ -1222,6 +1288,7 @@ mod tests {
             project_root: None,
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -1254,6 +1321,7 @@ mod tests {
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -1286,6 +1354,7 @@ mod tests {
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -1321,6 +1390,7 @@ mod tests {
             project_root: Some(std::env::temp_dir().display().to_string()),
             model_override: None,
             exec_tier: None,
+            mode: None,
             voice_input: false,
         };
 
@@ -1552,6 +1622,7 @@ mod tests {
                 project_root: None,
                 model_override: None,
                 exec_tier: None,
+                mode: None,
                 voice_input,
             }
         }

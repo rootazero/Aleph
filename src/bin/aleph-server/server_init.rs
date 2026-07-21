@@ -347,6 +347,7 @@ where
         project_root: params.project_root,
         model_override: params.model_override,
         exec_tier: params.exec_tier,
+        mode: params.mode,
         voice_input: params.voice_input,
     };
     let mut run_request = match build_run_request(

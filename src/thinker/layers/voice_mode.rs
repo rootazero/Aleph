@@ -1,7 +1,7 @@
 //! `VoiceModeLayer` — injects voice-mode guidelines when active (priority 1710).
 //!
 //! Voice-as-Context: when the gateway marks the session as spoken (the inbound
-//! router writes it to [`session_mode`](crate::gateway::voice::session_mode),
+//! router writes it to [`voice_mode`](crate::gateway::voice::voice_mode),
 //! the harness bridge reads it into [`ResolvedContext::voice`]), this layer
 //! reframes the whole reply contract for the ear instead of the eye.
 //!

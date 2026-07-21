@@ -106,6 +106,11 @@ pub struct SubagentTool {
     /// share the run-global strategy. `None` (the `new()` default) keeps
     /// subagents strategy-free, byte-identical to the pre-strategy build.
     pub(super) strategy: Option<String>,
+    /// Parent run's usage mode (chat / work / code), threaded into every
+    /// spawn so the child prompt names its inherited partition. `None` (the
+    /// `new()` default, and the Work identity partition the wiring site
+    /// skips) keeps child prompts byte-identical.
+    pub(super) session_mode: Option<crate::config::types::policies::SessionMode>,
     /// VESR v1.1 (b) — routing store threaded into every child `AgentRuntime`
     /// so spawned subagents capture their own routing experience. `None` (the
     /// `new()` default) keeps subagents capture-free.
@@ -164,6 +169,7 @@ impl SubagentTool {
             provider_overrides: HashMap::new(),
             guardrails: None,
             strategy: None,
+            session_mode: None,
             routing_store: None,
             default_max_iterations: None,
             parallel_tool_concurrency: None,
@@ -318,6 +324,17 @@ impl SubagentTool {
     #[must_use]
     pub fn with_strategy(mut self, strategy: String) -> Self {
         self.strategy = Some(strategy);
+        self
+    }
+
+    /// Wire the parent run's usage mode so every spawned child's prompt
+    /// names the partition its inherited tool surface was built with.
+    #[must_use]
+    pub const fn with_session_mode(
+        mut self,
+        mode: crate::config::types::policies::SessionMode,
+    ) -> Self {
+        self.session_mode = Some(mode);
         self
     }
 }

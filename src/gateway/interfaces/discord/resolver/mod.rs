@@ -1,11 +1,7 @@
-mod account;
-mod channel;
 mod error;
 mod input;
 mod strategy;
 
-pub use account::AccountResolver;
-pub use channel::{ChannelSettingsResolver, ResolvedChannelSettings};
 pub use error::{Candidate, ChannelResolutionError};
 pub use input::ParsedInput;
 

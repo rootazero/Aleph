@@ -209,6 +209,16 @@ pub(super) fn InputArea() -> impl IntoView {
         // send there is no session row to have written it to — and that is the
         // turn the picker was armed for. The server stamps it onto the session.
         let tier = chat.session_exec_tier.get();
+        // The composer's usage mode. Unlike the tier it is carried ONLY on
+        // the first send (no session row exists yet to have been patched):
+        // once a session exists the store is authoritative, and re-carrying
+        // the pill's cached value would out-rank and silently revert a
+        // `session_set_mode` switch the model made mid-conversation.
+        let mode = if session_key.is_some() {
+            None
+        } else {
+            chat.session_mode.get()
+        };
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -229,6 +239,7 @@ pub(super) fn InputArea() -> impl IntoView {
                 pr,
                 mo,
                 tier.as_deref(),
+                mode.as_deref(),
                 false,
             )
             .await
@@ -366,6 +377,13 @@ pub(super) fn InputArea() -> impl IntoView {
         let project_root = chat.active_project_root.get_untracked();
         let model_override = chat.selected_model.get_untracked();
         let tier = chat.session_exec_tier.get_untracked();
+        // First-send-only carriage — see the typed-send path above. Queue
+        // flush always has a live session, so this is None in practice.
+        let mode = if session_key.is_some() {
+            None
+        } else {
+            chat.session_mode.get_untracked()
+        };
         let dash = dashboard;
         spawn_local(async move {
             for entry in batch {
@@ -389,6 +407,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     project_root.as_deref(),
                     model_override.as_ref(),
                     tier.as_deref(),
+                    mode.as_deref(),
                     false,
                 )
                 .await
@@ -1041,8 +1060,16 @@ pub(super) fn InputArea() -> impl IntoView {
                         // with the attach paperclip. Dropdowns still flip upward.
                         <ProjectMenu />
                         <crate::components::model_picker::ModelPicker />
-                        // Per-session tool-execution tier (Ask / Auto / Full).
-                        <crate::views::chat::exec_tier_picker::ExecTierPicker />
+                        // Per-session usage mode (chat / work / code) + tool
+                        // execution tier (Ask / Auto / Full). Hidden in team
+                        // chat: the team send path (`TeamChatApi::send`) carries
+                        // neither, and with `session_key` cleared a pick could
+                        // not persist either — an override dot that does
+                        // nothing would just mislead.
+                        <Show when=move || chat.team_id.get().is_none()>
+                            <crate::views::chat::mode_picker::ModePicker />
+                            <crate::views::chat::exec_tier_picker::ExecTierPicker />
+                        </Show>
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />
 

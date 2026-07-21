@@ -364,6 +364,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
+        name: "session_set_mode",
+        description: "Switch this session's usage mode (chat / work / code)",
+        requires_config: true, // Requires SessionManager (via gateway_context)
+    },
+    BuiltinToolDefinition {
         name: "session_search",
         description: "Search past conversation transcripts across all sessions using full-text search",
         requires_config: true, // Requires SessionManager
@@ -943,6 +948,8 @@ pub fn create_tool_boxed(
         "session_compact" => None,
         // Session set-topic tool requires SessionManager (from gateway_context) at runtime
         "session_rename" => None,
+        // Session set-mode tool requires SessionManager (from gateway_context) at runtime
+        "session_set_mode" => None,
         // Session search tool requires SessionManager at runtime
         "session_search" => None,
         // Remember tool requires MemoryContextProvider (per-agent CuratedMemoryStore)

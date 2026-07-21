@@ -80,6 +80,7 @@ impl HarnessRunner for AgentHarnessRunner {
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
         exec_tier: Option<crate::config::types::policies::ExecTier>,
+        session_mode: Option<crate::config::types::policies::SessionMode>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -368,6 +369,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 routing_text,
                 has_session_summaries,
                 exec_tier,
+                session_mode,
             )
             .await
         {
@@ -1015,6 +1017,8 @@ impl HarnessRunner for AgentHarnessRunner {
                     false,
                     // No resolved tier on the estimate path — an approval line
                     // here would pollute the cached per-(agent, model) overhead.
+                    None,
+                    // Same for the usage-mode line.
                     None,
                 )
                 .await

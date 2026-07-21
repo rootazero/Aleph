@@ -65,8 +65,34 @@ pub(crate) fn apply_trace_event(
                 // call unless the user has pinned a different one. Gated to
                 // the foreground conversation — a background run must not
                 // hijack the pane the user is currently viewing.
+                //
+                // The SESSION MODE shapes what "follow" means (survey: the
+                // right panel is the mode's signature surface — chat has
+                // none, work shows progress, code shows the tool/diff view):
+                //   chat → no auto-drive at all; the badge (note_activity
+                //          above) is the only signal.
+                //   work → once a plan exists, the Plan/progress surface is
+                //          the home view; before the first plan lands, fall
+                //          back to the tool detail.
+                //   code / unknown → live-follow the tool detail
+                //          (pre-mode behavior, byte-identical default).
+                // Keyed off the EFFECTIVE mode: the session's explicit
+                // override, else the global `[policies] mode` default the
+                // pill's fetch mirrored into `chat.global_mode` — so a
+                // follow-global session gets its mode's behavior too.
+                // `None` (older core / pre-connect) keeps the default.
                 if is_foreground {
-                    workspace.follow_tool(run_id, tool_id);
+                    let effective = chat
+                        .session_mode
+                        .get_untracked()
+                        .or_else(|| chat.global_mode.get_untracked());
+                    match effective.as_deref() {
+                        Some("chat") => {}
+                        Some("work") if chat.plan.get_untracked().is_some() => {
+                            workspace.follow_plan(run_id);
+                        }
+                        _ => workspace.follow_tool(run_id, tool_id),
+                    }
                 }
             }
         }

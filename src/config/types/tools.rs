@@ -159,26 +159,32 @@ pub const fn default_shell_timeout() -> u64 {
 /// `ProgressiveDisclosureRewriter`.
 ///
 /// INVARIANT — do not drop `subagent` or `get_tool_schema` from this set.
-/// They are the only two tools that appear in a request's live tool surface
-/// yet are ABSENT from the `get_tool_schema` schema snapshot: `subagent` is
-/// attached out-of-band via `ScopedToolService::with_subagent_tool`, and
-/// `get_tool_schema` is registered into the loop registry AFTER the snapshot
-/// is captured (see `run_loop/inner.rs`). If either were collapsed, the model
-/// would be told to call `get_tool_schema(<it>)`, which would miss and mislead
-/// on a headline capability. Keeping them core means they are never collapsed,
-/// which is what closes the "collapsed-but-unsnapshotted" bug class. Guarded
-/// by `snapshot_exempt_tools_must_stay_core`.
+/// They are the only two tools *in this list* that appear in a request's live
+/// tool surface yet are ABSENT from the `get_tool_schema` schema snapshot:
+/// `subagent` is attached out-of-band via
+/// `ScopedToolService::with_subagent_tool`, and `get_tool_schema` is
+/// registered into the loop registry AFTER the snapshot is captured (see
+/// `run_loop/inner.rs`). If either were collapsed, the model would be told to
+/// call `get_tool_schema(<it>)`, which would miss and mislead on a headline
+/// capability. Keeping them core means they are never collapsed, which is
+/// what closes the "collapsed-but-unsnapshotted" bug class. Guarded by
+/// `snapshot_exempt_tools_must_stay_core`. `tool_search` is the third member
+/// of that class (registered after the snapshot, only when a deferred tier
+/// exists) — it cannot live in this static list, so `run_loop/inner.rs` adds
+/// it to the request's effective core set at registration time instead.
 ///
 /// `moa` is core so a user's "turn on MoA for this session" engages in one
 /// step — the activation toggle must not hide behind a get_tool_schema
-/// round-trip (R8 conversational management; round-2 W1).
+/// round-trip (R8 conversational management; round-2 W1). `session_set_mode`
+/// is core for the same R8 one-step reason: every mode's prompt line points
+/// at it, and its schema is a single string field.
 pub fn default_core_tools() -> Vec<String> {
     [
         "ask_user", "subagent", "bash", "code_exec", "code_check",
         "file_read", "file_write", "file_edit", "file_ops",
         "search", "web_fetch", "memory_search", "remember",
         "skill_read", "skill_list", "scratchpad", "note_manage",
-        "system", "get_tool_schema", "moa",
+        "system", "get_tool_schema", "moa", "session_set_mode",
         // MCP native discovery+read mechanism — all four kept core (never
         // schema-collapsed) so discovery and read are each one step, mirroring
         // `skill_list`+`skill_read` above. There is deliberately NO
@@ -770,7 +776,9 @@ mod core_tools_tests {
         assert!(c.core.iter().any(|t| t == "mcp_list_resources"));
         assert!(c.core.iter().any(|t| t == "mcp_list_prompts"));
         assert!(c.core.iter().any(|t| t == "mcp_list_resource_templates"));
-        assert_eq!(c.core.len(), 25);
+        // R8 one-step mode switch — every mode prompt line points at it.
+        assert!(c.core.iter().any(|t| t == "session_set_mode"));
+        assert_eq!(c.core.len(), 26);
         assert!(!c.truncate_tool_descriptions);
     }
 

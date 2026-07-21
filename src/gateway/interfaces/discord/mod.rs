@@ -25,25 +25,14 @@
 //! dm_allowed = true
 //! ```
 
-pub mod account_pool;
 pub mod api;
 pub mod config;
-pub mod handlers;
 pub mod permissions;
 pub mod resolver;
 pub mod security;
 
-pub use account_pool::DiscordAccountPool;
-pub use config::{DiscordChannelConfig, DiscordChannelSettings, DiscordConfig, IntentsConfig};
-pub use handlers::{
-    AgentId, ApprovalError, ApprovalQueue, ApprovalStatus, InteractionError, InteractionHandler,
-    InteractionResult, PendingExec, StreamingError, StreamingHandler, StreamingPreview,
-    ThreadBindingError, ThreadBindingHandler, ThreadInfo,
-};
-pub use resolver::{
-    AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,
-    ResolvedChannel, ResolvedChannelSettings,
-};
+pub use config::{DiscordConfig, IntentsConfig};
+pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -59,7 +48,8 @@ use std::collections::HashMap;
 
 use serenity::{
     all::{
-        ChannelId as SerenityChannelId, CommandDataOptionValue, Context, CreateAttachment,
+        ButtonStyle, ChannelId as SerenityChannelId, CommandDataOptionValue, ComponentInteraction,
+        Context, CreateActionRow, CreateAttachment, CreateButton, CreateInteractionResponse,
         CreateMessage, EditMessage, EventHandler, GatewayIntents, GuildChannel, Interaction,
         Message, MessageId as SerenityMessageId, PartialGuildChannel, Ready,
     },
@@ -108,14 +98,8 @@ impl ThreadBinding {
 pub struct DiscordChannel {
     /// Channel information
     info: ChannelInfo,
-    /// Configuration (legacy flat config)
+    /// Configuration
     config: DiscordConfig,
-    /// Account pool for multi-bot-instance support
-    account_pool: Option<DiscordAccountPool>,
-    /// Account resolver for channel-to-account mapping
-    account_resolver: Option<AccountResolver>,
-    /// Settings resolver for per-channel config override
-    settings_resolver: Option<ChannelSettingsResolver>,
     /// Unified channel state (status + inbound sender/receiver)
     channel_state: ChannelState,
     /// Shutdown signal sender
@@ -127,7 +111,7 @@ pub struct DiscordChannel {
 }
 
 impl DiscordChannel {
-    /// Create a new Discord channel (legacy constructor)
+    /// Create a new Discord channel.
     pub fn new(id: impl Into<String>, config: DiscordConfig) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
@@ -137,15 +121,9 @@ impl DiscordChannel {
             capabilities: Self::capabilities(),
         };
 
-        let channel_config: DiscordChannelConfig = config.clone().into();
-        let account_resolver = AccountResolver::new(&channel_config);
-
         Self {
             info,
-            config: config.clone(),
-            account_pool: None,
-            account_resolver: Some(account_resolver),
-            settings_resolver: Some(ChannelSettingsResolver::new(channel_config)),
+            config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             http: None,
@@ -157,33 +135,6 @@ impl DiscordChannel {
         let mut channel = Self::new(id, config);
         channel.test_mode = true;
         channel
-    }
-
-    /// Create a new Discord channel with nested config (multi-account support)
-    pub fn with_config(id: impl Into<String>, channel_config: DiscordChannelConfig) -> Self {
-        let info = ChannelInfo {
-            id: ChannelId::new(id),
-            name: "Discord".to_string(),
-            channel_type: "discord".to_string(),
-            status: ChannelStatus::Disconnected,
-            capabilities: Self::capabilities(),
-        };
-
-        let account_resolver = AccountResolver::new(&channel_config);
-        let account_pool = DiscordAccountPool::new(channel_config.clone());
-        let settings_resolver = ChannelSettingsResolver::new(channel_config.clone());
-
-        Self {
-            info,
-            config: DiscordConfig::default(),
-            account_pool: Some(account_pool),
-            account_resolver: Some(account_resolver),
-            settings_resolver: Some(settings_resolver),
-            channel_state: ChannelState::new(100),
-            shutdown_tx: None,
-            http: None,
-            test_mode: false,
-        }
     }
 
     /// Get Discord-specific capabilities
@@ -202,7 +153,10 @@ impl DiscordChannel {
             rich_text: true, // Markdown support
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
-            stream_protocol: Default::default(),
+            // Reply streaming: the generic ReplyEmitter drives send→edit via our
+            // `Channel::edit()` impl. The inbound executor flips `stream_enabled`
+            // on when it sees EditBased. Mirrors Telegram's progressive editing.
+            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
         }
     }
 
@@ -245,58 +199,22 @@ impl DiscordChannel {
             .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))
     }
 
-    /// Resolve settings for a channel using the nested config hierarchy.
-    ///
-    /// This method uses the settings resolver to apply the override chain:
-    /// default -> account -> guild -> channel
-    pub fn resolve_settings(
-        &self,
-        channel_id: u64,
-        guild_id: Option<u64>,
-    ) -> Result<DiscordChannelSettings, DiscordChannelError> {
-        let account_resolver = self
-            .account_resolver
-            .as_ref()
-            .ok_or(DiscordChannelError::NotConfigured)?;
-
-        let settings_resolver = self
-            .settings_resolver
-            .as_ref()
-            .ok_or(DiscordChannelError::NotConfigured)?;
-
-        let account_id = account_resolver
-            .resolve_account(channel_id)
-            .or_else(|| guild_id.and_then(|g| account_resolver.resolve_account_by_guild(g)))
-            .ok_or(DiscordChannelError::ChannelNotInAnyAccount(channel_id))?;
-
-        let resolved = settings_resolver.resolve(&account_id, guild_id, Some(channel_id));
-        Ok(resolved.settings)
-    }
-
-    /// Get the account pool for multi-account management.
-    #[must_use]
-    pub const fn account_pool(&self) -> Option<&DiscordAccountPool> {
-        self.account_pool.as_ref()
-    }
-
-    /// Get the settings resolver.
-    #[must_use]
-    pub const fn settings_resolver(&self) -> Option<&ChannelSettingsResolver> {
-        self.settings_resolver.as_ref()
-    }
 }
 
-/// Discord channel specific errors
-#[derive(Debug, thiserror::Error)]
-pub enum DiscordChannelError {
-    #[error("channel not configured for nested config")]
-    NotConfigured,
-
-    #[error("channel {0} is not in any account")]
-    ChannelNotInAnyAccount(u64),
-
-    #[error("account not found: {0}")]
-    AccountNotFound(String),
+/// Map an approval `callback_data` to a styled Discord button.
+///
+/// `approve*` → green (Success), `deny*` → red (Danger), otherwise neutral.
+/// The `custom_id` carries `callback_data` verbatim so the click round-trips
+/// back to the approval sink unchanged.
+fn button_style_for(callback_data: &str, text: &str) -> CreateButton {
+    let style = if callback_data.starts_with("approve") {
+        ButtonStyle::Success
+    } else if callback_data.starts_with("deny") {
+        ButtonStyle::Danger
+    } else {
+        ButtonStyle::Secondary
+    };
+    CreateButton::new(callback_data).label(text).style(style)
 }
 
 /// Event handler for Discord gateway events
@@ -306,6 +224,64 @@ struct Handler {
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
     thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
+}
+
+impl Handler {
+    /// Forward a button/select-menu click to the router's approval sink.
+    ///
+    /// The router recognises approval callbacks by the `cb_` message-id prefix
+    /// and hands `text` (== the button's `custom_id`) plus the clicker id to the
+    /// injected `ApprovalCallbackSink`. Discord itself holds no approval state —
+    /// this stays R4-pure I/O: translate the interaction into an inbound message.
+    async fn handle_component(&self, ctx: &Context, component: &ComponentInteraction) {
+        // Enforce the same guild/channel allowlist as messages and commands so a
+        // button can't drive the agent from a non-allowed surface.
+        if let Some(guild_id) = component.guild_id {
+            if !self.config.is_guild_allowed(guild_id.get()) {
+                return;
+            }
+        }
+        if !self.config.is_channel_allowed(component.channel_id.get()) {
+            return;
+        }
+
+        // Key the conversation exactly like message()/interaction_create so the
+        // approval reply lands in the same conversation as the original prompt.
+        let conversation_id = if component.guild_id.is_some() {
+            ConversationId::new(component.channel_id.to_string())
+        } else {
+            ConversationId::new(format!("dm:{}", component.user.id))
+        };
+
+        let inbound = InboundMessage {
+            id: MessageId::new(format!("cb_{}", component.id)),
+            channel_id: ChannelId::new("discord"),
+            conversation_id,
+            sender_id: UserId::new(component.user.id.to_string()),
+            sender_name: Some(component.user.name.clone()),
+            text: component.data.custom_id.clone(),
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: component.guild_id.is_some(),
+            raw: None,
+            metadata: vec![],
+        };
+
+        if let Err(e) = self.inbound_tx.send(inbound) {
+            tracing::error!(error = ?e, "Failed to forward Discord button callback");
+        }
+
+        // ACK the interaction (deferred update) so Discord clears the click
+        // spinner. The human-visible result is posted by the router as a normal
+        // channel message.
+        if let Err(e) = component
+            .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+            .await
+        {
+            tracing::debug!(error = ?e, "Failed to ACK Discord component interaction");
+        }
+    }
 }
 
 #[async_trait]
@@ -472,7 +448,14 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        // Button / select-menu clicks (approval UI): forward the callback to the
+        // router's approval sink via a cb_-prefixed inbound message, then ACK.
+        if let Interaction::Component(component) = &interaction {
+            self.handle_component(&ctx, component).await;
+            return;
+        }
+
         let serenity::all::Interaction::Command(command) = interaction else {
             return;
         };
@@ -812,6 +795,29 @@ impl Channel for DiscordChannel {
             }
         }
 
+        // Render inline keyboard (approval UI etc.) as Discord button components.
+        // The button `custom_id` carries the callback_data verbatim; a click comes
+        // back through `interaction_create` → cb_-prefixed inbound → approval sink.
+        // Discord caps action rows at 5 and buttons-per-row at 5.
+        if let Some(keyboard) = &message.inline_keyboard {
+            let rows: Vec<CreateActionRow> = keyboard
+                .rows
+                .iter()
+                .take(5)
+                .filter_map(|row| {
+                    let buttons: Vec<CreateButton> = row
+                        .iter()
+                        .take(5)
+                        .map(|btn| button_style_for(&btn.callback_data, &btn.text))
+                        .collect();
+                    (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
+                })
+                .collect();
+            if !rows.is_empty() {
+                builder = builder.components(rows);
+            }
+        }
+
         // Send the message
         let sent = channel_id
             .send_message(http, builder)
@@ -1004,5 +1010,33 @@ mod tests {
         let channel = DiscordChannel::new("discord-test", config);
         assert_eq!(channel.info().id.as_str(), "discord-test");
         assert_eq!(channel.info().channel_type, "discord");
+    }
+
+    #[test]
+    fn test_stream_protocol_is_edit_based() {
+        // Reply streaming relies on this: the inbound executor only enables
+        // stream_enabled when the channel declares EditBased.
+        assert_eq!(
+            DiscordChannel::capabilities().stream_protocol,
+            crate::gateway::channel::StreamProtocol::EditBased
+        );
+    }
+
+    #[test]
+    fn test_button_style_mapping() {
+        // approve* → green, deny* → red, everything else neutral. The label and
+        // custom_id (== callback_data) must survive verbatim for the round-trip.
+        // We assert via the serialized component JSON since CreateButton exposes
+        // no getters.
+        let approve = serde_json::to_value(button_style_for("approve:abc:once", "Approve")).unwrap();
+        assert_eq!(approve["style"], 3); // ButtonStyle::Success
+        assert_eq!(approve["custom_id"], "approve:abc:once");
+        assert_eq!(approve["label"], "Approve");
+
+        let deny = serde_json::to_value(button_style_for("deny:abc", "Deny")).unwrap();
+        assert_eq!(deny["style"], 4); // ButtonStyle::Danger
+
+        let other = serde_json::to_value(button_style_for("misc:x", "Other")).unwrap();
+        assert_eq!(other["style"], 2); // ButtonStyle::Secondary
     }
 }

@@ -332,6 +332,9 @@ impl SubagentTool {
         if let Some(s) = self.strategy.clone() {
             runtime = runtime.with_strategy(s);
         }
+        if let Some(m) = self.session_mode {
+            runtime = runtime.with_session_mode(m);
+        }
         runtime
     }
 }

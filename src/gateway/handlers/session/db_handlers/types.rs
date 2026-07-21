@@ -66,6 +66,13 @@ pub struct SessionInfo {
     /// live on the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_tier: Option<String>,
+    /// Per-session usage-mode override (`identity_meta.custom["session_mode"]`,
+    /// written through `sessions.patch` or stamped from a request-carried
+    /// value). `None` ⇒ the session follows the global `[policies] mode`. Same
+    /// read-back contract as `exec_tier`: the Panel's mode pill restores it on
+    /// session reselect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 /// Session history message.
