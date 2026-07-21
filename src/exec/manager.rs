@@ -536,6 +536,33 @@ impl ExecApprovalManager {
             }
         };
 
+        // Group-chat / paired-chat originator gate. When the card was raised
+        // by a specific user (channel with a known sender), only THAT user may
+        // resolve it — `/approve` / `/deny` from any other paired member is
+        // silently ignored. The button-callback path goes through a separate
+        // `authorize_actor` gate; this is the text-fallback twin so the
+        // capability-without-originator fallback in `ChannelApprovalBridge`
+        // doesn't widen to "any paired member". A `None` originator (e.g.
+        // CLI / RPC with no chat context) preserves the legacy behaviour —
+        // any `/approve` is honored.
+        if let Some(entry) = pending.get(&id) {
+            if let Some(ref expected) = entry.record.originator_user_id {
+                match resolved_by.as_deref() {
+                    Some(actual) if actual == expected.as_str() => {}
+                    Some(_) | None => {
+                        warn!(
+                            id = %id,
+                            expected = %expected,
+                            actual = ?resolved_by,
+                            "Rejecting /approve or /deny from non-originator \
+                             (group-chat approval bypass guard)"
+                        );
+                        return SessionResolveOutcome::NothingPending;
+                    }
+                }
+            }
+        }
+
         if let Some(entry) = pending.get_mut(&id) {
             let decision = Self::clamp_decision(decision);
             let summary = Self::display_line(&entry.record);

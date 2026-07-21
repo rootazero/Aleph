@@ -66,9 +66,18 @@ static DEFAULTS_OVERRIDE: OnceLock<DefaultsOverride> = OnceLock::new();
 
 /// Initialize the global defaults override. Called once during startup.
 ///
-/// If already initialized (e.g., in tests), the new value is silently ignored.
+/// If already initialized (e.g., in tests), a warning is logged and the new
+/// value is ignored. Callers that legitimately need to refresh the override
+/// (e.g. a test running after a previous one) must restart the process or
+/// otherwise reset the global state.
 pub fn init_defaults_override(overrides: DefaultsOverride) {
-    let _ = DEFAULTS_OVERRIDE.set(overrides);
+    if DEFAULTS_OVERRIDE.set(overrides).is_err() {
+        warn!(
+            "DEFAULTS_OVERRIDE already initialized; ignoring re-init. \
+             defaults.toml from this load is silently inactive — restart the \
+             process to pick up changes."
+        );
+    }
 }
 
 /// Get a reference to the global defaults override.

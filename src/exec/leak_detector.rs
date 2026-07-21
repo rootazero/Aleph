@@ -122,14 +122,19 @@ impl LeakDetector {
 
     /// Scan content for leaks (internal implementation).
     fn scan(&self, content: &str) -> ScanResult {
-        // Fast path: if no prefix matches, content is clean
-        if !self.ac.is_match(content) {
-            return ScanResult {
-                findings: Vec::new(),
-            };
-        }
+        // The Aho-Corasick automaton is a SOFT hint, not a hard gate: many
+        // regex patterns (custom vault tokens, raw JWTs without a "Bearer "
+        // prefix, HMAC blobs, post-quantum secrets) carry no prefix the
+        // automaton knows about. Gating the regex on the prefix match used
+        // to let those high-value credentials escape every leak check
+        // (`is_clean() == true` despite a real secret being present).
+        // Now the prefix scan only chooses between "definitely run regex" and
+        // "very-likely-but-still-run-regex" — the regex pass is always taken.
+        let _ = self.ac.is_match(content);
 
-        // Slow path: check each regex pattern
+        // Always run the full regex sweep. The cost of `Regex::find` over a
+        // short content string is negligible compared to the cost of a
+        // secret-leak callback page.
         let mut findings = Vec::new();
         for pattern in &self.patterns {
             if let Some(m) = pattern.regex.find(content) {
