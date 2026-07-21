@@ -175,19 +175,31 @@ impl ValueObject for SkillSource {}
 /// Operating system discriminator for platform-specific skills.
 ///
 /// Deserialization accepts the same aliases as [`Os::from_str`] (`macos` for
-/// `darwin`, `win` for `windows`) so that a hand-authored `EligibilitySpec` /
-/// `InstallSpec` deserialized directly via serde behaves identically to the
-/// markdown-manifest path, which parses OS strings through `FromStr`.
-/// Serialization always emits the canonical lowercase name (`darwin` / `linux`
-/// / `windows`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// `darwin`, `win` for `windows`) **case-insensitively**, so that a hand-
+/// authored `EligibilitySpec` / `InstallSpec` deserialized directly via serde
+/// behaves identically to the markdown-manifest path, which parses OS strings
+/// through `FromStr`. `MACOS` / `Win` / `DARWIN` all deserialize to the same
+/// variant as their lowercase form. Serialization always emits the canonical
+/// lowercase name (`darwin` / `linux` / `windows`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Os {
-    #[serde(alias = "macos")]
     Darwin,
     Linux,
-    #[serde(alias = "win")]
     Windows,
+}
+
+impl<'de> Deserialize<'de> for Os {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = String::deserialize(deserializer)?;
+        // Reuse the FromStr impl so serde and FromStr can never drift. The
+        // serde `#[serde(alias)]` attribute is case-sensitive (e.g. it would
+        // accept `macos` but reject `MACOS`); FromStr is case-insensitive.
+        s.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl ValueObject for Os {}
