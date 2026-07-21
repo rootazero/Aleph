@@ -21,6 +21,86 @@ use crate::error::{DesktopError, Result};
 )]
 use tracing::debug;
 
+/// SCK crop rect: `x`/`y`/`w`/`h` are display **points** (fed to
+/// `setSourceRect`); `out_w`/`out_h` are **pixels** (fed to `setWidth`/`setHeight`).
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq)]
+struct SckRegionRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    out_w: usize,
+    out_h: usize,
+}
+
+/// Map a requested `region` to the SCK crop rect.
+///
+/// `region` is in **physical pixels** (`ScreenRegion`'s documented unit — see
+/// `lib.rs`; the Linux/Windows sibling recorders treat it the same). `display_w_pts`
+/// ×`display_h_pts` are the display size in **points** (`SCDisplay.width/height`),
+/// and `scale` is the pixel-per-point factor. The region is clamped to the display
+/// (compared in pixels = points × `scale`), then split into the `sourceRect`
+/// (points = pixels ÷ `scale`) and the output pixel dimensions (the clamped region
+/// pixels, used as-is). `None` when the region's origin is off-display or the
+/// clamped size is zero — the caller maps that to a `ScreenCapture` error. Pure so
+/// it is unit-testable without a display (mirrors `build_x11grab_args`).
+///
+/// A region equal to the whole display reproduces the whole-display path exactly:
+/// `sourceRect` = full display in points, output = display points × `scale`.
+#[cfg(any(target_os = "macos", test))]
+fn sck_region_rect(
+    region: &crate::ScreenRegion,
+    display_w_pts: u32,
+    display_h_pts: u32,
+    scale: u32,
+) -> Option<SckRegionRect> {
+    // Clamp against the display in the region's own unit (pixels = points × scale).
+    let display_w_px = display_w_pts * scale;
+    let display_h_px = display_h_pts * scale;
+    if region.x >= display_w_px || region.y >= display_h_px {
+        return None; // origin past the display — no intersection
+    }
+    let w_px = region.width.min(display_w_px - region.x);
+    let h_px = region.height.min(display_h_px - region.y);
+    if w_px == 0 || h_px == 0 {
+        return None;
+    }
+    let scale_f = f64::from(scale);
+    Some(SckRegionRect {
+        // sourceRect is in points: pixels ÷ scale.
+        x: f64::from(region.x) / scale_f,
+        y: f64::from(region.y) / scale_f,
+        w: f64::from(w_px) / scale_f,
+        h: f64::from(h_px) / scale_f,
+        // Output buffer is in pixels: the clamped region, used as-is.
+        out_w: w_px as usize,
+        out_h: h_px as usize,
+    })
+}
+
+/// Confirm a recording actually produced a non-empty file. `timed_out` is the
+/// delegate-wait timeout flag. A timeout, a missing file, or a zero-byte file
+/// is a failure — the `SCRecordingOutput` path previously returned `Ok` in all
+/// three cases (false success). Pure over the filesystem so it is unit-testable.
+#[cfg(any(target_os = "macos", test))]
+fn verify_recording_output(path: &std::path::Path, timed_out: bool) -> Result<()> {
+    if timed_out {
+        return Err(DesktopError::ScreenCapture(
+            "recording did not signal completion within 15s".into(),
+        ));
+    }
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        Ok(_) => Err(DesktopError::ScreenCapture(
+            "recording finished but the output file is empty".into(),
+        )),
+        Err(e) => Err(DesktopError::ScreenCapture(format!(
+            "recording finished but the output file is missing: {e}"
+        ))),
+    }
+}
+
 // SCRecordingOutput delegate — defined at module scope to avoid ObjC
 // class re-registration panic on repeated calls.
 #[cfg(target_os = "macos")]
@@ -235,12 +315,41 @@ fn sc_recording_output_record(
     let stream_config = unsafe { SCStreamConfiguration::new() };
 
     // Use 2x scale for retina displays
-    let scale: usize = 2;
+    let scale: u32 = 2;
+    // Honor a requested sub-region: crop via `setSourceRect` (display points =
+    // region pixels ÷ scale) and size the output to the region's pixels. No
+    // region → whole display, exactly as before.
+    let (out_w, out_h) = match config.region.as_ref() {
+        None => (
+            display_width * scale as usize,
+            display_height * scale as usize,
+        ),
+        Some(region) => {
+            let rect = sck_region_rect(region, display_width as u32, display_height as u32, scale)
+                .ok_or_else(|| {
+                    DesktopError::ScreenCapture(format!(
+                        "region {}x{}+{},{} does not intersect the {display_width}x{display_height} display",
+                        region.width, region.height, region.x, region.y
+                    ))
+                })?;
+            use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+            // SAFETY: `stream_config` is a freshly allocated mutable configuration;
+            // `setSourceRect` takes a by-value `CGRect` in display points.
+            unsafe {
+                stream_config.setSourceRect(CGRect::new(
+                    CGPoint::new(rect.x, rect.y),
+                    CGSize::new(rect.w, rect.h),
+                ));
+            }
+            (rect.out_w, rect.out_h)
+        }
+    };
+
     // SAFETY: `stream_config` is a freshly allocated mutable configuration;
     // these setters are the documented way to populate it.
     unsafe {
-        stream_config.setWidth(display_width * scale);
-        stream_config.setHeight(display_height * scale);
+        stream_config.setWidth(out_w);
+        stream_config.setHeight(out_h);
         stream_config.setMinimumFrameInterval(CMTime {
             value: 1,
             timescale: config.fps as i32,
@@ -368,9 +477,10 @@ fn sc_recording_output_record(
     let guard = lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _result = cvar
+    let (_guard, wait_res) = cvar
         .wait_timeout_while(guard, Duration::from_secs(15), |finished| !*finished)
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let timed_out = wait_res.timed_out();
 
     // Check for recording errors
     if let Some(err_msg) = error_slot
@@ -382,6 +492,10 @@ fn sc_recording_output_record(
             "Recording failed: {err_msg}"
         )));
     }
+
+    // The delegate never signalling completion, or an absent/empty file, means
+    // no usable recording — do not report success (matches the CLI/ffmpeg paths).
+    verify_recording_output(output_path, timed_out)?;
 
     debug!("Screen recording complete: {}", output_path.display());
 
@@ -775,5 +889,151 @@ mod tests {
         let args = build_gdigrab_args(&cfg, Some("Microphone (Realtek Audio)"), "C:/tmp/a.mp4");
         assert!(args.iter().any(|a| a == "dshow"));
         assert!(args.iter().any(|a| a == "audio=Microphone (Realtek Audio)"));
+    }
+
+    // `region` is in PHYSICAL PIXELS; the display args are POINTS; scale=2 → the
+    // display spans 2000×1600 px. sourceRect = pixels ÷ scale (points); output =
+    // clamped region pixels as-is.
+    #[test]
+    fn sck_region_rect_converts_pixels_to_source_points() {
+        let r = crate::ScreenRegion {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 50,
+        };
+        assert_eq!(
+            super::sck_region_rect(&r, 1000, 800, 2),
+            Some(super::SckRegionRect {
+                x: 5.0,
+                y: 10.0,
+                w: 50.0,
+                h: 25.0,
+                out_w: 100,
+                out_h: 50
+            })
+        );
+    }
+
+    #[test]
+    fn sck_region_rect_clamps_overflow_to_display() {
+        // Far edge exceeds the display's pixel extent (2000×1600): width/height
+        // clamp to what remains, in pixels, before the ÷scale conversion.
+        let r = crate::ScreenRegion {
+            x: 1900,
+            y: 1500,
+            width: 300,
+            height: 300,
+        };
+        assert_eq!(
+            super::sck_region_rect(&r, 1000, 800, 2),
+            Some(super::SckRegionRect {
+                x: 950.0,
+                y: 750.0,
+                w: 50.0,
+                h: 50.0,
+                out_w: 100,
+                out_h: 100
+            })
+        );
+    }
+
+    #[test]
+    fn sck_region_rect_origin_outside_is_none() {
+        // x == display pixel width (1000 pts × 2) → no intersection.
+        let r = crate::ScreenRegion {
+            x: 2000,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(super::sck_region_rect(&r, 1000, 800, 2), None);
+    }
+
+    #[test]
+    fn sck_region_rect_zero_size_is_none() {
+        let r = crate::ScreenRegion {
+            x: 10,
+            y: 10,
+            width: 0,
+            height: 50,
+        };
+        assert_eq!(super::sck_region_rect(&r, 1000, 800, 2), None);
+    }
+
+    // Retina case with odd pixel values: proves region is pixels (output == region
+    // pixels as-is) and sourceRect = pixels ÷ scale, including fractional points.
+    #[test]
+    fn sck_region_rect_retina_preserves_fractional_points() {
+        let r = crate::ScreenRegion {
+            x: 101,
+            y: 201,
+            width: 641,
+            height: 481,
+        };
+        assert_eq!(
+            super::sck_region_rect(&r, 1440, 900, 2),
+            Some(super::SckRegionRect {
+                x: 50.5,
+                y: 100.5,
+                w: 320.5,
+                h: 240.5,
+                out_w: 641,
+                out_h: 481
+            })
+        );
+    }
+
+    // Correctness anchor: a region equal to the whole display (in pixels) must
+    // reproduce the whole-display path — sourceRect = full display points,
+    // output = display points × scale.
+    #[test]
+    fn sck_region_rect_full_display_matches_whole_display_path() {
+        let r = crate::ScreenRegion {
+            x: 0,
+            y: 0,
+            width: 2000,  // 1000 pts × 2
+            height: 1600, // 800 pts × 2
+        };
+        assert_eq!(
+            super::sck_region_rect(&r, 1000, 800, 2),
+            Some(super::SckRegionRect {
+                x: 0.0,
+                y: 0.0,
+                w: 1000.0,
+                h: 800.0,
+                out_w: 2000,
+                out_h: 1600
+            })
+        );
+    }
+
+    #[test]
+    fn verify_recording_output_ok_for_nonempty_file() {
+        let dir = std::env::temp_dir().join(format!("aleph_rec_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("ok.mp4");
+        std::fs::write(&f, b"data").unwrap();
+        assert!(super::verify_recording_output(&f, false).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_recording_output_err_on_timeout() {
+        let f = std::path::Path::new("/nonexistent/whatever.mp4");
+        assert!(super::verify_recording_output(f, true).is_err());
+    }
+
+    #[test]
+    fn verify_recording_output_err_on_missing_or_empty() {
+        assert!(
+            super::verify_recording_output(std::path::Path::new("/no/such.mp4"), false).is_err()
+        );
+        let dir = std::env::temp_dir().join(format!("aleph_rec_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("empty.mp4");
+        std::fs::write(&f, b"").unwrap();
+        assert!(super::verify_recording_output(&f, false).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

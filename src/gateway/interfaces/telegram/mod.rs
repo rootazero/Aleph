@@ -4,7 +4,7 @@
 //!
 //! # Features
 //!
-//! - Long-polling or webhook mode
+//! - Long-polling transport (teloxide dispatcher)
 //! - User/group allowlists with pairing flow
 //! - File and image attachments with URL resolution
 //! - Inline keyboards with callback routing
@@ -22,43 +22,34 @@ pub mod chunking;
 pub mod config;
 pub mod config_resolver;
 pub mod config_v2;
-pub mod context;
 pub mod delivery;
 pub mod error_cooldown;
-pub mod group_chat;
 pub mod handlers;
 pub mod mention;
 pub mod offset;
-pub mod poll;
 mod polling;
 pub mod reaction_handler;
-pub mod session;
-pub mod status_reaction;
 pub mod sticker;
 pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
-pub use config::{parse_telegram_channel_config, PairingEntry, TelegramConfig, WebhookConfig};
+pub use config::{parse_telegram_channel_config, TelegramConfig};
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config_v2::TelegramConfigV2;
 pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
-pub use context::{
-    AccessLevel, ChatType, ConversationKey, MediaItem, SessionState, TelegramInboundContext,
-};
-pub use session::{SessionConfig, SessionError, TelegramSessionManager};
 
 use crate::gateway::channel::{
-    CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, MessageMeta, OutboundMessage, PairingData, SendResult, UserId,
+    MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
 };
 use crate::sync_primitives::{Arc, Ordering};
 use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
 use error_cooldown::ErrorCooldown;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use teloxide::{prelude::*, types::CallbackQuery as TgCallbackQuery};
 
@@ -70,10 +61,6 @@ pub struct TelegramChannel {
     config_v2: TelegramConfigV2,
     /// Unified channel state (status + inbound sender/receiver)
     channel_state: ChannelState,
-    /// Callback query sender
-    callback_tx: mpsc::Sender<CallbackQuery>,
-    /// Callback query receiver (taken on first call)
-    callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
     /// Active bot instances (one per account)
     bot_instances: Vec<bot_instance::BotInstance>,
     /// `ToolCatalog` for building slash commands at startup
@@ -84,7 +71,9 @@ pub struct TelegramChannel {
     error_cooldown: Arc<ErrorCooldown>,
     /// Persistent polling offset tracker (set via `set_offset_tracker`).
     offset_tracker: Option<Arc<offset::OffsetTracker>>,
-    /// State database for pairing persistence (set via `set_state_database`).
+    /// State database for the sticker description cache (set via
+    /// `set_state_database`). Pairing persistence now lives in the router's
+    /// `pairing_store`.
     state_db: Option<Arc<crate::resilience::StateDatabase>>,
     /// Multi-account config resolver
     config_resolver: ConfigResolver,
@@ -93,8 +82,6 @@ pub struct TelegramChannel {
 impl TelegramChannel {
     /// Create a new Telegram channel
     pub fn new(id: impl Into<String>, config_v2: TelegramConfigV2) -> Self {
-        let (callback_tx, callback_rx) = mpsc::channel(100);
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Telegram".to_string(),
@@ -149,8 +136,6 @@ impl TelegramChannel {
             info,
             config_v2,
             channel_state: ChannelState::new(100),
-            callback_tx,
-            callback_rx: Some(callback_rx),
             bot_instances: Vec::new(),
             tool_registry: None,
             access,
@@ -216,14 +201,11 @@ impl Channel for TelegramChannel {
         &self.channel_state
     }
 
-    async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
-        let code = self.access.generate_code().await;
-        Ok(PairingData::Code(code))
-    }
-
-    async fn list_active_pairing_codes(&self) -> ChannelResult<Vec<(String, u64)>> {
-        Ok(self.access.list_codes().await)
-    }
+    // `get_pairing_data` / `list_active_pairing_codes` intentionally fall back to
+    // the `Channel` trait defaults (no local pairing). Pairing is owned by the
+    // inbound router's `pairing_store`: an unpaired DM is auto-issued a code and
+    // approved by the operator via `pairing.approve` (see the telegram:access
+    // skill), so the channel no longer mints its own codes.
 
     async fn start(&mut self) -> ChannelResult<()> {
         if self.config_v2.accounts.is_empty() {
@@ -234,21 +216,6 @@ impl Channel for TelegramChannel {
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Telegram channel...");
-
-        // Inject state database into AccessController for pairing persistence.
-        if let Some(ref db) = self.state_db {
-            if let Some(access) = Arc::get_mut(&mut self.access) {
-                access.set_state_database(db.clone());
-            } else {
-                tracing::warn!(
-                    "Could not inject StateDatabase into AccessController \
-                     (Arc has multiple references)"
-                );
-            }
-        }
-
-        // Load previously paired users from the database into memory.
-        self.access.load_from_database(self.info.id.as_str()).await;
 
         for account in &self.config_v2.accounts {
             let resolved_config = self
@@ -272,7 +239,7 @@ impl Channel for TelegramChannel {
                     link_preview: account.link_preview.unwrap_or_default(),
                 });
 
-            let mut instance = BotInstance::new(account, self.callback_tx.clone(), resolved_config);
+            let mut instance = BotInstance::new(account, resolved_config);
 
             // Group mention gate: only respond to addressed group messages when
             // the account opts in. The bot's live `@username` (authoritative,
@@ -499,7 +466,7 @@ impl Channel for TelegramChannel {
                             return Ok::<(), std::convert::Infallible>(());
                         }
 
-                        match access.check_message(user_id, chat_id, is_group).await {
+                        match access.check_message(user_id, chat_id, is_group) {
                             AccessDecision::Allowed => {
                                 if let Some(mut inbound) = handlers::convert_message(
                                     &msg,
@@ -519,25 +486,18 @@ impl Channel for TelegramChannel {
                                         inbound.metadata.push(MessageMeta::AppMention);
                                     }
 
-                                    let tg_ctx =
-                                        TelegramInboundContext::from_inbound(inbound.clone(), &msg);
-                                    let access_level = AccessLevel::Member;
-                                    let _tg_ctx = tg_ctx.with_access_level(access_level);
-
-                                    tracing::debug!(
-                                        channel = "telegram",
-                                        chat_id = %chat_id,
-                                        thread_id = ?_tg_ctx.thread_id,
-                                        access_level = ?access_level,
-                                        "TelegramInboundContext ready for message"
-                                    );
-
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
                                     }
                                 }
                             }
                             AccessDecision::NeedsPairing => {
+                                // The inbound router owns the authoritative pairing
+                                // gate (`pairing_store` + `check_permission`): an
+                                // unpaired DM is denied there and a pairing request
+                                // is minted/sent. Forwarding here lets the router
+                                // run that single-source flow; the local access
+                                // controller only pre-classifies.
                                 if let Some(inbound) = handlers::convert_message(
                                     &msg,
                                     &bot,
@@ -546,19 +506,6 @@ impl Channel for TelegramChannel {
                                 )
                                 .await
                                 {
-                                    let tg_ctx =
-                                        TelegramInboundContext::from_inbound(inbound.clone(), &msg);
-                                    let access_level = AccessLevel::Stranger;
-                                    let _tg_ctx = tg_ctx.with_access_level(access_level);
-
-                                    tracing::debug!(
-                                        channel = "telegram",
-                                        chat_id = %chat_id,
-                                        thread_id = ?_tg_ctx.thread_id,
-                                        access_level = ?access_level,
-                                        "TelegramInboundContext ready for needs-pairing message"
-                                    );
-
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
                                     }
@@ -605,9 +552,7 @@ impl Channel for TelegramChannel {
                             let user_id_val = q.from.id.0 as i64;
 
                             let is_group = raw_chat_id < 0;
-                            let decision = access
-                                .check_message(user_id_val, raw_chat_id, is_group)
-                                .await;
+                            let decision = access.check_message(user_id_val, raw_chat_id, is_group);
                             if decision == AccessDecision::Allowed {
                                 let inbound = InboundMessage {
                                     id: MessageId::new(format!("cb_{}", q.id)),
@@ -924,8 +869,6 @@ impl Channel for TelegramChannel {
             account_id: first.account_id.clone(),
             bot: first.bot.clone(),
             resolved_config: first.resolved_config.clone(),
-            callback_tx: first.callback_tx.clone(),
-            channel_state: ChannelState::new(100),
             offset_tracker: first.offset_tracker.clone(),
             shutdown_tx: None,
             is_healthy: first.is_healthy.clone(),
@@ -936,8 +879,6 @@ impl Channel for TelegramChannel {
                     info: self.info.clone(),
                     config_v2: self.config_v2.clone(),
                     channel_state: ChannelState::new(100),
-                    callback_tx: self.callback_tx.clone(),
-                    callback_rx: None,
                     bot_instances: vec![instance],
                     tool_registry: self.tool_registry.clone(),
                     access: self.access.clone(),
@@ -949,13 +890,6 @@ impl Channel for TelegramChannel {
                 self.access.clone(),
             ),
         ))
-    }
-}
-
-impl TelegramChannel {
-    /// Take the callback receiver (can only be called once)
-    pub const fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
-        self.callback_rx.take()
     }
 }
 

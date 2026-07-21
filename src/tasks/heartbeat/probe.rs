@@ -51,6 +51,19 @@ impl DefaultProbeExecutor {
 #[async_trait]
 impl ProbeExecutor for DefaultProbeExecutor {
     async fn execute(&self, tool_name: &str, params: Option<&Value>) -> Result<Value, String> {
+        // Heartbeat probes run on a timer without an LLM in the loop, so they
+        // must never reach RCE / host-mutation / control-plane tools or any
+        // tool that requires user confirmation — there is no approval
+        // transport here. Mirrors the same gate the `tools.invoke` RPC uses
+        // (`is_denied_on_gateway_surface`).
+        if crate::security::dangerous_tools::is_denied_on_gateway_surface(tool_name) {
+            return Err(format!(
+                "Probe tool '{tool_name}' is denied on the heartbeat surface \
+                 (dangerous or confirmation-gated); configure a read-only probe \
+                 or grant it via {ALLOW_ENV} (DANGEROUS only).",
+                ALLOW_ENV = crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
+            ));
+        }
         let arguments = params.cloned().unwrap_or(serde_json::json!({}));
         let result: crate::error::Result<Value> =
             self.registry.execute_tool(tool_name, arguments).await;

@@ -39,19 +39,34 @@ impl SecurityKernel {
 
     /// Create a security kernel from configuration, compiling the custom
     /// blocked / danger patterns when `enable_custom_patterns` is set.
+    ///
+    /// Invalid patterns are skipped (logged at warn) instead of aborting the
+    /// whole kernel — one bad regex must not silently disable every other
+    /// user-configured rule. The factory that wires this kernel in must also
+    /// surface the skip count to operators.
     pub fn from_config(config: &ShellSecurityConfig) -> Result<Self, regex::Error> {
         let mut kernel = Self::default();
 
         if config.enable_custom_patterns {
             for pattern in &config.custom_blocked {
-                kernel
-                    .custom_blocked
-                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
+                match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
+                    Ok(re) => kernel.custom_blocked.push(re),
+                    Err(err) => tracing::warn!(
+                        pattern = %pattern.pattern,
+                        error = %err,
+                        "security kernel: dropping invalid custom_blocked regex",
+                    ),
+                }
             }
             for pattern in &config.custom_danger {
-                kernel
-                    .custom_danger
-                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
+                match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
+                    Ok(re) => kernel.custom_danger.push(re),
+                    Err(err) => tracing::warn!(
+                        pattern = %pattern.pattern,
+                        error = %err,
+                        "security kernel: dropping invalid custom_danger regex",
+                    ),
+                }
             }
         }
 

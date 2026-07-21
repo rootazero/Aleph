@@ -172,9 +172,12 @@ impl HarnessRunner for AgentHarnessRunner {
                         }
                         Err(reason) => {
                             // Round-2 B5: a one-shot consumed by a build that
-                            // never engaged MoA is refilled (empty-slot-only),
-                            // and the failure is surfaced to the panel via the
-                            // activation-failure advisor event (count == 0).
+                            // never engaged MoA is refilled — an empty slot OR
+                            // the displaced-sticky undo (restore_one_shot's CAS
+                            // re-stacks the one-shot over a reinstated sticky;
+                            // see its doc) — and the failure is surfaced to the
+                            // panel via the activation-failure advisor event
+                            // (count == 0).
                             if pref.one_shot {
                                 crate::providers::session_moa_handle::restore_one_shot(
                                     &session_pref_key,

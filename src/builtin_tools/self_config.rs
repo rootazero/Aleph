@@ -144,6 +144,13 @@ impl SelfConfigTool {
         self.config_patcher = Some(patcher);
         self
     }
+
+    /// Late-bind a `ConfigPatcher` after construction. Called from
+    /// `BuiltinToolRegistry::set_config_patcher` once the patcher exists
+    /// (it is built after the registry in `start::register_agent_handlers`).
+    pub fn set_patcher(&mut self, patcher: Arc<ConfigPatcher>) {
+        self.config_patcher = Some(patcher);
+    }
 }
 
 // =============================================================================

@@ -228,6 +228,31 @@ mod tests {
     }
 
     #[test]
+    fn first_boot_adopts_pre_enrolled_cjk_name_without_churn() {
+        let s = store();
+        // Operator pre-enrolls a Chinese-named node.
+        let pre = mint_node_device(&s, "工作站").unwrap();
+        // The node dials in with the same CJK name and no persisted id. It must
+        // ADOPT the pre-enrolled row, not mint a duplicate. The ASCII-only
+        // normalize_node_key used to fold "工作站" to "" → reuse_by_name returned
+        // None → a fresh id every boot, proliferating offline ghost rows.
+        let a = admit_node(&s, None, "工作站");
+        assert_eq!(
+            a,
+            NodeAdmission::Admitted {
+                node_id: pre,
+                minted: true
+            },
+            "CJK-named node must adopt its pre-enrolled row, not mint a duplicate"
+        );
+        assert_eq!(
+            s.list_devices().unwrap().len(),
+            1,
+            "no duplicate CJK ghost row may appear across reconnects"
+        );
+    }
+
+    #[test]
     fn deregistered_node_is_refused_on_reconnect() {
         let s = store();
         let NodeAdmission::Admitted { node_id, .. } = admit_node(&s, None, "worker-1") else {

@@ -17,6 +17,8 @@ pub mod open_path;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod wayland_input;
 pub mod window;
+#[cfg(target_os = "macos")]
+mod window_ax;
 
 pub use app_launch::{launch_app, quit_app};
 pub use input::{

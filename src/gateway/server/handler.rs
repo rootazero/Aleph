@@ -283,14 +283,27 @@ fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
 /// connection's idle/ping watchdog observes that metric and closes the socket
 /// with code 1008 so the client reconnects and re-syncs from the hello snapshot.
 ///
-/// Only a closed bus terminates this forwarder. (Previously a `while let Ok(..)`
-/// loop treated `Lagged` as fatal, silently killing the task and leaving the
-/// socket open but permanently event-starved.)
+/// The forwarder terminates on either of two terminal conditions: the global bus
+/// closes (`RecvError::Closed`, i.e. process shutdown) **or** the per-client
+/// receiver is dropped (connection closed). The latter makes `try_send` fail —
+/// the bounded broadcast errors only when it has zero receivers, and
+/// `handle_connection` holds the sole receiver for the connection's lifetime —
+/// so a failed send unambiguously means "socket gone", and we stop instead of
+/// looping forever against a dead client. (Previously the send error was
+/// discarded with `let _ =`, so this task — and its live global-bus receiver —
+/// leaked for the whole process lifetime on *every* WS disconnect, cloning every
+/// published event to a dead receiver: O(dead_connections) fan-out growth on a
+/// long-running daemon. Separately, an earlier `while let Ok(..)` loop treated
+/// `Lagged` as fatal, silently killing the task and event-starving a live socket.)
 async fn forward_bus_to_client(mut rx: broadcast::Receiver<String>, buffer: PerClientBuffer) {
     loop {
         match rx.recv().await {
             Ok(event) => {
-                let _ = buffer.try_send(event);
+                // A failed send == the per-client receiver was dropped == the
+                // connection closed. Reap this task instead of leaking it.
+                if buffer.try_send(event).is_err() {
+                    break;
+                }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
                 buffer.metrics().add_overflow(n);
@@ -398,9 +411,6 @@ async fn handle_connection(
     let mut ping_timer = interval_at(TokioInstant::now() + ping_period, ping_period);
     ping_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last_activity_at = Instant::now();
-    // Last observed cumulative event-overflow count. The bus->buffer forwarder
-    // accounts global-hop drops here; the ping tick below acts on any growth.
-    let last_overflow: u64 = 0;
     // Closes the socket after too many login-wall rejections (stale-token
     // retry loops); see `flood_guard` module docs.
     let mut flood_guard = super::flood_guard::UnauthorizedFloodGuard::new(
@@ -1304,14 +1314,14 @@ async fn handle_connection(
             _ = ping_timer.tick() => {
                 // Global-hop overflow watchdog. The bus->buffer forwarder drops
                 // events on transient lag and records them on the shared metric
-                // (without access to this socket). If it grew, apply the same
-                // slow-consumer policy as the per-client drain arm: warn the
-                // client to reconnect, then close 1008 so it re-syncs from the
-                // hello snapshot. Bounded by the ping interval; the client just
+                // (without access to this socket). If any overflow has accrued,
+                // apply the same slow-consumer policy as the per-client drain arm:
+                // warn the client to reconnect, then close 1008 so it re-syncs from
+                // the hello snapshot. Bounded by the ping interval; the client just
                 // misses some events until then, which the resync recovers.
                 let overflow_now = buffer_metrics.overflow();
-                if overflow_now > last_overflow {
-                    let dropped = overflow_now - last_overflow;
+                if overflow_now > 0 {
+                    let dropped = overflow_now;
                     warn!(
                         "Event bus overflow for {} ({} dropped, total {}); closing for reconnect",
                         conn_id, dropped, overflow_now
@@ -1720,6 +1730,31 @@ mod tests {
                 Some(format!("m{i}").as_str())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn forwarder_terminates_when_client_receiver_dropped() {
+        // Regression (task-leak): when the connection closes, its sole per-client
+        // receiver drops, so the forwarder must reap itself instead of leaking for
+        // the process lifetime. The global bus is kept OPEN for the whole await, so
+        // termination can ONLY come from the send-failure path — never
+        // `RecvError::Closed`. A hang here means the leak (one stranded task holding
+        // a live global-bus receiver per WS disconnect) is back.
+        let (bus_tx, bus_rx) = broadcast::channel::<String>(16);
+        let (buffer, client_rx) = PerClientBuffer::with_capacity(256);
+
+        drop(client_rx); // connection closed: sole per-client receiver gone
+        let _ = bus_tx.send("orphan".to_string()); // wakes forwarder → send fails
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            forward_bus_to_client(bus_rx, buffer),
+        )
+        .await
+        .expect("forwarder must terminate once its per-client receiver is dropped");
+
+        // bus_tx is still alive here → proves termination was NOT via bus closure.
+        drop(bus_tx);
     }
 
     // ── Trusted-proxy IP parsing (F5) ─────────────────────────────────────

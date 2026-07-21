@@ -26,27 +26,59 @@ impl LaneHandle {
         }
     }
 
-    /// Append a text chunk to this lane.
-    /// If no preview message exists yet, sends a new message.
-    /// Otherwise edits the existing preview message.
-    pub async fn write_chunk(&self, text: &str) -> ChannelResult<()> {
+    /// Append a streaming **delta** to this lane.
+    ///
+    /// Deltas are accumulated into the lane's cumulative text; the preview is
+    /// then created (first delta) or edited (subsequent deltas) with the full
+    /// accumulated text. Two openclaw-style disciplines apply:
+    /// - **First-preview withholding** (`min_initial_chars`): the preview is not
+    ///   sent until enough text has accrued, so a tiny partial doesn't fire a
+    ///   push notification.
+    /// - **Edit throttling** (`debounce_ms`): edits are coalesced to at most one
+    ///   per interval. A throttled edit is not lost — the next delta past the
+    ///   interval (or `finalize`) flushes the latest accumulated text.
+    pub async fn write_chunk(&self, delta: &str) -> ChannelResult<()> {
+        let stream_cfg = &self.delivery.config.streaming;
+        let min_initial_chars = stream_cfg.min_initial_chars;
+        let debounce = std::time::Duration::from_millis(stream_cfg.debounce_ms);
+
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
             .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
 
-        let message_id = if let Some(id) = state.preview_message_id {
-            id
-        } else {
-            let id = self.delivery.send_text_message(text).await?;
-            state.preview_message_id = Some(id);
-            state.is_streaming = true;
-            return Ok(());
-        };
+        state.accumulated.push_str(delta);
 
-        drop(tracker);
-        self.delivery.edit_text_message(message_id, text).await?;
-        Ok(())
+        match state.preview_message_id {
+            None => {
+                // Withhold the first preview until enough text has accrued.
+                if state.accumulated.chars().count() < min_initial_chars {
+                    return Ok(());
+                }
+                let text = state.accumulated.clone();
+                // Reserve the throttle slot before releasing the lock so a
+                // concurrent delta can't race a second send.
+                state.last_update = std::time::Instant::now();
+                drop(tracker);
+                let id = self.delivery.send_text_message(&text).await?;
+                let mut tracker = self.tracker.lock().await;
+                if let Some(state) = tracker.get_mut(self.lane_id) {
+                    state.preview_message_id = Some(id);
+                    state.is_streaming = true;
+                }
+                Ok(())
+            }
+            Some(message_id) => {
+                if state.last_update.elapsed() < debounce {
+                    return Ok(());
+                }
+                let text = state.accumulated.clone();
+                state.last_update = std::time::Instant::now();
+                drop(tracker);
+                self.delivery.edit_text_message(message_id, &text).await?;
+                Ok(())
+            }
+        }
     }
 
     /// Finalize the lane with final text.

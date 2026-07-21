@@ -37,6 +37,13 @@
   **仅治理 channel**（Telegram / Slack…）——`inbound_router` 按 `ChannelPermissionLevel`
   （默认 Chat ⇒ `guest`）盖 `caller_role`，禁 chat-tier channel 跑自配置类工具。Panel
   授权后恒 operator，此闸对 Panel 自然全过。
+- **channel access / pairing 单一真源**：per-channel 的 `dm_policy` / `group_policy` /
+  allowlist / pairing **由 `inbound_router::check_permission` + `pairing_store` 权威裁决**
+  （非 channel 接口自持）。channel 配置经 `From<&*Config> for ChannelConfig` 桥接进 router
+  并在 `start/builder/subsystems.rs` 注册（iMessage、Telegram 均已接）。⚠️ **地雷**：新增/改
+  channel 若不桥接，router 退回 `ChannelConfig::default()`（DM `Pairing` / group `Open`）
+  **静默忽略 operator 的策略配置**。Telegram 的接口侧 `access.rs` 只是配置化预过滤，
+  `NeedsPairing` 转发 router（不自持 pairing 码）。
 - **WS Origin 校验**（`origin_policy.rs`）：挡公网恶意网页跨源驱动 agent。域名部署须把
   origin 加进 `[gateway] allowed_origins`。
 

@@ -32,6 +32,32 @@ impl BuiltinToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
+    /// Late-bind a `ConfigPatcher` into `self_config` and `moa_manage` tools.
+///
+/// `ConfigPatcher` is built by `register_agent_handlers` *after* the
+/// `BuiltinToolRegistry`, so the constructor cannot see it. Without this
+/// setter those tools ship permanently without a patcher and every write
+/// returns "patcher not available", even though their schema is advertised
+/// to the LLM.
+///
+/// The registry is shared through `Arc`, so callers pass `&mut Arc<Self>`;
+/// `Arc::get_mut` succeeds only when the caller is the sole owner (the
+/// case at startup, right after the registry was built). When the Arc is
+/// already shared the setter is a no-op — log a warning rather than panic.
+    pub fn set_config_patcher(
+        registry: &mut Arc<Self>,
+        patcher: Arc<crate::config::patcher::ConfigPatcher>,
+    ) {
+        if let Some(reg) = Arc::get_mut(registry) {
+            reg.self_config_tool.set_patcher(Arc::clone(&patcher));
+            reg.moa_manage_tool.set_patcher(Arc::clone(&patcher));
+        } else {
+            tracing::warn!(
+                "ConfigPatcher could not be late-bound: BuiltinToolRegistry Arc is already shared"
+            );
+        }
+    }
+
     /// Extract the caller's `agent_id` for the tool call currently executing.
     ///
     /// Prefers the per-turn `TURN_CONTEXT` task-local — scoped by the dispatch

@@ -296,21 +296,32 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
     labels
 }
 
-/// 把人类可读的节点名归一化成稳定查找键：转小写 + 把每段非字母数字（空格/标点/
-/// 下划线…）折叠为单个 `-` + 去掉首尾 `-`。映射 openclaw `node-match.ts::
-/// normalizeNodeKey`（`[^a-z0-9]+ → -`），让按 name 寻址大小写 + 标点不敏感
-/// （"GPU Box" / "gpu_box" / "gpu-box" 折叠为同一键）。在线 [`NodeRegistry::match_id`]
-/// 与离线 `cluster.deregister` 回退寻址共用此单一真源，杜绝两路语义漂移。
+/// 把人类可读的节点名归一化成稳定查找键：转小写 + 把每段非字母数字折叠为单个
+/// `-` + 去掉首尾 `-`。**字母数字判定用 Unicode 感知的 [`char::is_alphanumeric`]**
+/// （非 ASCII-only），故 CJK / 带重音的拉丁字母被**保留**而非丢弃——`"工作站"`
+/// 归一化后仍非空、仍可按名寻址（"GPU Box" / "gpu_box" 仍折叠为 `gpu-box`）。
+/// 旧的 ASCII-only 实现会把纯非 ASCII 名整段折成空键 ⇒ 中文/日文节点名根本无法
+/// 按名寻址、且每次重连 [`crate::cluster::admit_node`] 都重铸一个新 id（幽灵行堆积）。
+///
+/// 映射 openclaw `node-match.ts::normalizeNodeKey` 演进后的 Unicode 版
+/// （NFC + `[^\p{L}\p{M}\p{N}]+ → -`）的**常见分支**。**有意的偏差（R3 核心轻量化——
+/// 不为单一 helper 引入 `unicode-normalization` crate）**：组合记号（`\p{M}`，如天城文
+/// 元音符号 / 分解式重音）被当作分隔符、且不做 NFC。这只影响键的**外观**、不影响可
+/// 寻址性——归一化对 query 与库存名**对称**施加，两侧折叠一致即可匹配。
+///
+/// 在线 [`NodeRegistry::match_id`] 与离线 `cluster.deregister` 回退寻址共用此单一
+/// 真源，杜绝两路语义漂移。空键（全标点/全记号查询）由各调用点的 `is_empty` 守卫跳过。
 pub(crate) fn normalize_node_key(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut pending_dash = false;
     for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_alphanumeric() {
             if pending_dash && !out.is_empty() {
                 out.push('-');
             }
             pending_dash = false;
-            out.push(ch.to_ascii_lowercase());
+            // `char::to_lowercase` 可能产出多个 char（如 İ → i̇），用 extend 而非 push。
+            out.extend(ch.to_lowercase());
         } else {
             // Defer the separator so leading/trailing/repeated runs collapse and
             // never produce a boundary dash.
@@ -477,6 +488,44 @@ mod tests {
         // All-punctuation / empty → empty key (callers skip name matching on it).
         assert_eq!(normalize_node_key("  -_- "), "");
         assert_eq!(normalize_node_key(""), "");
+    }
+
+    #[test]
+    fn normalize_node_key_is_unicode_aware() {
+        // Non-ASCII letters must SURVIVE rather than collapse to an empty key —
+        // a pure-CJK node name was previously unaddressable and re-minted a fresh
+        // id on every reconnect. Maps openclaw's Unicode-aware normalizeNodeKey.
+        assert_eq!(normalize_node_key("工作站"), "工作站");
+        assert_eq!(normalize_node_key("工作站 01"), "工作站-01");
+        assert_eq!(normalize_node_key("GPU 工作站"), "gpu-工作站");
+        // Precomposed accented Latin lowercases and is preserved (café, not caf).
+        assert_eq!(normalize_node_key("Café"), "café");
+        // Combining-mark scripts (Devanagari vowel signs are \p{M}, dropped in the
+        // zero-dep impl) still fold to a stable NON-EMPTY key, so the node stays
+        // addressable by name — the key is an internal match key, need not be
+        // visually identical, and the same fold applies to query and stored name.
+        assert!(!normalize_node_key("किताब").is_empty());
+        // All-punctuation, including non-ASCII punctuation, still folds to empty.
+        assert_eq!(normalize_node_key("。、！"), "");
+    }
+
+    #[test]
+    fn resolve_cjk_name_is_addressable() {
+        let reg = NodeRegistry::new();
+        reg.register(NodeSession {
+            node_id: "id-cn".into(),
+            conn_id: "c-cn".into(),
+            device_name: "工作站".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec![],
+            connected_at: 1,
+        });
+        // Exact CJK name resolves (was NotFound before: "工作站" → "" → the
+        // empty-key guard skipped name matching entirely).
+        assert_eq!(reg.resolve_id("工作站").unwrap(), "id-cn");
+        // Fuzzy substring on the normalized CJK form also resolves.
+        assert_eq!(reg.resolve_id("工作").unwrap(), "id-cn");
     }
 
     #[test]

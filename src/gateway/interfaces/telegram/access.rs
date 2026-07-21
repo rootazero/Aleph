@@ -1,195 +1,53 @@
-//! Policy-based access control for the Telegram channel.
+//! Policy-based access pre-filter for the Telegram channel.
 //!
-//! Centralizes all authorization logic (DM policy, group policy, pairing flow)
-//! that was previously scattered across the message handler closure.
+//! This controller coarsely classifies inbound messages against the channel's
+//! DM/group policy and static allowlists so obviously-denied traffic is dropped
+//! at the interface. The **authoritative** access and pairing decision lives in
+//! the inbound router (`check_permission` + `pairing_store`, R4): the channel's
+//! `dm_policy` / `group_policy` / allowlists are bridged into the router via
+//! `From<&TelegramConfigV2> for ChannelConfig`, and the router owns the pairing
+//! flow (mint code → operator `pairing.approve`). A `NeedsPairing` decision here
+//! is therefore just "forward to the router" — the interface no longer keeps its
+//! own pairing-code store or runtime-paired-user set.
 
-use super::config::PairingEntry;
 use super::config_resolver::ResolvedConfig;
 use super::config_v2::{DmPolicy, GroupPolicy};
-use crate::resilience::StateDatabase;
-use crate::sync_primitives::Arc;
-use std::collections::HashMap;
-use std::time::Instant;
-use tokio::sync::RwLock;
 
 /// Result of an access check on an incoming message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessDecision {
     /// User is authorized — process the message.
     Allowed,
-    /// User is not yet authorized but may pair — prompt for a code.
+    /// User is not statically allowlisted but the DM policy is `Pairing`.
+    /// Forward to the router, which owns the authoritative pairing gate.
     NeedsPairing,
     /// User is not authorized and cannot pair — silently drop.
     Denied,
 }
 
-/// Result of a pairing attempt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PairingResult {
-    /// Pairing succeeded — user is now authorized.
-    Success,
-    /// The code was valid but has expired.
-    Expired,
-    /// No matching code found.
-    InvalidCode,
-}
-
-/// Centralized access controller for the Telegram channel.
+/// Config-driven access pre-filter for the Telegram channel.
 ///
-/// Owns the runtime-paired user list, active pairing codes, and rate-limit
-/// state for pairing prompts. Shared (via `Arc`) between the channel struct
-/// and handler closures.
+/// Holds only the resolved (default-account) config; all pairing state has been
+/// unified into the inbound router's `pairing_store`.
 pub struct AccessController {
     resolved_config: ResolvedConfig,
-    /// Users authorized at runtime via the pairing flow.
-    runtime_users: Arc<RwLock<Vec<i64>>>,
-    /// Active pairing codes: code → entry.
-    pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
-    /// Rate-limit map: `user_id` → last prompt time.
-    prompt_times: Arc<RwLock<HashMap<i64, Instant>>>,
-    /// Optional state database for persisting paired users across restarts.
-    db: Option<Arc<StateDatabase>>,
 }
 
 impl AccessController {
     /// Create a new controller from the resolved channel config.
     #[must_use]
-    pub fn new(resolved_config: ResolvedConfig) -> Self {
-        Self {
-            resolved_config,
-            runtime_users: Arc::new(RwLock::new(Vec::new())),
-            pairing_codes: Arc::new(RwLock::new(HashMap::new())),
-            prompt_times: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
-        }
+    pub const fn new(resolved_config: ResolvedConfig) -> Self {
+        Self { resolved_config }
     }
 
-    /// Inject the state database for pairing persistence.
-    ///
-    /// Must be called **before** the controller is wrapped in `Arc`.
-    pub fn set_state_database(&mut self, db: Arc<StateDatabase>) {
-        self.db = Some(db);
-    }
-
-    /// Load previously-paired users from the database into the runtime set.
-    ///
-    /// Silently no-ops when no database is configured.
-    pub async fn load_from_database(&self, channel_id: &str) {
-        if let Some(ref db) = self.db {
-            match db.load_paired_users(channel_id) {
-                Ok(users) => {
-                    let users: Vec<i64> = users;
-                    if !users.is_empty() {
-                        let mut runtime = self.runtime_users.write().await;
-                        for uid in &users {
-                            if !runtime.contains(uid) {
-                                runtime.push(*uid);
-                            }
-                        }
-                        tracing::info!(count = users.len(), "loaded paired users from database");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("failed to load paired users from database: {}", e);
-                }
-            }
-        }
-    }
-
-    /// Check whether a message should be processed, needs pairing, or is denied.
-    pub async fn check_message(
-        &self,
-        user_id: i64,
-        chat_id: i64,
-        is_group: bool,
-    ) -> AccessDecision {
-        if is_group {
-            self.check_group(chat_id).await
-        } else {
-            self.check_dm(user_id).await
-        }
-    }
-
-    /// Attempt to pair a user with the given code.
-    ///
-    /// `channel_id` is used to persist the pairing to the database (when configured).
-    pub async fn try_pair(&self, user_id: i64, code: &str, channel_id: &str) -> PairingResult {
-        let normalized = code.trim().to_uppercase();
-        let mut codes = self.pairing_codes.write().await;
-
-        if let Some(entry) = codes.get(&normalized) {
-            if entry.is_expired() {
-                codes.remove(&normalized);
-                return PairingResult::Expired;
-            }
-            codes.remove(&normalized);
-            drop(codes);
-            self.runtime_users.write().await.push(user_id);
-            tracing::info!("User {} paired via code {}", user_id, normalized);
-
-            // Persist to database so the pairing survives restarts.
-            if let Some(ref db) = self.db {
-                if let Err(e) = db.add_paired_user(channel_id, user_id) {
-                    tracing::warn!("failed to persist paired user to database: {}", e);
-                }
-            }
-
-            PairingResult::Success
-        } else {
-            PairingResult::InvalidCode
-        }
-    }
-
-    /// Generate a new 6-character pairing code, cleaning up expired entries.
-    pub async fn generate_code(&self) -> String {
-        use rand::RngExt;
-
-        let code: String = rand::rng()
-            .sample_iter(&rand::distr::Alphanumeric)
-            .take(6)
-            .map(char::from)
-            .collect::<String>()
-            .to_uppercase();
-
-        let entry = PairingEntry::new(code.clone());
-        let mut codes = self.pairing_codes.write().await;
-        codes.insert(code.clone(), entry);
-        codes.retain(|_, e| !e.is_expired());
-
-        code
-    }
-
-    /// List active (non-expired) pairing codes with remaining TTL in seconds.
-    pub async fn list_codes(&self) -> Vec<(String, u64)> {
-        let mut codes = self.pairing_codes.write().await;
-        codes.retain(|_, e| !e.is_expired());
-        codes
-            .values()
-            .map(|e| {
-                let elapsed = e.created_at.elapsed().as_secs();
-                let remaining = e.ttl_secs.saturating_sub(elapsed);
-                (e.code.clone(), remaining)
-            })
-            .collect()
-    }
-
-    /// Whether we should show a pairing prompt to this user (rate-limited to
-    /// once per 5 minutes).
-    pub async fn should_prompt(&self, user_id: i64) -> bool {
-        let mut times = self.prompt_times.write().await;
-        let should = times
-            .get(&user_id)
-            .is_none_or(|t| t.elapsed().as_secs() > 300);
-        if should {
-            times.insert(user_id, Instant::now());
-        }
-        should
-    }
-
-    /// Reference to the runtime users list (for callback handler checks).
+    /// Classify an incoming message as allowed, needing pairing, or denied.
     #[must_use]
-    pub const fn runtime_users(&self) -> &Arc<RwLock<Vec<i64>>> {
-        &self.runtime_users
+    pub fn check_message(&self, user_id: i64, chat_id: i64, is_group: bool) -> AccessDecision {
+        if is_group {
+            self.check_group(chat_id)
+        } else {
+            self.check_dm(user_id)
+        }
     }
 
     /// Reference to the underlying resolved config.
@@ -200,19 +58,19 @@ impl AccessController {
 
     // --- Private helpers ---
 
-    async fn check_dm(&self, user_id: i64) -> AccessDecision {
-        match self.resolved_config.dm_policy.clone() {
+    fn check_dm(&self, user_id: i64) -> AccessDecision {
+        match &self.resolved_config.dm_policy {
             DmPolicy::Disabled => AccessDecision::Denied,
             DmPolicy::Open => AccessDecision::Allowed,
             DmPolicy::Allowlist => {
-                if self.is_user_authorized(user_id).await {
+                if self.is_user_allowlisted(user_id) {
                     AccessDecision::Allowed
                 } else {
                     AccessDecision::Denied
                 }
             }
             DmPolicy::Pairing => {
-                if self.is_user_authorized(user_id).await {
+                if self.is_user_allowlisted(user_id) {
                     AccessDecision::Allowed
                 } else {
                     AccessDecision::NeedsPairing
@@ -221,11 +79,14 @@ impl AccessController {
         }
     }
 
-    async fn check_group(&self, chat_id: i64) -> AccessDecision {
-        match self.resolved_config.group_policy.clone() {
+    fn check_group(&self, chat_id: i64) -> AccessDecision {
+        match &self.resolved_config.group_policy {
             GroupPolicy::Disabled => AccessDecision::Denied,
             GroupPolicy::Open => AccessDecision::Allowed,
             GroupPolicy::Allowlist => {
+                // Empty allowlist with `Allowlist` policy means "allow all groups"
+                // — the router's `From<&TelegramConfigV2>` bridge preserves this by
+                // mapping the empty case to `Open`.
                 if self.resolved_config.allowed_groups.is_empty()
                     || self.resolved_config.allowed_groups.contains(&chat_id)
                 {
@@ -237,12 +98,10 @@ impl AccessController {
         }
     }
 
-    /// Check static allowlist + runtime-paired users.
-    async fn is_user_authorized(&self, user_id: i64) -> bool {
-        if self.resolved_config.allowed_users.contains(&user_id) {
-            return true;
-        }
-        self.runtime_users.read().await.contains(&user_id)
+    /// Whether `user_id` is in the static config allowlist. Runtime-paired users
+    /// are tracked by the router's `pairing_store`, not here.
+    fn is_user_allowlisted(&self, user_id: i64) -> bool {
+        self.resolved_config.allowed_users.contains(&user_id)
     }
 }
 
@@ -270,244 +129,112 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_dm_disabled() {
+    #[test]
+    fn test_dm_disabled() {
         let ctrl = AccessController::new(make_config(
             DmPolicy::Disabled,
             GroupPolicy::default(),
             vec![],
         ));
-        assert_eq!(
-            ctrl.check_message(111, 111, false).await,
-            AccessDecision::Denied,
-        );
+        assert_eq!(ctrl.check_message(111, 111, false), AccessDecision::Denied);
     }
 
-    #[tokio::test]
-    async fn test_dm_open() {
+    #[test]
+    fn test_dm_open() {
         let ctrl =
             AccessController::new(make_config(DmPolicy::Open, GroupPolicy::default(), vec![]));
-        assert_eq!(
-            ctrl.check_message(111, 111, false).await,
-            AccessDecision::Allowed,
-        );
+        assert_eq!(ctrl.check_message(111, 111, false), AccessDecision::Allowed);
     }
 
-    #[tokio::test]
-    async fn test_dm_pairing_unknown_user() {
+    #[test]
+    fn test_dm_pairing_unknown_user_needs_pairing() {
+        // Unknown user under `Pairing` is forwarded to the router (which owns the
+        // authoritative pairing gate), not authorized locally.
         let ctrl = AccessController::new(make_config(
             DmPolicy::Pairing,
             GroupPolicy::default(),
             vec![],
         ));
         assert_eq!(
-            ctrl.check_message(111, 111, false).await,
+            ctrl.check_message(111, 111, false),
             AccessDecision::NeedsPairing,
         );
     }
 
-    #[tokio::test]
-    async fn test_dm_pairing_after_pair() {
+    #[test]
+    fn test_dm_pairing_allowlisted_user_allowed() {
         let ctrl = AccessController::new(make_config(
             DmPolicy::Pairing,
             GroupPolicy::default(),
+            vec![111],
+        ));
+        assert_eq!(ctrl.check_message(111, 111, false), AccessDecision::Allowed);
+    }
+
+    #[test]
+    fn test_dm_allowlist_allowed() {
+        let ctrl = AccessController::new(make_config(
+            DmPolicy::Allowlist,
+            GroupPolicy::default(),
+            vec![111, 222],
+        ));
+        assert_eq!(ctrl.check_message(111, 111, false), AccessDecision::Allowed);
+    }
+
+    #[test]
+    fn test_dm_allowlist_denied() {
+        let ctrl = AccessController::new(make_config(
+            DmPolicy::Allowlist,
+            GroupPolicy::default(),
+            vec![111, 222],
+        ));
+        assert_eq!(ctrl.check_message(999, 999, false), AccessDecision::Denied);
+    }
+
+    #[test]
+    fn test_group_disabled() {
+        let ctrl = AccessController::new(make_config(
+            DmPolicy::default(),
+            GroupPolicy::Disabled,
             vec![],
         ));
-
-        // Generate a code and pair
-        let code = ctrl.generate_code().await;
-        let result = ctrl.try_pair(111, &code, "test-channel").await;
-        assert_eq!(result, PairingResult::Success);
-
-        // Now the user should be allowed
         assert_eq!(
-            ctrl.check_message(111, 111, false).await,
-            AccessDecision::Allowed,
-        );
-    }
-
-    #[tokio::test]
-    async fn test_dm_allowlist_allowed() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Allowlist,
-            GroupPolicy::default(),
-            vec![111, 222],
-        ));
-        assert_eq!(
-            ctrl.check_message(111, 111, false).await,
-            AccessDecision::Allowed,
-        );
-    }
-
-    #[tokio::test]
-    async fn test_dm_allowlist_denied() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Allowlist,
-            GroupPolicy::default(),
-            vec![111, 222],
-        ));
-        assert_eq!(
-            ctrl.check_message(999, 999, false).await,
+            ctrl.check_message(111, -100123, true),
             AccessDecision::Denied,
         );
     }
 
-    #[tokio::test]
-    async fn test_group_disabled() {
-        let config = ResolvedConfig {
-            account_id: "main".to_string(),
-            bot_token: "123:ABC".to_string(),
-            bot_username: None,
-            default_agent: None,
-            dm_policy: DmPolicy::default(),
-            group_policy: GroupPolicy::Disabled,
-            send_typing: true,
-            max_retries: 3,
-            allowed_users: vec![],
-            allowed_groups: vec![],
-            streaming: StreamingOptions::default(),
-            error_policy: ErrorPolicy::default(),
-            html_fallback: true,
-            link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
-        };
-        let ctrl = AccessController::new(config);
-        assert_eq!(
-            ctrl.check_message(111, -100123, true).await,
-            AccessDecision::Denied,
-        );
-    }
-
-    #[tokio::test]
-    async fn test_group_open() {
+    #[test]
+    fn test_group_open() {
         let ctrl =
             AccessController::new(make_config(DmPolicy::default(), GroupPolicy::Open, vec![]));
         assert_eq!(
-            ctrl.check_message(111, -100123, true).await,
+            ctrl.check_message(111, -100123, true),
             AccessDecision::Allowed,
         );
     }
 
-    #[tokio::test]
-    async fn test_group_allowlist_empty_allows_all() {
+    #[test]
+    fn test_group_allowlist_empty_allows_all() {
         let ctrl = AccessController::new(make_config(
             DmPolicy::default(),
             GroupPolicy::Allowlist,
             vec![],
         ));
-        // Empty allowed_groups with Allowlist policy → allow all
+        // Empty allowed_groups with Allowlist policy → allow all.
         assert_eq!(
-            ctrl.check_message(111, -100123, true).await,
+            ctrl.check_message(111, -100123, true),
             AccessDecision::Allowed,
         );
     }
 
-    #[tokio::test]
-    async fn test_group_allowlist_denied() {
-        let config = ResolvedConfig {
-            account_id: "main".to_string(),
-            bot_token: "123:ABC".to_string(),
-            bot_username: None,
-            default_agent: None,
-            dm_policy: DmPolicy::default(),
-            group_policy: GroupPolicy::Allowlist,
-            send_typing: true,
-            max_retries: 3,
-            allowed_users: vec![],
-            allowed_groups: vec![-100111],
-            streaming: StreamingOptions::default(),
-            error_policy: ErrorPolicy::default(),
-            html_fallback: true,
-            link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
-        };
+    #[test]
+    fn test_group_allowlist_denied() {
+        let mut config = make_config(DmPolicy::default(), GroupPolicy::Allowlist, vec![]);
+        config.allowed_groups = vec![-100111];
         let ctrl = AccessController::new(config);
         assert_eq!(
-            ctrl.check_message(111, -100999, true).await,
-            AccessDecision::Denied,
-        );
-    }
-
-    // Backdating an `Instant` by an hour underflows on Windows (its monotonic
-    // clock epoch can be <1h old), so this time-travel test is POSIX-only; the
-    // expiry logic itself is platform-agnostic and uses `Instant::elapsed`.
-    #[cfg(not(windows))]
-    #[tokio::test]
-    async fn test_pairing_expired_code() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Pairing,
-            GroupPolicy::default(),
-            vec![],
-        ));
-
-        // Insert a code and backdate it
-        let code = ctrl.generate_code().await;
-        {
-            let mut codes = ctrl.pairing_codes.write().await;
-            if let Some(entry) = codes.get_mut(&code) {
-                entry.created_at = Instant::now() - std::time::Duration::from_secs(3601);
-            }
-        }
-
-        assert_eq!(
-            ctrl.try_pair(111, &code, "test-channel").await,
-            PairingResult::Expired
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pairing_invalid_code() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Pairing,
-            GroupPolicy::default(),
-            vec![],
-        ));
-        assert_eq!(
-            ctrl.try_pair(111, "NOPE99", "test-channel").await,
-            PairingResult::InvalidCode,
-        );
-    }
-
-    #[tokio::test]
-    async fn test_should_prompt_rate_limit() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Pairing,
-            GroupPolicy::default(),
-            vec![],
-        ));
-
-        // First call should prompt
-        assert!(ctrl.should_prompt(111).await);
-        // Immediate second call should be rate-limited
-        assert!(!ctrl.should_prompt(111).await);
-    }
-
-    #[tokio::test]
-    async fn test_list_codes() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Pairing,
-            GroupPolicy::default(),
-            vec![],
-        ));
-
-        let code = ctrl.generate_code().await;
-        let list = ctrl.list_codes().await;
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].0, code);
-        assert!(list[0].1 > 0); // remaining TTL > 0
-    }
-
-    #[tokio::test]
-    async fn test_backward_compat_allowlist_promotion() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Allowlist,
-            GroupPolicy::default(),
-            vec![123],
-        ));
-        assert_eq!(
-            ctrl.check_message(123, 123, false).await,
-            AccessDecision::Allowed,
-        );
-        assert_eq!(
-            ctrl.check_message(999, 999, false).await,
+            ctrl.check_message(111, -100999, true),
             AccessDecision::Denied,
         );
     }

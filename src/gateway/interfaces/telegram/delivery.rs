@@ -220,10 +220,12 @@ pub(crate) async fn send_message(
     if config.send_typing && cooldown.check_typing() {
         let mut action_req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
         if let Some(tid) = thread_id {
-            if tid != 1 {
-                action_req =
-                    action_req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
-            }
+            // Unlike `sendMessage` (which must OMIT message_thread_id for the
+            // General topic, tid == 1, or Telegram rejects with "thread not
+            // found"), `sendChatAction` must always INCLUDE it — otherwise the
+            // typing indicator never appears in that topic. openclaw parity:
+            // the General-topic send-vs-typing asymmetry.
+            action_req = action_req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
         }
         match action_req.await {
             Ok(_) => cooldown.record_typing_success(),

@@ -411,7 +411,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | 反向 RPC 形状 | center 发 **event** `node.invoke.request`,node 回 **req** `node.invoke.result`;关联需 (id, nodeId, connId) 三元组 | 对称 req/res,靠**结构**区分(有 `method`=请求);pending 表天然 per-connection ⇒ connId 隐含 | **分道且更简**(少一层关联键) |
 | 断线 fail-fast | `unregister` reject 全部 pending | `PendingInvokes::cancel_all()` | **对齐** |
 | 舰队排序 | connected-first → displayName → nodeId(`src/gateway/node-catalog.ts:305-311`) | `handle_environments_list` 同序(online → name → id) | **对齐** |
-| 按名寻址归一化 | `node-match.ts::normalizeNodeKey`(`[^a-z0-9]+ → -`) | `cluster::normalize_node_key` 单一真源,在线/离线共用 | **对齐** |
+| 按名寻址归一化 | `node-match.ts::normalizeNodeKey` 已演进为 **Unicode**(NFC + `[^\p{L}\p{M}\p{N}]+ → -`,保留 CJK/带重音字母) | `cluster::normalize_node_key` 单一真源,在线/离线共用,**Unicode 感知**(`char::is_alphanumeric` + `to_lowercase`,保留 CJK/带重音字母;组合记号 `\p{M}` 有意折为分隔符,零依赖) | **对齐**(2026-07-20 收口 ASCII-only 漂移,见下「已闭合」) |
 | 重连退避 | 1s → ×2 → 30s,**无 jitter**(`client.ts:1506`;全仓 grep `jitter` 零命中) | 2s → ×2 → 60s,**±25% jitter** + 仅在活过 30s 的会话后重置 | 🟢 **超越**(N 节点不齐步撞门;不对"接受即关闭"的中心热转) |
 | 扇出 | **没有**——`invoke()` 只收单个 `nodeId`(`src/gateway/node-registry.ts:606`) | `node_invoke_many` 按 tag AND 并发扇出 + 部分失败容忍 + 结果确定序 | 🟢 **超越**(openclaw 无对应物) |
 | 并发调度 | 无(每 invoke 各自 Promise,无资源模型) | `ExclusiveScope::Nodes`——不同机器的 `node_invoke` 并行,同机器串行 | 🟢 **超越**(利用已有 `ConcurrencyClaim` 基建,Rust 侧独有) |
@@ -444,6 +444,24 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。四个 LLM 工具与
   `NodeRegistry` **零改动**(纯传输层收口)。锚点 `cluster/reverse_rpc.rs::with_close` +
   `gateway/server/handler.rs` 的 `rpc_close` select arm。
+
+- **按名寻址 Unicode 化(2026-07-20 收口 ASCII-only 漂移)**:`normalize_node_key` 曾用
+  `is_ascii_alphanumeric` + `to_ascii_lowercase`,把所有非 ASCII 字母当分隔符——中文/日文节点名
+  (如 "工作站")整段折成**空键** ⇒ ① 按名寻址被空键守卫跳过,`node_invoke`/`node_file`/
+  `cluster.deregister` 都够不着;② 更糟:`admit_node` 首启的 `reuse_by_name` 拿到空键返 `None` ⇒
+  **每次重连重铸一个新 node_id**,离线幽灵行无限堆积。而其 doc 注释自称是 openclaw
+  `node-match.ts::normalizeNodeKey` 的 SSOT 映射,但 openclaw 早已把该函数演进为 Unicode 感知
+  (NFC + `[^\p{L}\p{M}\p{N}]+ → -`,其 tests 钉死 `工作站 01→工作站-01`)——Aleph 从**自己引用的
+  SSOT 漂移**了(与「慢消费者」不同:那是尚未闭合的已知项,这是静默回归)。现改用 Unicode 感知的
+  `char::is_alphanumeric` + `char::to_lowercase`(**零新依赖**):CJK / 带重音的拉丁字母被保留、
+  仍可按名寻址(`工作站`→`工作站`、`GPU 工作站`→`gpu-工作站`、precomposed `Café`→`café`)。
+  **有意偏差(R3 核心轻量化,不为单一 helper 引 `unicode-normalization`)**:组合记号(`\p{M}`,如
+  天城文元音符号 / 分解式重音)当分隔符、不做 NFC——只影响键**外观**不影响可寻址性(归一化对
+  query 与库存名**对称**施加,两侧折叠一致即匹配)。三个消费者(`registry.rs::match_id` /
+  `enrollment.rs::reuse_by_name` / `handlers/cluster.rs::resolve_enrolled_node`)共用这一 SSOT,
+  改一处即全线生效、零消费者改动。回归测试 `registry.rs::{normalize_node_key_is_unicode_aware,
+  resolve_cjk_name_is_addressable}` + `enrollment.rs::first_boot_adopts_pre_enrolled_cjk_name_without_churn`
+  钉死 CJK 可寻址 + 无重铸 churn。锚点 `cluster/registry.rs::normalize_node_key`。
 
 ## 与「一核多端」的边界
 

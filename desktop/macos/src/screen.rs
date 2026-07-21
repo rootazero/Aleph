@@ -152,7 +152,12 @@ impl ScreenCapability for MacOSScreen {
                 },
             )
             .await
-            .map_err(|e| DesktopError::OcrFailed(format!("bridge screen.ocr: {e}")))?;
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::OcrFailed(format!("bridge screen.ocr: {m}"))
+                }
+                other => other,
+            })?;
 
         // Convert protocol OcrResult → aleph_desktop OcrResult.
         // Vision boundingBox is normalized, bottom-left origin.
@@ -478,8 +483,11 @@ impl ScreenCapability for MacOSScreen {
                 },
             )
             .await
-            .map_err(|e| {
-                DesktopError::ScreenCapture(format!("bridge screen.capture (window): {e}"))
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::ScreenCapture(format!("bridge screen.capture (window): {m}"))
+                }
+                other => other,
             })?;
 
         Ok(WindowShot {
@@ -513,10 +521,14 @@ impl MacOSScreen {
         P: serde::Serialize + Send,
         R: serde::de::DeserializeOwned + Send,
     {
-        self.bridge
-            .call(method, params)
-            .await
-            .map_err(|e| DesktopError::InputFailed(format!("bridge {method}: {e}")))
+        self.bridge.call(method, params).await.map_err(|e| match e {
+            // Keep typed recovery variants (permission / timeout / …); only an
+            // opaque BridgeFailed becomes an InputFailed with rail context.
+            DesktopError::BridgeFailed(m) => {
+                DesktopError::InputFailed(format!("bridge {method}: {m}"))
+            }
+            other => other,
+        })
     }
 
     /// SCK-backed screenshot via the Swift helper. Caller is expected to
@@ -540,11 +552,16 @@ impl MacOSScreen {
             // reading pixel coordinates wants (the cursor is not UI).
             show_cursor: None,
         };
-        let rpc: CaptureResult = self
-            .bridge
-            .call(METHOD_CAPTURE, params)
-            .await
-            .map_err(|e| DesktopError::ScreenCapture(format!("bridge screen.capture: {e}")))?;
+        let rpc: CaptureResult =
+            self.bridge
+                .call(METHOD_CAPTURE, params)
+                .await
+                .map_err(|e| match e {
+                    DesktopError::BridgeFailed(m) => {
+                        DesktopError::ScreenCapture(format!("bridge screen.capture: {m}"))
+                    }
+                    other => other,
+                })?;
         Ok(Screenshot {
             image_base64: rpc.png_base64,
             width: rpc.width,
@@ -566,8 +583,11 @@ impl MacOSScreen {
             .bridge
             .call(METHOD_LIST_DISPLAYS, serde_json::Value::Null)
             .await
-            .map_err(|e| {
-                DesktopError::ScreenCapture(format!("bridge screen.list_displays: {e}"))
+            .map_err(|e| match e {
+                DesktopError::BridgeFailed(m) => {
+                    DesktopError::ScreenCapture(format!("bridge screen.list_displays: {m}"))
+                }
+                other => other,
             })?;
         Ok(rpc
             .displays
