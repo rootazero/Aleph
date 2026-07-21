@@ -193,8 +193,8 @@ impl Channel for XmppChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let write_tx = self.write_tx.read().await.clone();
-        let write_tx = write_tx.ok_or_else(|| {
+        let write_tx = self.write_tx.read().await;
+        let write_tx = write_tx.as_ref().ok_or_else(|| {
             ChannelError::NotConnected("XMPP adapter not started - call start() first".to_string())
         })?;
 
@@ -223,8 +223,8 @@ impl Channel for XmppChannel {
             return Ok(());
         }
 
-        let write_tx = self.write_tx.read().await.clone();
-        if let Some(write_tx) = write_tx {
+        let write_tx = self.write_tx.read().await;
+        if let Some(write_tx) = write_tx.as_ref() {
             // Escape the JID before interpolating into a single-quoted XML
             // attribute — a crafted JID must not break out of the stanza.
             let to = conversation_id
