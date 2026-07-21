@@ -232,7 +232,15 @@ impl DirectoryScanner {
                             }
                         };
                         let path = entry.path();
-                        if path.is_dir() {
+                        // `symlink_metadata` reports the link's own type, so
+                        // a symlinked skill/command/agent pointing outside
+                        // the expected tree is rejected instead of being
+                        // enumerated as a discovered component.
+                        let meta = match std::fs::symlink_metadata(&path) {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        };
+                        if meta.file_type().is_dir() {
                             if is_hidden(&path) {
                                 continue;
                             }
@@ -252,7 +260,7 @@ impl DirectoryScanner {
                                 scan_dir.source,
                                 scan_dir.priority,
                             ));
-                        } else if path.is_file() {
+                        } else if meta.file_type().is_file() {
                             if is_hidden(&path) {
                                 continue;
                             }
@@ -344,7 +352,7 @@ impl DirectoryScanner {
         source: DiscoverySource,
         priority: u32,
     ) {
-        if !plugins_dir.is_dir() {
+        if !is_existing_dir_no_follow(plugins_dir) {
             return;
         }
         let entries = match std::fs::read_dir(plugins_dir) {
@@ -362,7 +370,10 @@ impl DirectoryScanner {
                     continue;
                 }
             };
-            if !path.is_dir() || is_hidden(&path) {
+            // Use `symlink_metadata` so a symlinked "plugin" directory
+            // pointing outside the expected tree is rejected, not enumerated
+            // as if it lived inside `plugins_dir`.
+            if !is_existing_dir_no_follow(&path) || is_hidden(&path) {
                 continue;
             }
 
@@ -379,7 +390,7 @@ impl DirectoryScanner {
                             continue;
                         }
                     };
-                    if !sub_path.is_dir() || is_hidden(&sub_path) {
+                    if !is_existing_dir_no_follow(&sub_path) || is_hidden(&sub_path) {
                         continue;
                     }
                     if has_plugin_manifest(&sub_path) {
@@ -389,6 +400,16 @@ impl DirectoryScanner {
             }
         }
     }
+}
+
+/// `DirEntry::path().is_dir()` follows symlinks; `symlink_metadata` reports
+/// the link's own file type. This stops a symlink inside `~/.aleph/{skills,
+/// commands, plugins}` pointing outside the expected tree from being
+/// enumerated as a discovered component.
+fn is_existing_dir_no_follow(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_dir())
+        .unwrap_or(false)
 }
 
 /// Check if a path represents a hidden directory (name starts with '.')

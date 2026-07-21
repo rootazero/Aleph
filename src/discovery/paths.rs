@@ -42,8 +42,9 @@ pub const MCP_CONFIG_FILE: &str = ".mcp.json";
 // Path Functions
 // =============================================================================
 
-/// Get the user's home directory
-pub fn home_dir() -> DiscoveryResult<PathBuf> {
+/// Get the user's home directory. Pub because `claude_home_dir` (in this
+/// module) re-exports it for the discovery crate; no external callers.
+pub(crate) fn home_dir() -> DiscoveryResult<PathBuf> {
     crate::utils::paths::get_home_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
 }
 
@@ -69,36 +70,14 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
 
 /// Find the git root directory from a starting path
 ///
-/// Traverses upward until finding a .git directory or reaching filesystem root.
-/// Guarded by a max depth to prevent unbounded traversal in pathological cases.
+/// Delegates to `crate::utils::paths::find_git_root` so the two cannot drift
+/// in their `.git`/canonicalize/depth semantics. The shared implementation
+/// caps depth at 100 to prevent unbounded traversal in pathological
+/// filesystems and canonicalizes the start path so a `.git` symlink to an
+/// arbitrary directory cannot mis-report an ancestor dir as a git root.
 #[must_use]
 pub fn find_git_root(start: &Path) -> Option<PathBuf> {
-    const MAX_DEPTH: usize = 100;
-    let mut current = start.to_path_buf();
-    let mut depth = 0;
-
-    // Canonicalize to resolve symlinks and get absolute path
-    if let Ok(canonical) = current.canonicalize() {
-        current = canonical;
-    }
-
-    loop {
-        if depth >= MAX_DEPTH {
-            return None;
-        }
-
-        if current.join(".git").exists() {
-            return Some(current);
-        }
-
-        match current.parent() {
-            Some(parent) => {
-                current = parent.to_path_buf();
-                depth += 1;
-            }
-            None => return None,
-        }
-    }
+    crate::utils::paths::find_git_root(start)
 }
 
 /// Traverse upward from start to stop, finding all matching directories
