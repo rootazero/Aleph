@@ -153,7 +153,13 @@ mod tests {
         is_internal(&Url::parse(u).unwrap())
     }
 
+    // All tests in this module share the process-global REMOTE_ORIGIN
+    // static. Run them serially so a parallel test thread doesn't observe
+    // another test's writes between `set_remote_host` and the assertion.
+    use serial_test::serial;
+
     #[test]
+    #[serial(remote_origin)]
     fn loopback_panel_origins_are_internal() {
         assert!(internal("http://127.0.0.1:18790"));
         assert!(internal("http://127.0.0.1:18790/auth/bootstrap?nonce=abc"));
@@ -163,6 +169,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_origin)]
     fn bundled_asset_schemes_are_internal() {
         assert!(internal("tauri://localhost/index.html"));
         assert!(internal("http://tauri.localhost/index.html"));
@@ -171,6 +178,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_origin)]
     fn outside_origins_are_external() {
         assert!(!internal("https://github.com/aleph"));
         assert!(!internal("https://example.com/127.0.0.1"));
@@ -180,6 +188,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_origin)]
     fn route_allows_internal_without_side_effects() {
         // Only the internal branch is exercised here: it returns `true`
         // without ever calling `open_external`, so no browser is spawned
@@ -189,6 +198,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_origin)]
     fn remote_origin_becomes_internal_when_set() {
         // Use TEST-NET-3 (203.0.113.x) — not used in any other test,
         // avoiding concurrent REMOTE_ORIGIN pollution with outside_origins_are_external.
@@ -206,6 +216,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(remote_origin)]
     fn different_scheme_or_port_on_remote_host_stays_external() {
         // Set a remote origin on plain http; the same host on a different
         // scheme (https) or a different port must NOT be auto-trusted —

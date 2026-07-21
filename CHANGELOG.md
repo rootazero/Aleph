@@ -5,6 +5,128 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.7.21]
+
+The largest release since the harness dissolution — 282 commits across three
+days. Three threads run through it. First, a new user-facing dial: the
+**chat / work / code session mode**, the third twin of exec tier and think
+level, which statically partitions the tool *presentation* surface (never
+permissions) and cuts per-turn token cost sharply in chat. Second, a
+**governance topology** — the loop-graph layer gains a persistent store, a
+nine-action tool, victory-claim watchers, an independent-evidence auditor
+agent, and a team node kind that fuses it with the multi-agent system. Third,
+a broad **entropy-reduction and hardening sweep**: the Telegram and Discord
+channels were gap-analyzed against reference implementations and shed several
+thousand lines of dead parallel layers while their access control was unified
+onto the real router, the macOS desktop rails were corrected against real
+hardware, and a multi-module adversarial review pass fixed dozens of
+correctness, concurrency, and security defects across the gateway, providers,
+extensions, tasks, teams, sessions, and skills.
+
+### Added
+
+- **`chat` / `work` / `code` session mode.** A user-selected static partition of
+  the tool presentation surface, orthogonal to permissions (approvals stay with
+  the exec tier). Single source in `config/types/policies/session_mode.rs`;
+  request > session > global resolution with stamp-on-carry; the partition lands
+  on the two existing presentation mechanisms (progressive-disclosure core set +
+  deferred-tool tier) so `src/harness/` gains zero lines. Picked from a Panel
+  composer pill, from Settings → Policies as a global default, or
+  conversationally via the new `session_set_mode` tool. Each mode also drives a
+  distinct right-panel behavior (chat = badge, work = plan surface, code = tool
+  detail) and adds one cache-stable prompt line.
+- **Mode v2 semantics.** Family tables match on `_` word boundaries;
+  MCP-qualified `{server}__{tool}` names are exempt from the builtin tables;
+  `media_understand` stays listed in chat and code; chat's core subtraction can
+  no longer drain to empty; subagents inherit the parent mode with a short prompt
+  line.
+- **Loop-graph governance layer.** A governance topology store, a nine-action
+  tool, an audit ring, objective ACLs, a prompt layer, and a root gate — the
+  closed-set governance edges that give the four single-loop failure modes
+  (Goodhart, reference blindness, ring conflict, measurement decay) a
+  topological answer. Documented in `GRAPH_LAYER.md`.
+- **Graph × multi-agent fusion.** A `team` node kind, live-joined teams in
+  graph status, team pair targets, victory-claim triggers that poke watchers on
+  team disband, and a built-in **`loop-auditor` agent** so audit and watch
+  templates default to independent-context evidence.
+- **`governance_metrics` in-core probe.** Replaces the sandbox-walled `sqlite`
+  shell probes that the audit sensor could not legally reach, plus notes-era
+  activity counters on `dream_reports`.
+- **Discord interactive approval buttons.** A two-way `ApprovalCallbackSink`
+  flow, plus edit-based reply streaming.
+- **iMessage inbound reactions as context.** Add-tapbacks arriving from the user
+  are surfaced to the model as context rather than dropped.
+- **macOS window targeting via Accessibility.** A public AX window resolver
+  (CGWindowID → AX by geometry) so focus raises the *specific* target window and
+  bounds are set on the exact window, with an osascript fallback.
+- **Grounding evidence gate on team task review.** `task_review` approvals can
+  now require grounding, with acceptance metadata helpers.
+- **Daemon-computed session cost.** `session.usage` computes cost via core
+  pricing and the duplicate price table in the shell was deleted; `plugin.install`
+  gained a unified handler that classifies the source (the CLI stops guessing).
+
+### Fixed
+
+- **Every Panel send re-carried the composer's cached mode**, silently reverting
+  a `session_set_mode` switch made by the model — all four send paths now carry
+  mode on the first message only, and `session_updated` syncs mode and exec tier
+  back into Panel state so the pill and right rail read store truth.
+- **`tool_search` could be collapsed by progressive disclosure**, pointing the
+  model at a guaranteed-miss lookup — it is now pushed into the request core set
+  at registration, and a mode or tier pick riding a slash-command message is no
+  longer dropped.
+- **Telegram ignored the operator's configured access policy.** The inbound
+  router fell back to defaults for Telegram, and the channel-local pairing store
+  was never written to, so it never paired anyone; access, pairing, and
+  allowlists are now single-sourced on the router. ~2.8k lines of dead parallel
+  layers (an uncompiled webhook server, an unconstructed session manager, a dead
+  draft API, duplicated status reactions) were removed, along with the parallel
+  nested-config / account-pool / resolver layers in Discord.
+- **Gateway leaks and drops.** A per-connection event-forward task leaked on
+  every WebSocket disconnect; the channel forwarder died permanently on
+  `broadcast::RecvError::Lagged`; webhook backpressure silently dropped inbound
+  messages instead of returning 503; and the raw error chain leaked to the Panel
+  instead of a single-sourced user receipt.
+- **Command injection on desktop `open`/`launch`** — now dispatched through
+  `ShellExecuteW` instead of a shell; symlink planting during bundled-content
+  extraction is refused via `symlink_metadata`; skill download path traversal is
+  closed and the scanner file size capped; cluster `file.write` no longer has a
+  TOCTOU window between existence check and write.
+- **Certificate approval could be authorized without a fingerprint match**, and
+  the webview microphone grant was not origin-restricted on Linux or Windows.
+- **Approval failed open on a missing policy file**, and `permissive_default`
+  disagreed with `Default::default()` — both now fail closed; the guardian judge
+  payload masks secrets; heartbeat probes refuse dangerous and
+  confirmation-gated tools.
+- **Prompt-boundary injection.** Transcript, focus, and prior-summary content now
+  escape boundary markers before entering the prompt; `ToolAwareChunker` asserts
+  a non-zero token ratio instead of computing `usize::MAX`.
+- **Provider failover cloned the entire conversation on every request** and
+  published route state non-atomically (torn config reads); ~2,000 lines of
+  unreachable provider code were deleted.
+- **Extension lifecycle races** — concurrent `reload` is now serialized under the
+  load guard, malformed plugin results are no longer masked as
+  `ServiceResult::ok`, and `AuthorInfo` parsing uses the leftmost separator.
+- **Cluster node keys were byte-sliced**, breaking CJK node names — normalization
+  is now Unicode-aware.
+- **macOS capture and recording rails.** Screen recording is cropped to the
+  requested region via `setSourceRect` (the region is in physical pixels, not
+  points), completion is verified to have produced output before reporting
+  success, typed bridge errors are preserved on the OCR, window-capture,
+  media, input, and screenshot rails instead of being flattened, and
+  `screen_record` serialization errors propagate instead of becoming `null`.
+- **Harness ratchet lowered to 5008** by removing the `DiminishingReturnsDetector`
+  hard stop — a deterministic completion judgment inside the loop, which R10
+  forbids. Stuck runs are bounded by `max_iterations`, the tool-loop verifier, and
+  the model's own stop instead.
+- **Session and team integrity.** `retire_from` is atomic and shutdown timeouts
+  surface; active team names are unique via a partial index; team protocol text
+  and artifact content are size-capped; `sessions` and `tasks` gained presence
+  opt-in, a hashed carryover filename, and deterministic template env ordering.
+- **Wire request ids no longer use UUIDs** (replaced by an atomic counter,
+  dropping the dependency from `aleph-protocol`); a custom regex that fails to
+  compile no longer discards the valid ones alongside it.
+
 ## [26.7.18]
 
 A remote-access release that closes the loop on **self-signed TLS**, building

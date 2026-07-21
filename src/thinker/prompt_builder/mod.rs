@@ -167,6 +167,13 @@ pub struct PromptBuilder {
     /// post-pipeline, byte-for-byte matching the `StrategyLayer` wrap. `None`
     /// leaves the prompt byte-identical to the pre-strategy build.
     strategy: Option<String>,
+    /// Usage-mode line for the subagent inline prompt seam. Same rationale as
+    /// `strategy` above: the Basic path threads no `ResolvedContext`, so
+    /// `SecurityLayer` (which renders the mode line on the gateway path)
+    /// never fires here. When set, `build_system_prompt` appends
+    /// `SessionMode::subagent_prompt_line` post-pipeline. `None` (and the
+    /// caller-side Work skip) leaves the prompt byte-identical.
+    session_mode: Option<crate::config::types::policies::SessionMode>,
     /// True when this run's history carries `<session_context>` compaction
     /// summaries. Threaded into every `LayerInput` so `SessionContextGuideLayer`
     /// injects its usage guide only when summaries are present. Sourced by the
@@ -192,6 +199,7 @@ impl PromptBuilder {
             iteration_cap: None,
             extra_files: None,
             strategy: None,
+            session_mode: None,
             has_session_summaries: false,
         }
     }
@@ -303,6 +311,18 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach the parent run's usage mode (chat / work / code) so the child
+    /// prompt names the partition its inherited tool surface was built with.
+    /// Threaded in by `subagent_spawner::spawn` from `SpawnRequest.session_mode`.
+    #[must_use]
+    pub const fn with_session_mode(
+        mut self,
+        mode: crate::config::types::policies::SessionMode,
+    ) -> Self {
+        self.session_mode = Some(mode);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let path = AssemblyPath::Basic;
@@ -335,6 +355,12 @@ impl PromptBuilder {
             prompt.push_str("<strategy>\n");
             prompt.push_str(body);
             prompt.push_str("\n</strategy>\n\n");
+        }
+        // Subagent mode weld: same post-pipeline seam as the strategy weld —
+        // the Basic path has no `ResolvedContext` for `SecurityLayer` to read.
+        if let Some(mode) = self.session_mode {
+            prompt.push_str(mode.subagent_prompt_line());
+            prompt.push_str("\n\n");
         }
         prompt
     }

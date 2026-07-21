@@ -70,7 +70,8 @@ pub fn PhoneComposer() -> impl IntoView {
                 agent_id.as_deref(),
                 project_root.as_deref(),
                 None,
-                // No tier picker on phone: the session's stored tier governs.
+                // No tier/mode pickers on phone: the session's stored values govern.
+                None,
                 None,
                 false,
             )
@@ -181,7 +182,8 @@ pub fn PhoneComposer() -> impl IntoView {
                     agent_id.as_deref(),
                     project_root.as_deref(),
                     None,
-                    // No tier picker on phone: the session's stored tier governs.
+                    // No tier/mode pickers on phone: the session's stored values govern.
+                    None,
                     None,
                     false,
                 )

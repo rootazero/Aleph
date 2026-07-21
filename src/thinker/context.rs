@@ -247,7 +247,7 @@ pub struct ResolvedContext {
     pub strategy_guardrails: Option<String>,
     /// Voice context for this session, rendered by `VoiceModeLayer`
     /// (priority 1710) as the spoken-reply guidelines. Populated in the harness
-    /// bridge from `voice::session_mode` (written by the gateway inbound
+    /// bridge from `voice::voice_mode` (written by the gateway inbound
     /// router). [`VoiceContext::Off`] keeps the section absent — the prompt is
     /// byte-identical for non-voice turns.
     #[serde(skip, default)]
@@ -263,6 +263,18 @@ pub struct ResolvedContext {
     /// that carries no resolved tier, keeping their prompt byte-identical.
     #[serde(skip, default)]
     pub approval_tier: Option<crate::config::types::policies::ExecTier>,
+
+    /// Active session usage mode (chat / work / code), rendered by
+    /// `SecurityLayer` beside the approval line as the `Usage mode:` line —
+    /// the presentation half of the operating envelope: which register the
+    /// session runs in and how its tool surface was partitioned
+    /// (schema-resident vs deferred). Populated in the harness bridge from
+    /// the turn's resolved
+    /// [`SessionMode`](crate::config::types::policies::SessionMode)
+    /// (request pill > session > global). `None` on internal / subagent
+    /// dispatch, keeping their prompt byte-identical.
+    #[serde(skip, default)]
+    pub session_mode: Option<crate::config::types::policies::SessionMode>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -345,6 +357,7 @@ impl ContextAggregator {
             strategy_guardrails: None,
             voice: VoiceContext::Off,
             approval_tier: None,
+            session_mode: None,
         }
     }
 

@@ -38,12 +38,14 @@ impl PromptLayer for SecurityLayer {
         let security_notes = &ctx.environment_contract.security_notes;
         let sandbox_summary = ctx.sandbox_summary.as_ref();
         let approval_tier = ctx.approval_tier;
+        let session_mode = ctx.session_mode;
 
         // Only add section if there's something to report
         if security_notes.is_empty()
             && disabled_tools.is_empty()
             && sandbox_summary.is_none()
             && approval_tier.is_none()
+            && session_mode.is_none()
         {
             return;
         }
@@ -68,6 +70,16 @@ impl PromptLayer for SecurityLayer {
         // describes), so it needs no prompt sanitization.
         if let Some(tier) = approval_tier {
             output.push_str(&format!("- {}\n\n", tier.approval_prompt_line()));
+        }
+
+        // Usage-mode register (chat / work / code): the presentation half of
+        // the envelope — names the partition the tool surface was built with,
+        // so the model knows which families are deferred behind `tool_search`
+        // instead of discovering absences by failed calls. Copy is a constant
+        // owned by `SessionMode` (single source with the partition tables), so
+        // it needs no prompt sanitization.
+        if let Some(mode) = session_mode {
+            output.push_str(&format!("- {}\n\n", mode.prompt_line()));
         }
 
         // Security notes
@@ -250,6 +262,41 @@ mod tests {
 
         assert!(out.contains("## Security & Constraints"));
         assert!(out.contains("Approval mode: full"));
+    }
+
+    #[test]
+    fn renders_session_mode_line_when_attached() {
+        use crate::config::types::policies::SessionMode;
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        // Strip everything else so the mode is the sole trigger — pins the
+        // new guard arm alongside the approval-tier one.
+        ctx.environment_contract.security_notes.clear();
+        ctx.session_mode = Some(SessionMode::Code);
+
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains("## Security & Constraints"));
+        assert!(out.contains("Usage mode: code"));
+
+        // An unset mode (internal / subagent dispatch) leaves the line absent.
+        ctx.session_mode = None;
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+        assert!(!out.contains("Usage mode:"));
     }
 
     #[test]

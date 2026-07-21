@@ -244,7 +244,7 @@ fn cost_line(model: &str, cost_usd: Option<f64>) -> String {
 }
 
 fn format_usage(state: &AppState, u: &UsageReply) -> String {
-    vec![
+    [
         format!(
             "Session usage — messages: {}  input: {}  output: {}  total: {}",
             u.messages, u.input_tokens, u.output_tokens, u.tokens

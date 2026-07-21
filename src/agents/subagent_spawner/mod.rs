@@ -134,6 +134,12 @@ pub struct SpawnRequest<'a> {
     /// Injected into the inline `PromptBuilder` so the spawned agent shares
     /// the run-global strategy. `None` keeps the child prompt byte-identical.
     pub strategy: Option<&'a str>,
+    /// Parent run's usage mode (chat / work / code). The child inherits the
+    /// parent's mode-partitioned tool surface, so its prompt names the
+    /// partition (`SessionMode::subagent_prompt_line`). `None` — and Work,
+    /// which callers skip as the identity partition — keeps the child prompt
+    /// byte-identical.
+    pub session_mode: Option<crate::config::types::policies::SessionMode>,
 }
 
 /// Build a child ephemeral session, run the harness, and synthesize the
@@ -367,6 +373,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         .with_chain_context(child_chain.clone());
         if let Some(strategy) = req.strategy {
             builder = builder.with_strategy(strategy.to_string());
+        }
+        if let Some(mode) = req.session_mode {
+            builder = builder.with_session_mode(mode);
         }
         let system_prompt = builder.build_system_prompt(&[]);
 

@@ -78,3 +78,6 @@ windows-core = "0.61"
 # Not in [workspace.dependencies] (only a root [dependencies] entry there);
 # pinned to match the version root/gateway/tls.rs already resolves.
 rcgen = "0.13"
+# external_link tests share a process-global REMOTE_ORIGIN static; serialise
+# them so parallel test threads don't see each other's writes.
+serial_test = "3.0"

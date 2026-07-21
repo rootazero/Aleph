@@ -258,6 +258,29 @@ pub async fn handle_patch_db(
         }
     }
 
+    // Same paired-validation contract for the session usage mode (the tier's
+    // third twin): `chat.send` refuses an unknown mode id in
+    // `build_run_request`, so this write path must refuse it too, or a stored
+    // junk value shows as an override in the Panel while every turn silently
+    // runs at the global default. `null` stays legal — "follow global".
+    if let Some(v) = params
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(crate::config::types::policies::MODE_SESSION_KEY))
+    {
+        let valid = v.is_null()
+            || v.as_str()
+                .and_then(crate::config::types::policies::SessionMode::from_id)
+                .is_some();
+        if !valid {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Unknown session_mode: {v}"),
+            );
+        }
+    }
+
     let patch = crate::gateway::session_manager::SessionPatch {
         label: params
             .get("label")

@@ -1033,6 +1033,12 @@ impl BuiltinToolRegistry {
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .map(crate::builtin_tools::sessions::SessionSetTopicTool::new),
+            session_set_mode_tool: config
+                .gateway_context
+                .as_ref()
+                .map(|ctx| Arc::clone(ctx.session_store()))
+                .or_else(|| config.session_manager.clone())
+                .map(crate::builtin_tools::sessions::SessionSetModeTool::new),
             // session_search_tool: removed — now constructed on-the-fly from
             // GatewayContext in the dispatch path to enforce A2A policy filtering.
             cron_manage_tool: config

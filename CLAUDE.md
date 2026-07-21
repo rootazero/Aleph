@@ -244,6 +244,8 @@
 
 > **执行档位 (Exec Tier)**: 工具执行权限有一根面向用户的旋钮——`Ask` / `Auto`（默认）/ `Full`，Panel composer pill 选（本会话，随第一条消息生效）或 Settings → Policies 设（全局）。规则读工具**声明的元数据**（幂等 / destructive），不认名字；未知工具在 `Ask` 档 fail-closed；`[sandbox.command_policy]` 硬底线任何档位都压不下去。**唯一强制点是 `src/tools/scoped/`——任何新的能执行工具的 surface（新 RPC / 新快路径 / 新后台产地）不经过它就自带旁路**（已堵：斜杠快路径 / `tools.invoke` / 后台续跑）。详见 [SECURITY.md](docs/reference/SECURITY.md) 与 FEATURE_LOCATOR §5.12。
 
+> **会话模式 (Session Mode)**: 与执行档位正交的第三根会话旋钮——`chat` / `work`（默认）/ `code`，Panel composer 模式 pill 选（随第一条消息生效）或 `session_set_mode` 工具对话式切。模式只做**工具呈现面**的静态分区（schema 常驻核 × 整族延迟，`tool_search` 永远可发现+晋升——R10 渐进披露例外的形状），不授予不拒绝任何权限；审批仍归 exec tier。单一源 `src/config/types/policies/session_mode.rs`（族表 `_` 词边界匹配；MCP 限定名 `{server}__{tool}` 整体豁免内建表；子代理继承父分区并获短版 mode line）。详见 [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) 与 FEATURE_LOCATOR §5.16。
+
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
 ### Windows 构建
@@ -312,6 +314,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | GATEWAY.md | [docs/reference/GATEWAY.md](docs/reference/GATEWAY.md) |
 | CLUSTER.md | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — Aleph 集群（单中心非对称节点联邦）：reverse RPC + `node_invoke`/`node_file` + 命令 allowlist + 审批回中心 + 断线 fail-fast |
 | TOOL_SYSTEM.md | [docs/reference/TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
+| **MODE_SYSTEM.md** | [docs/reference/MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) — 会话模式 chat/work/code：exec_tier/think_level 的第三孪生，工具呈现面静态分区（R10 渐进披露例外）+ 模式 prompt line + Panel 模式选择器/右栏差异化 |
 | MEMORY_SYSTEM.md | [docs/reference/MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
 | └─ RAW_MEMORY.md | [docs/reference/memory/RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) |
 | └─ NOTES.md | [docs/reference/memory/NOTES.md](docs/reference/memory/NOTES.md) |

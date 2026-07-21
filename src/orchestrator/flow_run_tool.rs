@@ -96,6 +96,7 @@ impl FlowRunTool {
             think_level: None,
             // Subagent sub-flows carry no resolved exec tier — no approval line.
             exec_tier: None,
+            session_mode: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

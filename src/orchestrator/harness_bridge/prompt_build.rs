@@ -222,6 +222,7 @@ impl AgentHarnessRunner {
         routing_text: Option<String>,
         has_session_summaries: bool,
         exec_tier: Option<crate::config::types::policies::ExecTier>,
+        session_mode: Option<crate::config::types::policies::SessionMode>,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -614,6 +615,7 @@ impl AgentHarnessRunner {
             sandbox,
             self.tool_catalog.as_ref(),
             exec_tier,
+            session_mode,
         )
         .await;
         builder = builder.with_resolved_context(resolved_context);
@@ -708,6 +710,7 @@ async fn resolve_prompt_context(
     sandbox: &dyn Sandbox,
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
     exec_tier: Option<crate::config::types::policies::ExecTier>,
+    session_mode: Option<crate::config::types::policies::SessionMode>,
 ) -> crate::thinker::context::ResolvedContext {
     let default_manifest;
     let manifest_ref = match channel_manifest {
@@ -798,7 +801,7 @@ async fn resolve_prompt_context(
     // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
     // leaves the prompt byte-identical; the `transcribed` bit distinguishes
     // a spoken-only turn from one whose input was ASR-transcribed.
-    resolved_context.voice = match crate::gateway::voice::session_mode::get(session_key_str) {
+    resolved_context.voice = match crate::gateway::voice::voice_mode::get(session_key_str) {
         None => crate::thinker::context::VoiceContext::Off,
         Some(false) => crate::thinker::context::VoiceContext::Spoken,
         Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
@@ -809,6 +812,11 @@ async fn resolve_prompt_context(
     // than re-derived so the prompt shows the exact tier the tool gate enforces.
     // `None` on internal / subagent dispatch leaves the approval line absent.
     resolved_context.approval_tier = exec_tier;
+    // Usage-mode register (chat / work / code): the turn's resolved session
+    // mode, threaded through the same way as the tier so the prompt names the
+    // exact partition the tool surface was built with. `None` on internal /
+    // subagent dispatch leaves the mode line absent.
+    resolved_context.session_mode = session_mode;
     resolved_context
 }
 

@@ -322,7 +322,7 @@ impl InboundMessageRouter {
         // stamp had no reader and `VoiceModeLayer` never fired — this is the
         // wire that makes voice mode actually change agent behavior. Set on both
         // edges so disabling voice clears stale state.
-        crate::gateway::voice::session_mode::set(
+        crate::gateway::voice::voice_mode::set(
             &ctx.session_key.to_key_string(),
             voice_enabled,
             ctx.transcribed_input,
