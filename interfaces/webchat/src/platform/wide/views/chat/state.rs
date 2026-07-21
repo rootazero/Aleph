@@ -458,6 +458,12 @@ pub struct ChatState {
     /// `SessionIdentityMeta.custom["exec_tier"]`; the composer's tier pill owns
     /// reads/writes. Session-scoped → rides along in [`SessionSnapshot`].
     pub session_exec_tier: RwSignal<Option<String>>,
+    /// Per-session usage-mode override (`"chat"` | `"work"` | `"code"`).
+    /// `None` = follow the global `[policies] mode`. Mirrors what core
+    /// persists under `SessionIdentityMeta.custom["session_mode"]`; the
+    /// composer's mode pill owns reads/writes. Session-scoped → rides along
+    /// in [`SessionSnapshot`].
+    pub session_mode: RwSignal<Option<String>>,
     /// Run IDs whose final assistant reply should be spoken aloud — the
     /// voice-loop turns started from the composer mic button. `events.rs` pops
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
@@ -524,6 +530,7 @@ impl ChatState {
             pending_model_override: RwSignal::new(None),
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
+            session_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
@@ -1022,6 +1029,7 @@ impl ChatState {
         // A fresh conversation carries no session tier — it follows the global
         // one until the user picks otherwise.
         self.session_exec_tier.set(None);
+        self.session_mode.set(None);
     }
 
     /// Clear session state but keep `agent_id` (for new chat within same agent).
@@ -1041,6 +1049,7 @@ impl ChatState {
         self.context_usage.set(None);
         self.run_costs.set(std::collections::HashMap::new());
         self.session_exec_tier.set(None);
+        self.session_mode.set(None);
         // agent_id is intentionally preserved
     }
 
@@ -1072,6 +1081,7 @@ impl ChatState {
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
             session_exec_tier: self.session_exec_tier.get_untracked(),
+            session_mode: self.session_mode.get_untracked(),
         }
     }
 
@@ -1099,6 +1109,7 @@ impl ChatState {
         }
         self.run_costs.set(snap.run_costs);
         self.session_exec_tier.set(snap.session_exec_tier);
+        self.session_mode.set(snap.session_mode);
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).
@@ -1141,6 +1152,9 @@ pub struct SessionSnapshot {
     pub run_costs: std::collections::HashMap<String, RunCost>,
     /// This session's execution-tier override (`None` = follow the global tier).
     pub session_exec_tier: Option<String>,
+    /// Per-session usage-mode override (mode pill) — same carrier contract as
+    /// `session_exec_tier`.
+    pub session_mode: Option<String>,
 }
 
 #[cfg(test)]

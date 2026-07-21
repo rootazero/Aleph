@@ -23,6 +23,24 @@ pub async fn set_exec_tier(
     Ok(())
 }
 
+/// Persist (or clear) the usage mode bound to a session.
+///
+/// Third twin of [`set_exec_tier`]: `Some(mode_id)` stores the mode under
+/// `SessionIdentityMeta.custom["session_mode"]`, `None` writes a JSON null
+/// (follow the global `[policies] mode`). Takes effect on the next turn.
+pub async fn set_session_mode(
+    state: &DashboardState,
+    session_key: &str,
+    mode: Option<&str>,
+) -> Result<(), String> {
+    let params = serde_json::json!({
+        "session_key": session_key,
+        "metadata": { "session_mode": mode },
+    });
+    state.rpc_call("sessions.patch", params).await?;
+    Ok(())
+}
+
 /// Persist (or clear) the project working directory bound to a session.
 /// `Some(path)` stores it; `None` reverts to the default agent workspace.
 /// Persists server-side (cross-device, R6) so the Panel can restore the active

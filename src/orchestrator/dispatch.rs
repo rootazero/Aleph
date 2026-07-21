@@ -462,6 +462,14 @@ pub struct FlowRequest {
     /// for internal / subagent dispatch that carries no resolved tier — their
     /// prompt stays byte-identical.
     pub exec_tier: Option<crate::config::types::policies::ExecTier>,
+    /// This turn's resolved session usage mode (chat / work / code), already
+    /// resolved by the gateway with request/session/global precedence. Third
+    /// twin of `think_level` / `exec_tier` above. Forwarded into
+    /// `HarnessRunner::run`, which threads it into the `ResolvedContext` so
+    /// `SecurityLayer` surfaces the mode's register to the model, beside the
+    /// approval line. `None` for internal / subagent dispatch — their prompt
+    /// stays byte-identical.
+    pub session_mode: Option<crate::config::types::policies::SessionMode>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -567,6 +575,10 @@ pub trait HarnessRunner: Send + Sync {
         // model as the `Approval mode:` line. `None` = no tier resolved
         // (internal / subagent dispatch), approval line stays absent.
         exec_tier: Option<crate::config::types::policies::ExecTier>,
+        // This turn's resolved usage mode (chat / work / code). Surfaced to
+        // the model as the `Usage mode:` line beside the approval line.
+        // `None` = no mode resolved, line stays absent.
+        session_mode: Option<crate::config::types::policies::SessionMode>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -820,6 +832,7 @@ impl Orchestrator {
         let transient_context = req.transient_context.clone();
         let think_level = req.think_level;
         let exec_tier = req.exec_tier;
+        let session_mode = req.session_mode;
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -861,6 +874,7 @@ impl Orchestrator {
                         transient_context,
                         think_level,
                         exec_tier,
+                        session_mode,
                     ),
                 ),
             )

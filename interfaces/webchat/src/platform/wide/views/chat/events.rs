@@ -65,8 +65,27 @@ pub(crate) fn apply_trace_event(
                 // call unless the user has pinned a different one. Gated to
                 // the foreground conversation — a background run must not
                 // hijack the pane the user is currently viewing.
+                //
+                // The SESSION MODE shapes what "follow" means (survey: the
+                // right panel is the mode's signature surface — chat has
+                // none, work shows progress, code shows the tool/diff view):
+                //   chat → no auto-drive at all; the badge (note_activity
+                //          above) is the only signal.
+                //   work → once a plan exists, the Plan/progress surface is
+                //          the home view; before the first plan lands, fall
+                //          back to the tool detail.
+                //   code / follow-global → live-follow the tool detail
+                //          (pre-mode behavior, byte-identical default).
+                // Keyed off the session's explicit override only — a
+                // follow-global session keeps the default behavior.
                 if is_foreground {
-                    workspace.follow_tool(run_id, tool_id);
+                    match chat.session_mode.get_untracked().as_deref() {
+                        Some("chat") => {}
+                        Some("work") if chat.plan.get_untracked().is_some() => {
+                            workspace.follow_plan(run_id);
+                        }
+                        _ => workspace.follow_tool(run_id, tool_id),
+                    }
                 }
             }
         }

@@ -49,6 +49,11 @@ struct SessionEntry {
     /// that is actually live.
     #[serde(default)]
     exec_tier: Option<String>,
+    /// Per-session usage-mode override persisted on the session. `None` ⇒
+    /// follow the global default. Restored into `chat.session_mode` on
+    /// reselect — same contract as `exec_tier`.
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).
@@ -593,6 +598,14 @@ pub fn ChatSidebar() -> impl IntoView {
                 .iter()
                 .find(|s| s.key == key)
                 .and_then(|s| s.exec_tier.clone()),
+        );
+        // Third twin: restore the session's usage-mode override the same way.
+        chat.session_mode.set(
+            sessions
+                .get_untracked()
+                .iter()
+                .find(|s| s.key == key)
+                .and_then(|s| s.mode.clone()),
         );
 
         leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));

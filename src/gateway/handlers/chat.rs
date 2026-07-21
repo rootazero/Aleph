@@ -67,6 +67,10 @@ pub struct SendParams {
     /// [`AgentRunParams::exec_tier`].
     #[serde(default)]
     pub exec_tier: Option<String>,
+    /// Session usage mode (chat / work / code) picked in the composer. Same
+    /// first-message carriage as `exec_tier` — see [`AgentRunParams::mode`].
+    #[serde(default)]
+    pub mode: Option<String>,
     /// True when this message is an ASR-transcribed spoken utterance (the
     /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
@@ -226,6 +230,7 @@ pub async fn handle_send(
         project_root: params.project_root,
         model_override: params.model_override,
         exec_tier: params.exec_tier,
+        mode: params.mode,
         voice_input: params.voice_input,
     };
 
