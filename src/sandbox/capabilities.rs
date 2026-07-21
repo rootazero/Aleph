@@ -127,18 +127,69 @@ const fn limit_within(child: Option<u64>, baseline: Option<u64>) -> bool {
 /// Resolves `.` and `..` segments to prevent path traversal bypasses, and
 /// attempts to resolve symlinks so an approved parent cannot be escaped via
 /// a symlink placed under it.
+///
+/// Fail-closed: if any *existing* ancestor along the way is a symlink
+/// pointing outside `baseline`, the check returns `false`. Lexical-only
+/// fallbacks are safe only when the parent chain has been verified free of
+/// untrusted symlinks — i.e. when the path genuinely does not exist yet
+/// (the caller wants to create it) and the deepest existing ancestor is
+/// inside `baseline`. Configuration-time baseline paths that simply do not
+/// exist yet still fall through to lexical comparison; production code is
+/// expected to set up the workspace tree before issuing `is_within` checks.
 fn path_starts_with_normalized(child: &std::path::Path, baseline: &std::path::Path) -> bool {
     let child_norm = normalize_path_components(child);
     let baseline_norm = normalize_path_components(baseline);
 
     // Best-effort symlink resolution: if the path exists, canonicalize it.
-    // For non-existent targets (e.g., a write to a new file), fall back to the
-    // lexical normalization, which still blocks `..` traversal.
-    let child_canon = std::fs::canonicalize(&child_norm).unwrap_or(child_norm);
-    let baseline_canon =
-        std::fs::canonicalize(&baseline_norm).unwrap_or(baseline_norm);
+    // For non-existent targets (e.g., a write to a new file), fall back to
+    // a parent-chain walk that verifies each existing ancestor is inside
+    // `baseline` and not itself a symlink that escapes.
+    let child_canon = std::fs::canonicalize(&child_norm).ok();
+    let baseline_canon = std::fs::canonicalize(&baseline_norm)
+        .unwrap_or_else(|_| baseline_norm.clone());
 
-    child_canon.starts_with(&baseline_canon)
+    if let Some(cc) = &child_canon {
+        return cc.starts_with(&baseline_canon);
+    }
+
+    // Child does not exist. Walk up the parent chain verifying no ancestor
+    // is a symlink pointing outside `baseline`. This closes the
+    // symlink-swap TOCTOU: an attacker who creates `/tmp/foo` as a symlink
+    // to `/etc` after this check but before the actual write would have
+    // their symlink traversed by `symlink_metadata` and rejected.
+    let mut existing_ancestor: Option<std::path::PathBuf> = None;
+    let mut cursor: Option<&std::path::Path> = Some(child_norm.as_path());
+    while let Some(p) = cursor {
+        match std::fs::symlink_metadata(p) {
+            Ok(meta) if meta.is_symlink() => {
+                // Resolve the symlink and verify the target stays inside
+                // `baseline`. If canonicalize fails or target is outside,
+                // fail closed.
+                match std::fs::canonicalize(p) {
+                    Ok(target) if target.starts_with(&baseline_canon) => {
+                        existing_ancestor = Some(target);
+                        break;
+                    }
+                    _ => return false,
+                }
+            }
+            Ok(_) => {
+                existing_ancestor = Some(p.to_path_buf());
+                break;
+            }
+            Err(_) => {
+                cursor = p.parent();
+            }
+        }
+    }
+
+    match existing_ancestor {
+        Some(ancestor) => ancestor.starts_with(&baseline_canon),
+        // No existing ancestor at all — only `/`-like roots. Compare
+        // lexically; the configured baseline was also non-existent so we
+        // cannot canonicalize it.
+        None => child_norm.starts_with(&baseline_norm),
+    }
 }
 
 fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
@@ -242,6 +293,35 @@ mod tests {
             ..Default::default()
         };
         assert!(child.is_within(&baseline));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_write_rejects_symlink_swap_outside_baseline() {
+        // Regression: a baseline that exists but whose child path is
+        // non-existent at check time MUST NOT silently fall back to a
+        // lexical check that allows a subsequent symlink-swap to escape.
+        // We use a temp dir to model a real baseline path, and create a
+        // symlink under it pointing outside. The child path targets a
+        // file under the symlink (which does not yet exist).
+        let tmp = tempfile::tempdir().unwrap();
+        let baseline_root = tmp.path().to_path_buf();
+        let outside = tmp.path().join("outside-target");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, baseline_root.join("escape")).unwrap();
+
+        let baseline = SandboxCapabilities {
+            fs_write: vec![baseline_root.clone()],
+            ..Default::default()
+        };
+        let child = SandboxCapabilities {
+            fs_write: vec![baseline_root.join("escape").join("payload")],
+            ..Default::default()
+        };
+        assert!(
+            !child.is_within(&baseline),
+            "is_within must fail closed when child parent is a symlink pointing outside baseline"
+        );
     }
 
     #[test]

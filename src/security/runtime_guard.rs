@@ -1,4 +1,22 @@
 //! Runtime security orchestrator for the agent loop.
+//
+// LOCK DISCIPLINE (do not break):
+// - `pii_engine` uses `crate::sync_primitives::RwLock` (= `std::sync::RwLock`),
+//   because `PiiEngine::global()` exposes a sync read/write API. Inside an
+//   async task, calling `engine.read().unwrap()` blocks the current tokio
+//   worker for the duration of the read. The read window here is short
+//   (rule evaluation + `filter_with_platform`) and `RwLock::read` is
+//   lock-free on Linux when no writer is waiting, so this is acceptable
+//   **as long as the guard is NOT held across an `.await` point**. If you
+//   need to await between taking the guard and dropping it, wrap the
+//   section in `tokio::task::spawn_blocking`.
+// - `exec_leak_detector` / `secret_leak_detector` use `tokio::sync::Mutex`
+//   (imported directly from `tokio::sync::Mutex`, not `sync_primitives`)
+//   because their guard is held across `.await` points inside
+//   `process_outbound` / `process_inbound` (we `register_injected` and then
+//   rescan). DO NOT switch them to `crate::sync_primitives::Mutex` — that
+//   is `std::sync::Mutex` and would deadlock the runtime when held across
+//   `.await`.
 
 use std::collections::HashMap;
 

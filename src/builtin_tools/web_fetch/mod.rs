@@ -489,8 +489,14 @@ mod tests {
     #[test]
     fn test_ssrf_allows_public_urls() {
         let policy = SsrfPolicy::default();
-        assert!(validate_url("https://example.com", &policy).is_ok());
+        // IP literal — sync path can fully validate without DNS.
         assert!(validate_url("https://8.8.8.8", &policy).is_ok());
+        // Hostname — sync path cannot resolve DNS, must signal caller to use
+        // `validate_url_async`. This is a fail-closed contract, not a bug.
+        assert!(matches!(
+            validate_url("https://example.com", &policy),
+            Err(crate::security::ssrf::SsrfError::RequiresDnsResolution(_))
+        ));
     }
 
     #[test]

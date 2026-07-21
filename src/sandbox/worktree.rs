@@ -289,51 +289,88 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         cmd.args(&command.args)
             .current_dir(&self.worktree_path)
             .envs(command.env.iter())
-            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"));
+            .env("CARGO_TARGET_DIR", self.worktree_path.join("target"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
-        let exec = if let Some(timeout) = command.timeout {
-            match tokio::time::timeout(timeout, cmd.no_window().output()).await {
-                Ok(Ok(out)) => out,
-                Ok(Err(e)) => return Err(crate::sandbox::SandboxError::Io(e.to_string())),
-                Err(_) => {
-                    // Worktree-isolated commands use `cmd.output()` which
-                    // can't surface partial stdout/stderr on timeout — the
-                    // future is dropped before we can split the pipes.
-                    // Treat both partial buffers as empty here; callers
-                    // that need partial output should go through the
-                    // sandbox driver path which uses run_child_with_drain.
-                    return Err(crate::sandbox::SandboxError::Timeout {
-                        elapsed_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-                        partial_stdout: Vec::new(),
-                        partial_stderr: Vec::new(),
-                    });
-                }
-            }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?;
+
+        // Default 1 MiB total budget, mirroring `WorkspaceSandbox::default`.
+        const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+        let result = if let Some(timeout) = command.timeout {
+            crate::sandbox::platforms::common::run_child_with_drain(
+                child,
+                command.stdin.as_deref(),
+                timeout,
+                MAX_OUTPUT_BYTES,
+            )
+            .await
         } else {
-            cmd.no_window()
-                .output()
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if let Some(mut child_stdin) = child.stdin.take() {
+                if let Some(data) = command.stdin.as_deref() {
+                    let _ = child_stdin.write_all(data).await;
+                }
+                drop(child_stdin);
+            }
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+            let stdout_task = tokio::spawn(async move {
+                let mut buf = Vec::new();
+                if let Some(pipe) = stdout {
+                    let _ = pipe.read_to_end(&mut buf).await;
+                }
+                buf
+            });
+            let stderr_task = tokio::spawn(async move {
+                let mut buf = Vec::new();
+                if let Some(pipe) = stderr {
+                    let _ = pipe.read_to_end(&mut buf).await;
+                }
+                buf
+            });
+            let status = child
+                .wait()
                 .await
-                .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?
+                .map_err(|e| crate::sandbox::SandboxError::Io(e.to_string()))?;
+            let elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+            let stdout_buf = stdout_task.await.unwrap_or_default();
+            let stderr_buf = stderr_task.await.unwrap_or_default();
+            let (stdout, stdout_dropped) =
+                crate::sandbox::platforms::common::truncate_output(stdout_buf, MAX_OUTPUT_BYTES);
+            let (stderr, stderr_dropped) =
+                crate::sandbox::platforms::common::truncate_output(stderr_buf, MAX_OUTPUT_BYTES);
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt;
+                status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal: Option<i32> = None;
+            Ok(crate::sandbox::SandboxOutput {
+                stdout,
+                stderr,
+                exit_code: status.code(),
+                signal,
+                truncated: stdout_dropped > 0 || stderr_dropped > 0,
+                stdout_truncated_bytes: stdout_dropped,
+                stderr_truncated_bytes: stderr_dropped,
+                duration_ms: elapsed_ms,
+            })
         };
 
-        #[cfg(unix)]
-        let signal = {
-            use std::os::unix::process::ExitStatusExt;
-            exec.status.signal()
+        let exec = match result {
+            Ok(out) => out,
+            Err(crate::sandbox::SandboxError::Timeout { .. }) => return result,
+            Err(e) => return Err(e),
         };
-        #[cfg(not(unix))]
-        let signal: Option<i32> = None;
 
-        let mut out = crate::sandbox::SandboxOutput {
-            stdout: exec.stdout,
-            stderr: exec.stderr,
-            exit_code: exec.status.code(),
-            signal,
-            truncated: false,
-            stdout_truncated_bytes: 0,
-            stderr_truncated_bytes: 0,
-            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-        };
+        let mut out = exec;
 
         // Same output content floor as WorkspaceSandbox (single source of truth):
         // redact secrets, strip invisible/bidi controls, and fail closed on

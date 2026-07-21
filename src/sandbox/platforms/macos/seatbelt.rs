@@ -634,6 +634,35 @@ impl SeatbeltDriver {
                     writable_roots.push(path);
                 }
             }
+            FsPolicy::ReadWritePaths { read, write } => {
+                profile.push_str(&format!(
+                    "; workspace read/write\n\
+                     (allow file-read* (subpath \"{cwd_str}\"))\n\
+                     (allow file-write* (subpath \"{cwd_str}\"))\n"
+                ));
+                writable_roots.push(cwd);
+                for path in read {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
+                        SandboxError::ProfileGeneration(format!(
+                            "path contains invalid UTF-8: {}",
+                            path.display()
+                        ))
+                    })?);
+                    profile.push_str(&format!("(allow file-read* (subpath \"{path_str}\"))\n"));
+                }
+                for path in write {
+                    let path_str = escape_sbpl(path.to_str().ok_or_else(|| {
+                        SandboxError::ProfileGeneration(format!(
+                            "path contains invalid UTF-8: {}",
+                            path.display()
+                        ))
+                    })?);
+                    profile.push_str(&format!(
+                        "(allow file-read* file-write* (subpath \"{path_str}\"))\n"
+                    ));
+                    writable_roots.push(path);
+                }
+            }
             FsPolicy::FullRead { exclude } => {
                 profile.push_str("; full read access\n(allow file-read*)\n");
                 for path in exclude {

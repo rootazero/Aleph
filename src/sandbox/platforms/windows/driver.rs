@@ -114,6 +114,16 @@ impl WindowsSandboxDriver {
                     lines.push(format!("write={}", path.display()));
                 }
             }
+            FsPolicy::ReadWritePaths { read, write } => {
+                lines.push("fs=read_write_paths".to_string());
+                lines.push(format!("cwd={}", cwd.display()));
+                for path in read {
+                    lines.push(format!("read={}", path.display()));
+                }
+                for path in write {
+                    lines.push(format!("write={}", path.display()));
+                }
+            }
             FsPolicy::FullRead { exclude } => {
                 lines.push("fs=full_read".to_string());
                 for path in exclude {

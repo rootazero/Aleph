@@ -216,29 +216,39 @@ impl CommandPolicy {
     #[must_use]
     pub fn evaluate(&self, command_text: &str) -> PolicyEvaluation {
         // Bound the scan window FIRST so both de-obfuscation and matching stay
-        // bounded even for a multi-megabyte `bash -s` payload. Scan head + tail
-        // rather than a single head window: a script longer than the cap could
-        // otherwise pad its front to bury a dangerous command in an unscanned
-        // tail, evading the filter. Text up to `2 * MAX_SCAN_BYTES` is scanned
-        // whole; beyond that we join the first and last windows. Rules are
-        // single-line (`[^\n]*`), so the `\n` seam between the two windows
-        // cannot produce a false cross-boundary match. All slice ends land on
-        // char boundaries to keep `&str` valid (UTF-8 safe).
+        // bounded even for a multi-megabyte `bash -s` payload. Text up to
+        // `2 * MAX_SCAN_BYTES` is scanned whole; beyond that we sample head,
+        // tail, and intermediate slabs so the middle band cannot bury a
+        // dangerous command. Rules are single-line (`[^\n]*`), so each slab
+        // is delimited by `\n` and slabs cannot produce a false
+        // cross-boundary match. All slice ends land on char boundaries to
+        // keep `&str` valid (UTF-8 safe).
         let scan_buf;
         let windowed: &str = if command_text.len() <= 2 * MAX_SCAN_BYTES {
             command_text
         } else {
+            let len = command_text.len();
+            let mid = len / 2;
             let mut head_end = MAX_SCAN_BYTES;
             while head_end > 0 && !command_text.is_char_boundary(head_end) {
                 head_end -= 1;
             }
-            let mut tail_start = command_text.len() - MAX_SCAN_BYTES;
-            while tail_start < command_text.len() && !command_text.is_char_boundary(tail_start) {
+            let mut mid_start = mid.saturating_sub(MAX_SCAN_BYTES / 2);
+            while mid_start > 0 && !command_text.is_char_boundary(mid_start) {
+                mid_start -= 1;
+            }
+            let mut mid_end = (mid + MAX_SCAN_BYTES / 2).min(len);
+            while mid_end < len && !command_text.is_char_boundary(mid_end) {
+                mid_end += 1;
+            }
+            let mut tail_start = len - MAX_SCAN_BYTES;
+            while tail_start < len && !command_text.is_char_boundary(tail_start) {
                 tail_start += 1;
             }
             scan_buf = format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
                 &command_text[..head_end],
+                &command_text[mid_start..mid_end],
                 &command_text[tail_start..]
             );
             &scan_buf
@@ -1036,7 +1046,7 @@ mod tests {
     fn oversized_padded_script_does_not_evade_tail_scan() {
         // A `bash -s` script longer than 2×MAX_SCAN_BYTES pads its head with
         // benign content and hides a Block pattern in the tail. Head-only
-        // scanning would miss it; the head+tail scan must still catch it.
+        // scanning would miss it; the head+tail+mid scan must still catch it.
         let pad = "echo padding\n".repeat((2 * MAX_SCAN_BYTES) / 13 + 1024);
         assert!(
             pad.len() > 2 * MAX_SCAN_BYTES,
@@ -1046,7 +1056,30 @@ mod tests {
         let e = policy(EnforcementMode::Block).evaluate(&payload);
         assert!(
             e.blocked.contains(&"dd_to_block_device".to_string()),
-            "dangerous tail must be caught by head+tail scan: {e:?}"
+            "dangerous tail must be caught by head+tail+mid scan: {e:?}"
+        );
+    }
+
+    #[test]
+    fn oversized_padded_script_does_not_evade_mid_scan() {
+        // The middle band must not be a blind spot. A dangerous command hidden
+        // between two benign head/tail padding runs must be caught by the
+        // middle slab scan.
+        let head_pad = "echo padding\n".repeat(MAX_SCAN_BYTES / 13);
+        let tail_pad = "echo padding\n".repeat(MAX_SCAN_BYTES / 13);
+        let payload = format!(
+            "{head_pad}dd if=/dev/zero of=/dev/sda{tail_pad}",
+            head_pad = head_pad,
+            tail_pad = tail_pad
+        );
+        assert!(
+            payload.len() > 2 * MAX_SCAN_BYTES,
+            "payload must exceed the full-scan window"
+        );
+        let e = policy(EnforcementMode::Block).evaluate(&payload);
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "dangerous middle slab must be caught: {e:?}"
         );
     }
 

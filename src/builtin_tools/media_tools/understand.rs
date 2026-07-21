@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use crate::error::Result;
 use crate::media::detect::{detect_by_extension, detect_from_path};
 use crate::media::{MediaInput, MediaPipeline, MediaType};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -120,7 +120,7 @@ Examples:
             (None, Some(url), None) => {
                 // SSRF protection: block requests to internal/private hosts
                 let ssrf_policy = SsrfPolicy::default();
-                if let Err(e) = validate_url(url, &ssrf_policy) {
+                if let Err(e) = validate_url_async(url, &ssrf_policy).await {
                     return Ok(MediaUnderstandOutput::err(format!(
                         "SSRF blocked for URL '{url}': {e}"
                     )));

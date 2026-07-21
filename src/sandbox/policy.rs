@@ -23,6 +23,10 @@ pub enum FsPolicy {
     ReadPaths(Vec<PathBuf>),
     /// Write access to specific paths.
     WritePaths(Vec<PathBuf>),
+    /// Both read and write paths specified — preserved as separate lists so
+    /// platform drivers can apply the right primitive to each (e.g. bwrap
+    /// `--ro-bind` vs `--bind`, Windows `read=` vs `write=`).
+    ReadWritePaths { read: Vec<PathBuf>, write: Vec<PathBuf> },
     /// Full read access with optional exclusions.
     FullRead { exclude: Vec<PathBuf> },
     /// Full write access with optional exclusions.
@@ -79,18 +83,25 @@ impl Default for SandboxPolicy {
 
 impl From<&SandboxCapabilities> for SandboxPolicy {
     fn from(caps: &SandboxCapabilities) -> Self {
-        let filesystem = if caps.fs_write.is_empty() && caps.fs_read.is_empty() {
-            FsPolicy::WorkspaceOnly
-        } else if !caps.fs_write.is_empty() && caps.fs_read.is_empty() {
-            // rust-doctor-disable-next-line excessive-clone
-            FsPolicy::WritePaths(caps.fs_write.clone())
-        } else if !caps.fs_read.is_empty() && caps.fs_write.is_empty() {
-            // rust-doctor-disable-next-line excessive-clone
-            FsPolicy::ReadPaths(caps.fs_read.clone())
-        } else {
-            // Both read and write paths specified — treat as write (superset).
-            // rust-doctor-disable-next-line excessive-clone
-            FsPolicy::WritePaths(caps.fs_write.clone())
+        let filesystem = match (
+            caps.fs_read.is_empty(),
+            caps.fs_write.is_empty(),
+        ) {
+            (true, true) => FsPolicy::WorkspaceOnly,
+            (false, true) => {
+                // rust-doctor-disable-next-line excessive-clone
+                FsPolicy::ReadPaths(caps.fs_read.clone())
+            }
+            (true, false) => {
+                // rust-doctor-disable-next-line excessive-clone
+                FsPolicy::WritePaths(caps.fs_write.clone())
+            }
+            (false, false) => FsPolicy::ReadWritePaths {
+                // rust-doctor-disable-next-line excessive-clone
+                read: caps.fs_read.clone(),
+                // rust-doctor-disable-next-line excessive-clone
+                write: caps.fs_write.clone(),
+            },
         };
 
         let network = match &caps.network {
@@ -173,8 +184,15 @@ mod tests {
             ..Default::default()
         };
         let policy = SandboxPolicy::from(&caps);
-        // When both are present, write takes precedence (superset).
-        assert_eq!(policy.filesystem, FsPolicy::WritePaths(vec!["/tmp".into()]));
+        // When both are present, keep them as separate read and write lists
+        // so platform drivers can pick the right primitive (ro-bind vs bind).
+        assert_eq!(
+            policy.filesystem,
+            FsPolicy::ReadWritePaths {
+                read: vec!["/etc".into()],
+                write: vec!["/tmp".into()],
+            }
+        );
     }
 
     #[test]
@@ -236,7 +254,13 @@ mod tests {
             timeout_secs: None,
         };
         let policy = SandboxPolicy::from(&caps);
-        assert_eq!(policy.filesystem, FsPolicy::WritePaths(vec!["/tmp".into()]));
+        assert_eq!(
+            policy.filesystem,
+            FsPolicy::ReadWritePaths {
+                read: vec!["/etc".into()],
+                write: vec!["/tmp".into()],
+            }
+        );
         assert_eq!(
             policy.network,
             NetworkPolicy::AllowHosts(vec!["github.com".into()])

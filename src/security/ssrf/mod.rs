@@ -46,6 +46,9 @@ pub enum SsrfError {
     #[error("URL has no host")]
     NoHost,
 
+    #[error("hostname requires DNS resolution; use validate_url_async instead")]
+    RequiresDnsResolution(String),
+
     #[error("too many redirects (limit: {0})")]
     TooManyRedirects(u8),
 
@@ -98,11 +101,29 @@ fn validate_url_common(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfEr
 }
 
 /// Validates a URL synchronously (no DNS resolution).
+///
+/// Only performs IP-literal / scheme / credential / hostname blocklist checks.
+/// For `Host::Domain` (i.e. names that need DNS to be evaluated against
+/// blocked-IP ranges) this returns `SsrfError::RequiresDnsResolution` —
+/// callers MUST switch to `validate_url_async` to close the
+/// hostname→private-IP bypass via DNS rebinding.
 pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
     if !policy.enabled {
         return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
     }
-    validate_url_common(url_str, policy)
+    let url = validate_url_common(url_str, policy)?;
+
+    if !policy.enabled {
+        return Ok(url);
+    }
+    let host = url.host_str().ok_or(SsrfError::NoHost)?;
+    let allowlisted = is_allowlisted(host, &policy.allowed_hosts);
+    if !allowlisted
+        && matches!(url.host(), Some(url::Host::Domain(_)))
+    {
+        return Err(SsrfError::RequiresDnsResolution(host.to_string()));
+    }
+    Ok(url)
 }
 
 pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
@@ -379,6 +400,35 @@ mod tests {
         let policy = default_policy();
         let result = validate_url("http://printer.local/admin", &policy);
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
+    }
+
+    #[test]
+    fn sync_requires_dns_resolution_for_hostnames() {
+        // Hostname URLs without DNS rebinding protection MUST be rejected by
+        // the sync path. This is the fail-closed contract that closes the
+        // SSRF bypass where a hostname resolves to a private IP after sync
+        // validation has already returned Ok.
+        let policy = default_policy();
+        let result = validate_url("https://attacker-controlled.test/foo", &policy);
+        assert!(
+            matches!(result, Err(SsrfError::RequiresDnsResolution(_))),
+            "sync validate_url must require DNS for non-allowlisted hostnames: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn sync_allows_allowlisted_hostname_without_dns() {
+        let policy = SsrfPolicy {
+            allowed_hosts: vec!["cdn.example.com".to_string()],
+            ..Default::default()
+        };
+        let result = validate_url("https://cdn.example.com/asset.js", &policy);
+        assert!(
+            result.is_ok(),
+            "allowlisted hostname is exempt from DNS requirement: {:?}",
+            result
+        );
     }
 
     // --- Async tests ---

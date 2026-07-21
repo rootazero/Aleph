@@ -1,6 +1,7 @@
 //! Runtime install dispatcher driven by `super::specs::SPECS`.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -10,6 +11,16 @@ use super::post_install;
 use super::probe;
 use super::specs::{find_spec, select_install, InstallStrategy};
 use crate::utils::no_window::NoWindow;
+
+/// Process-wide serialization for PATH read-modify-write.
+///
+/// `std::env::set_var` is documented as not thread-safe; two concurrent
+/// `prepend_existing_dirs` callers can race, with the loser's prepended
+/// directory disappearing from PATH. Capability locks only serialize same-
+/// capability bootstrap; a node + uv bootstrap from two different callers
+/// races here. This mutex makes the read-modify-write atomic across the
+/// process. It is short-lived and uncontended in steady state.
+static PATH_LOCK: Mutex<()> = Mutex::new(());
 
 /// Result of a bootstrap attempt.
 #[derive(Debug)]
@@ -263,6 +274,7 @@ fn enrich_path_for_reprobe() {
 /// exist or are already present. Idempotent. Shared by `enrich_path_for_reprobe`
 /// and `enrich_path_for_via_parent`.
 fn prepend_existing_dirs(candidates: Vec<PathBuf>) {
+    let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut existing: std::collections::HashSet<PathBuf> =
         std::env::split_paths(&current).collect();

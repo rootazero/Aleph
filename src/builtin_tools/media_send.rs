@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::gateway::media::{is_remote_fetch_url, MediaItem};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Input arguments for `media_send` tool.
@@ -80,7 +80,7 @@ impl AlephTool for MediaSendTool {
         let ssrf_policy = SsrfPolicy::default();
         for item in &args.items {
             if is_remote_fetch_url(&item.url) {
-                if let Err(e) = validate_url(&item.url, &ssrf_policy) {
+                if let Err(e) = validate_url_async(&item.url, &ssrf_policy).await {
                     return Err(crate::error::AlephError::tool(format!(
                         "SSRF blocked for URL '{}': {}",
                         item.url, e

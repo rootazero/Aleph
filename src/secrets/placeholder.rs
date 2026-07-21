@@ -41,7 +41,7 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
 
         let valid = name
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
         if !valid {
             return Err(SecretError::InvalidPlaceholder(format!(
                 "invalid secret name '{name}'"
@@ -87,5 +87,13 @@ mod tests {
     fn test_extract_placeholders_rejects_malformed() {
         let err = extract_secret_refs("Bearer {{secret:oops").unwrap_err();
         assert!(format!("{}", err).contains("Invalid secret placeholder"));
+    }
+
+    #[test]
+    fn test_extract_placeholders_accepts_namespace_colon() {
+        let text = "Bearer {{secret:anthropic:prod-key_1}}";
+        let refs = extract_secret_refs(text).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "anthropic:prod-key_1");
     }
 }

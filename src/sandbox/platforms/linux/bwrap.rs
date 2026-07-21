@@ -297,12 +297,44 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
+                push_metadata_protection_args(args, std::iter::once(cwd))?;
+            }
+            FsPolicy::ReadWritePaths { read, write } => {
+                let cwd_str = cwd.to_str().ok_or_else(|| {
+                    SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
+                })?;
+                args.push("--bind".into());
+                args.push(cwd_str.into());
+                args.push(cwd_str.into());
+
+                for path in read {
+                    let path_str = path.to_str().ok_or_else(|| {
+                        SandboxError::ProfileGeneration(format!(
+                            "path contains invalid UTF-8: {}",
+                            path.display()
+                        ))
+                    })?;
+                    args.push("--ro-bind".into());
+                    args.push(path_str.into());
+                    args.push(path_str.into());
+                }
+                for path in write {
+                    let path_str = path.to_str().ok_or_else(|| {
+                        SandboxError::ProfileGeneration(format!(
+                            "path contains invalid UTF-8: {}",
+                            path.display()
+                        ))
+                    })?;
+                    args.push("--bind".into());
+                    args.push(path_str.into());
+                    args.push(path_str.into());
+                }
                 // Protect metadata in cwd AND every additional writable
                 // path. bwrap evaluates mounts in order: later mounts
                 // shadow earlier ones, so emitting `--ro-bind-try` after
                 // the writable `--bind` is what makes these read-only.
                 let mut all = vec![cwd];
-                all.extend(paths.iter().map(|p| p.as_path()));
+                all.extend(write.iter().map(|p| p.as_path()));
                 push_metadata_protection_args(args, all)?;
             }
             FsPolicy::FullRead { exclude } => {
