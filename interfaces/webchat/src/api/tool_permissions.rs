@@ -20,6 +20,13 @@ pub struct TierPreset {
     pub id: String,
 }
 
+/// One selectable session usage mode — same id-only contract as
+/// [`TierPreset`]; copy resolves per locale in `components::mode_labels`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModePreset {
+    pub id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionsResponse {
     /// Active tier id (`ask` / `auto` / `full`).
@@ -27,6 +34,13 @@ pub struct ToolPermissionsResponse {
     /// Selectable tiers, ordered least → most permissive.
     #[serde(default)]
     pub tiers: Vec<TierPreset>,
+    /// Global default usage mode id (`chat` / `work` / `code`). Defaulted so
+    /// the decoder tolerates an older core that predates the mode dial.
+    #[serde(default)]
+    pub mode: String,
+    /// Selectable modes, in display order.
+    #[serde(default)]
+    pub modes: Vec<ModePreset>,
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,
@@ -92,9 +106,28 @@ mod tests {
         });
         let cfg: ToolPermissionsResponse = serde_json::from_value(v).unwrap();
         assert_eq!(cfg.exec_tier, "auto");
+        // An older core without the mode dial must still decode.
+        assert_eq!(cfg.mode, "");
+        assert!(cfg.modes.is_empty());
         assert_eq!(cfg.tiers.len(), 1);
         assert_eq!(cfg.tiers[0].id, "ask");
         assert_eq!(cfg.default, "allow");
         assert_eq!(cfg.overrides.get("bash").map(String::as_str), Some("ask"));
+    }
+
+    #[test]
+    fn response_decodes_the_mode_dial() {
+        let v = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask" }],
+            "mode": "work",
+            "modes": [{ "id": "chat" }, { "id": "work" }, { "id": "code" }],
+            "default": "allow",
+            "overrides": {},
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(cfg.mode, "work");
+        assert_eq!(cfg.modes.len(), 3);
+        assert_eq!(cfg.modes[2].id, "code");
     }
 }

@@ -32,6 +32,9 @@ pub use dispatch::{
 // referencing an unreachable type (external `HarnessRunner` impls could not name
 // the param). Re-exported here alongside the types that surface it.
 pub use crate::config::types::policies::ExecTier;
+// `SessionMode` — same publicly-nameable requirement as `ExecTier` above: it
+// appears in `FlowRequest::session_mode` and the `HarnessRunner::run` param.
+pub use crate::config::types::policies::SessionMode;
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_run_tool::{FlowRunContext, FlowRunDescriptor, FlowRunInput, FlowRunTool};

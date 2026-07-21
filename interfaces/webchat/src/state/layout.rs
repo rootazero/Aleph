@@ -256,6 +256,17 @@ impl WorkspaceState {
         }
     }
 
+    /// 直播跟随（work 模式变体）：未钉住时把详情面切到执行计划（Progress 视角）。
+    /// work 模式下计划/进度是右栏的主场面（Claude Cowork / Manus 同款语义）；
+    /// 与 `follow_tool` 同一规则 —— 钉住即让位，永不 force-open。
+    pub fn follow_plan(&self, run_id: &str) {
+        if !self.pinned.get_untracked() {
+            self.selected.set(Some(InspectorTarget::Plan {
+                run_id: run_id.to_string(),
+            }));
+        }
+    }
+
     /// 用户点选任一关键点：切换详情面到该目标 + 钉住 + 确保 Split 打开。
     /// 聊天侧所有"→ 详情"入口（工具行、成本行、推理/计划头…）都走这唯一漏斗。
     pub fn inspect(&self, target: InspectorTarget) {
@@ -459,6 +470,26 @@ mod tests {
         // 解钉后恢复跟随
         ws.follow_tool("r2", "t9");
         assert_eq!(ws.selected.get_untracked(), Some(tool("r2", "t9")));
+    }
+
+    /// `follow_plan` (the work-mode live-follow variant) obeys the same
+    /// pin contract as `follow_tool`: it writes only when unpinned.
+    #[test]
+    fn follow_plan_respects_the_pin() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.follow_plan("r1");
+        assert_eq!(
+            ws.selected.get_untracked(),
+            Some(InspectorTarget::Plan {
+                run_id: "r1".to_string()
+            })
+        );
+        // A pinned target survives a later plan follow.
+        ws.inspect(tool("r1", "t1"));
+        ws.follow_plan("r1");
+        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t1")));
     }
 
     #[test]

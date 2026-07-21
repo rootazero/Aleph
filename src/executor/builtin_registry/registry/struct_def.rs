@@ -139,6 +139,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_compact_tool: Option<crate::builtin_tools::sessions::SessionCompactTool>,
     /// Session set-topic tool (optional - requires `SessionManager`)
     pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
+    pub(crate) session_set_mode_tool: Option<crate::builtin_tools::sessions::SessionSetModeTool>,
     // session_search is constructed on-the-fly from gateway_context (like session_list/session_send)
     // to enforce A2A policy filtering — no stored instance needed.
     /// Cron management tool (optional - requires `SharedCronService`)

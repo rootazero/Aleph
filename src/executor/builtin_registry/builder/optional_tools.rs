@@ -358,7 +358,7 @@ impl BuiltinToolRegistry {
 
         if let Some(ref sm) = session_mgr {
             use crate::builtin_tools::sessions::{
-                SessionCompactTool, SessionNewTool, SessionSetTopicTool,
+                SessionCompactTool, SessionNewTool, SessionSetModeTool, SessionSetTopicTool,
             };
 
             let tmp_new = SessionNewTool::new(Arc::clone(sm));
@@ -390,6 +390,16 @@ impl BuiltinToolRegistry {
                 def.parameters.clone(),
             );
             info!("Registered session.rename tool in BuiltinToolRegistry");
+
+            let tmp_mode = SessionSetModeTool::new(Arc::clone(sm));
+            let def = AlephTool::definition(&tmp_mode);
+            reg(
+                tools,
+                "session_set_mode",
+                SessionSetModeTool::DESCRIPTION,
+                def.parameters.clone(),
+            );
+            info!("Registered session.set_mode tool in BuiltinToolRegistry");
 
             // session_search — metadata only; tool is constructed on-the-fly from GatewayContext
             use crate::builtin_tools::SessionSearchTool;

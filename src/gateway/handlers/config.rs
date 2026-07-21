@@ -604,6 +604,11 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     Ok(json!({
         "exec_tier": cfg.policies.exec_tier.id(),
         "tiers": serde_json::to_value(crate::config::types::policies::builtin_tiers())?,
+        // The session-mode dial rides the same surface: the composer's mode
+        // pill and the tier pill share one fetch + one decoder (Panel
+        // ToolPermissionsApi). Core ships ids only; copy is the surface's.
+        "mode": cfg.policies.mode.id(),
+        "modes": serde_json::to_value(crate::config::types::policies::builtin_modes())?,
         "default": serde_json::to_value(cfg.policies.tool_permissions.default)?,
         "overrides": serde_json::to_value(&cfg.policies.tool_permissions.overrides)?,
     }))
@@ -636,6 +641,11 @@ struct UpdateToolPermissionsParams {
     /// Execution tier id (`ask` / `auto` / `full`) — optional partial update.
     #[serde(default)]
     pub exec_tier: Option<String>,
+
+    /// Session usage mode id (`chat` / `work` / `code`) — optional partial
+    /// update of the global default mode.
+    #[serde(default)]
+    pub mode: Option<String>,
 
     /// Default permission level (optional partial update)
     #[serde(default)]
@@ -676,11 +686,28 @@ pub async fn handle_update_tool_permissions(
         None => None,
     };
 
+    let mode = match params.mode.as_deref() {
+        Some(id) => match crate::config::types::policies::SessionMode::from_id(id) {
+            Some(m) => Some(m),
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Unknown mode '{id}' (expected chat / work / code)"),
+                )
+            }
+        },
+        None => None,
+    };
+
     let updated = {
         let mut cfg = config.write().await;
 
         if let Some(tier) = tier {
             cfg.policies.exec_tier = tier;
+        }
+        if let Some(mode) = mode {
+            cfg.policies.mode = mode;
         }
         if let Some(default) = params.default {
             cfg.policies.tool_permissions.default = default;
