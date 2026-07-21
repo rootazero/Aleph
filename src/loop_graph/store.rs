@@ -14,9 +14,10 @@ use std::path::Path;
 
 use crate::error::{AlephError, Result};
 use crate::loop_graph::types::{cadence_rank, EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
+use crate::sync_primitives::{Mutex, MutexGuard};
 
 pub struct LoopGraphStore {
-    conn: std::sync::Mutex<rusqlite::Connection>,
+    conn: Mutex<rusqlite::Connection>,
 }
 
 impl LoopGraphStore {
@@ -53,7 +54,7 @@ impl LoopGraphStore {
         )
         .map_err(|e| AlephError::other(format!("loop_graph store init: {e}")))?;
         Ok(Self {
-            conn: std::sync::Mutex::new(conn),
+            conn: Mutex::new(conn),
         })
     }
 
@@ -64,11 +65,11 @@ impl LoopGraphStore {
             rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|e| AlephError::other(format!("loop_graph store open_readonly: {e}")))?;
         Ok(Self {
-            conn: std::sync::Mutex::new(conn),
+            conn: Mutex::new(conn),
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+    fn lock(&self) -> MutexGuard<'_, rusqlite::Connection> {
         // P7 lock-safety: never propagate poison.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -289,16 +290,18 @@ impl LoopGraphStore {
         let mut findings = Vec::new();
 
         for e in &edges {
-            for endpoint in [e.from_id.as_str(), e.to_id.as_str()] {
-                if !by_id.contains_key(endpoint) {
-                    findings.push(format!(
-                        "悬空边: {} -[{}]-> {}（节点 '{}' 已消失——被治理的环不见了，需审计裁决或 gc）",
-                        e.from_id,
-                        e.kind.as_str(),
-                        e.to_id,
-                        endpoint
-                    ));
-                }
+            let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
+                .into_iter()
+                .filter(|id| !by_id.contains_key(id))
+                .collect();
+            if !missing.is_empty() {
+                findings.push(format!(
+                    "悬空边: {} -[{}]-> {}（节点 {:?} 已消失——被治理的环不见了，需审计裁决或 gc）",
+                    e.from_id,
+                    e.kind.as_str(),
+                    e.to_id,
+                    missing
+                ));
             }
         }
 

@@ -19,6 +19,7 @@ use once_cell::sync::OnceCell;
 use tracing::{info, warn};
 
 use crate::loop_graph::types::EdgeKind;
+use crate::sync_primitives::Mutex;
 use crate::tasks::cron::SharedCronService;
 
 /// v1 scopes the graph to the default agent; multi-agent scoping is an
@@ -31,7 +32,7 @@ const DEFAULT_AGENT: &str = "main";
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(60);
 
 static CRON_TRIGGER: OnceCell<SharedCronService> = OnceCell::new();
-static DEBOUNCE: OnceCell<std::sync::Mutex<HashMap<String, Instant>>> = OnceCell::new();
+static DEBOUNCE: OnceCell<Mutex<HashMap<String, Instant>>> = OnceCell::new();
 
 /// Install the cron handle that powers watcher pokes. Called once at boot
 /// next to `loop_graph::init_global`; absent (None / never called) the
@@ -43,7 +44,7 @@ pub fn init_cron_trigger(svc: Option<SharedCronService>) {
 }
 
 fn debounce_pass(watcher_job_id: &str) -> bool {
-    let map = DEBOUNCE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     match guard.get(watcher_job_id) {
