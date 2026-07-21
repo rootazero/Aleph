@@ -37,8 +37,11 @@ pub struct ScanFinding {
     pub pattern_name: &'static str,
     /// Action recommended for this finding.
     pub action: LeakAction,
-    /// The matched text, truncated to 20 characters.
-    pub matched_text: String,
+    /// The matched text, truncated to a non-secret prefix length. Internal
+    /// callers (audit, debug) may use it; the field is **not** part of the
+    /// public stable surface — do not log it through observability backends
+    /// or audit pipelines without first hashing / redacting.
+    pub(crate) matched_text: String,
 }
 
 /// Result of scanning content for leaks.
