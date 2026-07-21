@@ -10,7 +10,7 @@ pub mod webhook;
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use tokio::sync::watch;
+use tokio::sync::RwLock;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -28,7 +28,7 @@ pub struct LineChannel {
     config: LineConfig,
     channel_state: ChannelState,
     api: Option<Arc<LineMessagingApi>>,
-    shutdown_tx: Option<watch::Sender<bool>>,
+    webhook_handle: Option<tokio::task::JoinHandle<()>>,
     /// Optional custom API base URL for testing (e.g. mock server)
     api_base: Option<String>,
 }
@@ -48,7 +48,7 @@ impl LineChannel {
             config,
             channel_state: ChannelState::new(100),
             api: None,
-            shutdown_tx: None,
+            webhook_handle: None,
             api_base: None,
         }
     }
@@ -124,9 +124,6 @@ impl Channel for LineChannel {
         };
         self.api = Some(api);
 
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-        self.shutdown_tx = Some(shutdown_tx);
-
         if self.api_base.is_none() {
             let webhook_ctx = WebhookContext {
                 config: self.config.clone(),
@@ -135,7 +132,7 @@ impl Channel for LineChannel {
                 status_handle: self.channel_state.status_handle(),
             };
 
-            tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+            self.webhook_handle = Some(tokio::spawn(webhook::run_webhook_server(webhook_ctx)));
 
             tracing::info!(
                 "LINE channel started on {}:{}",
@@ -153,8 +150,8 @@ impl Channel for LineChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping LINE channel...");
 
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
+        if let Some(handle) = self.webhook_handle.take() {
+            handle.abort();
         }
 
         self.api = None;

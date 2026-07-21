@@ -26,11 +26,14 @@ impl ManifestAdapter for AutoDiscoverAdapter {
     }
 
     fn parse(&self, dir: &Path) -> Result<AdapterOutput> {
-        let plugin_id = dir
+        let raw_id = dir
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+            .unwrap_or("unknown");
+        let mut plugin_id = crate::extension::manifest::sanitize_plugin_id(raw_id);
+        if plugin_id.is_empty() {
+            plugin_id = "unknown".to_string();
+        }
         let mut caps = vec![];
 
         if dir.join("skills").is_dir() {
@@ -40,7 +43,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
         }
         // Commands are merged into skills following OpenClaw convention
         if dir.join("commands").is_dir() {
-            if let Ok(c) = parsers::parse_skills_dir(dir, "commands", &plugin_id) {
+            if let Ok(c) = parsers::parse_commands_dir(dir, "commands", &plugin_id) {
                 caps.extend(c);
             }
         }

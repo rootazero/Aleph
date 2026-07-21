@@ -94,7 +94,13 @@ impl WasmCapabilityKernel {
         // an omitted/typo'd prefix list would silently allow reading any
         // workspace path.
         if ws.allowed_prefixes.is_empty()
-            || !ws.allowed_prefixes.iter().any(|p| path.starts_with(p))
+            || !ws.allowed_prefixes.iter().any(|prefix| {
+                let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+                !prefix.is_empty()
+                    && path
+                        .strip_prefix(prefix)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
         {
             return Err(CapabilityError::NotAllowed(format!(
                 "path '{path}' not in allowed prefixes"
@@ -195,17 +201,21 @@ impl WasmCapabilityKernel {
             .unwrap_or_else(|e| e.into_inner());
         // Drop anything older than the longest (hour) window.
         stamps.retain(|t| now.saturating_sub(*t) < 3_600_000);
-        let last_minute = stamps
-            .iter()
-            .filter(|t| now.saturating_sub(**t) < 60_000)
-            .count() as u32;
+        let last_minute = u32::try_from(
+            stamps
+                .iter()
+                .filter(|t| now.saturating_sub(**t) < 60_000)
+                .count(),
+        )
+        .unwrap_or(u32::MAX);
         if rl.requests_per_minute > 0 && last_minute >= rl.requests_per_minute {
             return Err(CapabilityError::RateLimited(format!(
                 "{} requests/minute exceeded",
                 rl.requests_per_minute
             )));
         }
-        if rl.requests_per_hour > 0 && stamps.len() as u32 >= rl.requests_per_hour {
+        let last_hour = u32::try_from(stamps.len()).unwrap_or(u32::MAX);
+        if rl.requests_per_hour > 0 && last_hour >= rl.requests_per_hour {
             return Err(CapabilityError::RateLimited(format!(
                 "{} requests/hour exceeded",
                 rl.requests_per_hour

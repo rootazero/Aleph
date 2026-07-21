@@ -26,7 +26,6 @@ use tracing::{info, warn};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
 use crate::extension::mcp_config;
-use crate::extension::registry::PluginRegistry;
 use crate::extension::runtime::WasmRuntime;
 use crate::extension::types::{DirectCommandResult, PluginKind};
 use crate::mcp::McpManagerConfig;
@@ -115,18 +114,14 @@ impl PluginLoader {
     // ===== Loading =====
 
     /// Load a plugin based on its kind.
-    pub fn load_plugin(
-        &mut self,
-        manifest: &PluginManifest,
-        registry: &mut PluginRegistry,
-    ) -> ExtensionResult<()> {
+    pub fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.is_loaded(&manifest.id) {
             warn!("Plugin {} is already loaded, skipping", manifest.id);
             return Ok(());
         }
 
         match manifest.kind {
-            PluginKind::Wasm => self.load_wasm_plugin(manifest, registry),
+            PluginKind::Wasm => self.load_wasm_plugin(manifest),
             PluginKind::Mcp => self.load_mcp_plugin(manifest),
             PluginKind::Static => {
                 info!("Plugin {} is static, skipping runtime loading", manifest.id);
@@ -136,11 +131,7 @@ impl PluginLoader {
     }
 
     /// Load a WASM plugin.
-    fn load_wasm_plugin(
-        &mut self,
-        manifest: &PluginManifest,
-        _registry: &mut PluginRegistry,
-    ) -> ExtensionResult<()> {
+    fn load_wasm_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.wasm_runtime.is_none() {
             info!("Initializing WASM runtime");
             self.wasm_runtime = Some(WasmRuntime::new());
@@ -172,7 +163,8 @@ impl PluginLoader {
         }
 
         let server_count = configs.len();
-        let server_names: Vec<String> = configs.keys().cloned().collect();
+        let mut server_names: Vec<String> = configs.keys().cloned().collect();
+        server_names.sort();
 
         self.mcp_configs.insert(manifest.id.clone(), configs);
         self.loaded_plugins
@@ -197,23 +189,22 @@ impl PluginLoader {
     pub fn load_plugin_with_memory(
         &mut self,
         manifest: &PluginManifest,
-        registry: &mut PluginRegistry,
         memory_registry: &Arc<MemoryExtensionRegistry>,
     ) -> ExtensionResult<()> {
-        self.load_plugin(manifest, registry)?;
+        self.load_plugin(manifest)?;
         // Resolve the plugin's MCP server id (memory hooks route there). A
         // memory plugin is expected to declare exactly one server; if it
         // declares several, use the first and warn.
         let server_id = self.mcp_configs.get(&manifest.id).and_then(|servers| {
-            let mut keys = servers.keys();
-            let first = keys.next().cloned();
-            if keys.next().is_some() {
+            let mut keys: Vec<String> = servers.keys().cloned().collect();
+            keys.sort();
+            if keys.len() > 1 {
                 warn!(
                     plugin = %manifest.id,
                     "plugin declares >1 MCP server; routing [memory] hooks to the first"
                 );
             }
-            first
+            keys.into_iter().next()
         });
         register_memory_extension_if_declared(manifest, server_id, memory_registry);
         Ok(())
@@ -229,11 +220,19 @@ impl PluginLoader {
             Some(PluginKind::Wasm) => {
                 if let Some(runtime) = &mut self.wasm_runtime {
                     if !runtime.unload_plugin(plugin_id) {
+                        self.loaded_plugins
+                            .insert(plugin_id.to_string(), PluginKind::Wasm);
                         return Err(ExtensionError::Runtime(format!(
                             "Failed to unload WASM plugin '{plugin_id}'"
                         )));
                     }
                     info!("Unloaded WASM plugin '{}'", plugin_id);
+                } else {
+                    self.loaded_plugins
+                        .insert(plugin_id.to_string(), PluginKind::Wasm);
+                    return Err(ExtensionError::Runtime(
+                        "WASM runtime not initialized".to_string(),
+                    ));
                 }
             }
             Some(PluginKind::Mcp) => {

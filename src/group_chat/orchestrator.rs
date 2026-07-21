@@ -173,8 +173,16 @@ impl GroupChatOrchestrator {
             .unwrap_or_else(|e| e.into_inner())
             .remove(session_id)?;
 
-        if let Ok(mut session) = handle.try_lock() {
-            session.end();
+        match handle.try_lock() {
+            Ok(mut session) => session.end(),
+            Err(_) => {
+                tracing::debug!(
+                    subsystem = "group_chat",
+                    session_id = %session_id,
+                    "session lock contended during end_session; caller is expected to \
+                     lock and call session.end() to mark the session ended"
+                );
+            }
         }
 
         // Persist status change to database

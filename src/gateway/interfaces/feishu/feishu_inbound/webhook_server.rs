@@ -58,6 +58,9 @@ async fn handle_webhook(
     // Resolve the real event payload: when an Encrypt Key is configured Feishu
     // AES-encrypts the body and signs it, so we must verify + decrypt before parsing.
     let payload = resolve_payload(&state, &headers, &body_str)?;
+    if !verify_payload_token(&state, &payload) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
 
     // URL-verification handshake — the challenge may live inside the decrypted payload.
     if let Ok(challenge_json) = serde_json::from_str::<serde_json::Value>(&payload) {
@@ -117,15 +120,16 @@ fn resolve_payload(
 
     match (state.config.encrypt_key.as_ref(), encrypt_field) {
         (Some(key), Some(encrypted)) => {
-            if let (Some(ts), Some(nonce), Some(sig)) = (
+            let (Some(ts), Some(nonce), Some(sig)) = (
                 header_str(headers, "x-lark-request-timestamp"),
                 header_str(headers, "x-lark-request-nonce"),
                 header_str(headers, "x-lark-signature"),
-            ) {
-                if !crypto::verify_signature(key, &ts, &nonce, body_str, &sig) {
-                    tracing::warn!("Feishu webhook signature mismatch; rejecting request");
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
+            ) else {
+                return Err(StatusCode::UNAUTHORIZED);
+            };
+            if !timestamp_is_fresh(&ts) || !crypto::verify_signature(key, &ts, &nonce, body_str, &sig) {
+                tracing::warn!("Feishu webhook signature mismatch; rejecting request");
+                return Err(StatusCode::UNAUTHORIZED);
             }
             crypto::decrypt_event(key, &encrypted).map_err(|e| {
                 tracing::warn!("Feishu webhook decrypt failed: {e}");
@@ -134,6 +138,32 @@ fn resolve_payload(
         }
         _ => Ok(body_str.to_string()),
     }
+}
+
+fn verify_payload_token(state: &WebhookState, payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    let token = value
+        .get("token")
+        .or_else(|| value.pointer("/header/token"))
+        .and_then(|v| v.as_str());
+    match (state.config.verification_token.as_deref(), token) {
+        (Some(expected), Some(actual)) => {
+            crate::security::secret_equal_bytes(expected.as_bytes(), actual.as_bytes())
+        }
+        _ => false,
+    }
+}
+
+fn timestamp_is_fresh(timestamp: &str) -> bool {
+    let Ok(timestamp) = timestamp.parse::<u64>() else {
+        return false;
+    };
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    now.as_secs().abs_diff(timestamp) <= 300
 }
 
 fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -236,7 +266,7 @@ mod tests {
                     .method("POST")
                     .uri("/feishu/events")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"challenge":"abc123"}"#))
+                    .body(Body::from(r#"{"challenge":"abc123","token":"token"}"#))
                     .unwrap(),
             )
             .await

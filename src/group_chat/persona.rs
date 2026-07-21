@@ -75,8 +75,18 @@ impl PersonaRegistry {
     pub fn reload(&mut self, configs: &[PersonaConfig]) {
         self.presets.clear();
         for cfg in configs {
-            self.presets
-                .insert(cfg.id.clone(), persona_from_config(cfg));
+            let persona = persona_from_config(cfg);
+            if self
+                .presets
+                .insert(cfg.id.clone(), persona)
+                .is_some()
+            {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    persona_id = %cfg.id,
+                    "duplicate persona ID in reload configuration, last definition wins"
+                );
+            }
         }
     }
 

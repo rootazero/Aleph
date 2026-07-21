@@ -191,13 +191,21 @@ where
         let entry = entry?;
         let path = entry.path();
 
+        if !is_path_inside(base, &path) {
+            warn!(
+                "{} entry {:?} escapes plugin root {:?}, skipping",
+                config.component_name, path, base
+            );
+            continue;
+        }
+
         if is_hidden(&path) {
             continue;
         }
 
         let result = if path.is_dir() {
             let entry_file = path.join(config.dir_entry_file);
-            if !entry_file.exists() {
+            if !entry_file.exists() || !is_path_inside(base, &entry_file) {
                 continue;
             }
             let dir_name = path
@@ -394,6 +402,12 @@ pub fn parse_hooks_file(
     if !file_path.exists() {
         return Ok(Vec::new());
     }
+    if !is_path_inside(base, &file_path) {
+        return Err(anyhow::anyhow!(
+            "path escapes plugin root: {}",
+            file_path.display()
+        ));
+    }
 
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read hooks file: {}", file_path.display()))?;
@@ -463,6 +477,12 @@ pub fn parse_mcp_config_file(
     if !file_path.exists() {
         return Ok(Vec::new());
     }
+    if !is_path_inside(base, &file_path) {
+        return Err(anyhow::anyhow!(
+            "path escapes plugin root: {}",
+            file_path.display()
+        ));
+    }
 
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read MCP config: {}", file_path.display()))?;
@@ -522,6 +542,12 @@ pub fn parse_v2_prompt(
     use crate::extension::types::PromptScope;
 
     let file_path = base.join(&prompt_section.file);
+    if !is_path_inside(base, &file_path) {
+        return Err(anyhow::anyhow!(
+            "path escapes plugin root: {}",
+            file_path.display()
+        ));
+    }
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read v2 prompt file: {}", file_path.display()))?;
 
@@ -563,6 +589,13 @@ pub fn parse_v2_tool_prompts(
         };
 
         let file_path = base.join(instruction_file);
+        if !is_path_inside(base, &file_path) {
+            warn!(
+                "Tool instruction file {:?} escapes plugin root {:?}, skipping",
+                file_path, base
+            );
+            continue;
+        }
         match std::fs::read_to_string(&file_path) {
             Ok(content) => {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {

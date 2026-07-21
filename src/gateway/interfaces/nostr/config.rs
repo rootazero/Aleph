@@ -25,12 +25,20 @@ pub struct NostrConfig {
     /// for real-time events and publishes to all relays.
     pub relays: Vec<String>,
 
-    /// Allowed public keys to accept messages from (hex-encoded, empty = accept all)
+    /// Allowed public keys to accept messages from (hex-encoded, empty = allow all)
     ///
     /// When non-empty, only events from these public keys are forwarded as
     /// inbound messages. Other events are silently dropped.
     #[serde(default)]
     pub allowed_pubkeys: Vec<String>,
+
+    /// Hard deny-list of blocked public keys (hex-encoded).
+    ///
+    /// Events from these pubkeys are always dropped, even when
+    /// `allowed_pubkeys` is empty. Use this to mute known spammers without
+    /// having to maintain a positive allowlist.
+    #[serde(default)]
+    pub blocked_pubkeys: Vec<String>,
 
     /// Event kinds to subscribe to (default: [1, 4] for text notes and DMs)
     ///
@@ -46,6 +54,7 @@ impl Default for NostrConfig {
             private_key: String::new(),
             relays: Vec::new(),
             allowed_pubkeys: Vec::new(),
+            blocked_pubkeys: Vec::new(),
             subscription_kinds: default_subscription_kinds(),
         }
     }
@@ -103,6 +112,9 @@ impl NostrConfig {
     /// pubkey is in the allowed list.
     #[must_use]
     pub fn is_pubkey_allowed(&self, pubkey: &str) -> bool {
+        if self.blocked_pubkeys.iter().any(|pk| pk == pubkey) {
+            return false;
+        }
         if self.allowed_pubkeys.is_empty() {
             true
         } else {

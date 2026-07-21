@@ -62,6 +62,9 @@ pub struct CcPluginToml {
     /// Path to skills directory
     pub skills: Option<String>,
 
+    /// Path to commands directory
+    pub commands: Option<String>,
+
     /// Path to agents directory
     pub agents: Option<String>,
 
@@ -227,6 +230,10 @@ pub fn parse_cc_plugin_toml_content(
 
     let (aleph_ext, permissions) =
         aleph_extensions.map_or((None, Vec::new()), |(ext, perms)| (Some(ext), perms));
+    let wasm_capabilities = aleph_ext
+        .as_ref()
+        .and_then(|ext| ext.capabilities.as_ref())
+        .and_then(crate::extension::manifest::toml_types::convert_wasm_capabilities);
 
     let manifest = PluginManifest {
         id: plugin_id,
@@ -252,7 +259,7 @@ pub fn parse_cc_plugin_toml_content(
         services_v2: None,
         prompt_v2: None,
         capabilities_v2: None,
-        wasm_capabilities: None,
+        wasm_capabilities,
         wasm_resource_limits: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
@@ -319,6 +326,14 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");
         capabilities.extend(parsers::parse_skills_dir(
             plugin_dir, skills_rel, &plugin_id,
+        )?);
+
+        // Parse commands
+        let commands_rel = raw.commands.as_deref().unwrap_or("commands");
+        capabilities.extend(parsers::parse_commands_dir(
+            plugin_dir,
+            commands_rel,
+            &plugin_id,
         )?);
 
         // Parse agents

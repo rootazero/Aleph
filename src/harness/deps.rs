@@ -134,7 +134,7 @@ pub struct HarnessDeps {
     /// from `SplitSession` to `CompactToFit`'s deterministic truncation floor
     /// when the budget asks for a split.
     pub session_epoch_registrar:
-        Option<std::sync::Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
+        Option<Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>>,
     /// Spec 3 — fire-and-forget sink for per-tool-invocation signals. Each
     /// completed tool call (success or failure) is forwarded here so the
     /// Dream cycle's signal collector can read cross-session statistics

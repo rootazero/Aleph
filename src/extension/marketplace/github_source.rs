@@ -74,7 +74,23 @@ pub fn sync_github_marketplace(
     cache_dir: &Path,
     marketplace_name: &str,
 ) -> Result<PathBuf, String> {
+    if marketplace_name.is_empty()
+        || marketplace_name.contains('/')
+        || marketplace_name.contains('\\')
+        || marketplace_name.contains("..")
+    {
+        return Err(format!("Invalid marketplace name '{marketplace_name}'"));
+    }
+
     let final_dir = cache_dir.join(marketplace_name);
+    if std::fs::symlink_metadata(&final_dir)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(format!(
+            "Marketplace cache path must not be a symlink: {}",
+            final_dir.display()
+        ));
+    }
 
     if final_dir.join(".git").exists() {
         pull_github_repo(&final_dir)?;

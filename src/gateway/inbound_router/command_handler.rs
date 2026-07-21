@@ -276,10 +276,14 @@ impl InboundMessageRouter {
 
         let ctx = InboundContext::new(btw_msg, reply_route, session_key);
 
-        // Execute with btw metadata marker
-        let metadata = serde_json::json!({"btw": true}).to_string();
-        self.execute_for_context_with_metadata(&ctx, metadata)
-            .await?;
+        // /btw is a plain ephemeral turn — it does NOT take the slash-command
+        // fast path. Sending a non-mode JSON through
+        // `execute_for_context_with_metadata` previously injected `{"btw":true}`
+        // into the SLASH_COMMAND_MODE_KEY, which the engine's fast path
+        // parsed as an unknown `mode_type` and rejected with
+        // "Unknown slash command type:". Route through the regular
+        // execution path so the model gets the btw prompt directly.
+        self.execute_for_context(&ctx).await?;
 
         info!(
             "[Router] /btw handled as ephemeral session for agent '{}'",

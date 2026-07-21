@@ -377,7 +377,16 @@ impl MarketplaceManager {
         config: &MarketplaceConfig,
     ) -> Result<PathBuf, String> {
         match config.source_type {
-            MarketplaceSourceType::Github => Ok(self.cache_dir.join(marketplace_name)),
+            MarketplaceSourceType::Github => {
+                if marketplace_name.is_empty()
+                    || marketplace_name.contains('/')
+                    || marketplace_name.contains('\\')
+                    || marketplace_name.contains("..")
+                {
+                    return Err(format!("Invalid marketplace name '{marketplace_name}'"));
+                }
+                Ok(self.cache_dir.join(marketplace_name))
+            }
             MarketplaceSourceType::Local => resolve_local_marketplace(&config.source),
         }
     }

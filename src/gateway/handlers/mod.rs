@@ -129,7 +129,7 @@ pub use config::{handle_get_full_config, handle_patch_config};
 pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
 
 use crate::gateway::security::SharedTokenManager;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AsyncRwLock};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -154,11 +154,10 @@ fn service_unavailable(req: JsonRpcRequest, reason: &'static str) -> JsonRpcResp
 /// This avoids threading shared state through the registry while remaining correct —
 /// the ledger is persisted on disk, so concurrent callers see the same data.
 pub fn make_runtime_ledger(
-) -> Result<std::sync::Arc<tokio::sync::RwLock<crate::runtimes::ledger::CapabilityLedger>>, String>
-{
+) -> Result<Arc<AsyncRwLock<crate::runtimes::ledger::CapabilityLedger>>, String> {
     let dir = crate::runtimes::get_runtimes_dir().map_err(|e| format!("runtimes dir: {e}"))?;
     let ledger = crate::runtimes::ledger::CapabilityLedger::load_or_create(dir.join("ledger.json"));
-    Ok(std::sync::Arc::new(tokio::sync::RwLock::new(ledger)))
+    Ok(Arc::new(AsyncRwLock::new(ledger)))
 }
 
 /// Resolve a secret from the vault by its full key. Returns `None` on missing or error.

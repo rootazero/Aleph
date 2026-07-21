@@ -168,10 +168,7 @@ impl WasmRuntime {
         let input_json = serde_json::to_string(&input)
             .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize input: {e}")))?;
 
-        debug!(
-            "Calling WASM handler '{}' with input: {}",
-            handler, input_json
-        );
+        debug!(plugin = plugin_id, handler, "Calling WASM handler");
 
         let mut plugin = loaded
             .plugin

@@ -71,9 +71,14 @@ impl ReplyEmitter {
             // Read live voice state from registry (not the stale local copy)
             // Check channel-specific first, then "default" fallback
             let channel_id = self.route.channel_id.as_str();
+            // Track which channel's state we resolved to so the success/failure
+            // bookkeeping below writes back to the SAME entry — the "default"
+            // fallback must not credit the channel-specific entry.
+            let mut state_channel_id = channel_id;
             let mut voice_state = self.channel_registry.get_voice_state(channel_id).await;
             if !voice_state.is_active() && channel_id != "default" {
                 voice_state = self.channel_registry.get_voice_state("default").await;
+                state_channel_id = "default";
             }
             let gen_config = match self.generation_config {
                 Some(ref cfg) => cfg.read().await.clone(),
@@ -93,8 +98,13 @@ impl ReplyEmitter {
             .await
             {
                 TtsOutcome::Generated(attachment) => {
-                    // Success — reset failure counter
-                    self.voice_state.lock().await.record_success();
+                    // Reset the registry-tracked failure counter so subsequent
+                    // runs start from 0 (the local per-emitter copy would
+                    // otherwise reset on every new emitter and never persist).
+                    voice_state.record_success();
+                    self.channel_registry
+                        .set_voice_state(state_channel_id, voice_state)
+                        .await;
 
                     // Send voice-only message (no text — voice replaces text)
                     let message = OutboundMessage {
@@ -127,12 +137,19 @@ impl ReplyEmitter {
                     }
                 }
                 TtsOutcome::Failed => {
-                    // TTS generation failed — record and maybe auto-disable
-                    let auto_disabled = self.voice_state.lock().await.record_failure();
+                    // TTS generation failed — record on the registry-tracked
+                    // state (not the local per-emitter copy) so 3 consecutive
+                    // failures auto-disable the channel in the registry and
+                    // subsequent runs fall back to text without re-attempting
+                    // voice.
+                    let auto_disabled = voice_state.record_failure();
+                    self.channel_registry
+                        .set_voice_state(state_channel_id, voice_state)
+                        .await;
                     if auto_disabled {
                         warn!(
                             "Voice auto-disabled for channel {} after 3 consecutive TTS failures",
-                            self.route.channel_id
+                            state_channel_id
                         );
                     }
                     // Fallback to plain text

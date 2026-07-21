@@ -51,6 +51,12 @@ impl SecurityStore {
     }
 
     /// Load the persisted plaintext token (if any) from the `shared_token` table.
+    ///
+    /// Empty plaintext (a stored row whose `plaintext_token` is the empty
+    /// string) is treated as "no token" — same convention as
+    /// [`crate::gateway::security::token_readonly::read_current_token_readonly`],
+    /// so the admin IPC client and the in-process `SharedTokenManager` agree
+    /// on what an absent token looks like.
     pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare("SELECT plaintext_token FROM shared_token LIMIT 1")?;
@@ -61,7 +67,8 @@ impl SecurityStore {
         });
 
         match result {
-            Ok(plaintext) => Ok(plaintext),
+            Ok(Some(text)) if !text.is_empty() => Ok(Some(text)),
+            Ok(_) => Ok(None),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }

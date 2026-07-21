@@ -34,10 +34,12 @@ impl ManifestAdapter for AlephTomlAdapter {
         // Sanitize the declared id so a third-party manifest cannot claim an
         // arbitrary/colliding capability-registry key (mirrors the Codex and
         // Cursor adapters, and the metadata path which sanitizes this id too).
-        let mut plugin_id = crate::extension::manifest::sanitize_plugin_id(&raw.plugin.id);
+        let plugin_id = crate::extension::manifest::sanitize_plugin_id(&raw.plugin.id);
         if plugin_id.is_empty() {
-            plugin_id = "unknown".to_string();
+            return Err(anyhow::anyhow!("plugin.id must not be empty"));
         }
+        crate::extension::manifest::validate_plugin_id(&plugin_id)
+            .map_err(|e| anyhow::anyhow!("invalid plugin id '{}': {e}", raw.plugin.id))?;
         let mut capabilities = Vec::new();
 
         // Component directories (same convention as auto-discover).
@@ -46,7 +48,7 @@ impl ManifestAdapter for AlephTomlAdapter {
         }
         // Commands are merged into skills following the OpenClaw convention.
         if plugin_dir.join("commands").is_dir() {
-            capabilities.extend(parsers::parse_skills_dir(
+            capabilities.extend(parsers::parse_commands_dir(
                 plugin_dir, "commands", &plugin_id,
             )?);
         }
@@ -83,6 +85,43 @@ impl ManifestAdapter for AlephTomlAdapter {
                 Ok(caps) => capabilities.extend(caps),
                 Err(e) => tracing::debug!("Failed to parse [[tools]] for {}: {}", plugin_id, e),
             }
+            for tool in &raw.tools {
+                let Some(handler) = tool.handler.clone().filter(|handler| !handler.is_empty()) else {
+                    continue;
+                };
+                capabilities.push(crate::extension::CapabilityDeclaration::Tool(
+                    crate::extension::ToolRegistration {
+                        name: tool.name.clone(),
+                        description: tool.description.clone().unwrap_or_default(),
+                        parameters: tool
+                            .parameters
+                            .clone()
+                            .unwrap_or_else(|| serde_json::json!({"type": "object"})),
+                        handler,
+                        plugin_id: plugin_id.clone(),
+                    },
+                ));
+            }
+        }
+
+        for command in &raw.commands {
+            let Some(handler) = command
+                .handler
+                .clone()
+                .filter(|handler| !handler.is_empty())
+            else {
+                continue;
+            };
+            capabilities.push(crate::extension::CapabilityDeclaration::Skill(
+                crate::extension::SkillRegistration {
+                    name: command.name.clone(),
+                    description: command.description.clone().unwrap_or_default(),
+                    content: handler,
+                    skill_type: crate::extension::SkillType::Command,
+                    plugin_id: plugin_id.clone(),
+                    ..Default::default()
+                },
+            ));
         }
 
         // Event hooks declared in [[hooks]]. Previously these were parsed

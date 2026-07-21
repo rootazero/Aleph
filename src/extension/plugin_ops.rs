@@ -4,6 +4,7 @@ use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest;
 use crate::extension::registry::PluginRegistry;
 use crate::extension::types::{DirectCommandResult, PluginInfo, PluginRecord};
+use crate::sync_primitives::Arc;
 
 use super::ExtensionManager;
 
@@ -18,6 +19,7 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
+        self.ensure_plugin_active(plugin_id).await?;
         // Auto-load plugin if not already loaded
         {
             let loader = self.plugin_loader.read().await;
@@ -33,11 +35,24 @@ impl ExtensionManager {
             .call_tool(plugin_id, handler, args)
     }
 
+    async fn ensure_plugin_active(&self, plugin_id: &str) -> ExtensionResult<()> {
+        let registry = self.plugin_registry.read().await;
+        match registry.get_plugin(plugin_id) {
+            Some(record) if record.status.is_active() => Ok(()),
+            Some(_) => Err(ExtensionError::Runtime(format!(
+                "Plugin '{plugin_id}' is disabled"
+            ))),
+            None => Err(ExtensionError::PluginNotFound(plugin_id.to_string())),
+        }
+    }
+
     /// Ensure a plugin is loaded into the runtime.
     pub(crate) async fn ensure_plugin_loaded(&self, plugin_id: &str) -> ExtensionResult<()> {
+        self.ensure_plugin_active(plugin_id).await?;
         let registry = self.plugin_registry.read().await;
         let record = registry
             .get_plugin(plugin_id)
+            .filter(|record| record.status.is_active())
             .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
         let root_dir = record.root_dir.clone();
         drop(registry);
@@ -48,24 +63,20 @@ impl ExtensionManager {
         if loader.is_loaded(plugin_id) {
             return Ok(()); // another task loaded it while we waited
         }
-        let mut registry = self.plugin_registry.write().await;
         let mem_reg_snapshot = self
             .memory_registry
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(&manifest, &mut registry, mem_reg)?;
+            loader.load_plugin_with_memory(&manifest, mem_reg)?;
         } else {
-            loader.load_plugin(&manifest, &mut registry)?;
+            loader.load_plugin(&manifest)?;
         }
         tracing::info!(
             plugin_id = plugin_id,
             "Auto-loaded plugin for tool execution"
         );
-        // Release the loader/registry write locks before the async bind so we
-        // never hold them across the await.
-        drop(registry);
         drop(loader);
 
         // X1: bind the just-loaded plugin's memory caller if the MCP handle is
@@ -85,6 +96,7 @@ impl ExtensionManager {
         handler: &str,
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
+        self.ensure_plugin_active(plugin_id).await?;
         // Auto-load plugin if not already loaded
         {
             let loader = self.plugin_loader.read().await;
@@ -107,6 +119,15 @@ impl ExtensionManager {
         handler: &str,
         args: serde_json::Value,
     ) -> ExtensionResult<DirectCommandResult> {
+        self.ensure_plugin_active(plugin_id).await?;
+        {
+            let loader = self.plugin_loader.read().await;
+            if !loader.is_loaded(plugin_id) {
+                drop(loader);
+                self.ensure_plugin_loaded(plugin_id).await?;
+            }
+        }
+
         self.plugin_loader
             .read()
             .await
@@ -124,9 +145,7 @@ impl ExtensionManager {
     /// spawner can carry it across layers and snapshot the referenced tools
     /// under its own read guard at provision time.
     #[must_use]
-    pub fn plugin_registry_handle(
-        &self,
-    ) -> std::sync::Arc<tokio::sync::RwLock<PluginRegistry>> {
+    pub fn plugin_registry_handle(&self) -> Arc<tokio::sync::RwLock<PluginRegistry>> {
         self.plugin_registry.clone()
     }
 
@@ -148,18 +167,16 @@ impl ExtensionManager {
         manifest: &super::PluginManifest,
     ) -> ExtensionResult<()> {
         let mut loader = self.plugin_loader.write().await;
-        let mut registry = self.plugin_registry.write().await;
         let mem_reg_snapshot = self
             .memory_registry
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let result = if let Some(ref mem_reg) = mem_reg_snapshot {
-            loader.load_plugin_with_memory(manifest, &mut registry, mem_reg)
+            loader.load_plugin_with_memory(manifest, mem_reg)
         } else {
-            loader.load_plugin(manifest, &mut registry)
+            loader.load_plugin(manifest)
         };
-        drop(registry);
         drop(loader);
 
         if result.is_ok() {
@@ -289,7 +306,50 @@ impl ExtensionManager {
         };
 
         if changed {
+            if !enabled {
+                let _ = self.unload_runtime_plugin(plugin_id).await;
+            }
             self.sync_runtime_snapshots().await;
+            *self.hook_executor.write().await =
+                crate::extension::hooks::HookExecutor::empty()
+                    .with_consent(crate::extension::hooks::ShellHookConsent::shared());
+            self.sync_hooks_from_registry().await;
+            self.sync_user_hooks().await;
+
+            let mut skill_dirs: Vec<std::path::PathBuf> = self
+                .discovery
+                .discover_skill_dirs()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|dir| dir.path)
+                .collect();
+            let (plugin_skill_dirs, plugin_subagents) = {
+                let registry = self.plugin_registry.read().await;
+                let active = |plugin_id: &str| {
+                    registry
+                        .get_plugin(plugin_id)
+                        .is_some_and(|plugin| plugin.status.is_active())
+                };
+                let skill_dirs: Vec<std::path::PathBuf> = registry
+                    .list_active_plugins()
+                    .into_iter()
+                    .map(|plugin| plugin.root_dir.join("skills"))
+                    .filter(|dir| dir.is_dir())
+                    .collect();
+                let subagents = registry
+                    .list_agents()
+                    .into_iter()
+                    .filter(|agent| active(&agent.plugin_id))
+                    .filter_map(super::plugin_agent_to_def)
+                    .collect();
+                (skill_dirs, subagents)
+            };
+            skill_dirs.extend(plugin_skill_dirs.iter().cloned());
+            crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
+            crate::agents::publish_plugin_subagents(plugin_subagents);
+            if let Err(e) = self.skill_system.init(skill_dirs).await {
+                tracing::warn!(error = %e, "Failed to refresh skill system after plugin toggle");
+            }
         }
 
         changed

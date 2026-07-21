@@ -356,28 +356,19 @@ impl JwtValidator {
 /// - `smba.trafficmanager.net`
 #[must_use]
 pub fn validate_service_url(url: &str) -> bool {
-    let host = match extract_host(url) {
-        Some(h) => h,
-        None => return false,
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || parsed.username() != "" || parsed.password().is_some() {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
     };
 
     host == "botframework.com"
         || host.ends_with(".botframework.com")
         || host == "smba.trafficmanager.net"
-}
-
-fn extract_host(url: &str) -> Option<&str> {
-    // Strip scheme
-    let rest = if let Some(s) = url.strip_prefix("https://") {
-        s
-    } else {
-        url.strip_prefix("http://")?
-    };
-
-    // Take everything up to the first '/' or end of string
-    let host_port = rest.split('/').next()?;
-    // Strip port if present
-    Some(host_port.split(':').next().unwrap_or(host_port))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

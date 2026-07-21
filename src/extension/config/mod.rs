@@ -42,25 +42,34 @@ impl ConfigManager {
     async fn load_all(&mut self, discovery: &DiscoveryManager) -> Result<(), ExtensionError> {
         // Find all config files
         let config_files = discovery.find_config_files(ALEPH_CONFIG_FILE)?;
-
-        // Also check for .json variant
         let alt_files = discovery.find_config_files(ALEPH_CONFIG_FILE_ALT)?;
+        let toml_files = discovery.find_config_files("aleph.toml")?;
 
-        // Merge all configs in priority order
-        let mut all_files: Vec<_> = config_files.into_iter().chain(alt_files).collect();
+        let mut all_files: Vec<_> = config_files
+            .into_iter()
+            .chain(alt_files)
+            .chain(toml_files)
+            .collect();
 
-        // Deduplicate (prefer .jsonc over .json for same directory).
-        // Sort by parent, then place `.jsonc` before `.json` within a directory
-        // so `dedup_by` (which keeps the *first* of each adjacent pair) retains
-        // the richer comment-supporting variant. A plain `sort()` would order
-        // `aleph.json` before `aleph.jsonc` and drop the `.jsonc`.
+        let global_config_dir = discovery.aleph_home().ok();
         all_files.sort_by(|a, b| {
             let ext_rank = |p: &Path| match p.extension().and_then(|e| e.to_str()) {
-                Some("jsonc") => 0,
-                _ => 1,
+                Some("toml") => 0,
+                Some("jsonc") => 1,
+                _ => 2,
             };
-            a.parent()
-                .cmp(&b.parent())
+            let layer_rank = |p: &Path| {
+                if p.parent() == global_config_dir.as_deref() {
+                    0
+                } else {
+                    1
+                }
+            };
+            let depth = |p: &Path| p.parent().map_or(0, |parent| parent.components().count());
+            layer_rank(a)
+                .cmp(&layer_rank(b))
+                .then_with(|| depth(a).cmp(&depth(b)))
+                .then_with(|| a.parent().cmp(&b.parent()))
                 .then_with(|| ext_rank(a).cmp(&ext_rank(b)))
                 .then_with(|| a.cmp(b))
         });
@@ -99,10 +108,12 @@ impl ConfigManager {
     async fn load_and_merge(&mut self, path: &Path) -> Result<(), ExtensionError> {
         let content = tokio::fs::read_to_string(path).await?;
 
-        // Parse JSONC (with comments)
-        let parsed = parse_jsonc(&content, path)?;
+        let parsed = match path.extension().and_then(|e| e.to_str()) {
+            Some("toml") => toml::from_str(&content)
+                .map_err(|e| ExtensionError::config_parse(path, format!("TOML parse error: {e}")))?,
+            _ => parse_jsonc(&content, path)?,
+        };
 
-        // Merge into current config
         self.merge(parsed);
 
         Ok(())
@@ -119,7 +130,6 @@ impl ConfigManager {
 
     /// Merge another config into this one
     fn merge(&mut self, other: AlephConfig) {
-        // Plugins are concatenated
         if let Some(plugins) = other.plugin {
             let existing = self.config.plugin.get_or_insert_with(Vec::new);
             for plugin in plugins {
@@ -129,7 +139,6 @@ impl ConfigManager {
             }
         }
 
-        // Instructions are concatenated
         if let Some(instructions) = other.instructions {
             let existing = self.config.instructions.get_or_insert_with(Vec::new);
             for inst in instructions {
@@ -139,7 +148,6 @@ impl ConfigManager {
             }
         }
 
-        // Agents are merged (later overrides earlier)
         if let Some(agents) = other.agent {
             let existing = self.config.agent.get_or_insert_with(HashMap::new);
             for (name, agent) in agents {
@@ -147,7 +155,6 @@ impl ConfigManager {
             }
         }
 
-        // MCP servers are merged
         if let Some(mcp) = other.mcp {
             let existing = self.config.mcp.get_or_insert_with(HashMap::new);
             for (name, server) in mcp {
@@ -155,7 +162,6 @@ impl ConfigManager {
             }
         }
 
-        // Permission is merged
         if let Some(permission) = other.permission {
             let existing = self.config.permission.get_or_insert_with(HashMap::new);
             for (tool, rule) in permission {
@@ -163,7 +169,16 @@ impl ConfigManager {
             }
         }
 
-        // Simple fields use later value
+        if let Some(provider) = other.provider {
+            let existing = self.config.provider.get_or_insert_with(HashMap::new);
+            for (name, config) in provider {
+                existing.insert(name, config);
+            }
+        }
+
+        if other.schema.is_some() {
+            self.config.schema = other.schema;
+        }
         if other.model.is_some() {
             self.config.model = other.model;
         }
@@ -172,6 +187,18 @@ impl ConfigManager {
         }
         if other.default_agent.is_some() {
             self.config.default_agent = other.default_agent;
+        }
+        if other.disabled_providers.is_some() {
+            self.config.disabled_providers = other.disabled_providers;
+        }
+        if other.enabled_providers.is_some() {
+            self.config.enabled_providers = other.enabled_providers;
+        }
+        if other.compaction.is_some() {
+            self.config.compaction = other.compaction;
+        }
+        if other.experimental.is_some() {
+            self.config.experimental = other.experimental;
         }
     }
 

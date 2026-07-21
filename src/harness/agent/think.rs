@@ -1118,7 +1118,7 @@ impl AgentHarness {
             Some(budget) => tokio::select! {
                 biased;
                 _ = parent_cancel.cancelled() => Err(HarnessError::Cancelled),
-                _ = tokio::time::sleep(budget) => Err(HarnessError::StalledTurn {
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(started) + budget) => Err(HarnessError::StalledTurn {
                     elapsed: started.elapsed(),
                 }),
                 r = fut => Ok(r),

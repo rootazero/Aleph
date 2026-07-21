@@ -153,6 +153,27 @@ impl NostrMessageOps {
                         subscription_id: _,
                         event,
                     } => {
+                        // Reject events whose declared id / pubkey / sig don't
+                        // agree with the canonical NIP-01 hash. Without this
+                        // guard a malicious relay can substitute an event
+                        // authored by any pubkey (impersonation) or tamper
+                        // with content mid-flight, and the agent would still
+                        // process it as if it were authentic.
+                        let expected_id = crate::gateway::interfaces::nostr::message_ops::protocol::compute_event_id(
+                            &event.pubkey,
+                            event.created_at,
+                            event.kind,
+                            &event.tags,
+                            &event.content,
+                        );
+                        if expected_id != event.id || event.sig.is_empty() {
+                            tracing::debug!(
+                                "Nostr: dropping event with id/sig mismatch (id={})",
+                                event.id.get(..16).unwrap_or(&event.id)
+                            );
+                            continue;
+                        }
+
                         // Filter by allowed pubkeys
                         if !config.is_pubkey_allowed(&event.pubkey) {
                             tracing::debug!(
