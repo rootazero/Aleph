@@ -12,6 +12,7 @@
 //! - Rerank config (`memory.rerank`)        → vault prefix `rerank:`
 //! - Search backends (`search.backends.*`)  → vault prefix `search:`
 //! - Channels (`channels.*`)               → vault prefix `channel:`
+//! - Voice streaming (`voice.streaming`)    → vault prefix `voice_streaming:`
 
 use crate::gateway::security::SharedTokenManager;
 use crate::Config;
@@ -60,12 +61,19 @@ pub fn migrate_all_secrets_to_vault(cfg: &mut Config, vault: &SharedTokenManager
         sections_to_save.push("channels");
     }
 
+    // 7. Voice streaming: voice.streaming.api_key → voice_streaming:api_key
+    let voice_migrated = migrate_voice_streaming(cfg, vault);
+    if voice_migrated > 0 {
+        sections_to_save.push("voice_local");
+    }
+
     let total = ai_migrated
         + gen_migrated
         + embed_migrated
         + rerank_migrated
         + search_migrated
-        + channel_migrated;
+        + channel_migrated
+        + voice_migrated;
 
     if total > 0 {
         tracing::info!(
@@ -237,4 +245,24 @@ fn migrate_channels(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
         }
     }
     count
+}
+
+// ── Voice streaming ─────────────────────────────────────────────────────────
+
+fn migrate_voice_streaming(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
+    let api_key = &cfg.voice_local.streaming.api_key;
+    if api_key.is_empty() {
+        return 0;
+    }
+    match vault.store_secret("voice_streaming:api_key", api_key) {
+        Ok(_) => {
+            tracing::info!("Migrated voice.streaming.api_key to vault");
+            cfg.voice_local.streaming.api_key = String::new();
+            1
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to store voice streaming secret");
+            0
+        }
+    }
 }

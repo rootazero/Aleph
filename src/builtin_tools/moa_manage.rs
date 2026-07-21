@@ -212,7 +212,10 @@ pub struct MoaManageOutput {
 #[derive(Clone, Default)]
 pub struct MoaManageTool {
     config: Option<Arc<RwLock<Config>>>,
-    config_patcher: Option<Arc<ConfigPatcher>>,
+    // `OnceLock` (not `Option<T>`) so the registry can late-bind the patcher
+    // through `Arc<BuiltinToolRegistry>` (no `&mut self` available post-wrap).
+    // Hot-path read is a single pointer-load (`OnceLock::get`).
+    config_patcher: Arc<std::sync::OnceLock<Arc<ConfigPatcher>>>,
 }
 
 impl MoaManageTool {
@@ -227,15 +230,16 @@ impl MoaManageTool {
     }
 
     #[must_use]
-    pub fn with_patcher(mut self, patcher: Arc<ConfigPatcher>) -> Self {
-        self.config_patcher = Some(patcher);
+    pub fn with_patcher(self, patcher: Arc<ConfigPatcher>) -> Self {
+        let _ = self.config_patcher.set(patcher);
         self
     }
 
     /// Late-bind a `ConfigPatcher` after construction (see
-    /// `BuiltinToolRegistry::set_config_patcher`).
-    pub fn set_patcher(&mut self, patcher: Arc<ConfigPatcher>) {
-        self.config_patcher = Some(patcher);
+    /// `BuiltinToolRegistry::set_config_patcher`). Idempotent: a second set
+    /// silently no-ops (`OnceLock::set` returns Err when the cell is full).
+    pub fn set_patcher(&self, patcher: Arc<ConfigPatcher>) {
+        let _ = self.config_patcher.set(patcher);
     }
 }
 
@@ -419,7 +423,7 @@ impl MoaManageTool {
     fn resolve_store(
         &self,
     ) -> std::result::Result<crate::providers::moa::MoaPresetStore, MoaManageOutput> {
-        match (&self.config, &self.config_patcher) {
+        match (&self.config, self.config_patcher.get()) {
             (Some(c), Some(p)) => Ok(crate::providers::moa::MoaPresetStore::new(
                 Arc::clone(c),
                 Arc::clone(p),

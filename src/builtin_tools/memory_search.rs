@@ -302,10 +302,15 @@ impl MemorySearchTool {
         // and rewritten at every run start, so a concurrent run of another
         // agent can overwrite it mid-turn and this search would read the
         // wrong agent's workspace. The task-local is scoped per tool call by
-        // the dispatch chokepoint and cannot race.
+        // the dispatch chokepoint and cannot race. When the task-local is
+        // absent (cron / tests / direct RPC), fall back to the boot default
+        // (constructor sets `DEFAULT_AGENT = "main"`) instead of reading the
+        // shared handle — the shared handle is process-global state and a
+        // long-running search triggered outside any turn can race against the
+        // next request's workspace write.
         let default_ws = match crate::tools::turn_context::current_agent_id() {
             Some(agent_id) => agent_id,
-            None => self.default_workspace.read().await.clone(),
+            None => DEFAULT_AGENT.to_string(),
         };
         let workspace_filter = if args.cross_workspace.unwrap_or(false) {
             AgentEnvFilter::All
@@ -340,10 +345,15 @@ impl MemorySearchTool {
             // rewritten at every run start, so a concurrent run of another
             // agent can overwrite it mid-turn and this search would read the
             // wrong session. The task-local is scoped per tool call by the
-            // dispatch chokepoint and cannot race.
+            // dispatch chokepoint and cannot race. When the task-local is
+            // absent (cron / tests / direct RPC), fall back to the boot
+            // default of `"main"` rather than reading the shared handle — the
+            // shared handle is process-global state and a long-running search
+            // triggered outside any turn can race against the next request's
+            // session write.
             let session_key = match crate::tools::turn_context::current_session_key() {
                 Some(sk) => sk,
-                None => self.default_session_key.read().await.clone(),
+                None => "main".to_string(),
             };
             if session_key.is_empty() {
                 Vec::new()

@@ -7,7 +7,12 @@ use crate::error::{AlephError, Result};
 use super::{AgentManager, WorkspaceFile, BOOTSTRAP_FILES};
 
 impl AgentManager {
-    /// Validate `agent_id`: only alphanumeric, underscore, hyphen
+    /// Validate `agent_id`: only ASCII alphanumeric, underscore, hyphen.
+    ///
+    /// Mirrors `AgentManager::create` in `crud.rs` so a Unicode-aware ID
+    /// like `café` cannot pass here only to be rejected by the canonical
+    /// validator — the two paths used to disagree, producing intermittent
+    /// write failures depending on which entry point was hit.
     pub(super) fn validate_agent_id(&self, agent_id: &str) -> Result<()> {
         if agent_id.is_empty() {
             return Err(AlephError::invalid_config(
@@ -23,10 +28,10 @@ impl AgentManager {
         }
         if !agent_id
             .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
             return Err(AlephError::invalid_config(format!(
-                "Invalid agent_id '{agent_id}': must be alphanumeric, '_', or '-'"
+                "Invalid agent_id '{agent_id}': must be ASCII alphanumeric, '_', or '-'"
             )));
         }
         Ok(())

@@ -265,18 +265,32 @@ pub fn get_scratchpad_bindings_path() -> Result<PathBuf> {
 /// * `Option<PathBuf>` - The git root directory, or None if not found
 #[must_use]
 pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
-    let mut current = start.to_path_buf();
+    // Cap depth to prevent unbounded traversal in pathological filesystems
+    // (e.g. circular symlink chains, bind mounts). 100 covers any sane repo
+    // depth and is the same limit `discovery::paths::find_git_root` used
+    // before this consolidation.
+    const MAX_DEPTH: usize = 100;
+
+    // Resolve symlinks up front so `current.join(".git").exists()` does not
+    // follow a `.git` symlink to an arbitrary directory (which used to mis-
+    // report any ancestor dir as a git root). If canonicalize fails (path
+    // does not exist, permission denied), fall back to the un-resolved start.
+    let mut current = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    let mut depth = 0;
 
     loop {
-        let git_path = current.join(".git");
-        if git_path.exists() {
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        if current.join(".git").exists() {
             return Some(current);
         }
-
-        // Move up one directory
-        if !current.pop() {
-            // Reached filesystem root
-            return None;
+        match current.parent() {
+            Some(parent) => {
+                current = parent.to_path_buf();
+                depth += 1;
+            }
+            None => return None,
         }
     }
 }

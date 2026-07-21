@@ -99,6 +99,16 @@ pub fn analyze_shell_command(
     cwd: Option<&Path>,
     env: Option<&HashMap<String, String>>,
 ) -> CommandAnalysis {
+    // Refuse to scan arbitrarily large inputs. The three linear passes below
+    // (subshell / redirect / chain-split) are O(n) each, so a multi-GB command
+    // string exhausts memory/CPU before any security check returns. Real
+    // user-typed commands are well under 64 KiB; anything longer is almost
+    // certainly a DoS attempt or a tooling mistake.
+    const MAX_COMMAND_BYTES: usize = 64 * 1024;
+    if command.len() > MAX_COMMAND_BYTES {
+        return CommandAnalysis::error("command exceeds maximum analyzable length");
+    }
+
     // Check for disallowed characters (backticks, newlines)
     if command.chars().any(|c| DISALLOWED_CHARS.contains(&c)) {
         return CommandAnalysis::error("command contains disallowed characters");
