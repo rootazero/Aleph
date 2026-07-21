@@ -1,6 +1,6 @@
 # Discord Channel Refactor — 熵减 + 连线真实路径
 
-**Status**: Draft (pending user review)
+**Status**: Implemented (branch `worktree-discord-refactor`, Phase 1–3 committed；Phase 4 降级)
 **Created**: 2026-07-20
 **Supersedes**: `2026-04-15-discord-channel-redesign-design.md`（该重设计建了一套 nested-config + resolver + account_pool + handler 组件，**但从未接入真正的 serenity 事件循环**，成为孤立死代码）
 **Reference**: openclaw `extensions/discord/` (~61k LOC TS) + `src/channels/` 共享逻辑
