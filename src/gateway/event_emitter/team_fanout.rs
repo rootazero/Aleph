@@ -24,9 +24,10 @@
 //! { "topic": "team.<team_id>.message", "data": { "agent_id": "...", "text": "...", ... } }
 //! ```
 
+use crate::sync_primitives::RwLock;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, OnceLock, RwLock,
+    Arc, OnceLock,
 };
 
 use async_trait::async_trait;

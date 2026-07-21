@@ -17,7 +17,8 @@
 //! wired on the gateway/Panel run path and only when the run's surface differs
 //! from the session's recorded origin channel.
 
-use std::sync::{Arc, OnceLock, RwLock};
+use crate::sync_primitives::RwLock;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 
