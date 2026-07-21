@@ -36,9 +36,9 @@ impl TokenManager {
         {
             let guard = self.cache.lock().await;
             if let Some(ref cached) = *guard {
-                let refresh_ahead =
-                    Duration::from_secs(300).min((cached.expires_at - Instant::now()) / 3);
-                if Instant::now() < cached.expires_at - refresh_ahead {
+                let remaining = cached.expires_at.saturating_duration_since(Instant::now());
+                let refresh_ahead = Duration::from_secs(300).min(remaining / 3);
+                if remaining > refresh_ahead {
                     return Ok(cached.token.clone());
                 }
             }

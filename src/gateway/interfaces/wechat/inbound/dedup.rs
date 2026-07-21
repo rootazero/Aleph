@@ -65,6 +65,11 @@ impl MessageDedup {
         });
         false
     }
+
+    pub fn remove(&mut self, message_id: &str) {
+        self.seen.retain(|entry| entry.message_id != message_id);
+    }
+
 }
 
 #[cfg(test)]

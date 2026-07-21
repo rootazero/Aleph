@@ -71,9 +71,9 @@ pub struct AccessConfig {
 impl Default for AccessConfig {
     fn default() -> Self {
         Self {
-            dm_policy: DmPolicy::Pairing,
+            dm_policy: DmPolicy::Disabled,
             allow_from: Vec::new(),
-            group_policy: GroupPolicy::Allowlist,
+            group_policy: GroupPolicy::Disabled,
             group_allow_from: Vec::new(),
             groups: Vec::new(),
         }

@@ -63,14 +63,17 @@ impl ContextTokenStore {
     }
 
     async fn persist(&self, account_id: &str) {
-        let cache = self.cache.read().await;
-        let mut payload = HashMap::new();
-        let prefix = format!("{account_id}:");
-        for (key, value) in cache.iter() {
-            if key.starts_with(&prefix) {
-                payload.insert(key[prefix.len()..].to_string(), value.clone());
+        let payload = {
+            let cache = self.cache.read().await;
+            let mut payload = HashMap::new();
+            let prefix = format!("{account_id}:");
+            for (key, value) in cache.iter() {
+                if key.starts_with(&prefix) {
+                    payload.insert(key[prefix.len()..].to_string(), value.clone());
+                }
             }
-        }
+            payload
+        };
         let path = self.cache_path(account_id);
         if let Some(parent) = path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;

@@ -48,7 +48,7 @@ impl ReplyTracker {
             }
             return (true, false);
         }
-        (false, false)
+        (true, false)
     }
 
     pub fn record_reply(&self, msg_id: &str) {
@@ -244,7 +244,7 @@ mod tests {
         let tracker = ReplyTracker::new();
         let msg_id = "msg-1";
 
-        assert_eq!(tracker.can_reply_passively(msg_id), (false, false));
+        assert_eq!(tracker.can_reply_passively(msg_id), (true, false));
         tracker.record_reply(msg_id);
         assert_eq!(tracker.can_reply_passively(msg_id), (true, false));
 

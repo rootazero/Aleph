@@ -308,20 +308,6 @@ impl<H: NativeStreamHandler> StreamCoalescer<H> {
         self.idle_timeout = timeout;
         self
     }
-
-    async fn flush_buffered(
-        &self,
-        conversation_id: &ConversationId,
-        stream_id: &str,
-        pending: &mut PendingStream,
-    ) -> ChannelResult<()> {
-        let Some((text, sequence)) = pending.take_buffer() else {
-            return Ok(());
-        };
-        self.inner
-            .stream_update(conversation_id, stream_id, &text, sequence)
-            .await
-    }
 }
 
 #[async_trait]
@@ -358,16 +344,23 @@ impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoa
             let entry = pending_map
                 .entry(stream_key.clone())
                 .or_insert_with(|| PendingStream::new(tokio::spawn(async move {})));
+            entry.buffer.clear();
             entry.buffer.push_str(text);
             entry.sequence = sequence;
             entry.buffer.len() >= self.min_chars
         };
 
         if must_flush {
-            let mut pending_map = self.pending.write().await;
-            if let Some(pending) = pending_map.get_mut(&stream_key) {
-                pending.idle_task.abort();
-                self.flush_buffered(conversation_id, &stream_key, pending)
+            let buffered = {
+                let mut pending_map = self.pending.write().await;
+                pending_map.get_mut(&stream_key).and_then(|pending| {
+                    pending.idle_task.abort();
+                    pending.take_buffer()
+                })
+            };
+            if let Some((text, sequence)) = buffered {
+                self.inner
+                    .stream_update(conversation_id, &stream_key, &text, sequence)
                     .await?;
             }
         } else {
@@ -382,8 +375,11 @@ impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoa
                 tokio::pin!(sleep_duration);
                 let _ = sleep_duration.await;
 
-                let mut map = pending_map.write().await;
-                if let Some(pending) = map.remove(&sid) {
+                let pending = {
+                    let mut map = pending_map.write().await;
+                    map.remove(&sid)
+                };
+                if let Some(pending) = pending {
                     let _ = inner
                         .stream_update(&conv, &sid, &pending.buffer, pending.sequence)
                         .await;

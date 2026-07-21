@@ -182,8 +182,8 @@ impl Channel for IrcChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let write_tx = self.write_tx.read().await;
-        let write_tx = write_tx.as_ref().ok_or_else(|| {
+        let write_tx = self.write_tx.read().await.clone();
+        let write_tx = write_tx.ok_or_else(|| {
             ChannelError::NotConnected("IRC adapter not started - call start() first".to_string())
         })?;
 

@@ -193,11 +193,6 @@ impl Channel for WhatsAppChannel {
             access,
             vec![],
         );
-        let history_buffer =
-            crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer::new(
-                self.config.history.clone(),
-            );
-
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
             loop {
@@ -220,7 +215,6 @@ impl Channel for WhatsAppChannel {
                                 if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
-                                            history_buffer.add(&msg).await;
                                             if inbound_tx.send(msg).is_err() {
                                                 break;
                                             }
@@ -230,6 +224,9 @@ impl Channel for WhatsAppChannel {
                                         }
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
                                             tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
+                                            if inbound_tx.send(msg).is_err() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }

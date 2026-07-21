@@ -241,7 +241,10 @@ impl Handler {
                 return;
             }
         }
-        if !self.config.is_channel_allowed(component.channel_id.get()) {
+        if component.guild_id.is_none() && !self.config.dm_allowed {
+            return;
+        }
+        if component.guild_id.is_some() && !self.config.is_channel_allowed(component.channel_id.get()) {
             return;
         }
 
@@ -332,7 +335,7 @@ impl EventHandler for Handler {
         }
 
         // Check channel permission
-        if !self.config.is_channel_allowed(msg.channel_id.get()) {
+        if !is_dm && !self.config.is_channel_allowed(msg.channel_id.get()) {
             tracing::debug!(
                 "Message from channel {} ignored (not in allowlist)",
                 msg.channel_id
@@ -462,6 +465,11 @@ impl EventHandler for Handler {
 
         if !self.config.slash_commands_enabled {
             tracing::debug!("Slash command ignored (disabled in config)");
+            return;
+        }
+
+        if command.guild_id.is_none() && !self.config.dm_allowed {
+            tracing::debug!("Slash command from DM ignored (DMs disabled)");
             return;
         }
 

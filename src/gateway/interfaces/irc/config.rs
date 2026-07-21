@@ -32,7 +32,7 @@ pub struct IrcConfig {
     /// IRC channels to join (e.g., ["#aleph", "#test"])
     pub channels: Vec<String>,
 
-    /// Use TLS (reserved for future support)
+    /// Use TLS (recommended; default false to preserve legacy plaintext deployments)
     #[serde(default)]
     pub use_tls: bool,
 

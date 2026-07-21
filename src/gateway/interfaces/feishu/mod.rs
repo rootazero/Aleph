@@ -35,6 +35,7 @@ pub struct FeishuChannel {
     runtime: Option<FeishuRuntime>,
     message_ops: Option<MessageOps>,
     shutdown_tx: Option<watch::Sender<bool>>,
+    webhook_handle: Option<tokio::task::JoinHandle<()>>,
     test_mode: bool,
 }
 
@@ -66,6 +67,7 @@ impl FeishuChannel {
             runtime: None,
             message_ops: None,
             shutdown_tx: None,
+            webhook_handle: None,
             test_mode,
         })
     }
@@ -178,7 +180,7 @@ impl Channel for FeishuChannel {
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
                 policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
             };
-            tokio::spawn(run_webhook_server(webhook_state));
+            self.webhook_handle = Some(tokio::spawn(run_webhook_server(webhook_state)));
         } else {
             let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
             runtime.start(self.channel_state.sender()).await?;
@@ -197,6 +199,9 @@ impl Channel for FeishuChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
+        }
+        if let Some(handle) = self.webhook_handle.take() {
+            handle.abort();
         }
         if let Some(mut runtime) = self.runtime.take() {
             runtime.stop().await;

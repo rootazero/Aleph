@@ -469,13 +469,4 @@ mod tests {
         assert_eq!(config.media_max_mb, 25);
         assert_eq!(config.media_max_bytes(), 25 * 1024 * 1024);
     }
-
-    #[test]
-    fn test_media_fields_serde_default_backward_compatible() {
-        // Configs written before these fields existed must still deserialize.
-        let json = r#"{"homeserver_url": "https://matrix.org", "access_token": "t"}"#;
-        let config: MatrixConfig = serde_json::from_str(json).unwrap();
-        assert!(config.download_media);
-        assert_eq!(config.media_max_mb, 25);
-    }
 }

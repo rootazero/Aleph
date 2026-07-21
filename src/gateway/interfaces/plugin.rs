@@ -32,12 +32,14 @@ pub fn get_factory(channel_type: &str) -> Option<ChannelFactoryFn> {
 }
 
 pub fn channel_types() -> Vec<&'static str> {
-    PLUGINS
+    let mut types = PLUGINS
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .keys()
         .copied()
-        .collect()
+        .collect::<Vec<_>>();
+    types.sort_unstable();
+    types
 }
 
 pub fn create(channel_type: &str, config: ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>> {

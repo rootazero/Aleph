@@ -51,6 +51,7 @@ impl WeChatRuntime {
         }
 
         let sync_buf = load_sync_buf(&self.config.data_dir, &self.config.account_id).await;
+        self.token_store.restore(&self.config.account_id).await;
         {
             let mut buf = self.sync_buf.write().await;
             *buf = sync_buf;
@@ -75,16 +76,19 @@ impl WeChatRuntime {
                 .await
             {
                 Ok(resp) => {
-                    if let Some(new_buf) = resp.get_updates_buf {
-                        let mut buf = self.sync_buf.write().await;
-                        *buf = new_buf.clone();
-                        drop(buf);
-                        save_sync_buf(&self.config.data_dir, &self.config.account_id, &new_buf)
-                            .await;
-                    }
-
-                    if !resp.msgs.is_empty() {
-                        self.process_messages(&resp.msgs, &sender).await;
+                    let processed = if resp.msgs.is_empty() {
+                        true
+                    } else {
+                        self.process_messages(&resp.msgs, &sender).await
+                    };
+                    if processed {
+                        if let Some(new_buf) = resp.get_updates_buf {
+                            let mut buf = self.sync_buf.write().await;
+                            *buf = new_buf.clone();
+                            drop(buf);
+                            save_sync_buf(&self.config.data_dir, &self.config.account_id, &new_buf)
+                                .await;
+                        }
                     }
 
                     backoff_ms = INITIAL_BACKOFF_MS;
@@ -120,15 +124,17 @@ impl WeChatRuntime {
         &self,
         messages: &[super::types::Message],
         sender: &InboundMessageSender,
-    ) {
-        let mut dedup = self.dedup.lock().await;
-
+    ) -> bool {
         for msg in messages {
             if !should_accept_message(msg, &self.config) {
                 continue;
             }
 
-            if dedup.is_duplicate(&msg.msg_id) {
+            let duplicate = {
+                let mut dedup = self.dedup.lock().await;
+                dedup.is_duplicate(&msg.msg_id)
+            };
+            if duplicate {
                 tracing::debug!(msg_id = %msg.msg_id, "skipping duplicate message");
                 continue;
             }
@@ -138,11 +144,24 @@ impl WeChatRuntime {
                 &crate::gateway::channel::ChannelId::new("wechat"),
                 &self.config.account_id,
             ) {
+                if let Some(context_token) = msg.context_token.clone() {
+                    self.token_store
+                        .set(
+                            &self.config.account_id,
+                            inbound.conversation_id.as_str(),
+                            context_token,
+                        )
+                        .await;
+                }
                 if let Err(e) = sender.send(inbound) {
                     tracing::error!("failed to send message to channel: {:?}", e);
+                    let mut dedup = self.dedup.lock().await;
+                    dedup.remove(&msg.msg_id);
+                    return false;
                 }
             }
         }
+        true
     }
 
     pub async fn stop(&self) {
