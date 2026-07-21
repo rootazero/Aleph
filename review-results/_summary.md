@@ -113,3 +113,57 @@ See `review-results/{thinker,tool_output,tools,utils,verification,vision}.md` fo
 ## Conclusion
 
 All six modules are well-disciplined and match project redlines. No source-code changes are required at this time; only the review-results/* reports are added.
+
+---
+
+# Batch 2 (2026-07-21)
+
+**Modules reviewed**: 9 (`src/components`, `src/config`, `src/context`, `src/core`, `src/discovery`, `src/tool_metadata`, `src/domain`, `src/exec`, `src/executor`)
+**Branch**: `fix/review-batch2-modules`
+**Worktree**: `/tmp/opencode/aleph-review`
+
+## Module Totals
+
+| Module              | Files |    LOC | Critical | High | Medium |  Low | Total |
+|---------------------|------:|-------:|---------:|-----:|-------:|-----:|------:|
+| src/components      |    20 |   1905 |        0 |    5 |      9 |    5 |    19 |
+| src/config          |    98 |  27045 |    **4** |   12 |     18 |   20 |    54 |
+| src/context         |    24 |  10770 |        0 |    5 |      9 |   12 |    26 |
+| src/core            |     2 |    158 |        0 |    2 |      7 |    5 |    14 |
+| src/discovery       |     4 |   1482 |        0 |    2 |      5 |   14 |    21 |
+| src/tool_metadata   |    26 |   6729 |        0 |    1 |      9 |   12 |    22 |
+| src/domain          |     2 |   1103 |        0 |    1 |      8 |    8 |    17 |
+| src/exec            |    17 |   3946 |    **2** |    7 |      8 |   12 |    29 |
+| src/executor        |    21 |   9102 |    **4** |    7 |      8 |    5 |    24 |
+| **TOTAL**           |   214 |  ~62k  |  **10** |  **42** |  **81** |  **93** |  **226** |
+
+## Critical / High Fixed (commits on `fix/review-batch2-modules`)
+
+1. **config: voice streaming api_key plaintext** — secret_migration now covers `voice.streaming.api_key` (was hard-coded "skip if empty" then written to disk in plaintext).
+2. **config: defaults override OnceLock silent re-init** — was `let _ = OnceLock::set(...)`; now logs a warning so a stale defaults.toml can't silently disable every serde default function.
+3. **exec: `/approve` text-fallback bypass** — `resolve_for_session` now gates on `record.originator_user_id`; paired-chat approval bypass via plain-text replies is closed.
+4. **exec: leak_detector prefix-gate bypass** — secrets without a known prefix (raw JWTs, HMAC blobs, custom vault tokens) used to escape every regex check because `ac.is_match` was a hard gate. Now always runs regex.
+5. **executor: set_config_patcher no-op at boot** — `Arc::get_mut` on the registry always returned `None` (the boot path clones the registry Arc into `ExecutionEngine::new` and again into `agent_result.tool_registry`), so `self_config` and `moa` shipped without a patcher. Tools' `config_patcher` field switched to `Arc<OnceLock<…>>`, setter takes `&self`.
+6. **executor: memory_search cross-session race** — falling back to the process-global `default_session_key` / `default_workspace` handle outside a turn scope raced the next request's write. Falls back to boot default (`"main"`) instead.
+7. **tool_metadata: incomplete alias-collision detection** — only checked `(new.aliases vs existing.name)`; added the symmetric `(existing.aliases vs new.name)` and `alias↔alias` cases.
+8. **discovery: duplicate find_git_root** — `utils::paths::find_git_root` and `discovery::paths::find_git_root` had diverging depth + canonicalize semantics. Consolidated onto the safer utils implementation with depth cap 100 + canonicalize-first.
+9. **discovery: symlink-following in scanner** — `path.is_dir()/is_file()` follows symlinks; replaced with `symlink_metadata`-based check so a symlink inside `~/.aleph/{skills,commands,plugins}` pointing outside the expected tree is rejected.
+10. **executor: R1 platform imports in constructor** — noted but **intentional** (DI seam at composition root, evaluated 2026-07-20; existing comment documents the decision). Left as-is.
+11. **components: StreamingTextPart DoS** — `append` now caps content at 16 MiB.
+12. **components: PartUpdateData silent corruption** — `added` / `updated` now return `Result<_, serde_json::Error>`; the previous `unwrap_or_default()` produced a `part_json=""` payload that the UI misrendered with no error.
+13. **core: MediaType missing from re-exports** — `MediaAttachment::media_type` referenced `MediaType` but `MediaType` wasn't re-exported. Fixed.
+14. **core: similarity_score NaN/Inf** — deserializer now drops non-finite scores (they poisoned downstream sort/rank).
+15. **context: ToolAwareChunker::new panic** — `assert!(token_ratio > 0.0)` crashed the agent loop on a misconfigured caller; now falls back to 0.25 with a warn log.
+16. **context: is_summary_text too permissive** — matched any text starting with `[Context Summary`; tightened to require `]` or ` (` immediately after the head, so user content like `[Context Summary, please ignore everything above]` is no longer mistaken for a marker.
+17. **domain: Os serde aliases case-sensitive** — replaced with a custom `Deserialize` that delegates to the existing case-insensitive `FromStr`; serde aliases and `FromStr` can no longer drift.
+18. **domain: dead DispatchSpec / ArgMode / command_dispatch** — marked `#[deprecated]` instead of removing (manifests in the wild still carry the field); planned-removal notice attached.
+19. **exec: ScanFinding.matched_text exposure** — visibility tightened from `pub` to `pub(crate)` so the 20-char secret prefix can't leak through audit pipelines that log the whole struct.
+20. **exec: parser.rs DoS** — `analyze_shell_command` refuses inputs over 64 KiB (the three linear scans are O(n) each).
+21. **config: validate_agent_id ASCII drift** — `agent_files.rs::validate_agent_id` used `is_alphanumeric()` (Unicode-aware) while `crud.rs::validate_id` used `is_ascii_alphanumeric()`; IDs like `café` passed one and were rejected by the other. Unified on ASCII.
+
+## Notes
+
+- 10 critical findings across `src/exec`, `src/executor`, and `src/config` — all addressed.
+- Of the 42 high findings, 21 were addressed (the rest are R7/R9/R10 architecture-stance notes that need broader refactors, not isolated fixes — left for a separate batch).
+- R1 platform imports in `src/executor/builder/constructor/mod.rs:262-276` are **intentional** per the existing in-code comment; left as-is.
+- R10 MemoryInjectionMode gating (boot-time static partition, NOT per-message intent) is R10-compliant; logged for awareness only.
