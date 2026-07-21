@@ -158,6 +158,10 @@ impl RawMemoryStore for SqliteMemoryBackend {
         const CHUNK_SIZE: usize = 900;
         let mut total = 0usize;
 
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("mark_raw_as_processed transaction: {e}")))?;
+
         for chunk in ids.chunks(CHUNK_SIZE) {
             let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
             let sql = format!(
@@ -170,11 +174,14 @@ impl RawMemoryStore for SqliteMemoryBackend {
                 .map(|id| id as &dyn rusqlite::types::ToSql)
                 .collect();
 
-            let affected = conn
+            let affected = tx
                 .execute(&sql, params.as_slice())
                 .map_err(|e| AlephError::config(format!("mark_raw_as_processed failed: {e}")))?;
             total += affected;
         }
+
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("mark_raw_as_processed commit: {e}")))?;
 
         Ok(total)
     }

@@ -6,11 +6,12 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, reload, util::SubscriberInitExt, EnvFilter};
 
 /// Guard to keep the non-blocking writer alive, plus initialization result
 static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, String>> =
     OnceLock::new();
+static FILTER_RELOAD: OnceLock<reload::Handle<EnvFilter, tracing_subscriber::Registry>> = OnceLock::new();
 
 /// Initialize file + console logging for a named component.
 ///
@@ -52,6 +53,17 @@ pub fn init_component_logging(
     }
 }
 
+pub fn set_log_level(filter: &str) -> Result<(), String> {
+    let handle = FILTER_RELOAD
+        .get()
+        .ok_or_else(|| "Logging has not been initialized".to_string())?;
+    handle
+        .modify(|current| {
+            *current = EnvFilter::new(filter);
+        })
+        .map_err(|e| format!("Failed to reload log filter: {e}"))
+}
+
 /// Internal function to set up logging infrastructure
 fn setup_logging(
     component: &str,
@@ -71,6 +83,7 @@ fn setup_logging(
     // RUST_LOG overrides default_filter
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let (filter_layer, filter_handle) = reload::Layer::new(env_filter);
 
     // Console layer only when stdout is an interactive terminal. In daemon
     // mode `daemonize()` redirects stdout to gateway.log BEFORE this runs, so
@@ -96,13 +109,17 @@ fn setup_logging(
         .event_format(crate::pii_filter::PiiScrubbingFormat);
 
     if tracing_subscriber::registry()
-        .with(env_filter)
+        .with(filter_layer)
         .with(console_layer)
         .with(file_layer)
         .try_init()
         .is_err()
     {
         return Err("Tracing already initialized".into());
+    }
+
+    if FILTER_RELOAD.set(filter_handle).is_err() {
+        return Err("Logging filter was already initialized".into());
     }
 
     tracing::info!(component, "Logging system initialized");

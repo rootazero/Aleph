@@ -23,14 +23,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::Method;
 use tokio::sync::RwLock;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::protocol::MCP_PROTOCOL_VERSION;
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SafeFetchResponse, SsrfPolicy};
 
 /// Header carrying the Streamable HTTP session identifier.
 const SESSION_HEADER: &str = "Mcp-Session-Id";
@@ -72,8 +73,6 @@ pub struct HttpTransport {
     server_name: String,
     /// Configuration
     config: HttpTransportConfig,
-    /// HTTP client
-    client: Client,
     /// Connection state
     alive: RwLock<bool>,
     /// Streamable HTTP session id assigned by the server on `initialize`
@@ -97,15 +96,9 @@ impl HttpTransport {
     /// * `config` - HTTP transport configuration
     ///
     pub fn new(name: impl Into<String>, config: HttpTransportConfig) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(config.timeout)
-            .build()
-            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {e}")))?;
-
         Ok(Self {
             server_name: name.into(),
             config,
-            client,
             alive: RwLock::new(true),
             session_id: RwLock::new(None),
             negotiated_version: std::sync::RwLock::new(None),
@@ -113,10 +106,7 @@ impl HttpTransport {
         })
     }
 
-    /// Build request with protocol and configured headers
-    async fn build_request(&self, body: String) -> reqwest::RequestBuilder {
-        // Echo the negotiated revision once `initialize` has settled; until
-        // then (and for servers that never negotiate) fall back to our default.
+    async fn request_headers(&self, session: Option<&str>) -> Result<HeaderMap> {
         let protocol_version = self
             .negotiated_version
             .read()
@@ -124,30 +114,51 @@ impl HttpTransport {
             .clone()
             .unwrap_or_else(|| MCP_PROTOCOL_VERSION.to_string());
 
-        let mut req = self
-            .client
-            .post(&self.config.url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .header("MCP-Protocol-Version", protocol_version);
-
-        if let Some(session) = self.session_id.read().await.as_deref() {
-            req = req.header(SESSION_HEADER, session);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            HeaderName::from_static("accept"),
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
+        headers.insert(
+            HeaderName::from_static("mcp-protocol-version"),
+            HeaderValue::from_str(&protocol_version)
+                .map_err(|e| AlephError::IoError(format!("Invalid MCP protocol version: {e}")))?,
+        );
+        if let Some(session) = session {
+            headers.insert(
+                HeaderName::from_static("mcp-session-id"),
+                HeaderValue::from_str(session)
+                    .map_err(|e| AlephError::IoError(format!("Invalid MCP session id: {e}")))?,
+            );
         }
-
         for (key, value) in &self.config.headers {
-            req = req.header(key, value);
+            let name = HeaderName::from_bytes(key.as_bytes())
+                .map_err(|e| AlephError::IoError(format!("Invalid MCP header name: {e}")))?;
+            let value = HeaderValue::from_str(value)
+                .map_err(|e| AlephError::IoError(format!("Invalid MCP header value: {e}")))?;
+            headers.insert(name, value);
         }
+        Ok(headers)
+    }
 
-        req.body(body)
+    async fn send_body(&self, body: Vec<u8>, session: Option<&str>) -> Result<SafeFetchResponse> {
+        let headers = self.request_headers(session).await?;
+        safe_fetch(
+            &self.config.url,
+            &SsrfPolicy::default(),
+            SafeFetchRequest::post(body, self.config.timeout).with_headers(headers),
+        )
+        .await
+        .map_err(|e| AlephError::IoError(format!("HTTP request to '{}' failed: {e}", self.server_name)))
     }
 
     /// Capture the session id from a response, if the server assigned one
-    async fn capture_session(&self, response: &reqwest::Response) {
-        let value = response
-            .headers()
-            .get(SESSION_HEADER)
-            .and_then(|v| v.to_str().ok());
+    async fn capture_session(&self, headers: &HeaderMap) {
+        let value = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok());
         if let Some(value) = value {
             let mut session = self.session_id.write().await;
             if session.as_deref() != Some(value) {
@@ -208,13 +219,7 @@ fn parse_sse_response(body: &str, expected_id: u64) -> Option<JsonRpcResponse> {
 #[async_trait]
 impl McpTransport for HttpTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        // SSRF protection: validate the target URL before sending
-        let ssrf_policy = SsrfPolicy::default();
-        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
-            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-        })?;
-
-        let body = serde_json::to_string(request)
+        let body = serde_json::to_vec(request)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {e}")))?;
 
         tracing::debug!(
@@ -223,14 +228,9 @@ impl McpTransport for HttpTransport {
             "Sending HTTP request"
         );
 
-        let response = self.build_request(body).await.send().await.map_err(|e| {
-            AlephError::IoError(format!(
-                "HTTP request to '{}' failed: {}",
-                self.server_name, e
-            ))
-        })?;
-
-        let status = response.status();
+        let session = self.session_id.read().await.clone();
+        let response = self.send_body(body, session.as_deref()).await?;
+        let status = response.status;
 
         if status == reqwest::StatusCode::NOT_FOUND && self.clear_expired_session().await {
             return Err(AlephError::IoError(format!(
@@ -240,26 +240,22 @@ impl McpTransport for HttpTransport {
         }
 
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = String::from_utf8_lossy(&response.body);
             return Err(AlephError::IoError(format!(
                 "HTTP {} from '{}': {}",
                 status, self.server_name, body
             )));
         }
 
-        // Capture only from success responses: a 404 that carries a fresh
-        // session id must not survive the clear above.
-        self.capture_session(&response).await;
+        self.capture_session(&response.headers).await;
 
         let is_sse = response
-            .headers()
+            .headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
 
-        let text = response
-            .text()
-            .await
+        let text = String::from_utf8(response.body)
             .map_err(|e| AlephError::IoError(format!("Failed to read response: {e}")))?;
 
         if is_sse {
@@ -280,13 +276,7 @@ impl McpTransport for HttpTransport {
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
-        // SSRF protection: validate the target URL before sending
-        let ssrf_policy = SsrfPolicy::default();
-        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
-            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-        })?;
-
-        let body = serde_json::to_string(notification)
+        let body = serde_json::to_vec(notification)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {e}")))?;
 
         tracing::debug!(
@@ -295,19 +285,12 @@ impl McpTransport for HttpTransport {
             "Sending HTTP notification"
         );
 
-        let response = self.build_request(body).await.send().await.map_err(|e| {
-            AlephError::IoError(format!(
-                "HTTP notification to '{}' failed: {}",
-                self.server_name, e
-            ))
-        })?;
+        let session = self.session_id.read().await.clone();
+        let response = self.send_body(body, session.as_deref()).await?;
+        let status = response.status;
 
-        let status = response.status();
-
-        // 202 Accepted is the spec's acknowledgement for notifications and
-        // falls under is_success(); anything else is logged best-effort.
         if status.is_success() {
-            self.capture_session(&response).await;
+            self.capture_session(&response.headers).await;
         } else {
             if status == reqwest::StatusCode::NOT_FOUND {
                 self.clear_expired_session().await;
@@ -327,22 +310,26 @@ impl McpTransport for HttpTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        // Best-effort session termination per spec (HTTP DELETE).
         let session = self.session_id.write().await.take();
         if let Some(session) = session {
-            let mut req = self
-                .client
-                .delete(&self.config.url)
-                .header(SESSION_HEADER, &session);
-            for (key, value) in &self.config.headers {
-                req = req.header(key, value);
-            }
-            if let Err(e) = req.send().await {
-                tracing::debug!(
+            match self.request_headers(Some(&session)).await {
+                Ok(headers) => {
+                    let request = SafeFetchRequest::get(self.config.timeout)
+                        .with_method(Method::DELETE)
+                        .with_headers(headers);
+                    if let Err(e) = safe_fetch(&self.config.url, &SsrfPolicy::default(), request).await {
+                        tracing::debug!(
+                            server = %self.server_name,
+                            error = %e,
+                            "MCP session DELETE failed (best-effort)"
+                        );
+                    }
+                }
+                Err(e) => tracing::debug!(
                     server = %self.server_name,
                     error = %e,
-                    "MCP session DELETE failed (best-effort)"
-                );
+                    "MCP session DELETE header construction failed (best-effort)"
+                ),
             }
         }
 

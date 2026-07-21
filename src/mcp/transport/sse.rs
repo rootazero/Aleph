@@ -22,7 +22,7 @@ use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::JsonRpcError;
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 
 use super::sse_events::SseEvent;
 
@@ -114,6 +114,7 @@ impl SseTransport {
     /// receiving server-sent notifications.
     pub fn new(name: impl Into<String>, config: SseTransportConfig) -> Result<Self> {
         let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(config.timeout)
             .build()
             .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {e}")))?;
@@ -140,10 +141,11 @@ impl SseTransport {
     /// * `Err(AlephError)` - If starting the listener failed
     pub async fn start_event_listener(&self) -> Result<()> {
         // SSRF protection: validate the base URL before opening an SSE connection
-        let ssrf_policy = SsrfPolicy::default();
-        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
-            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-        })?;
+        validate_url_async(&self.config.url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| {
+                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+            })?;
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
@@ -167,7 +169,9 @@ impl SseTransport {
             );
 
             // Create a client specifically for SSE (no timeout for long-lived connection)
-            let sse_client = match Client::builder().build() {
+            let sse_client = match Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build() {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!(server = %server_name, error = %e, "Failed to create SSE client");
@@ -201,7 +205,10 @@ impl SseTransport {
                         }
 
                         // Wait before reconnecting
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                            _ = shutdown_rx.recv() => break,
+                        }
                     }
                 }
             }
@@ -350,10 +357,11 @@ impl SseTransport {
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
         // SSRF protection: validate the target URL before sending
-        let ssrf_policy = SsrfPolicy::default();
-        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
-            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-        })?;
+        validate_url_async(&self.config.url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| {
+                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+            })?;
 
         let body = serde_json::to_string(request)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {e}")))?;
@@ -395,10 +403,11 @@ impl McpTransport for SseTransport {
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
         // SSRF protection: validate the target URL before sending
-        let ssrf_policy = SsrfPolicy::default();
-        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
-            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-        })?;
+        validate_url_async(&self.config.url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| {
+                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+            })?;
 
         let body = serde_json::to_string(notification)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {e}")))?;
@@ -498,6 +507,12 @@ impl SseTransport {
         request_id: serde_json::Value,
         result: serde_json::Value,
     ) -> Result<()> {
+        validate_url_async(&self.config.url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| {
+                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+            })?;
+
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -536,6 +551,12 @@ impl SseTransport {
         code: i32,
         message: &str,
     ) -> Result<()> {
+        validate_url_async(&self.config.url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| {
+                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+            })?;
+
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_id,

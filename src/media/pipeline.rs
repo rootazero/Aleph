@@ -61,6 +61,15 @@ impl MediaPipeline {
         media_type: &MediaType,
         prompt: Option<&str>,
     ) -> Result<MediaOutput, MediaError> {
+        if let MediaInput::Url { url } = input {
+            crate::security::ssrf::validate_url_async(url, &crate::security::ssrf::SsrfPolicy::default())
+                .await
+                .map_err(|e| MediaError::ProviderError {
+                    provider: "ssrf".to_string(),
+                    message: format!("media URL blocked: {e}"),
+                })?;
+        }
+
         // 1. Policy check (file size if path)
         if let MediaInput::FilePath { path } = input {
             if tokio::fs::try_exists(path).await.unwrap_or(false) {

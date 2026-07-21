@@ -10,11 +10,11 @@ use std::time::{Duration, SystemTime};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use futures::StreamExt;
 use tracing::{debug, warn};
 
 use crate::gateway::channel::Attachment;
 use crate::gateway::media::{detect_mime, MediaItem};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 
 /// Maximum file size allowed (50 MB — for video files).
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
@@ -56,20 +56,13 @@ pub enum CacheError {
 
 /// Downloads/resolves channel attachments to local temp files and provides
 /// base64 encoding for LLM injection.
-pub struct MediaCache {
-    /// HTTP client reused across downloads.
-    client: reqwest::Client,
-}
+pub struct MediaCache;
 
 impl MediaCache {
-    /// Create a new cache with a shared HTTP client.
+    /// Create a new cache.
     #[must_use]
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(DOWNLOAD_TIMEOUT)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self { client }
+        Self
     }
 
     /// Resolve an attachment to a local file.
@@ -155,50 +148,32 @@ impl MediaCache {
     ) -> Result<CachedMedia, CacheError> {
         let dir = ensure_session_dir(session_id).await?;
 
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| CacheError::Download(e.to_string()))?;
+        let response = safe_fetch(
+            url,
+            &SsrfPolicy::default(),
+            SafeFetchRequest::get(DOWNLOAD_TIMEOUT).with_max_body_bytes(MAX_FILE_SIZE as usize),
+        )
+        .await
+        .map_err(|e| CacheError::Download(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            return Err(CacheError::Download(format!("HTTP {}", resp.status())));
+        if !response.status.is_success() {
+            return Err(CacheError::Download(format!("HTTP {}", response.status)));
         }
 
-        // Pre-check Content-Length to avoid downloading oversized files
-        if let Some(content_length) = resp.content_length() {
-            if content_length > MAX_FILE_SIZE {
-                return Err(CacheError::TooLarge {
-                    size: content_length,
-                });
+        if let Some(content_length) = response.headers.get(reqwest::header::CONTENT_LENGTH) {
+            if let Some(content_length) = content_length.to_str().ok().and_then(|s| s.parse().ok()) {
+                if content_length > MAX_FILE_SIZE {
+                    return Err(CacheError::TooLarge {
+                        size: content_length,
+                    });
+                }
             }
         }
 
         let filename = unique_filename(id, filename);
         let path = dir.join(&filename);
-
-        // Stream response body to file with incremental size check
-        // (guards against servers that lie about Content-Length or omit it)
-        use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::File::create(&path).await?;
-        let mut stream = resp.bytes_stream();
-        let mut total_size: u64 = 0;
-
-        while let Some(result) = stream.next().await {
-            let chunk = result.map_err(|e| CacheError::Download(e.to_string()))?;
-            total_size += chunk.len() as u64;
-            if total_size > MAX_FILE_SIZE {
-                // Clean up partially-written file
-                drop(file);
-                let _ = tokio::fs::remove_file(&path).await;
-                return Err(CacheError::TooLarge { size: total_size });
-            }
-            file.write_all(&chunk).await?;
-        }
-        // Flush buffered writes before the handle is dropped — tokio's
-        // File does not guarantee buffered data is submitted on drop.
-        file.flush().await?;
+        let total_size = response.body.len() as u64;
+        tokio::fs::write(&path, response.body).await?;
 
         debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
         Ok(CachedMedia {

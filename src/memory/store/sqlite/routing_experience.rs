@@ -288,8 +288,11 @@ impl SqliteMemoryBackend {
             out
         };
 
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("prune_routing_experiences transaction: {e}")))?;
         for id in drop_ids {
-            let rowid: Option<i64> = conn
+            let rowid: Option<i64> = tx
                 .query_row(
                     "SELECT rowid FROM routing_exp_vec_map WHERE agent_id = ?1 AND routing_exp_id = ?2",
                     params![agent_id, id],
@@ -300,14 +303,14 @@ impl SqliteMemoryBackend {
             if let Some(rowid) = rowid {
                 // Table name is validated by `vec::routing_exp_vec_table_for_dim` against a static allowlist.
                 // rust-doctor-disable-next-line sql-injection-risk
-                conn.execute(
+                tx.execute(
                     &format!("DELETE FROM {table} WHERE rowid = ?1"),
                     params![rowid],
                 )
                 .map_err(|e| {
                     AlephError::config(format!("prune_routing_experiences vec del: {e}"))
                 })?;
-                conn.execute(
+                tx.execute(
                     "DELETE FROM routing_exp_vec_map WHERE rowid = ?1",
                     params![rowid],
                 )
@@ -315,11 +318,13 @@ impl SqliteMemoryBackend {
                     AlephError::config(format!("prune_routing_experiences map del: {e}"))
                 })?;
             }
-            conn.execute("DELETE FROM routing_experiences WHERE id = ?1", params![id])
+            tx.execute("DELETE FROM routing_experiences WHERE id = ?1", params![id])
                 .map_err(|e| {
                     AlephError::config(format!("prune_routing_experiences exp del: {e}"))
                 })?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("prune_routing_experiences commit: {e}")))?;
         Ok(())
     }
 

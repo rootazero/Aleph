@@ -132,6 +132,20 @@ impl McpPersistentConfig {
             ))
         })?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = tokio::fs::set_permissions(&temp_path, perms).await {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                return Err(AlephError::IoError(format!(
+                    "Failed to restrict MCP config permissions at {}: {}",
+                    temp_path.display(),
+                    e
+                )));
+            }
+        }
+
         if let Err(e) = tokio::fs::rename(&temp_path, path).await {
             // Clean up orphaned temp file on rename failure
             let _ = tokio::fs::remove_file(&temp_path).await;

@@ -90,7 +90,7 @@ where
                         .unwrap_or_default()
                 };
 
-                write!(writer, "{}{{", span.name())?;
+                write!(writer, "{}{{", scrub_pii(span.name()))?;
                 if !fields.is_empty() {
                     write!(writer, "{fields}")?;
                 }
@@ -127,10 +127,16 @@ impl Visit for StringVisitor {
         if !self.message.is_empty() {
             self.message.push_str(", ");
         }
-        let _ = if field.name() == "message" {
-            write!(&mut self.message, "{value:?}")
+        if field.name() == "message" {
+            let formatted = format!("{value:?}");
+            let trimmed = formatted
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(&formatted);
+            self.message.push_str(trimmed);
         } else {
-            write!(&mut self.message, "{}={:?}", field.name(), value)
-        };
+            use std::fmt::Write;
+            let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
+        }
     }
 }

@@ -345,11 +345,7 @@ impl McpClient {
         let (direct_match, all_connections) = {
             let servers = self.external_servers.read().await;
 
-            let direct = if let Some((server_name, _prompt_name)) = name.split_once(':') {
-                servers.get(server_name).cloned()
-            } else {
-                None
-            };
+            let direct = self.find_server_by_prefix(name, &servers).cloned();
 
             let all: Vec<_> = servers.values().cloned().collect();
             (direct, all)
@@ -391,11 +387,7 @@ impl McpClient {
         let (direct_match, all_connections) = {
             let servers = self.external_servers.read().await;
 
-            let direct = if let Some((server_name, _tool_name)) = name.split_once(':') {
-                servers.get(server_name).cloned()
-            } else {
-                None
-            };
+            let direct = self.find_server_by_prefix(name, &servers).cloned();
 
             let all: Vec<_> = servers.values().cloned().collect();
             (direct, all)

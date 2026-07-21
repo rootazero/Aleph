@@ -7,7 +7,7 @@
 
 use crate::error::AlephError;
 use crate::memory::notes::canonicalize_category;
-use crate::memory::notes::indexer::NoteIndexer;
+use crate::memory::notes::indexer::{NoteIndexer, CATEGORY_DIRS};
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
 use crate::memory::notes::note::{sanitize_title, KnowledgeNote, Relation};
 use crate::memory::notes::store::NoteStore;
@@ -564,6 +564,11 @@ fn split_path(note_path: &str) -> Result<(String, String), ApplyError> {
             "invalid category in note_path '{note_path}': {e}"
         )))
     })?;
+    if !CATEGORY_DIRS.contains(&safe_cat.as_str()) {
+        return Err(ApplyError::Other(AlephError::other(format!(
+            "unknown category '{safe_cat}' in note_path '{note_path}'"
+        ))));
+    }
     Ok((safe_cat, name.to_string()))
 }
 

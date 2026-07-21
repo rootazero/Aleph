@@ -27,6 +27,7 @@ pub struct FenceSpan {
     pub(crate) indent: String,
     /// Language tag if present (e.g., "rust", "javascript").
     pub(crate) language: Option<String>,
+    info: String,
 }
 
 /// Internal state for a fence that has been opened but not yet closed.
@@ -36,6 +37,7 @@ struct OpenFence {
     marker: String,
     indent: String,
     language: Option<String>,
+    info: String,
 }
 
 impl FenceSpan {
@@ -99,9 +101,10 @@ impl FenceSpan {
     /// Get the reopening fence line (preserves language tag).
     #[must_use]
     pub fn reopen_line(&self) -> String {
-        match &self.language {
-            Some(lang) if !lang.is_empty() => format!("{}{}{}", self.indent, self.marker, lang),
-            _ => self.close_line(),
+        if !self.info.is_empty() {
+            format!("{}{}{}", self.indent, self.marker, self.info)
+        } else {
+            self.close_line()
         }
     }
 }
@@ -159,14 +162,16 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                 let same_char = marker.chars().next() == open.marker.chars().next();
                 let long_enough = marker.len() >= open.marker.len();
                 let no_info = info.is_empty();
+                let valid_indent = indent.len() <= open.indent.len();
 
-                if same_char && long_enough && no_info {
+                if same_char && long_enough && no_info && valid_indent {
                     spans.push(FenceSpan {
                         start: open.start,
                         end: line_start,
                         marker: open.marker,
                         indent: open.indent,
                         language: open.language,
+                        info: open.info,
                     });
                 } else {
                     current_fence = Some(open);
@@ -183,6 +188,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                     marker: marker.to_string(),
                     indent: indent.to_string(),
                     language,
+                    info: info.to_string(),
                 });
             }
         }
@@ -208,6 +214,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
             marker: open.marker,
             indent: open.indent,
             language: open.language,
+            info: open.info,
         });
     }
 
@@ -368,6 +375,25 @@ mod tests {
     }
 
     #[test]
+    fn reopen_preserves_fence_info() {
+        let spans = parse_fence_spans("```rust title=example\ncode\n```");
+        assert_eq!(
+            get_fence_split(&spans, 15).unwrap().reopen_line,
+            "```rust title=example"
+        );
+    }
+
+    #[test]
+    fn closing_fence_cannot_be_more_indented_than_opening() {
+        let spans = parse_fence_spans("```\ncode\n   ```\n");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            spans[0].end(),
+            spans[0].start() + "```\ncode\n   ```\n".len()
+        );
+    }
+
+    #[test]
     fn test_close_reopen_lines() {
         let span = FenceSpan {
             start: 0,
@@ -375,6 +401,7 @@ mod tests {
             marker: "```".to_string(),
             indent: "".to_string(),
             language: Some("typescript".to_string()),
+            info: "typescript".to_string(),
         };
 
         assert_eq!(span.close_line(), "```");

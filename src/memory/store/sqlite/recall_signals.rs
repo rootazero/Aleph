@@ -97,30 +97,38 @@ impl SqliteMemoryBackend {
                    (id, note_path, agent_id, query_hash, query_text, channel, score, session_id, namespace, created_at, day_bucket) \
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
-        let mut stmt = conn
-            .prepare_cached(sql)
-            .map_err(|e| AlephError::config(format!("record_signals prepare: {e}")))?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("record_signals transaction: {e}")))?;
+        let inserted = {
+            let mut stmt = tx
+                .prepare_cached(sql)
+                .map_err(|e| AlephError::config(format!("record_signals prepare: {e}")))?;
 
-        let mut inserted = 0usize;
-        for hit in hits {
-            let id = uuid::Uuid::new_v4().to_string();
-            let rows = stmt
-                .execute(params![
-                    id,
-                    hit.note_path,
-                    agent_id,
-                    qhash,
-                    query,
-                    channel,
-                    hit.score,
-                    session_id,
-                    namespace,
-                    now,
-                    bucket,
-                ])
-                .map_err(|e| AlephError::config(format!("record_signals insert: {e}")))?;
-            inserted += rows;
-        }
+            let mut inserted = 0usize;
+            for hit in hits {
+                let id = uuid::Uuid::new_v4().to_string();
+                let rows = stmt
+                    .execute(params![
+                        id,
+                        hit.note_path,
+                        agent_id,
+                        qhash,
+                        query,
+                        channel,
+                        hit.score,
+                        session_id,
+                        namespace,
+                        now,
+                        bucket,
+                    ])
+                    .map_err(|e| AlephError::config(format!("record_signals insert: {e}")))?;
+                inserted += rows;
+            }
+            inserted
+        };
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("record_signals commit: {e}")))?;
 
         Ok(inserted)
     }

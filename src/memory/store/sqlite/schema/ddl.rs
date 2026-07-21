@@ -19,6 +19,8 @@ CREATE INDEX IF NOT EXISTS idx_recall_agent_path
     ON recall_signals(agent_id, note_path);
 CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
     ON recall_signals(day_bucket);
+CREATE INDEX IF NOT EXISTS idx_recall_query_bucket_channel
+    ON recall_signals(query_hash, day_bucket, channel);
 "#;
 
 pub const DREAM_REPORTS_DDL: &str = r#"

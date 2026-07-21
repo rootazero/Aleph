@@ -49,6 +49,11 @@ impl PhoneRule {
         false
     }
 
+    fn is_decimal_context(text: &str, start: usize, end: usize) -> bool {
+        (start > 0 && text.as_bytes()[start - 1] == b'.')
+            || (end < text.len() && text.as_bytes()[end] == b'.')
+    }
+
     /// Check if match is in a timestamp context (surrounding ~80 chars)
     fn is_timestamp_context(text: &str, start: usize) -> bool {
         // Snap to valid UTF-8 character boundaries to avoid panicking
@@ -100,6 +105,10 @@ impl PiiRule for PhoneRule {
 
             // Anti-false-positive: hex boundary (UUID fragment)
             if Self::is_hex_bounded(text, start, end) {
+                continue;
+            }
+
+            if Self::is_decimal_context(text, start, end) {
                 continue;
             }
 
@@ -171,6 +180,12 @@ mod tests {
         let matches = rule().detect("a18612345678b");
         // Preceded by hex 'a' — should skip
         assert_eq!(matches.len(), 0, "Hex-bounded number should not match");
+    }
+
+    #[test]
+    fn test_no_match_decimal_context() {
+        let matches = rule().detect("value: 1.13812345678");
+        assert_eq!(matches.len(), 0);
     }
 
     // === Anti-false-positive: Timestamp context ===

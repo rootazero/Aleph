@@ -1390,12 +1390,7 @@ impl NoteStore for SqliteMemoryBackend {
             return Ok(None);
         };
 
-        let table = match dim_hint {
-            768 => "notes_vec_768",
-            1024 => "notes_vec_1024",
-            1536 => "notes_vec_1536",
-            _ => return Ok(None),
-        };
+        let table = vec::notes_vec_table_for_dim(dim_hint)?;
 
         let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
         let blob: Option<Vec<u8>> = conn.query_row(&sql, params![rowid], |row| row.get(0)).ok();
@@ -1524,6 +1519,9 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("relink resolve ctx: {e}")))?;
 
         let mut updated = 0usize;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("relink transaction: {e}")))?;
         for (id, raw) in rows {
             let r = crate::memory::notes::links::resolve(&raw, &resolve_ctx);
             if let Some(target) = &r.target {
@@ -1536,7 +1534,7 @@ impl NoteStore for SqliteMemoryBackend {
                 // leaving every remaining dangling row unprocessed while
                 // earlier updates stay applied. `OR IGNORE` skips the losing
                 // row instead of erroring.
-                let changed = conn
+                let changed = tx
                     .execute(
                         "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
                                 resolved_by = ?3, status = 'active' WHERE id = ?4",
@@ -1548,7 +1546,7 @@ impl NoteStore for SqliteMemoryBackend {
                 // dangling duplicate of the edge that won — remove it. A
                 // no-op when the UPDATE above succeeded, since status is
                 // already 'active' by the time this runs.
-                conn.execute(
+                tx.execute(
                     "DELETE FROM notes_links WHERE id = ?1 AND status = 'dangling'",
                     params![id],
                 )
@@ -1559,6 +1557,8 @@ impl NoteStore for SqliteMemoryBackend {
                 }
             }
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("relink commit: {e}")))?;
         Ok(updated)
     }
 
@@ -1606,6 +1606,9 @@ impl NoteStore for SqliteMemoryBackend {
         let ctx = super::helpers::build_resolve_context(&conn, agent_id)
             .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
         let mut revived = 0usize;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AlephError::config(format!("backfill transaction: {e}")))?;
         for (id, raw) in rows {
             let r = links::resolve(&raw, &ctx);
             if let Some(target) = r.target {
@@ -1618,7 +1621,7 @@ impl NoteStore for SqliteMemoryBackend {
                 // `UPDATE OR IGNORE` skips the losing row instead of erroring
                 // out mid-pass; the follow-up DELETE clears the now-redundant
                 // loser so it doesn't linger as a permanent duplicate.
-                let changed = conn
+                let changed = tx
                     .execute(
                         "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
                                 resolved_by = ?3, status = 'active' WHERE id = ?4",
@@ -1626,7 +1629,7 @@ impl NoteStore for SqliteMemoryBackend {
                     )
                     .map_err(|e| AlephError::config(format!("backfill update: {e}")))?;
 
-                conn.execute(
+                tx.execute(
                     "DELETE FROM notes_links WHERE id = ?1 AND status IN ('dangling', 'tombstone')",
                     params![id],
                 )
@@ -1637,6 +1640,8 @@ impl NoteStore for SqliteMemoryBackend {
                 }
             }
         }
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("backfill commit: {e}")))?;
         Ok(revived)
     }
 

@@ -9,7 +9,7 @@ static BANK_CARD_RE: OnceLock<Regex> = OnceLock::new();
 
 fn bank_card_regex() -> &'static Regex {
     // rust-doctor-disable-next-line unwrap-in-production
-    BANK_CARD_RE.get_or_init(|| Regex::new(r"\d{16,19}").expect("static bank card regex compiles"))
+    BANK_CARD_RE.get_or_init(|| Regex::new(r"\d{13,19}").expect("static bank card regex compiles"))
 }
 
 pub struct BankCardRule;
@@ -23,7 +23,7 @@ impl BankCardRule {
     fn luhn_check(number: &str) -> bool {
         let digits: Vec<u32> = number.chars().filter_map(|c| c.to_digit(10)).collect();
 
-        if digits.len() < 16 {
+        if digits.len() < 13 {
             return false;
         }
 
@@ -136,6 +136,12 @@ mod tests {
     fn test_detect_valid_mastercard() {
         // 5425233430109903 is Luhn-valid
         let matches = rule().detect("5425233430109903");
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_valid_amex_card() {
+        let matches = rule().detect("378282246310005");
         assert_eq!(matches.len(), 1);
     }
 

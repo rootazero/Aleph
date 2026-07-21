@@ -133,12 +133,8 @@ pub fn get_log_level() -> LogLevel {
 
 /// Set the log level dynamically
 ///
-/// This updates the global log level setting. Note that this affects
-/// the filter directive, but the actual filtering is still controlled
-/// by the `EnvFilter` set during initialization.
-///
-/// For full dynamic control, the logging system should be reinitialized
-/// with the new level, or use a `reload::Layer`.
+/// This updates both the reported level and the active subscriber filter when
+/// shared logging has been initialized.
 pub fn set_log_level(level: LogLevel) {
     // Run the one-time RUST_LOG seed before applying the explicit override, so
     // an early `set` is never clobbered by a later lazy env seed (the `Once`
@@ -146,6 +142,9 @@ pub fn set_log_level(level: LogLevel) {
     init_log_level();
     let old_level = get_log_level();
     CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
+    if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
+        tracing::debug!(%error, "Runtime log filter is unavailable");
+    }
 
     tracing::info!(
         old_level = ?old_level,

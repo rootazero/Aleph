@@ -114,7 +114,7 @@ where
                     .map(|fields| scrub_pii(fields.as_str()))
                     .unwrap_or_default();
 
-                write!(writer, "{}{{", span.name())?;
+                write!(writer, "{}{{", scrub_pii(span.name()))?;
                 if !fields.is_empty() {
                     write!(writer, "{fields}")?;
                 }
