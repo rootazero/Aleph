@@ -99,6 +99,14 @@ pub async fn handle_list_db(
                             .and_then(|v| v.as_str())
                             .map(String::from)
                     });
+                    // Third twin: the per-session usage-mode override, so the
+                    // Panel pill restores on reload exactly like the tier.
+                    let mode = m.identity_meta.as_ref().and_then(|im| {
+                        im.custom
+                            .get(crate::config::types::policies::MODE_SESSION_KEY)
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    });
 
                     SessionInfo {
                         key: m.key,
@@ -125,6 +133,7 @@ pub async fn handle_list_db(
                         updated_at,
                         project_root,
                         exec_tier,
+                        mode,
                     }
                 })
                 .collect();

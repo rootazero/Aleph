@@ -55,6 +55,7 @@ where
             think_level: None,
             // Legacy `run_flow` helper resolves no exec tier — no approval line.
             exec_tier: None,
+            session_mode: None,
         };
 
         let handle = orchestrator

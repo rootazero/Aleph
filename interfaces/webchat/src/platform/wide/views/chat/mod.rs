@@ -5,6 +5,7 @@ pub mod events;
 pub mod exec_tier_picker;
 pub mod list_scroll;
 pub mod mention_palette;
+pub mod mode_picker;
 pub mod messages;
 pub mod plan;
 mod plan_archive_cell;

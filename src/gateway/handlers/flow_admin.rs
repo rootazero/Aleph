@@ -149,6 +149,7 @@ mod tests {
                 _transient_context: Option<String>,
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
                 _exec_tier: Option<crate::config::types::policies::ExecTier>,
+                _session_mode: Option<crate::config::types::policies::SessionMode>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

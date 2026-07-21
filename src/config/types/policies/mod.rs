@@ -31,12 +31,14 @@ pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
 pub mod retry;
+pub mod session_mode;
 pub mod tool_permissions;
 pub mod web_fetch;
 
 pub use exec_tier::{
     builtin_tiers, effective_permission, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
+pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;
@@ -75,6 +77,12 @@ pub struct PoliciesConfig {
     /// explicit `tool_permissions` entries win over the tier's preset.
     #[serde(default)]
     pub exec_tier: ExecTier,
+
+    /// Default session usage mode (chat / work / code) for sessions with no
+    /// per-session override. Orthogonal to `exec_tier`: the mode partitions
+    /// the tool *presentation* surface; the tier governs approvals.
+    #[serde(default)]
+    pub mode: SessionMode,
 
     /// LLM risk triage in front of human approval prompts (codex Guardian
     /// port, escalate-don't-deny variant): actions the judge finds clearly

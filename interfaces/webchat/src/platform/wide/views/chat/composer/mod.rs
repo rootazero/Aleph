@@ -209,6 +209,8 @@ pub(super) fn InputArea() -> impl IntoView {
         // send there is no session row to have written it to — and that is the
         // turn the picker was armed for. The server stamps it onto the session.
         let tier = chat.session_exec_tier.get();
+        // The composer's usage mode — same first-send carriage as the tier.
+        let mode = chat.session_mode.get();
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -229,6 +231,7 @@ pub(super) fn InputArea() -> impl IntoView {
                 pr,
                 mo,
                 tier.as_deref(),
+                mode.as_deref(),
                 false,
             )
             .await
@@ -366,6 +369,7 @@ pub(super) fn InputArea() -> impl IntoView {
         let project_root = chat.active_project_root.get_untracked();
         let model_override = chat.selected_model.get_untracked();
         let tier = chat.session_exec_tier.get_untracked();
+        let mode = chat.session_mode.get_untracked();
         let dash = dashboard;
         spawn_local(async move {
             for entry in batch {
@@ -389,6 +393,7 @@ pub(super) fn InputArea() -> impl IntoView {
                     project_root.as_deref(),
                     model_override.as_ref(),
                     tier.as_deref(),
+                    mode.as_deref(),
                     false,
                 )
                 .await
@@ -1041,6 +1046,8 @@ pub(super) fn InputArea() -> impl IntoView {
                         // with the attach paperclip. Dropdowns still flip upward.
                         <ProjectMenu />
                         <crate::components::model_picker::ModelPicker />
+                        // Per-session usage mode (chat / work / code).
+                        <crate::views::chat::mode_picker::ModePicker />
                         // Per-session tool-execution tier (Ask / Auto / Full).
                         <crate::views::chat::exec_tier_picker::ExecTierPicker />
                         // Live context-window gauge (self-hides until first usage).

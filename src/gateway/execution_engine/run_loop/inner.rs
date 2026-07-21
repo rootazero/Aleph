@@ -212,6 +212,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // last stamped with). `None` = send no thinking directive, which is the
         // behaviour every release before this one shipped.
         let think_level = self.resolve_turn_think_level(request).await;
+        // This turn's usage mode (composer mode pill / RPC `mode` param / the
+        // model's own `session_set_mode` call, else the session's stamped mode,
+        // else `[policies] mode`). Partitions the tool PRESENTATION surface
+        // only — schema-resident core set + deferred families — never
+        // permissions; `Work` is the identity partition.
+        let session_mode = self.resolve_turn_mode(request).await;
+        // Mode-effective schema-resident core set, fed to both
+        // `build_request_tool_service` call sites and the SchemaLookupTool
+        // registration gate below. Work returns the configured set unchanged.
+        let mode_core_tools = session_mode.effective_core_tools(&self.config.core_tools);
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -652,9 +662,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // is collapsed, so get_tool_schema has nothing to serve and must NOT
             // appear — keeping the tool surface byte-identical to pre-feature
             // (escape hatch) and preserving prompt-cache continuity.
-            if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(
-                &self.config.core_tools,
-            ) {
+            if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(&mode_core_tools) {
                 // Snapshot every tool's ORIGINAL full schema before progressive
                 // disclosure collapses them, then register the on-demand loader.
                 let schema_snapshot: std::collections::HashMap<String, serde_json::Value> =
@@ -685,10 +693,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // `tool_search` shrinks it when the model discovers a tool. Two
             // independent sets here would make deferred tools permanently
             // uncallable, which is exactly the bug this replaced.
-            let deferred = if self.config.defer_mcp_tools {
-                crate::tools::scoped::DeferredTools::new(mcp_tool_names)
+            // Mode-deferred families join the same tier: the session mode's
+            // static name partition (chat defers desktop/browser/media/teams/
+            // automation, code defers desktop/media, work defers nothing) is
+            // computed against the registry's REAL names, so a family that is
+            // not registered costs nothing. One shared handle with
+            // `tool_search` keeps every deferred tool promotable (R7).
+            let mut deferred_names = if self.config.defer_mcp_tools {
+                mcp_tool_names
             } else {
+                std::collections::BTreeSet::new()
+            };
+            deferred_names.extend(
+                loop_registry_inner
+                    .tool_definitions()
+                    .into_iter()
+                    .map(|d| d.name)
+                    .filter(|name| session_mode.defers_tool(name)),
+            );
+            let deferred = if deferred_names.is_empty() {
                 crate::tools::scoped::DeferredTools::empty()
+            } else {
+                crate::tools::scoped::DeferredTools::new(deferred_names)
             };
             if !deferred.is_empty() {
                 let docs: Vec<crate::tools::tool_search::ToolDoc> = loop_registry_inner
@@ -749,7 +775,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     tool_permissions.clone(),
                     exec_tier,
                     unattended,
-                    &self.config.core_tools,
+                    &mode_core_tools,
                     self.config.truncate_tool_descriptions,
                     deferred.clone(),
                 );
@@ -995,7 +1021,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 tool_permissions.clone(),
                 exec_tier,
                 unattended,
-                &self.config.core_tools,
+                &mode_core_tools,
                 self.config.truncate_tool_descriptions,
                 deferred.clone(),
             );
@@ -1117,6 +1143,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // approval regime it will actually meet (codex `<approval_policy>`
                 // parity, R9).
                 exec_tier: Some(exec_tier),
+                // This turn's resolved usage mode — the same value that
+                // partitioned the tool surface above — surfaced to the model
+                // as the `Usage mode:` line (R9: the mode's behavioral half
+                // lives in the prompt, the code only partitions).
+                session_mode: Some(session_mode),
             };
 
             // Dispatch via the orchestrator

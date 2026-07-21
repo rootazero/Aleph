@@ -954,6 +954,7 @@ async fn send_utterance(
     let pr = chat.active_project_root.get_untracked();
     let mo = chat.selected_model.get_untracked();
     let tier = chat.session_exec_tier.get_untracked();
+    let mode = chat.session_mode.get_untracked();
     // Bind to the conversation active at send time (I1), same as the typed
     // path, so run events route to this conversation's bubble.
     let send_conv = sessions.active_conv();
@@ -968,6 +969,7 @@ async fn send_utterance(
         pr.as_deref(),
         mo.as_ref(),
         tier.as_deref(),
+        mode.as_deref(),
         true,
     )
     .await

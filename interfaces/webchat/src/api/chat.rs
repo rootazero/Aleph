@@ -76,6 +76,7 @@ impl ChatApi {
         project_root: Option<&str>,
         model_override: Option<&crate::api::providers::ModelOverride>,
         exec_tier: Option<&str>,
+        mode: Option<&str>,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
@@ -103,6 +104,8 @@ impl ChatApi {
             // the one the picker was armed for. The server stamps it onto the
             // session, so later turns need not resend it.
             "exec_tier": exec_tier,
+            // Same first-message carriage for the usage mode (mode pill).
+            "mode": mode,
             "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;
