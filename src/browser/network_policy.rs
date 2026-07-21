@@ -122,6 +122,15 @@ impl From<ssrf::SsrfError> for PolicyViolation {
             ssrf::SsrfError::DnsResolutionFailed { host, .. } => {
                 Self::InvalidUrl(format!("DNS resolution failed for host: {host}"))
             }
+            ssrf::SsrfError::RequiresDnsResolution(host) => {
+                // Sync SSRF path refused the hostname because it has no DNS
+                // resolution. The browser layer always reaches the network,
+                // so missing the async check is a real violation; surface as
+                // invalid URL so the caller is forced to use the async path.
+                Self::InvalidUrl(format!(
+                    "SSRF sync validation requires DNS resolution for host: {host}"
+                ))
+            }
             ssrf::SsrfError::TooManyRedirects(_) | ssrf::SsrfError::FetchFailed(_) => {
                 Self::InvalidUrl(err.to_string())
             }

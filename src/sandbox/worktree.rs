@@ -322,14 +322,14 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             let stderr = child.stderr.take();
             let stdout_task = tokio::spawn(async move {
                 let mut buf = Vec::new();
-                if let Some(pipe) = stdout {
+                if let Some(mut pipe) = stdout {
                     let _ = pipe.read_to_end(&mut buf).await;
                 }
                 buf
             });
             let stderr_task = tokio::spawn(async move {
                 let mut buf = Vec::new();
-                if let Some(pipe) = stderr {
+                if let Some(mut pipe) = stderr {
                     let _ = pipe.read_to_end(&mut buf).await;
                 }
                 buf
