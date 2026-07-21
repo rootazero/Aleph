@@ -114,9 +114,9 @@ impl InitializationCoordinator {
 
     /// Run the full initialization sequence
     pub async fn run(&self) -> InitializationResult {
-        static INITIALIZING: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if INITIALIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        static INITIALIZING: crate::sync_primitives::AtomicBool =
+            crate::sync_primitives::AtomicBool::new(false);
+        if INITIALIZING.swap(true, crate::sync_primitives::Ordering::SeqCst) {
             return InitializationResult {
                 success: false,
                 completed_phases: Vec::new(),
@@ -129,7 +129,7 @@ impl InitializationCoordinator {
         struct Guard;
         impl Drop for Guard {
             fn drop(&mut self) {
-                INITIALIZING.store(false, std::sync::atomic::Ordering::SeqCst);
+                INITIALIZING.store(false, crate::sync_primitives::Ordering::SeqCst);
             }
         }
         let _guard = Guard;
