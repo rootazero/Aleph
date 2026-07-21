@@ -377,6 +377,13 @@ impl ValueObject for AutomationSpec {}
 // ---------------------------------------------------------------------------
 
 /// How arguments are passed to a dispatched command.
+#[deprecated(
+    since = "2026.7.21",
+    note = "No production code consumes ArgMode. The planned dispatch \
+             feature was never wired up; keep the type around for one \
+             release in case any out-of-tree skill manifest references it, \
+             then delete."
+)]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArgMode {
@@ -387,9 +394,15 @@ pub enum ArgMode {
     Parsed,
 }
 
+#[allow(deprecated)]
 impl ValueObject for ArgMode {}
 
 /// Describes how a skill dispatches to a tool/command.
+#[deprecated(
+    since = "2026.7.21",
+    note = "No production code consumes DispatchSpec. See ArgMode's deprecation \
+             note for the planned-removal timeline."
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchSpec {
     /// The tool name to dispatch to.
@@ -399,6 +412,7 @@ pub struct DispatchSpec {
     pub arg_mode: ArgMode,
 }
 
+#[allow(deprecated)]
 impl ValueObject for DispatchSpec {}
 
 /// Serde helper: returns `true`.
@@ -415,8 +429,11 @@ pub struct InvocationPolicy {
     /// Whether to prevent the model from invoking this skill.
     #[serde(default)]
     pub disable_model_invocation: bool,
-    /// Optional command dispatch configuration.
+    /// Optional command dispatch configuration. Unused — kept under
+    /// `Option` so existing skill manifests that still carry the field
+    /// continue to deserialize, but the dispatch path is not wired.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[allow(deprecated)]
     pub command_dispatch: Option<DispatchSpec>,
 }
 
