@@ -420,6 +420,9 @@ pub async fn handle_status(
 const fn wizard_error_code(e: &WizardSessionError) -> i32 {
     match e {
         WizardSessionError::SessionNotFound { .. } => RESOURCE_NOT_FOUND,
+        WizardSessionError::InvalidAnswer(_) | WizardSessionError::StepNotFound(_) => {
+            INVALID_PARAMS
+        }
         _ => INTERNAL_ERROR,
     }
 }
@@ -585,6 +588,34 @@ mod tests {
                 .as_bool()
                 .expect("cancelled must be a bool"),
             "cancelled must be true"
+        );
+    }
+
+    #[test]
+    fn wizard_error_code_maps_client_errors_to_invalid_params() {
+        use crate::wizard::WizardSessionError;
+        let invalid_answer =
+            WizardSessionError::InvalidAnswer("wrong step id".to_string());
+        let step_missing = WizardSessionError::StepNotFound("s".to_string());
+        let session_missing = WizardSessionError::SessionNotFound {
+            session_id: "s".to_string(),
+        };
+        let internal = WizardSessionError::Internal("boom".to_string());
+        assert_eq!(
+            wizard_error_code(&invalid_answer),
+            crate::gateway::protocol::INVALID_PARAMS
+        );
+        assert_eq!(
+            wizard_error_code(&step_missing),
+            crate::gateway::protocol::INVALID_PARAMS
+        );
+        assert_eq!(
+            wizard_error_code(&session_missing),
+            crate::gateway::protocol::RESOURCE_NOT_FOUND
+        );
+        assert_eq!(
+            wizard_error_code(&internal),
+            crate::gateway::protocol::INTERNAL_ERROR
         );
     }
 }

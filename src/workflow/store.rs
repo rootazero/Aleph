@@ -91,17 +91,21 @@ pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
         .map_err(|e| AlephError::config(format!("workflow serialise failed: {e}")))?;
 
     let tmp_path = unique_tmp_path(&final_path);
-    fs::write(&tmp_path, body).map_err(|e| {
-        AlephError::config(format!("workflow write {} failed: {e}", tmp_path.display()))
-    })?;
-    fs::rename(&tmp_path, &final_path).map_err(|e| {
+    if let Err(e) = fs::write(&tmp_path, body) {
         let _ = fs::remove_file(&tmp_path);
-        AlephError::config(format!(
+        return Err(AlephError::config(format!(
+            "workflow write {} failed: {e}",
+            tmp_path.display()
+        )));
+    }
+    if let Err(e) = fs::rename(&tmp_path, &final_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AlephError::config(format!(
             "workflow rename {} → {} failed: {e}",
             tmp_path.display(),
             final_path.display()
-        ))
-    })?;
+        )));
+    }
     Ok(final_path)
 }
 
@@ -116,16 +120,21 @@ pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<Pa
     ensure_dir_at(dir)?;
     let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
     let tmp_path = unique_tmp_path(&final_path);
-    fs::write(&tmp_path, body)
-        .map_err(|e| AlephError::config(format!("write {} failed: {e}", tmp_path.display())))?;
-    fs::rename(&tmp_path, &final_path).map_err(|e| {
+    if let Err(e) = fs::write(&tmp_path, body) {
         let _ = fs::remove_file(&tmp_path);
-        AlephError::config(format!(
+        return Err(AlephError::config(format!(
+            "write {} failed: {e}",
+            tmp_path.display()
+        )));
+    }
+    if let Err(e) = fs::rename(&tmp_path, &final_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(AlephError::config(format!(
             "rename {} → {} failed: {e}",
             tmp_path.display(),
             final_path.display()
-        ))
-    })?;
+        )));
+    }
     Ok(final_path)
 }
 
@@ -376,5 +385,30 @@ mod tests {
         let path = write_text_at(tmp.path(), "../escape", "workflow.js", "x").unwrap();
         // Stored file stays a direct child of tmp dir.
         assert_eq!(path.parent().unwrap(), tmp.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_at_cleans_tmp_when_write_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        let mut perms = fs::metadata(dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(dir, perms).unwrap();
+        let result = save_at(dir, &sample("blocked"));
+        let mut restore = fs::metadata(dir).unwrap().permissions();
+        restore.set_mode(0o755);
+        fs::set_permissions(dir, restore).unwrap();
+        assert!(result.is_err(), "read-only dir must fail");
+        let entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.iter().all(|n| !n.ends_with(".tmp")),
+            "no .tmp left behind on write failure, got: {entries:?}"
+        );
     }
 }

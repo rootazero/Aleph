@@ -95,7 +95,8 @@ impl ClarifyTaskMeta {
     /// Serialise to the JSON value stored under [`CLARIFY_META_KEY`].
     #[must_use]
     pub fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+        serde_json::to_value(self)
+            .expect("ClarifyTaskMeta is plain types; serialisation cannot fail")
     }
 
     /// Recover the clarify record from a `coord_task`'s metadata, if present.

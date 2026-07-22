@@ -31,14 +31,28 @@ impl ToolHandlerRegistry {
     }
 
     pub fn register(&self, name: String, handler: Arc<dyn ToolHandler>) -> Result<(), ToolError> {
-        let current = self.inner.load();
-        if current.contains_key(&name) {
-            return Err(ToolError::Duplicate { name: name.clone() });
-        }
-        let mut next = (**current).clone();
+        // Atomic check-and-insert via `ArcSwap::rcu`. Returning the
+        // current `Arc` from the closure is a no-op swap (compare_and_swap
+        // sees pointer equality), so a concurrent register for the same name
+        // either wins the CAS or rolls into the next rcu iteration with the
+        // newly inserted key visible. The prior load/clone/store sequence
+        // had a TOCTOU window where both callers passed `contains_key` and
+        // both then overwrote each other — closing that is the point of this
+        // change.
         let source = handler.definition().source.clone();
-        next.insert(name.clone(), handler);
-        self.inner.store(Arc::new(next));
+        let mut inserted = false;
+        self.inner.rcu(|current| {
+            if current.contains_key(&name) {
+                return Arc::clone(current);
+            }
+            let mut next = (**current).clone();
+            next.insert(name.clone(), handler.clone());
+            inserted = true;
+            Arc::new(next)
+        });
+        if !inserted {
+            return Err(ToolError::Duplicate { name });
+        }
         let _ = self
             .change_tx
             .send(RegistryChange::Registered { name, source });
@@ -47,17 +61,27 @@ impl ToolHandlerRegistry {
 
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        let current = self.inner.load();
-        let handler = current.get(name).cloned()?;
-        let mut next = (**current).clone();
-        let removed = next.remove(name)?;
+        // Atomic check-and-remove, same rcu guard as `register`. The closure
+        // captures the to-be-removed handler so a successful swap hands it
+        // back to the caller; a missing key returns the current `Arc` (no-op
+        // swap) and leaves `removed` `None`.
+        let mut removed: Option<Arc<dyn ToolHandler>> = None;
+        self.inner.rcu(|current| {
+            let Some(handler) = current.get(name).cloned() else {
+                return Arc::clone(current);
+            };
+            let mut next = (**current).clone();
+            next.remove(name);
+            removed = Some(handler);
+            Arc::new(next)
+        });
+        let removed = removed?;
         let source = removed.definition().source.clone();
-        self.inner.store(Arc::new(next));
         let _ = self.change_tx.send(RegistryChange::Unregistered {
             name: name.to_string(),
             source,
         });
-        Some(handler)
+        Some(removed)
     }
 
     #[must_use]
@@ -183,5 +207,59 @@ mod tests {
         let _ = reg.unregister("e");
         let evt = rx.try_recv().expect("event");
         assert!(matches!(evt, RegistryChange::Unregistered { .. }));
+    }
+
+    /// Regression: concurrent `register` calls for the SAME name used to both
+    /// pass the `contains_key` check (load → clone → store window), then the
+    /// last `store` silently overwrote the earlier caller. After the rcu
+    /// rewrite, exactly ONE caller succeeds and every other observes
+    /// `ToolError::Duplicate`; the snapshot contains a single entry for
+    /// the name.
+    #[test]
+    fn concurrent_register_for_same_name_atomic() {
+        use std::sync::Arc;
+        use std::thread;
+        const THREADS: usize = 16;
+        let reg = Arc::new(ToolHandlerRegistry::new());
+        let mut handles = Vec::with_capacity(THREADS);
+        for _ in 0..THREADS {
+            let r = Arc::clone(&reg);
+            handles.push(thread::spawn(move || r.register("race".into(), fake("race"))));
+        }
+        let mut wins = 0usize;
+        let mut dupes = 0usize;
+        for h in handles {
+            match h.join().expect("join") {
+                Ok(()) => wins += 1,
+                Err(ToolError::Duplicate { .. }) => dupes += 1,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+        assert_eq!(wins, 1, "exactly one register may succeed for the same name");
+        assert_eq!(dupes, THREADS - 1, "every other register must report Duplicate");
+        assert_eq!(reg.snapshot().len(), 1);
+    }
+
+    /// Regression: concurrent `register` calls for DISTINCT names used to
+    /// race on the load → clone → store sequence, occasionally dropping one
+    /// of the entries when both cloner and inserter based on the same
+    /// snapshot. The rcu loop re-loads on CAS failure, so all inserts
+    /// land.
+    #[test]
+    fn concurrent_register_for_distinct_names_keeps_every_entry() {
+        use std::sync::Arc;
+        use std::thread;
+        const THREADS: usize = 16;
+        let reg = Arc::new(ToolHandlerRegistry::new());
+        let mut handles = Vec::with_capacity(THREADS);
+        for i in 0..THREADS {
+            let r = Arc::clone(&reg);
+            let name = format!("t{i}");
+            handles.push(thread::spawn(move || r.register(name.clone(), fake(&name))));
+        }
+        for h in handles {
+            h.join().expect("join").expect("distinct-name register must succeed");
+        }
+        assert_eq!(reg.snapshot().len(), THREADS);
     }
 }
