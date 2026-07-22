@@ -9,18 +9,18 @@ import Foundation
         #expect(PairingTarget.parse("   ") == .failure(.empty))
     }
 
-    @Test("bare host gets http and default port")
+    @Test("bare host gets https and default port")
     func bareHost() throws {
         let t = try PairingTarget.parse("192.168.1.5").get()
-        #expect(t.url.absoluteString == "http://192.168.1.5:18790")
+        #expect(t.url.absoluteString == "https://192.168.1.5:18790")
         #expect(t.host == "192.168.1.5")
         #expect(t.port == 18790)
     }
 
-    @Test("host:port keeps user port, adds http")
+    @Test("host:port keeps user port, adds https")
     func hostPort() throws {
         let t = try PairingTarget.parse("box.lan:9000").get()
-        #expect(t.url.absoluteString == "http://box.lan:9000")
+        #expect(t.url.absoluteString == "https://box.lan:9000")
         #expect(t.port == 9000)
     }
 

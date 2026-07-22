@@ -62,7 +62,7 @@ struct PairingView: View {
                 .font(.title2).bold()
                 .foregroundStyle(titleText)
 
-            Text("Enter your Aleph server address — e.g. 192.168.1.5 or http://gw.example.com")
+            Text("Enter your Aleph server address — e.g. 192.168.1.5 or https://gw.example.com")
                 .font(.footnote)
                 .foregroundStyle(subtitleText)
                 .multilineTextAlignment(.center)

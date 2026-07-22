@@ -54,13 +54,14 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # WKWebView loads cleartext http (remote public-IP core, or local
-        # 127.0.0.1). NSAllowsArbitraryLoads alone disables ATS for ALL hosts
-        # (public IP + loopback). Do NOT also add NSAllowsLocalNetworking: on
-        # iOS 10+ its mere presence makes the OS IGNORE NSAllowsArbitraryLoads,
-        # which re-blocks public-IP cleartext (NSURLErrorDomain -1022).
+        # ATS is now enforced for remote hosts (https required). Only loopback /
+        # local-network cleartext remains allowed so simulator-side local dev with
+        # http://127.0.0.1 still works. NSAllowsLocalNetworking is safe here because
+        # NSAllowsArbitraryLoads is false: on iOS 10+ the presence of the local key
+        # simply scopes the exception to local networks.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoads: false
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aleph.panel

@@ -47,8 +47,8 @@ private struct StubProbe: ReachabilityProbing {
         let store = InMemoryConnectionStore()
         let state = AppState(store: store, probe: StubProbe(reachable: true), envURL: { nil })
         await state.submit("192.168.1.5")
-        #expect(state.screen == .connected(URL(string: "http://192.168.1.5:18790")!))
-        #expect(store.load() == URL(string: "http://192.168.1.5:18790")!)
+        #expect(state.screen == .connected(URL(string: "https://192.168.1.5:18790")!))
+        #expect(store.load() == URL(string: "https://192.168.1.5:18790")!)
     }
 
     @Test("submit invalid stays on pairing with message")

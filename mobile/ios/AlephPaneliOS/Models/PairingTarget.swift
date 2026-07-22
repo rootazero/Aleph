@@ -2,7 +2,7 @@ import Foundation
 
 /// A validated connection target: the full URL of an `aleph-server` Gateway,
 /// including any `?token=…`. Parsing mirrors the desktop lite shell's
-/// `ConnectionTarget::parse` (default scheme http, default port 18790) so the
+/// `ConnectionTarget::parse` (default scheme https, default port 18790) so the
 /// two shells share one onboarding format. iOS has no Local variant — the phone
 /// shell never embeds a server.
 struct PairingTarget: Equatable {
@@ -28,7 +28,7 @@ struct PairingTarget: Equatable {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.empty) }
 
-        let withScheme = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
         guard var components = URLComponents(string: withScheme) else {
             return .failure(.invalidURL)
         }
