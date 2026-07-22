@@ -8,10 +8,7 @@
 //! - `AgentRegistry`: Registry for managing agents
 //!
 //! ## Agent Configuration (`agents::rig::`)
-//! - `RigAgentConfig`: Configuration for the agent loop
 //! - `ChatMessage`, `ConversationHistory`: Message history management
-//! - `BuiltinToolConfig`: Configuration for built-in tools
-//! - `create_builtin_tool_server`: Create a `ToolServer` with built-in tools
 //!
 //! ## Sub-agent infrastructure (`agents::sub_agents::`)
 //! - `SubAgent`: Trait for specialized sub-agents (used by A2A)
@@ -54,11 +51,7 @@ pub use types::{
 };
 
 // Re-export rig module types for convenience
-#[allow(deprecated)]
-pub use rig::{
-    create_builtin_tool_server, create_builtin_tools_list, AgentConfig, BuiltinToolConfig,
-    ChatMessage, ConversationHistory, MessageRole, RigAgentConfig, ToolCallInfo, ToolCallResult,
-};
+pub use rig::{ChatMessage, ConversationHistory, MessageRole, ToolCallInfo, ToolCallResult};
 
 // Re-export sub_agents module types for convenience
 pub use sub_agents::{SubAgentRequest, SubAgentResult};

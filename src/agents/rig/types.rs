@@ -6,72 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // =============================================================================
-// Agent Configuration
-// =============================================================================
-
-/// Configuration for the agent loop
-#[derive(Debug, Clone)]
-pub struct AgentConfig {
-    /// System prompt for the agent
-    pub system_prompt: Option<String>,
-
-    /// Maximum number of turns (LLM calls) allowed
-    pub max_turns: usize,
-
-    /// Timeout per turn in milliseconds
-    pub turn_timeout_ms: u64,
-
-    /// Whether to stop on first tool error
-    pub stop_on_error: bool,
-
-    /// Whether to include tool results in conversation history
-    pub include_tool_results: bool,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            system_prompt: None,
-            max_turns: 50, // Allows complex multi-step tasks
-            turn_timeout_ms: 300_000,
-            stop_on_error: false,
-            include_tool_results: true,
-        }
-    }
-}
-
-impl AgentConfig {
-    /// Create a new config with system prompt
-    pub fn with_system_prompt(prompt: impl Into<String>) -> Self {
-        Self {
-            system_prompt: Some(prompt.into()),
-            ..Default::default()
-        }
-    }
-
-    /// Builder: set max turns
-    #[must_use]
-    pub const fn max_turns(mut self, max: usize) -> Self {
-        self.max_turns = max;
-        self
-    }
-
-    /// Builder: set turn timeout
-    #[must_use]
-    pub const fn turn_timeout_ms(mut self, timeout: u64) -> Self {
-        self.turn_timeout_ms = timeout;
-        self
-    }
-
-    /// Builder: set stop on error
-    #[must_use]
-    pub const fn stop_on_error(mut self, stop: bool) -> Self {
-        self.stop_on_error = stop;
-        self
-    }
-}
-
-// =============================================================================
 // Tool Call Types
 // =============================================================================
 
@@ -320,27 +254,6 @@ impl AgentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_agent_config_default() {
-        let config = AgentConfig::default();
-        assert_eq!(config.max_turns, 50); // 50 turns for complex tasks
-        assert_eq!(config.turn_timeout_ms, 300_000); // 5 minutes
-        assert!(!config.stop_on_error);
-    }
-
-    #[test]
-    fn test_agent_config_builder() {
-        let config = AgentConfig::with_system_prompt("You are a helper")
-            .max_turns(5)
-            .turn_timeout_ms(10_000)
-            .stop_on_error(true);
-
-        assert_eq!(config.system_prompt, Some("You are a helper".to_string()));
-        assert_eq!(config.max_turns, 5);
-        assert_eq!(config.turn_timeout_ms, 10_000);
-        assert!(config.stop_on_error);
-    }
 
     #[test]
     fn test_tool_call_info() {

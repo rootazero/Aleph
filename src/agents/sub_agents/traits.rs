@@ -34,8 +34,6 @@ pub struct ExecutionContextInfo {
     pub working_directory: Option<String>,
     /// Current application context
     pub current_app: Option<String>,
-    /// Window title context
-    pub window_title: Option<String>,
     /// Original user request (for understanding intent)
     pub original_request: Option<String>,
     /// Summary of what has been done so far
@@ -101,12 +99,6 @@ impl ExecutionContextInfo {
         self
     }
 
-    /// Set window title
-    pub fn with_window_title(mut self, title: impl Into<String>) -> Self {
-        self.window_title = Some(title.into());
-        self
-    }
-
     /// Set original request
     pub fn with_original_request(mut self, request: impl Into<String>) -> Self {
         self.original_request = Some(request.into());
@@ -137,85 +129,13 @@ impl ExecutionContextInfo {
     pub fn is_empty(&self) -> bool {
         self.working_directory.is_none()
             && self.current_app.is_none()
-            && self.window_title.is_none()
             && self.original_request.is_none()
             && self.history_summary.is_none()
             && self.recent_steps.is_empty()
             && self.metadata.is_empty()
     }
 
-    /// Build a summary string from the context
-    ///
-    /// Creates a human-readable summary suitable for passing to sub-agents.
-    /// The summary includes the history and recent steps in a concise format.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_length` - Maximum length of the summary (default: 500 chars)
-    #[must_use]
-    pub fn build_summary(&self, max_length: Option<usize>) -> String {
-        let max_len = max_length.unwrap_or(500);
-        let mut parts = Vec::new();
-
-        // Include existing history summary if present
-        if let Some(ref history) = self.history_summary {
-            parts.push(history.clone());
-        }
-
-        // Add recent steps
-        if !self.recent_steps.is_empty() {
-            let steps_summary: Vec<String> = self
-                .recent_steps
-                .iter()
-                .map(|s| {
-                    let status = if s.success { "✓" } else { "✗" };
-                    format!("{} {}: {}", status, s.action_type, s.description)
-                })
-                .collect();
-            parts.push(format!("Recent: {}", steps_summary.join("; ")));
-        }
-
-        let summary = parts.join(" | ");
-
-        // Truncate if too long (Unicode-safe)
-        crate::utils::text_format::truncate_text(&summary, max_len)
     }
-
-    /// Create a prompt-ready context string
-    ///
-    /// Formats the context information for inclusion in an LLM prompt.
-    #[must_use]
-    pub fn to_prompt(&self) -> String {
-        let mut lines = Vec::new();
-
-        if let Some(ref request) = self.original_request {
-            lines.push(format!("Original Request: {request}"));
-        }
-        if let Some(ref dir) = self.working_directory {
-            lines.push(format!("Working Directory: {dir}"));
-        }
-        if let Some(ref app) = self.current_app {
-            lines.push(format!("Current App: {app}"));
-        }
-        if let Some(ref history) = self.history_summary {
-            lines.push(format!("Progress: {history}"));
-        }
-        if !self.recent_steps.is_empty() {
-            let steps: Vec<String> = self
-                .recent_steps
-                .iter()
-                .take(5) // Limit to 5 most recent
-                .map(|s| {
-                    let status = if s.success { "done" } else { "failed" };
-                    format!("- {} ({}): {}", s.action_type, status, s.description)
-                })
-                .collect();
-            lines.push(format!("Recent Steps:\n{}", steps.join("\n")));
-        }
-
-        lines.join("\n")
-    }
-}
 
 impl SubAgentRequest {
     /// Create a new sub-agent request
@@ -541,54 +461,6 @@ mod tests {
 
         let not_empty = ExecutionContextInfo::new().with_working_directory("/tmp");
         assert!(!not_empty.is_empty());
-    }
-
-    #[test]
-    fn test_execution_context_info_build_summary() {
-        let ctx = ExecutionContextInfo::new()
-            .with_history_summary("Initial setup complete")
-            .with_step(StepContextInfo::success("glob", "Found files"))
-            .with_step(StepContextInfo::failure("read", "File not found"));
-
-        let summary = ctx.build_summary(None);
-        assert!(summary.contains("Initial setup complete"));
-        assert!(summary.contains("✓ glob"));
-        assert!(summary.contains("✗ read"));
-    }
-
-    #[test]
-    fn test_execution_context_info_build_summary_truncation() {
-        let ctx = ExecutionContextInfo::new()
-            .with_history_summary("A very long history summary that goes on and on...");
-
-        let summary = ctx.build_summary(Some(30));
-        // truncate_text keeps 30 chars then adds "..."
-        assert!(summary.chars().count() <= 33);
-        assert!(summary.ends_with("..."));
-    }
-
-    #[test]
-    fn test_execution_context_info_build_summary_multibyte() {
-        let ctx = ExecutionContextInfo::new()
-            .with_history_summary("你好世界这是一个非常长的历史摘要需要被截断处理");
-
-        let summary = ctx.build_summary(Some(10));
-        assert!(summary.ends_with("..."));
-    }
-
-    #[test]
-    fn test_execution_context_info_to_prompt() {
-        let ctx = ExecutionContextInfo::new()
-            .with_original_request("Refactor the code")
-            .with_working_directory("/project")
-            .with_history_summary("Found 10 files")
-            .with_step(StepContextInfo::success("glob", "Listed *.rs"));
-
-        let prompt = ctx.to_prompt();
-        assert!(prompt.contains("Original Request: Refactor the code"));
-        assert!(prompt.contains("Working Directory: /project"));
-        assert!(prompt.contains("Progress: Found 10 files"));
-        assert!(prompt.contains("glob (done)"));
     }
 
     #[test]
