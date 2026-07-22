@@ -107,6 +107,23 @@ impl ClaudeVisionProvider {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
     }
 
+    fn detect_mime_from_extension(ext: Option<&str>) -> Result<&'static str, VisionError> {
+        match ext.map(|e| e.to_lowercase()).as_deref() {
+            Some("png") => Ok("image/png"),
+            Some("jpg") | Some("jpeg") => Ok("image/jpeg"),
+            Some("webp") => Ok("image/webp"),
+            Some("gif") => Ok("image/gif"),
+            Some(other) => Err(VisionError::ImageError(format!(
+                "unsupported image extension: {other}"
+            ))),
+            None => Err(VisionError::ImageError(
+                "image file has no extension; rename the file or use a Base64 \
+                 ImageInput with an explicit format"
+                    .to_string(),
+            )),
+        }
+    }
+
     fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
         match image {
             ImageInput::Base64 { data, format } => {
@@ -144,20 +161,9 @@ impl ClaudeVisionProvider {
                     )));
                 }
                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
-                let mime = match ext.to_lowercase().as_str() {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "webp" => "image/webp",
-                    "gif" => "image/gif",
-                    other => {
-                        // Don't mislabel an unrecognized extension as PNG — the
-                        // API rejects the mismatched bytes with an opaque error.
-                        return Err(VisionError::ImageError(format!(
-                            "unsupported image extension: {other}"
-                        )));
-                    }
-                };
+                let mime = Self::detect_mime_from_extension(
+                    path.extension().and_then(|e| e.to_str()),
+                )?;
                 Ok(ContentBlock::Image {
                     source: ImageSource {
                         source_type: "base64".to_string(),
@@ -324,5 +330,49 @@ mod tests {
         let provider = ClaudeVisionProvider::new("sk-test", "claude-sonnet-4-20250514")?;
         assert_eq!(provider.name(), "claude-vision");
         Ok(())
+    }
+
+    #[test]
+    fn detect_mime_from_extension_known_types() {
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("png")),
+            Ok("image/png")
+        );
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("jpg")),
+            Ok("image/jpeg")
+        );
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("jpeg")),
+            Ok("image/jpeg")
+        );
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("webp")),
+            Ok("image/webp")
+        );
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("gif")),
+            Ok("image/gif")
+        );
+        assert_eq!(
+            ClaudeVisionProvider::detect_mime_from_extension(Some("PNG")),
+            Ok("image/png")
+        );
+    }
+
+    #[test]
+    fn detect_mime_from_extension_unknown_errors() {
+        match ClaudeVisionProvider::detect_mime_from_extension(Some("bmp")) {
+            Err(VisionError::ImageError(msg)) => assert!(msg.contains("bmp")),
+            other => panic!("expected ImageError for unknown extension, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detect_mime_from_extension_missing_errors() {
+        match ClaudeVisionProvider::detect_mime_from_extension(None) {
+            Err(VisionError::ImageError(msg)) => assert!(msg.contains("no extension")),
+            other => panic!("expected ImageError for missing extension, got {other:?}"),
+        }
     }
 }
