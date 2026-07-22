@@ -29,6 +29,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
     let is_loading = RwSignal::new(true);
     let is_saving = RwSignal::new(false);
     let save_message = RwSignal::new(Option::<(bool, String)>::None);
+    let load_error = RwSignal::new(false);
 
     // Reload file list
     let reload_files = move || {
@@ -53,12 +54,20 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
     let select_file = move |filename: String| {
         selected_file.set(Some(filename.clone()));
         save_message.set(None);
+        load_error.set(false);
         let id = agent_id.get_value();
         let dash = state;
         spawn_local(async move {
             match AgentsApi::files_get(&dash, &id, &filename).await {
-                Ok(content) => file_content.set(content),
-                Err(e) => file_content.set(format!("Error loading file: {e}")),
+                Ok(content) => {
+                    file_content.set(content);
+                    load_error.set(false);
+                }
+                Err(_e) => {
+                    file_content.set(String::new());
+                    load_error.set(true);
+                    save_message.set(Some((false, t_string!(i18n, common.error).to_string())));
+                }
             }
         });
     };
@@ -73,6 +82,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                     reload_files();
                     selected_file.set(Some(filename));
                     file_content.set(String::new());
+                    load_error.set(false);
                 }
                 Err(e) => web_sys::console::error_1(&format!("Create failed: {e}").into()),
             }
@@ -177,6 +187,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                 <div class="p-3 border-t border-border flex justify-end">
                                     <button
                                         on:click=move |_| {
+                                            if load_error.get() { return; }
                                             let Some(filename) = selected_file.get() else { return };
                                             is_saving.set(true);
                                             save_message.set(None);
@@ -191,7 +202,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                                 is_saving.set(false);
                                             });
                                         }
-                                        disabled=move || is_saving.get()
+                                        disabled=move || is_saving.get() || load_error.get()
                                         class="px-4 py-1.5 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50 text-sm"
                                     >
                                         {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
