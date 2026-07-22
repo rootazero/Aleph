@@ -82,6 +82,32 @@ const fn skill_status(skill: &SkillStatusEntry) -> &'static str {
     }
 }
 
+/// Only http/https homepages are rendered as clickable links. Other schemes
+/// (e.g. `javascript:`) are shown as plain text to avoid XSS.
+fn is_safe_homepage_url(hp: &str) -> bool {
+    let lower = hp.to_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+fn safe_homepage_link(href: &str, label: impl IntoView) -> impl IntoView {
+    if is_safe_homepage_url(href) {
+        view! {
+            <a
+                href=href.to_string()
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-xs text-primary hover:underline"
+            >
+                {label}
+            </a>
+        }.into_any()
+    } else {
+        view! {
+            <span class="text-xs text-text-secondary">{href}</span>
+        }.into_any()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Load function
 // ---------------------------------------------------------------------------
@@ -812,15 +838,7 @@ fn SkillDetailDialog(
                                             </div>
                                         })}
                                         {if let Some(hp) = homepage {
-                                            view! {
-                                                <a
-                                                    href=hp
-                                                    target="_blank"
-                                                    class="text-xs text-primary hover:underline"
-                                                >
-                                                    {t!(i18n, skills_page.get_api_key)}
-                                                </a>
-                                            }.into_any()
+                                            safe_homepage_link(&hp, t!(i18n, skills_page.get_api_key))
                                         } else {
                                             view! { <span></span> }.into_any()
                                         }}
@@ -921,9 +939,7 @@ fn SkillDetailDialog(
                                 view! {
                                     <div class="flex items-center gap-2">
                                         <span class="text-text-tertiary w-16">"Homepage"</span>
-                                        <a href=hp target="_blank" class="text-primary hover:underline">
-                                            {t!(i18n, skills_page.open)}
-                                        </a>
+                                        {safe_homepage_link(&hp, t!(i18n, skills_page.open))}
                                     </div>
                                 }.into_any()
                             } else {

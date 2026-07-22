@@ -70,18 +70,25 @@ pub fn BrowserView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
 
-    spawn_local(async move {
-        match BrowserConfigApi::get(&state).await {
-            Ok(cfg) => {
-                config.set(cfg);
-                loading.set(false);
+    let load_config = move || {
+        loading.set(true);
+        error.set(None);
+        spawn_local(async move {
+            match BrowserConfigApi::get(&state).await {
+                Ok(cfg) => {
+                    config.set(cfg);
+                    error.set(None);
+                    loading.set(false);
+                }
+                Err(e) => {
+                    error.set(Some(format!("Failed to load config: {e}")));
+                    loading.set(false);
+                }
             }
-            Err(e) => {
-                error.set(Some(format!("Failed to load config: {e}")));
-                loading.set(false);
-            }
-        }
-    });
+        });
+    };
+
+    load_config();
 
     view! {
         <div class="px-6 pb-6 aleph-content-top space-y-6">
@@ -105,7 +112,7 @@ pub fn BrowserView() -> impl IntoView {
                             <div class="text-text-tertiary">{t!(i18n, browser_settings.loading)}</div>
                         </div>
                     }.into_any()
-                } else {
+                } else if error.get().is_some() {
                     view! {
                         <div class="space-y-6">
                             {move || {
@@ -132,6 +139,17 @@ pub fn BrowserView() -> impl IntoView {
                                     None => None,
                                 }
                             }}
+                            <button
+                                on:click=move |_| load_config()
+                                class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover"
+                            >
+                                "Retry"
+                            </button>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="space-y-6">
                             <DefaultModeSection config=config />
                             <EngineSection config=config />
                             <DevToolsSection config=config />

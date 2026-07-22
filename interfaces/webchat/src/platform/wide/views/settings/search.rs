@@ -651,9 +651,17 @@ fn ProviderDetailPanel(
                 Ok(result) => {
                     test_success.set(Some(result.success));
                     if result.success {
-                        // Refresh config to pick up verified=true
+                        // Refresh config to pick up verified=true, but preserve
+                        // the API key the user just typed so it is not wiped
+                        // from the form before Save. The form Effect runs after
+                        // the config update, so restore the key on the next tick.
+                        let key = form_api_key.get();
                         if let Ok(new_cfg) = SearchConfigApi::get(&state).await {
                             config.set(new_cfg);
+                            set_timeout(
+                                move || form_api_key.set(key),
+                                std::time::Duration::from_secs(0),
+                            );
                         }
                     }
                     if !result.success {

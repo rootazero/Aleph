@@ -23,6 +23,8 @@ struct EnvRow {
     /// True if this secret was already configured on the server (loaded with its
     /// value redacted). Drives the "saved — blank keeps it" placeholder.
     configured: bool,
+    /// True if the loaded value was redacted and must not be written back.
+    redacted: bool,
 }
 
 /// Heuristic: does this env var name look like it holds a secret?
@@ -338,12 +340,17 @@ fn EditMcpServerDialog(
                         let rows: Vec<EnvRow> = entries
                             .into_iter()
                             .map(|(k, v)| {
-                                let configured = is_secret_env_key(&k);
+                                let is_secret = is_secret_env_key(&k);
                                 let row = EnvRow {
                                     id,
-                                    configured,
+                                    configured: is_secret,
+                                    redacted: is_secret,
                                     key: RwSignal::new(k),
-                                    value: RwSignal::new(v),
+                                    value: RwSignal::new(if is_secret {
+                                        String::new()
+                                    } else {
+                                        v
+                                    }),
                                 };
                                 id += 1;
                                 row
@@ -380,7 +387,13 @@ fn EditMcpServerDialog(
                 if k.is_empty() {
                     continue;
                 }
-                env_map.insert(k, row.value.get().trim().to_string());
+                let v = row.value.get().trim().to_string();
+                // Redacted secrets are loaded empty; don't overwrite the server's
+                // stored value when the user left the field blank.
+                if row.redacted && v.is_empty() {
+                    continue;
+                }
+                env_map.insert(k, v);
             }
             if env_map.is_empty() {
                 None
@@ -537,6 +550,7 @@ fn EditMcpServerDialog(
                                         rows.push(EnvRow {
                                             id,
                                             configured: false,
+                                            redacted: false,
                                             key: RwSignal::new(String::new()),
                                             value: RwSignal::new(String::new()),
                                         });

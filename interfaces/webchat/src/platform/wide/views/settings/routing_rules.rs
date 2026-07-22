@@ -51,6 +51,12 @@ pub fn RoutingRulesView() -> impl IntoView {
             if section != Some("routing_rules") {
                 return;
             }
+            // Don't refresh the list while the user is editing a rule; server
+            // indices could shift under the open editor and cause a save/delete
+            // to target the wrong rule.
+            if selected.get().is_some() {
+                return;
+            }
             spawn_local(async move {
                 if let Ok(list) = RoutingRulesApi::list(&state).await {
                     rules.set(list);
@@ -126,9 +132,10 @@ fn RulesList(
                                 {move || {
                                     rules.get().iter().enumerate().map(|(idx, rule)| {
                                         let rule = rule.clone();
-                                        let is_selected = Signal::derive(move || selected.get() == Some(idx));
+                                        let rule_index = rule.index;
+                                        let is_selected = Signal::derive(move || selected.get() == Some(rule_index));
                                         view! {
-                                            <RuleCard rule=rule index=idx is_selected=is_selected selected=selected />
+                                            <RuleCard rule=rule rule_index=rule_index display_index=idx is_selected=is_selected selected=selected />
                                         }
                                     }).collect::<Vec<_>>()
                                 }}
@@ -148,7 +155,8 @@ fn RulesList(
 #[component]
 fn RuleCard(
     rule: RoutingRuleInfo,
-    index: usize,
+    rule_index: usize,
+    display_index: usize,
     is_selected: Signal<bool>,
     selected: RwSignal<Option<usize>>,
 ) -> impl IntoView {
@@ -158,7 +166,7 @@ fn RuleCard(
 
     view! {
         <button
-            on:click=move |_| selected.set(Some(index))
+            on:click=move |_| selected.set(Some(rule_index))
             class=move || {
                 if is_selected.get() {
                     "w-full p-3 bg-primary-subtle border border-primary rounded-lg text-left transition-colors"
@@ -172,7 +180,7 @@ fn RuleCard(
                     {rule_type.to_uppercase()}
                 </span>
                 <span class="text-xs text-text-tertiary">
-                    {"#"}{index}
+                    {"#"}{display_index}
                 </span>
             </div>
             <div class="text-sm text-text-primary font-mono truncate">
@@ -226,8 +234,8 @@ fn RuleEditor(
                 form_provider.set(String::new());
                 form_system_prompt.set(String::new());
             } else {
-                // Load existing rule
-                if let Some(rule) = rules.get().get(idx) {
+                // Load existing rule by its server index.
+                if let Some(rule) = rules.get().iter().find(|r| r.index == idx) {
                     form_rule_type.set(rule.rule_type.clone());
                     form_regex.set(rule.regex.clone());
                     form_provider.set(rule.provider.clone().unwrap_or_default());
@@ -247,6 +255,23 @@ fn RuleEditor(
 
         saving.set(true);
         error.set(None);
+
+        // Preserve fields not exposed in the editor. intent_type and
+        // preferred_model are available from the list response; strip_prefix
+        // and icon are not returned by the current list/get API, so they can
+        // only be fully preserved if that API is extended (see
+        // interfaces/webchat/src/api/routing.rs and
+        // src/gateway/handlers/routing_rules.rs).
+        let (intent_type, preferred_model) = if let Some(idx) = selected.get() {
+            rules
+                .get()
+                .iter()
+                .find(|r| r.index == idx)
+                .map(|r| (r.intent_type.clone(), r.preferred_model.clone()))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
 
         let rule_config = RoutingRuleConfig {
             rule_type: Some(form_rule_type.get()),
@@ -268,8 +293,8 @@ fn RuleEditor(
                 }
             },
             strip_prefix: None,
-            intent_type: None,
-            preferred_model: None,
+            intent_type,
+            preferred_model,
             icon: None,
         };
 

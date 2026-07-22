@@ -27,17 +27,27 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);
 
-    spawn_local(async move {
-        match GenerationConfigApi::get(&state).await {
-            Ok(cfg) => {
-                config.set(cfg);
-                loading.set(false);
+    let load_error = RwSignal::new(Option::<String>::None);
+
+    let load_config = move || {
+        loading.set(true);
+        load_error.set(None);
+        spawn_local(async move {
+            match GenerationConfigApi::get(&state).await {
+                Ok(cfg) => {
+                    config.set(cfg);
+                    load_error.set(None);
+                    loading.set(false);
+                }
+                Err(e) => {
+                    load_error.set(Some(e));
+                    loading.set(false);
+                }
             }
-            Err(_) => {
-                loading.set(false);
-            }
-        }
-    });
+        });
+    };
+
+    load_config();
 
     let output_dir = RwSignal::new(String::new());
     let auto_paste = RwSignal::new(5u32);
@@ -89,6 +99,20 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
             if loading.get() {
                 view! {
                     <div class="text-text-tertiary text-sm">{t!(i18n, settings.generation.loading_settings)}</div>
+                }.into_any()
+            } else if let Some(e) = load_error.get() {
+                view! {
+                    <div class="space-y-4">
+                        <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
+                            {e}
+                        </div>
+                        <button
+                            on:click=move |_| load_config()
+                            class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover"
+                        >
+                            "Retry"
+                        </button>
+                    </div>
                 }.into_any()
             } else {
                 view! {

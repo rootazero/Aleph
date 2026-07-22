@@ -188,6 +188,15 @@ pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) ->
     let custom_rules = RwSignal::new(config.get().map(|c| c.custom_pii_rules).unwrap_or_default());
     let pattern_errors = RwSignal::new(Vec::<(usize, String)>::new());
 
+    // Keep the local editor in sync with the authoritative config so that an
+    // empty/stale snapshot is never written back while the config is still
+    // loading or after another client/CLI changed the rules.
+    Effect::new(move || {
+        if let Some(cfg) = config.get() {
+            custom_rules.set(cfg.custom_pii_rules);
+        }
+    });
+
     let save = move |_| {
         if let Some(mut cfg) = config.get() {
             cfg.custom_pii_rules = custom_rules.get();
