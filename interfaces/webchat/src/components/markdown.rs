@@ -20,7 +20,7 @@ fn render_markdown(content: &str) -> String {
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_TASKLISTS);
 
-    let parser = Parser::new_ext(content, options);
+    let parser = Parser::new_ext(content, options).map(sanitize_link_event);
 
     let mut html_output = String::new();
     let mut in_code_block = false;
@@ -176,6 +176,58 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+/// Allow only a small set of link schemes. Reject `javascript:` and other
+/// pseudo-URL schemes to prevent XSS when the rendered HTML is assigned to
+/// innerHTML.
+fn sanitize_link_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if let Some((scheme, _)) = trimmed.split_once(':') {
+        let scheme = scheme.to_lowercase();
+        if scheme == "http" || scheme == "https" || scheme == "mailto" {
+            return trimmed.to_string();
+        }
+        // Disallowed scheme: render as a no-op anchor instead.
+        return format!("#disallowed-{}", scheme);
+    }
+    trimmed.to_string()
+}
+
+/// Rewrite link and image destination URLs to block dangerous URI schemes
+/// before the rendered HTML is fed into innerHTML.
+fn sanitize_link_event(event: Event<'_>) -> Event<'_> {
+    match event {
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
+            let safe_url = sanitize_link_url(&dest_url);
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url: safe_url.into(),
+                title,
+                id,
+            })
+        }
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
+            let safe_url = sanitize_link_url(&dest_url);
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url: safe_url.into(),
+                title,
+                id,
+            })
+        }
+        event => event,
+    }
 }
 
 /// Lightweight streaming renderer — escapes HTML, tracks code fences, no Markdown parse.
