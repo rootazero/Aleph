@@ -104,7 +104,7 @@ impl EscapeAbort for WindowsEscapeListener {
 
             let (tx, rx) =
                 std::sync::mpsc::channel::<std::result::Result<(isize, u32), String>>();
-            let module = HINSTANCE(hmod.0);
+            let hmod_raw = hmod.0 as usize;
 
             // Spawn a dedicated thread to install the hook and pump Win32
             // messages. `WH_KEYBOARD_LL` callbacks are dispatched by the OS
@@ -114,6 +114,8 @@ impl EscapeAbort for WindowsEscapeListener {
                 use windows::Win32::UI::WindowsAndMessaging::{
                     DispatchMessageW, GetMessageW, TranslateMessage, UnhookWindowsHookEx, MSG,
                 };
+
+                let module = HINSTANCE(hmod_raw as *mut _);
 
                 // SAFETY: installs a process-wide low-level keyboard hook bound
                 // to the `'static` `keyboard_hook_proc`; removed again before
