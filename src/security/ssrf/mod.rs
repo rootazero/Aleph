@@ -127,8 +127,25 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
 }
 
 pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
+    let (url, _pinned) = validate_url_with_pinned(url_str, policy).await?;
+    Ok(url)
+}
+
+/// Validates a URL and (when a hostname lookup was performed) returns the
+/// `SocketAddr` that must be pinned on the outbound client to close the DNS
+/// rebinding window between validation and `reqwest`'s own resolver. Returns
+/// `(Url, None)` for IP-literal URLs and for `policy.enabled == false`;
+/// hostname URLs return `(Url, Some(SocketAddr))` whose address has been
+/// verified against the policy via [`super::dns::resolve_and_validate`].
+pub async fn validate_url_with_pinned(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
+    use std::net::SocketAddr;
+
     if !policy.enabled {
-        return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
+        let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+        return Ok((url, None));
     }
 
     let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
@@ -172,7 +189,7 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
                 return Err(SsrfError::BlockedAddress(ip.to_string()));
             }
         }
-        return Ok(url);
+        return Ok((url, None));
     }
 
     // DNS resolution — validate all returned IPs via dns module.
@@ -186,9 +203,9 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
     } else {
         policy
     };
-    dns::resolve_and_validate(host, port, dns_policy).await?;
+    let pinned: SocketAddr = dns::resolve_and_validate(host, port, dns_policy).await?;
 
-    Ok(url)
+    Ok((url, Some(pinned)))
 }
 
 #[cfg(test)]
@@ -201,11 +218,17 @@ mod tests {
 
     // --- Backward-compatible validate_url tests (matching original) ---
 
-    #[test]
-    fn allows_public_url() {
+    #[tokio::test]
+    async fn allows_public_url() {
         let policy = default_policy();
-        let result = validate_url("https://api.example.com/v1/data", &policy);
-        assert!(result.is_ok(), "public URL should be allowed");
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "api.example.com".to_string(),
+            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = validate_url_async("https://api.example.com/v1/data", &policy).await;
+        assert!(result.is_ok(), "public URL should be allowed: {:?}", result);
     }
 
     #[test]
@@ -452,5 +475,96 @@ mod tests {
         let policy = default_policy();
         let result = validate_url_async("http://127.0.0.1/admin", &policy).await;
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
+    }
+
+    #[tokio::test]
+    async fn validate_url_with_pinned_returns_none_for_ip_literal() {
+        let policy = default_policy();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "api.example.com".to_string(),
+            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let (url, pinned) =
+            validate_url_with_pinned("https://8.8.8.8/path", &policy)
+                .await
+                .expect("public IP literal must validate");
+        assert_eq!(url.host_str(), Some("8.8.8.8"));
+        assert!(
+            pinned.is_none(),
+            "IP literal needs no DNS pin — got {pinned:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_url_with_pinned_returns_pinned_addr_for_hostname() {
+        let policy = default_policy();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "api.example.com".to_string(),
+            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let (url, pinned) =
+            validate_url_with_pinned("https://api.example.com/v1/data", &policy)
+                .await
+                .expect("public hostname must validate");
+        assert_eq!(url.host_str(), Some("api.example.com"));
+        let addr = pinned.expect("hostname must produce a pinned SocketAddr");
+        assert_eq!(addr.ip(), "8.8.8.8".parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(addr.port(), 443, "https default port must be used");
+    }
+
+    #[tokio::test]
+    async fn validate_url_with_pinned_rejects_hostname_resolving_to_blocked_ip() {
+        let policy = default_policy();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "evil.example".to_string(),
+            vec!["127.0.0.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = validate_url_with_pinned("http://evil.example/admin", &policy).await;
+        assert!(
+            matches!(result, Err(SsrfError::BlockedAddress(_))),
+            "hostname → loopback must fail-closed — got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_url_with_pinned_returns_none_when_policy_disabled() {
+        let policy = SsrfPolicy::disabled();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "anything.example".to_string(),
+            vec!["127.0.0.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let (url, pinned) =
+            validate_url_with_pinned("http://anything.example/", &policy)
+                .await
+                .expect("disabled policy bypasses validation");
+        assert_eq!(url.host_str(), Some("anything.example"));
+        assert!(
+            pinned.is_none(),
+            "disabled policy yields no pin — caller uses normal client"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_url_with_pinned_blocks_benchmark_range() {
+        let policy = default_policy();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "bench.example".to_string(),
+            vec!["198.18.0.5".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = validate_url_with_pinned("http://bench.example/x", &policy).await;
+        assert!(
+            matches!(result, Err(SsrfError::BlockedAddress(_))),
+            "198.18.0.0/15 resolution must remain blocked — got {result:?}"
+        );
     }
 }

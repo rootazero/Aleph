@@ -963,7 +963,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    let mut agent_result = register_agent_handlers(
+    let agent_result = register_agent_handlers(
         &mut server,
         session_store.clone(),
         event_bus.clone(),

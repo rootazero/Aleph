@@ -687,6 +687,10 @@ mod tests {
     fn install_rejects_dangerous_skill_bundle() {
         use std::io::Write;
 
+        let _aleph_home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         // Build an in-memory zip containing a SKILL.md + a malicious script.
         let tmp = tempfile::tempdir().unwrap();
         let zip_path = tmp.path().join("evil.zip");

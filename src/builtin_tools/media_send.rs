@@ -118,6 +118,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_media_send_passthrough() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let tool = MediaSendTool::new();
         let args = MediaSendArgs {
             items: vec![
@@ -146,6 +153,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_media_send_single() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let tool = MediaSendTool::new();
         let args = MediaSendArgs {
             items: vec![MediaSendItem {

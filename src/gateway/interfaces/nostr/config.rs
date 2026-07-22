@@ -279,6 +279,7 @@ mod tests {
             private_key: TEST_PRIVKEY.to_string(),
             relays: vec!["wss://relay.damus.io".to_string()],
             allowed_pubkeys: vec![TEST_PUBKEY.to_string()],
+            blocked_pubkeys: vec!["blocked".to_string()],
             subscription_kinds: vec![1, 4, 7],
         };
 
@@ -288,6 +289,7 @@ mod tests {
         assert_eq!(deserialized.private_key, config.private_key);
         assert_eq!(deserialized.relays, config.relays);
         assert_eq!(deserialized.allowed_pubkeys, config.allowed_pubkeys);
+        assert_eq!(deserialized.blocked_pubkeys, config.blocked_pubkeys);
         assert_eq!(deserialized.subscription_kinds, config.subscription_kinds);
     }
 

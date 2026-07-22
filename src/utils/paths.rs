@@ -640,7 +640,8 @@ mod tests {
     #[test]
     fn test_find_git_root() {
         let temp_dir = TempDir::new().unwrap();
-        let project = temp_dir.path().join("project");
+        let temp_path = temp_dir.path().canonicalize().unwrap();
+        let project = temp_path.join("project");
         let subdir = project.join("src").join("lib");
         std::fs::create_dir_all(&subdir).unwrap();
 
@@ -658,7 +659,7 @@ mod tests {
         assert_eq!(root.unwrap(), project);
 
         // Should not find git root from temp dir (above project)
-        let root = find_git_root(temp_dir.path());
+        let root = find_git_root(&temp_path);
         assert!(root.is_none());
     }
 

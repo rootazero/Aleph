@@ -89,6 +89,13 @@ mod integration_tests {
 
     #[tokio::test]
     async fn full_pipeline_image_understand() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let mut vp = VisionPipeline::new();
         vp.add_provider(Box::new(MockVision));
 
@@ -144,6 +151,13 @@ mod integration_tests {
 
     #[tokio::test]
     async fn unsupported_media_type_returns_error() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let mp = MediaPipeline::new();
         let input = MediaInput::Url {
             url: "https://example.com/video.mp4".into(),

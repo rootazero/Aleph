@@ -218,29 +218,21 @@ impl ConflictResolver {
                     return true;
                 }
                 // New's aliases vs existing canonical name.
-                if alias_lowers.iter().any(|a| *a == existing_name_lower) {
+                if alias_lowers.contains(&existing_name_lower) {
                     return true;
                 }
-                // Existing's aliases vs new canonical name — symmetric check
-                // catches the case where a low-priority tool registers an
-                // alias that collides with a high-priority builtin's name.
-                // (Without this, `aliases = ["model"]` on a plugin wouldn't
-                // conflict with a builtin whose `name = "model"`.)
                 let existing_alias_lowers: Vec<String> = t
                     .aliases
                     .iter()
                     .map(|a| a.to_lowercase())
                     .collect();
-                if existing_alias_lowers.iter().any(|a| *a == name_lower) {
-                    return true;
-                }
                 // Alias↔alias collisions: e.g. plugin `aliases = ["x"]` vs
                 // builtin `aliases = ["x"]`. Two tools claiming the same
                 // shortcut must resolve via the priority rules, not silently
                 // shadow each other.
                 existing_alias_lowers
                     .iter()
-                    .any(|ea| alias_lowers.iter().any(|na| na == ea))
+                    .any(|ea| alias_lowers.contains(ea))
             })
             .map(|t| ConflictInfo {
                 existing_id: t.id.clone(),

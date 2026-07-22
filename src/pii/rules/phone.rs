@@ -50,8 +50,14 @@ impl PhoneRule {
     }
 
     fn is_decimal_context(text: &str, start: usize, end: usize) -> bool {
-        (start > 0 && text.as_bytes()[start - 1] == b'.')
-            || (end < text.len() && text.as_bytes()[end] == b'.')
+        let bytes = text.as_bytes();
+        if start > 0 && bytes[start - 1] == b'.' {
+            return true;
+        }
+        if end < bytes.len() && bytes[end] == b'.' && end + 1 < bytes.len() && bytes[end + 1].is_ascii_digit() {
+            return true;
+        }
+        false
     }
 
     /// Check if match is in a timestamp context (surrounding ~80 chars)
@@ -186,6 +192,26 @@ mod tests {
     fn test_no_match_decimal_context() {
         let matches = rule().detect("value: 1.13812345678");
         assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_trailing_dot_decimal() {
+        let matches = rule().detect("amount 13812345678.5");
+        assert_eq!(matches.len(), 0, ".digit must be treated as decimal continuation");
+    }
+
+    #[test]
+    fn test_match_phone_followed_by_period() {
+        let matches = rule().detect("call 13812345678.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "13812345678");
+    }
+
+    #[test]
+    fn test_match_phone_followed_by_dot_then_letter() {
+        let matches = rule().detect("Bearer 13812345678.abcdefghijklmnop");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "13812345678");
     }
 
     // === Anti-false-positive: Timestamp context ===

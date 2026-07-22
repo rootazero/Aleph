@@ -22,7 +22,7 @@ use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::JsonRpcError;
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
-use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 
 use super::sse_events::SseEvent;
 
@@ -87,8 +87,6 @@ pub struct SseTransport {
     server_name: String,
     /// Configuration
     config: SseTransportConfig,
-    /// HTTP client for POST requests
-    client: Client,
     /// Connection state
     alive: Arc<RwLock<bool>>,
     /// Notification handler (`crate::sync_primitives::Mutex` wrapped in Arc so the spawned
@@ -113,21 +111,42 @@ impl SseTransport {
     /// After creating the transport, call `start_event_listener()` to begin
     /// receiving server-sent notifications.
     pub fn new(name: impl Into<String>, config: SseTransportConfig) -> Result<Self> {
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(config.timeout)
-            .build()
-            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {e}")))?;
-
         Ok(Self {
             server_name: name.into(),
             config,
-            client,
             alive: Arc::new(RwLock::new(true)),
             notification_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             request_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             shutdown_tx: RwLock::new(None),
         })
+    }
+
+    /// Build a `reqwest::Client` whose resolver is pinned to the SSRF-validated
+    /// address for the URL's host, closing the rebinding window between
+    /// validation and reqwest's own resolver. IP-literal URLs and disabled
+    /// policies skip the `.resolve()` rule.
+    pub(crate) async fn build_pinned_client(
+        url_str: &str,
+        timeout: Option<Duration>,
+    ) -> std::result::Result<(reqwest::Url, Client), AlephError> {
+        let (url, pinned) = validate_url_with_pinned(url_str, &SsrfPolicy::default())
+            .await
+            .map_err(|e| AlephError::IoError(format!("SSRF blocked: {e}")))?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| AlephError::IoError("URL has no host".into()))?
+            .to_string();
+        let mut builder = Client::builder().redirect(reqwest::redirect::Policy::none());
+        if let Some(addr) = pinned {
+            builder = builder.resolve(&host, addr);
+        }
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+        let client = builder
+            .build()
+            .map_err(|e| AlephError::IoError(format!("Failed to build client: {e}")))?;
+        Ok((url, client))
     }
 
     /// Start the SSE event listener
@@ -140,8 +159,7 @@ impl SseTransport {
     /// * `Ok(())` - If the listener started successfully
     /// * `Err(AlephError)` - If starting the listener failed
     pub async fn start_event_listener(&self) -> Result<()> {
-        // SSRF protection: validate the base URL before opening an SSE connection
-        validate_url_async(&self.config.url, &SsrfPolicy::default())
+        let (validated_url, sse_client) = Self::build_pinned_client(&self.config.url, None)
             .await
             .map_err(|e| {
                 AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
@@ -154,7 +172,7 @@ impl SseTransport {
             *tx = Some(shutdown_tx);
         }
 
-        let sse_url = format!("{}/events", self.config.url.trim_end_matches('/'));
+        let sse_url = format!("{}/events", validated_url.as_str().trim_end_matches('/'));
         let server_name = self.server_name.clone();
         let headers = self.config.headers.clone();
         let notification_handler = Arc::clone(&self.notification_handler);
@@ -167,17 +185,6 @@ impl SseTransport {
                 url = %sse_url,
                 "Starting SSE event listener"
             );
-
-            // Create a client specifically for SSE (no timeout for long-lived connection)
-            let sse_client = match Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build() {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!(server = %server_name, error = %e, "Failed to create SSE client");
-                    return;
-                }
-            };
 
             loop {
                 tokio::select! {
@@ -337,31 +344,20 @@ impl SseTransport {
             }
         }
     }
-
-    /// Build request with configured headers
-    fn build_request(&self, body: String) -> reqwest::RequestBuilder {
-        let mut req = self
-            .client
-            .post(&self.config.url)
-            .header("Content-Type", "application/json");
-
-        for (key, value) in &self.config.headers {
-            req = req.header(key, value);
-        }
-
-        req.body(body)
-    }
 }
 
 #[async_trait]
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        // SSRF protection: validate the target URL before sending
-        validate_url_async(&self.config.url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| {
-                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-            })?;
+        let (validated_url, client) =
+            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+                .await
+                .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "SSRF blocked for '{}': {}",
+                        self.server_name, e
+                    ))
+                })?;
 
         let body = serde_json::to_string(request)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {e}")))?;
@@ -372,7 +368,13 @@ impl McpTransport for SseTransport {
             "Sending SSE/HTTP request"
         );
 
-        let response = self.build_request(body).send().await.map_err(|e| {
+        let mut req = client
+            .post(validated_url.as_str())
+            .header("Content-Type", "application/json");
+        for (key, value) in &self.config.headers {
+            req = req.header(key, value);
+        }
+        let response = req.body(body).send().await.map_err(|e| {
             AlephError::IoError(format!(
                 "SSE request to '{}' failed: {}",
                 self.server_name, e
@@ -402,12 +404,15 @@ impl McpTransport for SseTransport {
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
-        // SSRF protection: validate the target URL before sending
-        validate_url_async(&self.config.url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| {
-                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-            })?;
+        let (validated_url, client) =
+            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+                .await
+                .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "SSRF blocked for '{}': {}",
+                        self.server_name, e
+                    ))
+                })?;
 
         let body = serde_json::to_string(notification)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {e}")))?;
@@ -418,7 +423,13 @@ impl McpTransport for SseTransport {
             "Sending SSE/HTTP notification"
         );
 
-        let response = self.build_request(body).send().await.map_err(|e| {
+        let mut req = client
+            .post(validated_url.as_str())
+            .header("Content-Type", "application/json");
+        for (key, value) in &self.config.headers {
+            req = req.header(key, value);
+        }
+        let response = req.body(body).send().await.map_err(|e| {
             AlephError::IoError(format!(
                 "SSE notification to '{}' failed: {}",
                 self.server_name, e
@@ -507,11 +518,15 @@ impl SseTransport {
         request_id: serde_json::Value,
         result: serde_json::Value,
     ) -> Result<()> {
-        validate_url_async(&self.config.url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| {
-                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-            })?;
+        let (validated_url, client) =
+            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+                .await
+                .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "SSRF blocked for '{}': {}",
+                        self.server_name, e
+                    ))
+                })?;
 
         let response = serde_json::json!({
             "jsonrpc": "2.0",
@@ -522,8 +537,14 @@ impl SseTransport {
         let response_json = serde_json::to_string(&response)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize response: {e}")))?;
 
-        let http_response = self
-            .build_request(response_json)
+        let mut req = client
+            .post(validated_url.as_str())
+            .header("Content-Type", "application/json");
+        for (key, value) in &self.config.headers {
+            req = req.header(key, value);
+        }
+        let http_response = req
+            .body(response_json)
             .send()
             .await
             .map_err(|e| AlephError::IoError(format!("Failed to send response: {e}")))?;
@@ -551,11 +572,15 @@ impl SseTransport {
         code: i32,
         message: &str,
     ) -> Result<()> {
-        validate_url_async(&self.config.url, &SsrfPolicy::default())
-            .await
-            .map_err(|e| {
-                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-            })?;
+        let (validated_url, client) =
+            Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
+                .await
+                .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "SSRF blocked for '{}': {}",
+                        self.server_name, e
+                    ))
+                })?;
 
         let response = serde_json::json!({
             "jsonrpc": "2.0",
@@ -569,8 +594,14 @@ impl SseTransport {
         let response_json = serde_json::to_string(&response)
             .map_err(|e| AlephError::IoError(format!("Failed to serialize error response: {e}")))?;
 
-        let http_response = self
-            .build_request(response_json)
+        let mut req = client
+            .post(validated_url.as_str())
+            .header("Content-Type", "application/json");
+        for (key, value) in &self.config.headers {
+            req = req.header(key, value);
+        }
+        let http_response = req
+            .body(response_json)
             .send()
             .await
             .map_err(|e| AlephError::IoError(format!("Failed to send error response: {e}")))?;
@@ -677,6 +708,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_sse_transport_start_event_listener() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let config = SseTransportConfig {
             url: "https://example.com/mcp".to_string(),
             headers: HashMap::new(),
@@ -797,5 +835,60 @@ mod tests {
         assert!(json.contains("-32001"));
         assert!(json.contains("Sampling not supported"));
         assert!(!json.contains("\"result\""));
+    }
+
+    #[tokio::test]
+    async fn build_pinned_client_succeeds_for_hostname_with_public_ip() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = SseTransport::build_pinned_client(
+            "https://example.com/mcp",
+            Some(Duration::from_secs(30)),
+        )
+        .await;
+        let (url, _client) = result.expect("public hostname must build a pinned client");
+        assert_eq!(url.host_str(), Some("example.com"));
+        assert_eq!(url.scheme(), "https");
+    }
+
+    #[tokio::test]
+    async fn build_pinned_client_rejects_hostname_resolving_to_loopback() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "evil.example".to_string(),
+            vec!["127.0.0.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = SseTransport::build_pinned_client("http://evil.example/mcp", None).await;
+        assert!(
+            matches!(result, Err(AlephError::IoError(ref msg)) if msg.starts_with("SSRF blocked")),
+            "hostname → 127.0.0.1 must be blocked — got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_pinned_client_succeeds_for_ip_literal_without_pin() {
+        let result = SseTransport::build_pinned_client("https://8.8.8.8/mcp", None).await;
+        let (url, _client) = result.expect("public IP literal must build a client");
+        assert_eq!(url.host_str(), Some("8.8.8.8"));
+    }
+
+    #[tokio::test]
+    async fn build_pinned_client_rejects_benchmark_range_resolution() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "bench.example".to_string(),
+            vec!["198.18.0.5".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+        let result = SseTransport::build_pinned_client("http://bench.example/mcp", None).await;
+        assert!(
+            matches!(result, Err(AlephError::IoError(ref msg)) if msg.starts_with("SSRF blocked")),
+            "198.18.0.0/15 resolution must be blocked — got {result:?}"
+        );
     }
 }

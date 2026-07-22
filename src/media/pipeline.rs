@@ -219,8 +219,18 @@ mod tests {
         }
     }
 
+    fn install_example_public_ip() -> crate::security::ssrf::dns::test_hook::ResolverScope {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        crate::security::ssrf::dns::test_hook::ResolverScope::install(map)
+    }
+
     #[tokio::test]
     async fn empty_pipeline_returns_no_provider() {
+        let _guard = install_example_public_ip();
         let pipeline = MediaPipeline::new();
         let err = pipeline
             .process(&sample_input(), &image_type(), None)
@@ -231,6 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_provider_success() {
+        let _guard = install_example_public_ip();
         let mut pipeline = MediaPipeline::new();
         pipeline.add_provider(Box::new(SuccessProvider {
             name: "claude",
@@ -250,6 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn fallback_on_failure() {
+        let _guard = install_example_public_ip();
         let mut pipeline = MediaPipeline::new();
         pipeline.add_provider(Box::new(FailProvider { name: "primary" }));
         pipeline.add_provider(Box::new(SuccessProvider {
@@ -270,6 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_providers_without_matching_category() {
+        let _guard = install_example_public_ip();
         let mut pipeline = MediaPipeline::new();
         pipeline.add_provider(Box::new(SuccessProvider {
             name: "audio-only",
@@ -294,6 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn priority_ordering() {
+        let _guard = install_example_public_ip();
         let mut pipeline = MediaPipeline::new();
         pipeline.add_provider(Box::new(SuccessProvider {
             name: "low",

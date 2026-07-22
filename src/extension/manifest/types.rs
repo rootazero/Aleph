@@ -564,11 +564,7 @@ mod tests {
         )
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
 
-        // Absolute entry path should be returned as-is
-        assert_eq!(
-            manifest.entry_path().unwrap(),
-            PathBuf::from("/absolute/path/index.js")
-        );
+        assert!(manifest.entry_path().is_err());
     }
 
     #[test]
