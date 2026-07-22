@@ -89,7 +89,7 @@ fn is_safe_homepage_url(hp: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-fn safe_homepage_link(href: &str, label: impl IntoView) -> impl IntoView {
+fn safe_homepage_link(href: &str, label: impl IntoView) -> AnyView {
     if is_safe_homepage_url(href) {
         view! {
             <a
