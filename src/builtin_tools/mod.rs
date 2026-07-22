@@ -119,8 +119,9 @@ pub use acp_tools::{
 };
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
-    AgentDeleteTool, AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool, AgentSwitchArgs,
-    AgentSwitchOutput, AgentSwitchTool, SessionContext, SessionContextHandle,
+    AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs,
+    AgentListInfo, AgentListOutput, AgentListTool, AgentSwitchArgs, AgentSwitchOutput,
+    AgentSwitchTool, SessionContext, SessionContextHandle,
 };
 pub use arena::{
     ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,
@@ -128,7 +129,7 @@ pub use arena::{
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
-// pub use browser::*; — removed; Task 13 will re-export new types
+pub use browser_tools::*;
 pub use channel_manage::{
     ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
 };
@@ -161,7 +162,9 @@ pub use flag_user_correction::{
 };
 pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
-    ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,
+    AudioGenerateArgs, AudioGenerateOutput, AudioGenerateTool, ImageGenerateArgs,
+    ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool, VideoGenerateArgs,
+    VideoGenerateOutput, VideoGenerateTool,
 };
 pub use goal::{GoalAction, GoalArgs, GoalOutput, GoalTool};
 pub use google_meet::{
@@ -175,6 +178,7 @@ pub use heartbeat_manage::{
     HeartbeatReportTool, HeartbeatToggleArgs, HeartbeatToggleOutput, HeartbeatToggleTool,
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
+pub use hub::*;
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use loop_graph_manage::{LoopGraphAction, LoopGraphArgs, LoopGraphOutput, LoopGraphTool};
 pub use loop_manage::{LoopAction, LoopArgs, LoopOutput, LoopTool};
@@ -203,7 +207,9 @@ pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
 pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
 pub use node_list::{NodeListArgs, NodeListTool};
-pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
+pub use pdf_generate::{
+    ContentFormat, PageSize, PdfGenerateArgs, PdfGenerateOutput, PdfGenerateTool, RenderEngine,
+};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
 pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTool};
@@ -215,21 +221,23 @@ pub use select_model::{SelectModelArgs, SelectModelOutput, SelectModelTool};
 pub use self_manage::{SelfManageArgs, SelfManageOutput, SelfManageTool};
 pub use session_complete::{SessionCompleteArgs, SessionCompleteResult, SessionCompleteTool};
 pub use session_search::{SessionSearchArgs, SessionSearchOutput, SessionSearchTool};
-pub use skill_reader::{ListSkillsArgs, ListSkillsOutput, ListSkillsTool, SkillSummary};
+pub use sessions::*;
+pub use skill_reader::{
+    ListSkillsArgs, ListSkillsOutput, ListSkillsTool, ReadSkillArgs, ReadSkillOutput,
+    ReadSkillTool, SkillSummary,
+};
 pub use strategy_manage::{StrategyAction, StrategyArgs, StrategyOutput, StrategyTool};
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
-pub use task_manage::{TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool};
-pub use team::{
-    CreateAgentSpec, EnrolledMember, MemberSpec, TeamCreateArgs, TeamCreateOutput, TeamCreateTool,
-    TeamDelegateArgs, TeamDelegateOutput, TeamDelegateTool, TeamDisbandArgs, TeamDisbandOutput,
-    TeamDisbandTool, TeamStatusArgs, TeamStatusOutput, TeamStatusTool,
-};
+pub use task_manage::*;
+pub use team::*;
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,
     VoiceModeSetTool,
 };
-pub use web_fetch::{WebFetchArgs, WebFetchTool};
+pub use web_fetch::{
+    ExtractMode, Extractor, WebFetchArgs, WebFetchResult, WebFetchTool,
+};
 
 // ============================================================================
 // Tool Progress Callback System

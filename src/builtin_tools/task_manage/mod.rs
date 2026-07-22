@@ -5,7 +5,7 @@ pub mod list;
 pub mod update;
 pub mod wait;
 
-pub use create::TaskCreateTool;
-pub use list::TaskListTool;
-pub use update::TaskUpdateTool;
-pub use wait::TaskWaitTool;
+pub use create::{TaskCreateArgs, TaskCreateOutput, TaskCreateTool};
+pub use list::{TaskListArgs, TaskListOutput, TaskListTool};
+pub use update::{TaskUpdateArgs, TaskUpdateOutput, TaskUpdateTool};
+pub use wait::{TaskWaitArgs, TaskWaitOutput, TaskWaitTool};
