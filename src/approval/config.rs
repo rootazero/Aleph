@@ -272,6 +272,7 @@ impl ConfigApprovalPolicy {
             blocklist: vec![],
         })
     }
+}
 
 impl Default for ConfigApprovalPolicy {
     /// Sensible defaults:
