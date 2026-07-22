@@ -103,16 +103,6 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                             session_name: session_name.clone(),
                         });
                     }
-                    crate::acp::AcpSessionEvent::Updated {
-                        ref harness_id,
-                        ref acp_session_id,
-                    } => {
-                        if let Some(entry) = store.iter_mut().find(|s| {
-                            s.harness_id == *harness_id && s.acp_session_id == *acp_session_id
-                        }) {
-                            entry.last_used_at = chrono::Utc::now();
-                        }
-                    }
                     crate::acp::AcpSessionEvent::Removed {
                         ref harness_id,
                         ref cwd,

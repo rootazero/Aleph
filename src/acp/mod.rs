@@ -32,10 +32,6 @@ pub enum AcpSessionEvent {
         cwd: String,
         session_name: Option<String>,
     },
-    Updated {
-        harness_id: String,
-        acp_session_id: String,
-    },
     Removed {
         harness_id: String,
         cwd: String,

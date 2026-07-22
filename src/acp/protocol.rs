@@ -43,14 +43,17 @@ impl AcpRequest {
                     "version": env!("ALEPH_VERSION"),
                 },
                 // Advertise the client-side capabilities Aleph can service for
-                // agent→client requests. `fs.*` is backed by
-                // `crate::acp::incoming::IncomingHandler`; `terminal` is not yet
-                // implemented so it stays absent (spec-compliant agents won't
+                // agent→client requests. `fs.*` and `session.requestPermission` are
+                // backed by `crate::acp::incoming::IncomingHandler`; `terminal` is
+                // not yet implemented so it stays absent (spec-compliant agents won't
                 // send `terminal/*`, and a stray request gets a clean -32601).
                 "capabilities": {
                     "fs": {
                         "readTextFile": true,
                         "writeTextFile": true,
+                    },
+                    "session": {
+                        "requestPermission": true,
                     },
                 },
             })),
@@ -877,5 +880,6 @@ mod tests {
         let caps = &init.params.unwrap()["capabilities"];
         assert_eq!(caps["fs"]["readTextFile"], true);
         assert_eq!(caps["fs"]["writeTextFile"], true);
+        assert_eq!(caps["session"]["requestPermission"], true);
     }
 }

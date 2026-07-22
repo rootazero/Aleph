@@ -103,22 +103,6 @@ impl AlephTool for AcpDelegateTool {
                 )
                 .into());
             }
-            TrustLevel::Confirm => {
-                // User confirmation not yet integrated with gateway approval mechanism.
-                // Block rather than silently proceeding — set trust_level=full to allow.
-                let msg = format!(
-                    "ACP harness '{}' requires user confirmation (trust_level=confirm), \
-                     but approval flow is not yet implemented. Set trust_level to 'full' \
-                     via acp.update to allow delegation.",
-                    args.harness
-                );
-                notify_tool_result(Self::NAME, &msg, false);
-                return Err(crate::acp::protocol::AcpOperationError::new(
-                    crate::acp::protocol::AcpErrorCode::HarnessDenied,
-                    msg,
-                )
-                .into());
-            }
             TrustLevel::Full => {}
         }
 

@@ -113,14 +113,12 @@ pub enum OutputFormatSerde {
 pub enum TrustLevel {
     /// LLM can freely delegate without user confirmation
     Full,
-    /// Each delegation requires user confirmation
-    Confirm,
     /// Delegation disabled
     Disabled,
 }
 
 const fn default_trust_level() -> TrustLevel {
-    TrustLevel::Confirm
+    TrustLevel::Disabled
 }
 
 // =============================================================================
@@ -172,7 +170,7 @@ pub struct AcpAdapterEntry {
     pub preset: Option<String>,
 
     /// Trust level for LLM delegation. Preset harnesses default to Full,
-    /// custom harnesses default to Confirm.
+    /// custom harnesses default to Disabled.
     #[serde(default = "default_trust_level")]
     pub trust_level: TrustLevel,
 }
@@ -494,10 +492,6 @@ mod tests {
         let t: TrustLevel = serde_json::from_str(json).unwrap();
         assert_eq!(t, TrustLevel::Full);
 
-        let json = r#""confirm""#;
-        let t: TrustLevel = serde_json::from_str(json).unwrap();
-        assert_eq!(t, TrustLevel::Confirm);
-
         let json = r#""disabled""#;
         let t: TrustLevel = serde_json::from_str(json).unwrap();
         assert_eq!(t, TrustLevel::Disabled);
@@ -522,14 +516,14 @@ mod tests {
     #[test]
     fn test_custom_harness_default_trust() {
         let entry = AcpAdapterEntry::default();
-        assert_eq!(entry.trust_level, TrustLevel::Confirm);
+        assert_eq!(entry.trust_level, TrustLevel::Disabled);
     }
 
     #[test]
     fn test_trust_level_deserialize_missing() {
         let json = r#"{"display_name":"Test","enabled":true}"#;
         let entry: AcpAdapterEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.trust_level, TrustLevel::Confirm);
+        assert_eq!(entry.trust_level, TrustLevel::Disabled);
     }
 
     #[test]
