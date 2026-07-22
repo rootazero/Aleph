@@ -121,42 +121,6 @@ pub struct VersionInfo {
     pub files: Vec<String>,
 }
 
-/// Versions list response: `{ items: [...], nextCursor: ... }`
-#[derive(Debug, Clone, Deserialize)]
-pub struct VersionsResponse {
-    #[serde(default)]
-    pub items: Vec<RawVersionItem>,
-    #[serde(default, rename = "nextCursor")]
-    pub next_cursor: Option<String>,
-}
-
-/// Raw version item from the versions API
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawVersionItem {
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub changelog: Option<String>,
-    /// Unix milliseconds timestamp
-    #[serde(default, rename = "createdAt")]
-    pub created_at: Option<u64>,
-    #[serde(default, rename = "changelogSource")]
-    pub changelog_source: Option<String>,
-}
-
-impl From<RawVersionItem> for VersionInfo {
-    fn from(item: RawVersionItem) -> Self {
-        let published_at = item.created_at.map(unix_ms_to_rfc3339).unwrap_or_default();
-        Self {
-            number: item.version,
-            changelog: item.changelog.unwrap_or_default(),
-            license: String::new(),
-            published_at,
-            files: Vec::new(),
-        }
-    }
-}
-
 /// Owner info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnerInfo {

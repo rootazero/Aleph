@@ -25,7 +25,7 @@ use crate::error::{AlephError, Result};
 
 use super::types::{
     BrowseApiResponse, BrowseResponse, DetailApiResponse, SearchApiResponse, SkillDetail,
-    SkillSearchResult, SortOrder, VersionInfo, VersionsResponse,
+    SkillSearchResult, SortOrder, VersionInfo,
 };
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
@@ -233,20 +233,6 @@ impl ClawHubClient {
         debug!(slug, "ClawHub get_skill");
         let raw: DetailApiResponse = self.get_json(&url, &[], "get_skill").await?;
         Ok(SkillDetail::from(raw))
-    }
-
-    /// Get version list for a skill.
-    ///
-    /// The API returns `{ items: [{version, createdAt, changelog}], nextCursor }`.
-    pub async fn get_versions(&self, slug: &str) -> Result<Vec<VersionInfo>> {
-        let url = format!(
-            "{}/api/v1/skills/{}/versions",
-            self.base_url,
-            encode_slug_path(slug)
-        );
-        debug!(slug, "ClawHub get_versions");
-        let data: VersionsResponse = self.get_json(&url, &[], "get_versions").await?;
-        Ok(data.items.into_iter().map(VersionInfo::from).collect())
     }
 
     /// Download skill ZIP to a temporary file. Returns path to the temp ZIP.
