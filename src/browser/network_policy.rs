@@ -402,21 +402,18 @@ mod tests {
     #[tokio::test]
     async fn test_allows_public_urls() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("example.com", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("example.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
 
         assert!(policy.check_url("https://example.com/page").await.is_ok());
         assert!(policy.check_url("https://8.8.8.8/dns").await.is_ok());
         assert!(policy.check_url("https://172.32.0.1/").await.is_ok()); // 172.32 is NOT private
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn test_blocked_domain_patterns() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("safe.com", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("safe.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
@@ -442,14 +439,12 @@ mod tests {
         );
         // Non-matching domain is fine
         assert!(policy.check_url("https://safe.com/").await.is_ok());
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn test_allowed_domains_whitelist() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("random.com", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("random.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -468,14 +463,12 @@ mod tests {
             policy.check_url("https://random.com/").await,
             Err(PolicyViolation::NotInAllowlist(_))
         ));
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn test_disabled_ssrf_allows_everything() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("example.com", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("example.com", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -488,7 +481,6 @@ mod tests {
         assert!(policy.check_url("http://10.0.0.1/").await.is_ok());
         assert!(policy.check_url("http://192.168.1.1/").await.is_ok());
         assert!(policy.check_url("https://example.com/").await.is_ok());
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -553,8 +545,7 @@ mod tests {
     #[tokio::test]
     async fn check_navigation_blocks_secret_in_url() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("public.example", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("public.example", "8.8.8.8".parse().unwrap());
         // Default guard has block_secrets_in_url = true.
         let policy = BrowserSsrfGuard::default();
         let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
@@ -570,7 +561,6 @@ mod tests {
             .check_navigation("https://public.example/docs")
             .await
             .is_ok());
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -624,18 +614,19 @@ mod tests {
         HOSTNAME_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn install_resolved_multi(map: std::collections::HashMap<String, Vec<std::net::IpAddr>>) {
-        crate::security::ssrf::dns::test_hook::install(map);
+    fn install_resolved_multi(
+        map: std::collections::HashMap<String, Vec<std::net::IpAddr>>,
+    ) -> crate::security::ssrf::dns::test_hook::ResolverScope {
+        crate::security::ssrf::dns::test_hook::ResolverScope::install(map)
     }
 
-    fn install_resolved(host: &str, ip: std::net::IpAddr) {
+    fn install_resolved(
+        host: &str,
+        ip: std::net::IpAddr,
+    ) -> crate::security::ssrf::dns::test_hook::ResolverScope {
         let mut map = std::collections::HashMap::new();
         map.insert(host.to_string(), vec![ip]);
-        crate::security::ssrf::dns::test_hook::install(map);
-    }
-
-    fn clear_resolver() {
-        crate::security::ssrf::dns::test_hook::clear();
+        crate::security::ssrf::dns::test_hook::ResolverScope::install(map)
     }
 
     // These tests rely on a global test-only resolver hook. They must run
@@ -643,85 +634,73 @@ mod tests {
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_loopback() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://evil.example/admin").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "hostname resolving to 127.0.0.1 must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_private_10() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
+        let _scope = install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://internal.corp/api").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "RFC1918 10.0.0.0/8 resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_private_192() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("router.lan", "192.168.0.1".parse().unwrap());
+        let _scope = install_resolved("router.lan", "192.168.0.1".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://router.lan/admin").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "RFC1918 192.168.0.0/16 resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_link_local() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("apipa.host", "169.254.10.20".parse().unwrap());
+        let _scope = install_resolved("apipa.host", "169.254.10.20".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://apipa.host/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "link-local 169.254/16 resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_cloud_metadata() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("aws.example", "169.254.169.254".parse().unwrap());
+        let _scope = install_resolved("aws.example", "169.254.169.254".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://aws.example/latest/meta-data/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "cloud-metadata (169.254.169.254) resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_blocks_ipv6_loopback_resolution() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("v6.example", "::1".parse().unwrap());
+        let _scope = install_resolved("v6.example", "::1".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://v6.example/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "IPv6 loopback ::1 resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -729,7 +708,6 @@ mod tests {
         // A record set mixing a public IP with a loopback must be rejected
         // (TOCTOU floor: if ANY returned IP is blocked, reject entirely).
         let _lock = serial_test_lock();
-        clear_resolver();
         let mut map = std::collections::HashMap::new();
         map.insert(
             "mixed.example".to_string(),
@@ -738,42 +716,37 @@ mod tests {
                 "127.0.0.1".parse().unwrap(),
             ],
         );
-        install_resolved_multi(map);
+        let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://mixed.example/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "mixed A records containing a loopback must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_url_allows_hostname_resolving_to_public_ip() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("good.example", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("good.example", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://good.example/path").await;
         assert!(
             result.is_ok(),
             "hostname resolving to a public IP must pass — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn check_navigation_blocks_hostname_resolving_to_loopback() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_navigation("https://evil.example/admin").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "navigation guard must inherit DNS resolution — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -781,8 +754,7 @@ mod tests {
         // When block_private=false and no allow/blocklists, the policy is
         // disabled entirely — DNS validation is skipped (loopback reachable).
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -795,7 +767,6 @@ mod tests {
             result.is_ok(),
             "with all SSRF gating disabled, even loopback resolution must pass — got {result:?}"
         );
-        clear_resolver();
     }
 
     // --- DNS pinning for Chrome launch (defense against DNS rebinding
@@ -820,8 +791,7 @@ mod tests {
         // When SSRF is disabled we cannot validate any IPs, so we skip pinning
         // rather than hand Chrome an unvalidated MAP rule.
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("anything.example", "127.0.0.1".parse().unwrap());
+        let _scope = install_resolved("anything.example", "127.0.0.1".parse().unwrap());
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -834,7 +804,6 @@ mod tests {
             .await
             .expect("disabled policy must not error");
         assert_eq!(result, None, "disabled SSRF → no DNS pinning");
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -842,50 +811,43 @@ mod tests {
         // Same DNS rejection floor as check_url: hostname → 127.0.0.1 is refused
         // before any MAP rule is built.
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         let policy = BrowserSsrfGuard::default();
         let result = policy.pin_host_resolver_args("http://evil.example/admin").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "hostname resolving to 127.0.0.1 must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn pin_host_resolver_args_blocks_hostname_resolving_to_private_10() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
+        let _scope = install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.pin_host_resolver_args("http://internal.corp/api").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "RFC1918 10.0.0.0/8 resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn pin_host_resolver_args_blocks_hostname_resolving_to_cloud_metadata() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("aws.example", "169.254.169.254".parse().unwrap());
+        let _scope = install_resolved("aws.example", "169.254.169.254".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy.pin_host_resolver_args("http://aws.example/latest/meta-data/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "cloud-metadata resolution must be blocked — got {result:?}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
     async fn pin_host_resolver_args_returns_map_arg_for_public_hostname() {
         let _lock = serial_test_lock();
-        clear_resolver();
-        install_resolved("good.example", "8.8.8.8".parse().unwrap());
+        let _scope = install_resolved("good.example", "8.8.8.8".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
         let result = policy
             .pin_host_resolver_args("https://good.example/path")
@@ -898,7 +860,6 @@ mod tests {
         );
         assert!(arg.contains("MAP good.example"), "arg = {arg}");
         assert!(arg.contains("8.8.8.8"), "arg = {arg}");
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -907,7 +868,6 @@ mod tests {
         // round-robins them; include every passing IP so all valid resolution
         // paths stay reachable.
         let _lock = serial_test_lock();
-        clear_resolver();
         let mut map = std::collections::HashMap::new();
         map.insert(
             "multi.example".to_string(),
@@ -916,7 +876,7 @@ mod tests {
                 "1.1.1.1".parse().unwrap(),
             ],
         );
-        install_resolved_multi(map);
+        let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
         let result = policy
             .pin_host_resolver_args("http://multi.example/")
@@ -929,7 +889,6 @@ mod tests {
             arg.contains("8.8.8.8, 1.1.1.1") || arg.contains("1.1.1.1, 8.8.8.8"),
             "IPs must be comma-separated — arg = {arg}"
         );
-        clear_resolver();
     }
 
     #[tokio::test]
@@ -952,7 +911,6 @@ mod tests {
         // empty/useless MAP. (Full rebinding coverage is a platform concern —
         // see chrome_launch_args_omits_pin_when_chrome_already_running.)
         let _lock = serial_test_lock();
-        clear_resolver();
         let mut map = std::collections::HashMap::new();
         map.insert(
             "rebinding.example".to_string(),
@@ -961,13 +919,12 @@ mod tests {
                 "127.0.0.2".parse().unwrap(),
             ],
         );
-        install_resolved_multi(map);
+        let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
         let result = policy.pin_host_resolver_args("http://rebinding.example/").await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "all-loopback rebinding must surface as PrivateNetwork — got {result:?}"
         );
-        clear_resolver();
     }
 }

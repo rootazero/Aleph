@@ -250,6 +250,13 @@ mod tests {
 
     #[tokio::test]
     async fn url_with_extension() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "example.com".to_string(),
+            vec!["1.1.1.1".parse::<std::net::IpAddr>().unwrap()],
+        );
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
+
         let tool = make_tool();
         let args = MediaUnderstandArgs {
             file_path: None,

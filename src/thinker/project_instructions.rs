@@ -107,16 +107,19 @@ fn relative_label(path: &Path, workspace: &Path) -> String {
 /// presenters; [`load_project_instructions`] wraps it for the orchestrator path.
 #[must_use]
 pub fn discover_project_instructions(workspace: &Path) -> Vec<ProjectInstructionFile> {
-    let git_root = crate::utils::paths::find_git_root(workspace);
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let git_root = crate::utils::paths::find_git_root(&workspace);
     // `@import` boundary: the git root, or the workspace itself outside a repo.
-    let boundary = git_root.clone().unwrap_or_else(|| workspace.to_path_buf());
-    let home = dirs::home_dir();
+    let boundary = git_root.clone().unwrap_or_else(|| workspace.clone());
+    let home = dirs::home_dir().map(|home| home.canonicalize().unwrap_or(home));
 
     // Collect directories from workspace upward to the git root (inclusive).
     // Stop at the git root, `$HOME`, or a depth cap — whichever trips first —
     // so a workspace outside any repo can't walk to the filesystem root.
     let mut dirs = Vec::new();
-    let mut current = workspace.to_path_buf();
+    let mut current = workspace.clone();
     loop {
         dirs.push(current.clone());
         if git_root.as_deref() == Some(current.as_path()) {
@@ -184,7 +187,7 @@ pub fn discover_project_instructions(workspace: &Path) -> Vec<ProjectInstruction
             total += capped.chars().count();
 
             out.push(ProjectInstructionFile {
-                label: relative_label(&path, workspace),
+                label: relative_label(&path, &workspace),
                 path,
                 content: capped,
             });
@@ -429,6 +432,35 @@ mod tests {
         // Outermost (git root) first, most-specific (workspace) last.
         assert_eq!(files[0].content, "root rules");
         assert_eq!(files[1].content, "api rules");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_workspace_walks_canonical_repo_ancestors_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write(&repo.join("CLAUDE.md"), "repo rules");
+        let workspace = repo.join("crates/api");
+        write(&workspace.join("CLAUDE.md"), "workspace rules");
+
+        let link_parent = tmp.path().join("outside");
+        write(&link_parent.join("CLAUDE.md"), "outside rules");
+        let link = link_parent.join("workspace");
+        std::os::unix::fs::symlink(&workspace, &link).unwrap();
+
+        let files = discover_project_instructions(&link);
+        let contents: Vec<&str> = files.iter().map(|file| file.content.as_str()).collect();
+        let repo_pos = contents
+            .iter()
+            .position(|content| *content == "repo rules")
+            .unwrap();
+        let workspace_pos = contents
+            .iter()
+            .position(|content| *content == "workspace rules")
+            .unwrap();
+        assert!(repo_pos < workspace_pos);
+        assert!(!contents.contains(&"outside rules"));
     }
 
     #[test]

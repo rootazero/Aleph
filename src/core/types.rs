@@ -118,7 +118,7 @@ pub struct CompressionStats {
 }
 
 /// Memory entry for API responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryEntry {
     /// Unique identifier for the memory entry
     pub id: String,
@@ -135,19 +135,6 @@ pub struct MemoryEntry {
     /// rank downstream is worse than no score at all).
     #[serde(deserialize_with = "deserialize_finite_f32_opt")]
     pub similarity_score: Option<f32>,
-}
-
-impl Default for MemoryEntry {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            window_title: String::new(),
-            user_input: String::new(),
-            ai_output: String::new(),
-            timestamp: 0,
-            similarity_score: None,
-        }
-    }
 }
 
 fn deserialize_finite_f32_opt<'de, D>(d: D) -> Result<Option<f32>, D::Error>

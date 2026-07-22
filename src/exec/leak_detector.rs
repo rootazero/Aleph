@@ -31,17 +31,14 @@ pub struct LeakPattern {
 }
 
 /// A single finding from a scan.
+#[allow(clippy::manual_non_exhaustive)]
 #[derive(Debug, Clone)]
 pub struct ScanFinding {
     /// Name of the pattern that matched.
     pub pattern_name: &'static str,
     /// Action recommended for this finding.
     pub action: LeakAction,
-    /// The matched text, truncated to a non-secret prefix length. Internal
-    /// callers (audit, debug) may use it; the field is **not** part of the
-    /// public stable surface — do not log it through observability backends
-    /// or audit pipelines without first hashing / redacting.
-    pub(crate) matched_text: String,
+    _private: (),
 }
 
 /// Result of scanning content for leaks.
@@ -140,24 +137,11 @@ impl LeakDetector {
         // secret-leak callback page.
         let mut findings = Vec::new();
         for pattern in &self.patterns {
-            if let Some(m) = pattern.regex.find(content) {
-                let matched = m.as_str();
-                let truncated = if matched.len() > 20 {
-                    // Truncate to 20 chars, scanning backward from byte 20 to find
-                    // the nearest valid UTF-8 character boundary so we don't split
-                    // a multi-byte codepoint.
-                    let byte_offset = matched
-                        .char_indices()
-                        .nth(20)
-                        .map_or(matched.len(), |(i, _)| i);
-                    format!("{}...", &matched[..byte_offset])
-                } else {
-                    matched.to_string()
-                };
+            if pattern.regex.find(content).is_some() {
                 findings.push(ScanFinding {
                     pattern_name: pattern.name,
                     action: pattern.action,
-                    matched_text: truncated,
+                    _private: (),
                 });
             }
         }
@@ -283,28 +267,6 @@ mod tests {
         assert!(
             anthropic_finding.is_some(),
             "should have an anthropic_key finding"
-        );
-    }
-
-    #[test]
-    fn test_matched_text_truncation() {
-        let detector = LeakDetector::default_patterns();
-        // A long key that exceeds 20 chars
-        let result = detector.scan_outbound("sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef");
-        let finding = result
-            .findings
-            .iter()
-            .find(|f| f.pattern_name == "openai_key")
-            .expect("should detect openai key");
-        // Truncated to 20 chars + "..."
-        assert!(
-            finding.matched_text.len() <= 23,
-            "matched_text should be truncated: {}",
-            finding.matched_text
-        );
-        assert!(
-            finding.matched_text.ends_with("..."),
-            "truncated text should end with '...'"
         );
     }
 

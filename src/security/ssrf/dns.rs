@@ -13,24 +13,48 @@ use super::SsrfError;
 #[cfg(test)]
 pub(crate) mod test_hook {
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
 
     use super::*;
 
     static RESOLVER: Mutex<Option<HashMap<String, Vec<IpAddr>>>> = Mutex::new(None);
 
-    pub(crate) fn install(map: HashMap<String, Vec<IpAddr>>) {
-        *RESOLVER.lock().unwrap() = Some(map);
+    static RESOLVER_GUARD: Mutex<()> = Mutex::new(());
+
+    pub(crate) struct ResolverScope {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<HashMap<String, Vec<IpAddr>>>,
     }
 
-    pub(crate) fn clear() {
-        *RESOLVER.lock().unwrap() = None;
+    impl ResolverScope {
+        pub(crate) fn install(map: HashMap<String, Vec<IpAddr>>) -> Self {
+            let guard = RESOLVER_GUARD
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = {
+                let mut resolver = RESOLVER.lock().unwrap_or_else(|e| e.into_inner());
+                let prev = resolver.take();
+                *resolver = Some(map);
+                prev
+            };
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for ResolverScope {
+        fn drop(&mut self) {
+            let mut resolver = RESOLVER.lock().unwrap_or_else(|e| e.into_inner());
+            *resolver = self.previous.take();
+        }
     }
 
     pub(crate) fn lookup(host: &str) -> Option<Vec<IpAddr>> {
         RESOLVER
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .and_then(|m| m.get(host).cloned())
     }
@@ -198,5 +222,97 @@ mod tests {
         };
         let result = resolve_and_validate("127.0.0.1", 80, &policy).await;
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
+    }
+
+    #[test]
+    fn resolver_scope_installs_map_and_restores_on_drop() {
+        assert!(
+            test_hook::lookup("pinned.example").is_none(),
+            "RESOLVER starts empty — sanity check"
+        );
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "pinned.example".to_string(),
+            vec!["1.1.1.1".parse::<IpAddr>().unwrap()],
+        );
+        let scope = test_hook::ResolverScope::install(map);
+        assert_eq!(
+            test_hook::lookup("pinned.example").as_ref().map(|v| v.len()),
+            Some(1)
+        );
+        drop(scope);
+        assert!(
+            test_hook::lookup("pinned.example").is_none(),
+            "scope Drop must restore RESOLVER to its prior state"
+        );
+    }
+
+    #[test]
+    fn resolver_scope_saves_and_restores_previous_map() {
+        let mut first = std::collections::HashMap::new();
+        first.insert(
+            "first.example".to_string(),
+            vec!["1.1.1.1".parse::<IpAddr>().unwrap()],
+        );
+        let scope_a = test_hook::ResolverScope::install(first);
+        assert!(test_hook::lookup("first.example").is_some());
+
+        drop(scope_a);
+        assert!(
+            test_hook::lookup("first.example").is_none(),
+            "first map must be cleared before next install"
+        );
+
+        let mut second = std::collections::HashMap::new();
+        second.insert(
+            "second.example".to_string(),
+            vec!["8.8.8.8".parse::<IpAddr>().unwrap()],
+        );
+        let scope_b = test_hook::ResolverScope::install(second);
+        assert!(
+            test_hook::lookup("first.example").is_none(),
+            "old map must remain cleared after sequential scopes"
+        );
+        assert!(test_hook::lookup("second.example").is_some());
+        drop(scope_b);
+        assert!(test_hook::lookup("second.example").is_none());
+    }
+
+    #[tokio::test]
+    async fn resolver_scope_overrides_then_restores_for_resolve_and_validate() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "pinned.example".to_string(),
+            vec!["127.0.0.1".parse::<IpAddr>().unwrap()],
+        );
+        let _scope = test_hook::ResolverScope::install(map);
+
+        let policy = SsrfPolicy::default();
+        let result = resolve_and_validate("pinned.example", 80, &policy).await;
+        assert!(
+            matches!(result, Err(SsrfError::BlockedAddress(_))),
+            "resolver-scope override must be honored by resolve_and_validate — got {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolver_scope_restores_even_when_scope_body_panics() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "panic.example".to_string(),
+            vec!["1.1.1.1".parse::<IpAddr>().unwrap()],
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let scope = test_hook::ResolverScope::install(map);
+            assert!(test_hook::lookup("panic.example").is_some());
+            let _ = scope;
+            panic!("forced panic — Drop must still run during unwind");
+        }));
+        assert!(result.is_err(), "panic must propagate out of catch_unwind");
+        assert!(
+            test_hook::lookup("panic.example").is_none(),
+            "scope Drop must restore RESOLVER even when scope body panics"
+        );
     }
 }

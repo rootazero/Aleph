@@ -850,6 +850,40 @@ async fn test_resolve_alias_never_shadows_canonical_name() {
 }
 
 #[tokio::test]
+async fn test_unregister_canonical_restores_existing_alias() {
+    let registry = ToolCatalog::new();
+    let a = UnifiedTool::new("custom:goto", "goto", "Go somewhere", ToolSource::Builtin)
+        .with_aliases(["go"]);
+    let a_id = registry.register_with_conflict_resolution(a).await;
+    let b = UnifiedTool::new(
+        "custom:go",
+        "go",
+        "Dynamic go",
+        ToolSource::Custom { rule_index: 0 },
+    );
+    let b_id = registry.register_with_conflict_resolution(b).await;
+
+    let resolved = registry.resolve_command("/go").await.unwrap();
+    assert_eq!(
+        resolved.tool.name, "go",
+        "canonical 'go' must beat the alias hit while active"
+    );
+
+    let goto = registry.get_by_id(&a_id).await.unwrap();
+    assert!(
+        goto.aliases.iter().any(|a| a == "go"),
+        "goto's 'go' alias must be preserved when canonical 'go' registers"
+    );
+
+    assert!(registry.set_tool_active(&b_id, false).await);
+    let resolved_after = registry.resolve_command("/go").await.unwrap();
+    assert_eq!(
+        resolved_after.tool.name, "goto",
+        "after canonical 'go' is deactivated, 'go' alias must resolve back to goto"
+    );
+}
+
+#[tokio::test]
 async fn test_suggest_commands_scores_name_and_alias() {
     let registry = ToolCatalog::new();
     let tool = UnifiedTool::new(

@@ -333,31 +333,32 @@ mod tests {
     }
 
     #[test]
-    fn detect_mime_from_extension_known_types() {
+    fn detect_mime_from_extension_known_types() -> Result<(), VisionError> {
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("png")),
-            Ok("image/png")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("png"))?,
+            "image/png"
         );
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("jpg")),
-            Ok("image/jpeg")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("jpg"))?,
+            "image/jpeg"
         );
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("jpeg")),
-            Ok("image/jpeg")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("jpeg"))?,
+            "image/jpeg"
         );
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("webp")),
-            Ok("image/webp")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("webp"))?,
+            "image/webp"
         );
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("gif")),
-            Ok("image/gif")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("gif"))?,
+            "image/gif"
         );
         assert_eq!(
-            ClaudeVisionProvider::detect_mime_from_extension(Some("PNG")),
-            Ok("image/png")
+            ClaudeVisionProvider::detect_mime_from_extension(Some("PNG"))?,
+            "image/png"
         );
+        Ok(())
     }
 
     #[test]

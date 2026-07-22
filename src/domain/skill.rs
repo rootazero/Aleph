@@ -396,6 +396,7 @@ impl ValueObject for AutomationSpec {}
              release in case any out-of-tree skill manifest references it, \
              then delete."
 )]
+#[allow(deprecated)]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArgMode {
@@ -415,6 +416,7 @@ impl ValueObject for ArgMode {}
     note = "No production code consumes DispatchSpec. See ArgMode's deprecation \
              note for the planned-removal timeline."
 )]
+#[allow(deprecated)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchSpec {
     /// The tool name to dispatch to.
@@ -433,6 +435,7 @@ const fn default_true() -> bool {
 }
 
 /// Controls how a skill can be invoked.
+#[allow(deprecated)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvocationPolicy {
     /// Whether the user can invoke this skill directly.
@@ -445,7 +448,6 @@ pub struct InvocationPolicy {
     /// `Option` so existing skill manifests that still carry the field
     /// continue to deserialize, but the dispatch path is not wired.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(deprecated)]
     pub command_dispatch: Option<DispatchSpec>,
 }
 

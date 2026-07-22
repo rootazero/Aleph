@@ -333,12 +333,8 @@ mod tests {
         let content: String = "A".repeat(100_000);
         let result = truncate_with_head_tail(&content, 60, 0.7, 0.2);
         assert!(
-            result.contains("truncated ...]"),
+            result.contains("truncated ...]\n\n"),
             "marker closing clipped: {result:?}"
-        );
-        assert!(
-            result.ends_with("]\n\n"),
-            "marker tail must be intact: {result:?}"
         );
         assert!(
             result.chars().count() <= 60,

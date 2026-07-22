@@ -571,8 +571,7 @@ mod tests {
     async fn current_page_block_flags_internal_http_urls() {
         // Default browser SSRF policy blocks private/loopback/link-local.
         let manager = ProfileManager::new(BrowserSystemConfig::default());
-        crate::security::ssrf::dns::test_hook::clear();
-        crate::security::ssrf::dns::test_hook::install({
+        let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install({
             let mut m = std::collections::HashMap::new();
             m.insert("example.com".to_string(), vec!["8.8.8.8".parse().unwrap()]);
             m
@@ -612,6 +611,5 @@ mod tests {
                 .await
                 .is_none()
         );
-        crate::security::ssrf::dns::test_hook::clear();
     }
 }
