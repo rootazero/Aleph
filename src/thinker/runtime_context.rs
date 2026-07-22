@@ -168,12 +168,16 @@ static REPO_ROOT_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<PathBuf>>>> = Onc
 
 fn cached_repo_root(working_dir: &Path) -> Option<PathBuf> {
     let cache = REPO_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(cached) = map.get(working_dir) {
-        return cached.clone();
+    {
+        let map = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = map.get(working_dir) {
+            return cached.clone();
+        }
     }
     let detected = detect_repo_root(working_dir);
-    map.insert(working_dir.to_path_buf(), detected.clone());
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(working_dir.to_path_buf())
+        .or_insert_with(|| detected.clone());
     detected
 }
 
@@ -494,5 +498,22 @@ mod tests {
     fn detect_git_branch_returns_none_without_git() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(detect_git_branch(dir.path()), None);
+    }
+
+    #[test]
+    fn cached_repo_root_releases_lock_before_filesystem_io() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = std::thread::spawn({
+            let wd = dir.path().to_path_buf();
+            move || cached_repo_root(&wd)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let cache = REPO_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let try_result = cache.try_lock();
+        handle.join().unwrap();
+        assert!(
+            try_result.is_ok(),
+            "lock was held during I/O — concurrent callers would have blocked"
+        );
     }
 }

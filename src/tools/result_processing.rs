@@ -23,6 +23,8 @@ use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
 
+const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
+
 /// Global default budget for tools that neither declare an explicit
 /// `max_result_tokens` nor appear in the legacy name table. Mirrors the
 /// `MAX_TOOL_RESULT_TOKENS` constant in `pipeline/helpers.rs`.
@@ -226,12 +228,16 @@ fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage
     };
     // Read phase: these immutable borrows end before the mutation below.
     let data = match obj.get("image_base64").and_then(serde_json::Value::as_str) {
-        Some(s) if s.len() > 256 => s.to_string(),
+        Some(s) if s.len() > 256 && s.len() <= MAX_INLINE_IMAGE_BASE64_CHARS => s.to_string(),
         _ => return,
     };
     let mime_type = match obj.get("format").and_then(serde_json::Value::as_str) {
+        Some("png") => "image/png",
         Some("jpeg" | "jpg") => "image/jpeg",
-        _ => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("avif") => "image/avif",
+        _ => return,
     }
     .to_string();
     let chars = data.len();
@@ -396,6 +402,55 @@ mod tests {
         assert!(elided.len() < 256);
         // Surrounding metadata is preserved for the model to read.
         assert_eq!(value["data"]["width"], 1920);
+    }
+
+    #[test]
+    fn hoist_maps_common_image_formats() {
+        for (format, mime_type) in [
+            ("png", "image/png"),
+            ("jpeg", "image/jpeg"),
+            ("jpg", "image/jpeg"),
+            ("webp", "image/webp"),
+            ("gif", "image/gif"),
+            ("avif", "image/avif"),
+        ] {
+            let mut value = serde_json::json!({
+                "image_base64": "A".repeat(400),
+                "format": format,
+            });
+
+            let images = hoist_inline_images(&mut value);
+
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].mime_type, mime_type);
+        }
+    }
+
+    #[test]
+    fn hoist_keeps_unknown_image_format_in_text() {
+        let original = "A".repeat(400);
+        let mut value = serde_json::json!({
+            "image_base64": original,
+            "format": "bmp",
+        });
+
+        assert!(hoist_inline_images(&mut value).is_empty());
+        assert_eq!(value["image_base64"].as_str().unwrap().len(), 400);
+    }
+
+    #[test]
+    fn hoist_rejects_oversized_image_before_copying() {
+        let original = "A".repeat(MAX_INLINE_IMAGE_BASE64_CHARS + 1);
+        let mut value = serde_json::json!({
+            "image_base64": original,
+            "format": "png",
+        });
+
+        assert!(hoist_inline_images(&mut value).is_empty());
+        assert_eq!(
+            value["image_base64"].as_str().unwrap().len(),
+            MAX_INLINE_IMAGE_BASE64_CHARS + 1
+        );
     }
 
     #[test]

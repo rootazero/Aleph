@@ -166,16 +166,25 @@ impl DeliveryEngine {
         match config.mode {
             DeliveryMode::None => {}
             DeliveryMode::Primary => {
-                if let Some(target_cfg) = config.targets.first() {
-                    let outcome = self.deliver_to_target(payload, target_cfg).await;
-                    let success = outcome.success;
-                    outcomes.push(outcome);
+                match config.targets.first() {
+                    Some(target_cfg) => {
+                        let outcome = self.deliver_to_target(payload, target_cfg).await;
+                        let success = outcome.success;
+                        outcomes.push(outcome);
 
-                    // Fallback on failure
-                    if !success {
-                        if let Some(fallback) = &config.fallback_target {
-                            outcomes.push(self.deliver_to_target(payload, fallback).await);
+                        // Fallback on failure
+                        if !success {
+                            if let Some(fallback) = &config.fallback_target {
+                                outcomes.push(self.deliver_to_target(payload, fallback).await);
+                            }
                         }
+                    }
+                    None => {
+                        outcomes.push(DeliveryOutcome {
+                            target_kind: "primary".to_string(),
+                            success: false,
+                            message: Some("no primary target configured".to_string()),
+                        });
                     }
                 }
             }
@@ -417,6 +426,33 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("not registered"));
+    }
+
+    #[tokio::test]
+    async fn test_delivery_primary_empty_targets_returns_failure_outcome() {
+        let engine = DeliveryEngine::new();
+        let payload = make_payload();
+        let config = DeliveryConfig {
+            mode: DeliveryMode::Primary,
+            targets: vec![],
+            fallback_target: None,
+        };
+        let outcomes = engine.deliver(&payload, &config).await;
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "empty targets must produce a single observable failure outcome"
+        );
+        assert!(!outcomes[0].success);
+        assert_eq!(outcomes[0].target_kind, "primary");
+        assert!(
+            outcomes[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("no primary target configured"),
+            "failure outcome must explain the configuration error"
+        );
     }
 
     #[test]

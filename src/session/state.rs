@@ -62,11 +62,19 @@ impl SessionState {
                     pending_tool_calls: HashMap::new(),
                 });
             }
-            SessionEvent::TurnEnded { outcome, .. } => {
-                if matches!(outcome, TurnOutcome::Completed) {
-                    self.completed_turns += 1;
+            SessionEvent::TurnEnded {
+                turn_id, outcome, ..
+            } => {
+                if self
+                    .current_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.id == *turn_id)
+                {
+                    if matches!(outcome, TurnOutcome::Completed) {
+                        self.completed_turns += 1;
+                    }
+                    self.current_turn = None;
                 }
-                self.current_turn = None;
             }
 
             SessionEvent::UserMessage { .. } => {
@@ -83,38 +91,72 @@ impl SessionState {
                 // See UserMessage.
             }
 
-            SessionEvent::ToolCallRequested { call_id, name, .. } => {
-                if let Some(turn) = self.current_turn.as_mut() {
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id,
+                name,
+                ..
+            } => {
+                if let Some(turn) = self
+                    .current_turn
+                    .as_mut()
+                    .filter(|turn| turn.id == *turn_id)
+                {
                     turn.pending_tool_calls.insert(
-                        // rust-doctor-disable-next-line excessive-clone
                         call_id.clone(),
                         PendingToolCall {
-                            // rust-doctor-disable-next-line excessive-clone
                             name: name.clone(),
                             approved: None,
                         },
                     );
                 }
             }
-            SessionEvent::ToolCallApproved { call_id, by, .. } => {
-                if let Some(turn) = self.current_turn.as_mut() {
+            SessionEvent::ToolCallApproved {
+                turn_id,
+                call_id,
+                by,
+                ..
+            } => {
+                if let Some(turn) = self
+                    .current_turn
+                    .as_mut()
+                    .filter(|turn| turn.id == *turn_id)
+                {
                     if let Some(pc) = turn.pending_tool_calls.get_mut(call_id) {
                         pc.approved = Some(*by);
                     }
                 }
             }
-            SessionEvent::ToolCallDenied { call_id, .. } => {
-                if let Some(turn) = self.current_turn.as_mut() {
+            SessionEvent::ToolCallDenied {
+                turn_id, call_id, ..
+            } => {
+                if let Some(turn) = self
+                    .current_turn
+                    .as_mut()
+                    .filter(|turn| turn.id == *turn_id)
+                {
                     turn.pending_tool_calls.remove(call_id);
                 }
             }
-            SessionEvent::ToolResult { call_id, .. } => {
-                if let Some(turn) = self.current_turn.as_mut() {
+            SessionEvent::ToolResult {
+                turn_id, call_id, ..
+            } => {
+                if let Some(turn) = self
+                    .current_turn
+                    .as_mut()
+                    .filter(|turn| turn.id == *turn_id)
+                {
                     turn.pending_tool_calls.remove(call_id);
                 }
             }
-            SessionEvent::ToolError { call_id, .. } => {
-                if let Some(turn) = self.current_turn.as_mut() {
+            SessionEvent::ToolError {
+                turn_id, call_id, ..
+            } => {
+                if let Some(turn) = self
+                    .current_turn
+                    .as_mut()
+                    .filter(|turn| turn.id == *turn_id)
+                {
                     turn.pending_tool_calls.remove(call_id);
                 }
             }
@@ -131,7 +173,7 @@ impl SessionState {
                 tokens_budget,
                 ..
             } => {
-                self.tokens_used = *tokens_used;
+                self.tokens_used = self.tokens_used.max(*tokens_used);
                 self.tokens_budget = *tokens_budget;
             }
             SessionEvent::CompactionPerformed { .. } => {
@@ -190,6 +232,62 @@ mod tests {
         s.apply(&turn_ended_completed(tid));
         assert!(s.current_turn.is_none());
         assert_eq!(s.completed_turns, 1);
+    }
+
+    #[test]
+    fn stale_turn_end_does_not_clear_current_turn_or_count() {
+        let mut s = SessionState::default();
+        let first = uuid::Uuid::new_v4();
+        let current = uuid::Uuid::new_v4();
+        s.apply(&turn_started(first));
+        s.apply(&turn_started(current));
+        s.apply(&turn_ended_completed(first));
+        assert_eq!(s.current_turn.as_ref().map(|turn| turn.id), Some(current));
+        assert_eq!(s.completed_turns, 0);
+    }
+
+    #[test]
+    fn duplicate_turn_end_does_not_count_twice() {
+        let mut s = SessionState::default();
+        let tid = uuid::Uuid::new_v4();
+        let event = turn_ended_completed(tid);
+        s.apply(&turn_started(tid));
+        s.apply(&event);
+        s.apply(&event);
+        assert_eq!(s.completed_turns, 1);
+    }
+
+    #[test]
+    fn tool_events_are_isolated_by_turn_id() {
+        let mut s = SessionState::default();
+        let first = uuid::Uuid::new_v4();
+        let current = uuid::Uuid::new_v4();
+        s.apply(&turn_started(first));
+        s.apply(&SessionEvent::ToolCallRequested {
+            turn_id: first,
+            call_id: "c1".into(),
+            name: "bash_exec".into(),
+            input: serde_json::json!({}),
+            at: now_ms(),
+        });
+        s.apply(&turn_started(current));
+        s.apply(&SessionEvent::ToolResult {
+            turn_id: first,
+            call_id: "c1".into(),
+            output: ToolOutput {
+                value: serde_json::json!("ok"),
+                metadata: Default::default(),
+            },
+            at: now_ms(),
+        });
+        assert!(s
+            .current_turn
+            .as_ref()
+            .is_some_and(|turn| turn.id == current));
+        assert!(s
+            .current_turn
+            .as_ref()
+            .is_some_and(|turn| turn.pending_tool_calls.is_empty()));
     }
 
     #[test]
@@ -310,6 +408,25 @@ mod tests {
             at: now_ms(),
         });
         assert_eq!(s.tokens_used, 250);
+    }
+
+    #[test]
+    fn budget_updated_is_monotonic() {
+        let mut s = SessionState::default();
+        let tid = uuid::Uuid::new_v4();
+        s.apply(&SessionEvent::BudgetUpdated {
+            turn_id: tid,
+            tokens_used: 100,
+            tokens_budget: 4000,
+            at: now_ms(),
+        });
+        s.apply(&SessionEvent::BudgetUpdated {
+            turn_id: tid,
+            tokens_used: 20,
+            tokens_budget: 4000,
+            at: now_ms(),
+        });
+        assert_eq!(s.tokens_used, 100);
     }
 
     #[test]

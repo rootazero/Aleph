@@ -228,7 +228,7 @@ impl EventHandler for TeamNotifier {
             // genuinely has open work, or the claim's once-only guarantee
             // breaks under exactly the concurrency it guards.
             AlephEvent::TeamTaskUpdated { team_id, status, .. }
-                if CoordTaskStatus::from_stored(status).is_some_and(|s| !s.is_settled()) =>
+                if CoordTaskStatus::from_filter_str(status).is_some_and(|s| !s.is_settled()) =>
             {
                 if !self.team_work_finished(team_id).await {
                     self.rearm_completion_claim(team_id);
@@ -275,5 +275,33 @@ impl EventHandler for TeamNotifier {
             _ => {}
         }
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::agents::swarm::tasks::CoordTaskStatus;
+
+    #[test]
+    fn derived_statuses_round_trip_through_filter_vocabulary() {
+        for s in [
+            CoordTaskStatus::Blocked,
+            CoordTaskStatus::Unsatisfiable,
+            CoordTaskStatus::Pending,
+            CoordTaskStatus::InProgress,
+            CoordTaskStatus::WaitingReview,
+            CoordTaskStatus::Completed,
+        ] {
+            let parsed = CoordTaskStatus::from_filter_str(s.as_str());
+            assert_eq!(parsed, Some(s));
+        }
+        assert_eq!(
+            CoordTaskStatus::from_stored(CoordTaskStatus::Blocked.as_str()),
+            None
+        );
+        assert_eq!(
+            CoordTaskStatus::from_stored(CoordTaskStatus::Unsatisfiable.as_str()),
+            None
+        );
     }
 }

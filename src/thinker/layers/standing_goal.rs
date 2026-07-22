@@ -1,8 +1,8 @@
-//! `StandingGoalLayer` — emits `<standing_goal>` at priority 1754 (Dynamic).
+//! `StandingGoalLayer` — emits `<standing_goal>` at priority 1755 (Dynamic).
 //!
 //! Re-surfaces the session's active standing goal into the system prompt
 //! every turn while it is active — the cross-turn complement to
-//! `ExecutionPlanLayer` (1755, per-task checklist). hermes-agent re-states
+//! `ExecutionPlanLayer` (1756, per-task checklist). hermes-agent re-states
 //! the goal in every continuation; this is Aleph's R10-safe equivalent: pure
 //! scaffolding, the content is the user's own objective + the goal's own
 //! status, rendered verbatim. No judgment, no LLM call. `None` emits nothing,
@@ -19,7 +19,7 @@ impl PromptLayer for StandingGoalLayer {
     }
 
     fn priority(&self) -> u32 {
-        1754
+        1755
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -118,6 +118,6 @@ mod tests {
     #[test]
     fn name_and_priority() {
         assert_eq!(StandingGoalLayer.name(), "standing_goal");
-        assert_eq!(StandingGoalLayer.priority(), 1754);
+        assert_eq!(StandingGoalLayer.priority(), 1755);
     }
 }

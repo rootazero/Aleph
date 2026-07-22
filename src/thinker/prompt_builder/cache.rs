@@ -38,9 +38,18 @@ impl PromptBuilder {
         let stable = self
             .pipeline
             .execute_stable_with_mode(AssemblyPath::Cached, &input, mode);
-        let dynamic = self
-            .pipeline
-            .execute_dynamic_with_mode(AssemblyPath::Cached, &input, mode);
+        let mut dynamic =
+            self.pipeline
+                .execute_dynamic_with_mode(AssemblyPath::Cached, &input, mode);
+        let resolved_strategy = self
+            .resolved_context
+            .as_ref()
+            .and_then(|context| context.strategy.as_deref());
+        if let (Some(body), true) = (self.strategy.as_deref(), resolved_strategy.is_none()) {
+            dynamic.push_str("<strategy>\n");
+            dynamic.push_str(body);
+            dynamic.push_str("\n</strategy>\n\n");
+        }
 
         // Enforce the system-prompt token budget. The stable prefix is a
         // protected floor (persona / tools / security) and is left untouched so
@@ -310,5 +319,51 @@ mod tests {
             parts[0].content.contains("Adversarial verifier"),
             "cached Full prompt must carry the sub-agent's verify protocol block"
         );
+    }
+
+    #[test]
+    fn with_strategy_flows_to_cached_path_when_no_resolved_context_strategy() {
+        let body = "Objective: ship the parser.\nGuardrails:\n- no network calls";
+        let builder = PromptBuilder::new(PromptConfig::default()).with_strategy(body.to_string());
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        let dynamic = &parts[1].content;
+        assert!(
+            dynamic.contains("<strategy>\n"),
+            "welded strategy must land in the dynamic suffix: {dynamic:?}"
+        );
+        assert!(dynamic.contains("</strategy>\n"));
+        assert!(dynamic.contains("ship the parser."));
+        assert!(
+            dynamic.ends_with("</strategy>\n\n"),
+            "weld must mirror StrategyLayer wrap exactly"
+        );
+    }
+
+    #[test]
+    fn with_strategy_skipped_on_cached_path_when_resolved_context_strategy_present() {
+        use crate::thinker::context::ContextAggregator;
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        use crate::thinker::security_context::SecurityContext;
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.strategy = Some("Objective: from resolved context".to_string());
+        let body = "Objective: from with_strategy body — must be skipped";
+        let builder = PromptBuilder::new(PromptConfig::default())
+            .with_resolved_context(ctx)
+            .with_strategy(body.to_string());
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        let combined = format!("{}{}", parts[0].content, parts[1].content);
+        assert!(combined.contains("from resolved context"));
+        assert!(
+            !combined.contains("from with_strategy body"),
+            "weld must not duplicate StrategyLayer's render"
+        );
+        assert_eq!(combined.matches("<strategy>").count(), 1);
     }
 }

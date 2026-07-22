@@ -1,12 +1,12 @@
 //! `StrategyPointerLayer` — re-echoes the Strategy's guardrails verbatim as
-//! `<strategy_reminder>` at priority 1756 (Dynamic), near the read head.
+//! `<strategy_reminder>` at priority 1757 (Dynamic), near the read head.
 //!
 //! The Stable `StrategyLayer` (70) pins the full plan in the cacheable head,
 //! but on a long horizon the head scrolls far from the model's read position.
 //! This layer restates **only** the 1-3 concrete guardrails near the prompt
 //! tail every turn — the operation drift already fails at — so the concrete
 //! anti-distraction constraints stay salient. It deliberately omits the
-//! objective: `StandingGoalLayer` (1754) already re-injects that for `/goal`,
+//! objective: `StandingGoalLayer` (1755) already re-injects that for `/goal`,
 //! and three near-identical end-of-prompt reminders breed reminder-blindness.
 //!
 //! R10-safe: pure scaffolding, guardrails injected verbatim, no judgment.
@@ -24,7 +24,7 @@ impl PromptLayer for StrategyPointerLayer {
     }
 
     fn priority(&self) -> u32 {
-        1756
+        1757
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn name_priority_stability() {
         assert_eq!(StrategyPointerLayer.name(), "strategy_pointer");
-        assert_eq!(StrategyPointerLayer.priority(), 1756);
+        assert_eq!(StrategyPointerLayer.priority(), 1757);
         assert_eq!(StrategyPointerLayer.stability(), LayerStability::Dynamic);
         assert!(StrategyPointerLayer.paths().contains(&AssemblyPath::Cached));
     }

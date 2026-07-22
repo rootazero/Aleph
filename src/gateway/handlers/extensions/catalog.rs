@@ -3,7 +3,7 @@
 //! across MCP / plugins / skills).
 
 use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::skills::shared_system;
+use crate::gateway::handlers::skills::{ensure_shared_system_initialized, shared_system};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::hub::cache::{CatalogCache, CatalogFilter};
 use crate::hub::install::mcp_server_id;
@@ -45,6 +45,7 @@ pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEn
         out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
     }
 
+    ensure_shared_system_initialized().await;
     out.extend(
         shared_system()
             .full_status()

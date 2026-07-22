@@ -9,22 +9,20 @@ use crate::domain::skill::{PromptScope, SkillId};
 use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
 
 /// Shared `SkillSystem` instance — delegates to the process-wide singleton.
-///
-/// Lazily ensures the shared instance is initialized with the default skill
-/// directories. `init` is re-runnable; `ExtensionManager` may also call it
-/// later with discovery-derived dirs — both populate the same Arc registry.
 pub(crate) fn shared_system() -> &'static SkillSystem {
-    let system = crate::skill::shared_skill_system();
-    // Lazily ensure the shared instance is initialized with the default skill
-    // dirs. `init` is re-runnable; ExtensionManager may also init it later
-    // with discovery-derived dirs — both populate the same Arc registry.
-    static INIT_ONCE: std::sync::Once = std::sync::Once::new();
-    INIT_ONCE.call_once(|| {
-        let dirs = default_skill_dirs();
-        let rt = tokio::runtime::Handle::current();
-        let _ = tokio::task::block_in_place(|| rt.block_on(system.init(dirs)));
-    });
-    system
+    crate::skill::shared_skill_system()
+}
+
+static INIT_CELL: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+pub(crate) async fn ensure_shared_system_initialized() {
+    let system = shared_system();
+    let dirs = default_skill_dirs();
+    INIT_CELL
+        .get_or_init(|| async move {
+            let _ = system.init(dirs).await;
+        })
+        .await;
 }
 
 // ============================================================================
@@ -33,6 +31,7 @@ pub(crate) fn shared_system() -> &'static SkillSystem {
 
 /// Return full status for all skills
 pub async fn handle_status(request: JsonRpcRequest) -> JsonRpcResponse {
+    ensure_shared_system_initialized().await;
     let entries = shared_system().full_status().await;
     JsonRpcResponse::success(request.id, json!({ "skills": entries }))
 }
@@ -54,6 +53,8 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    ensure_shared_system_initialized().await;
 
     let skill_id = SkillId::new(&params.skill_id);
     let system = shared_system();
@@ -128,6 +129,8 @@ pub async fn handle_install_dep(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
+    ensure_shared_system_initialized().await;
+
     let skill_id = SkillId::new(&params.skill_id);
     let system = shared_system();
 
@@ -163,6 +166,8 @@ pub async fn handle_remove(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    ensure_shared_system_initialized().await;
 
     let skill_id = SkillId::new(&params.skill_id);
     match shared_system().remove_skill(&skill_id).await {

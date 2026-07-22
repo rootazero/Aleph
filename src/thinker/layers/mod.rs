@@ -51,7 +51,7 @@ pub use timer_loop::TimerLoopLayer;
 mod strategy;
 pub use strategy::StrategyLayer;
 
-// --- Strategy pointer layer (guardrail echo, Dynamic, prio 1756) ---
+// --- Strategy pointer layer (guardrail echo, Dynamic, prio 1757) ---
 mod strategy_pointer;
 pub use strategy_pointer::StrategyPointerLayer;
 

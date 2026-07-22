@@ -167,7 +167,7 @@ pub fn cluster_chains(entries: &[RecentUse], window_secs: u64) -> Vec<Vec<String
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |d| d.as_millis().min(u64::MAX as u128) as u64)
 }
 
 #[cfg(test)]

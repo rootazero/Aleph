@@ -809,11 +809,14 @@ fn guess_source(path: &Path) -> SkillSource {
     let path_str = path.to_string_lossy();
 
     if let Ok(global_skills) = crate::utils::paths::get_skills_dir() {
-        if path.starts_with(&global_skills) {
+        let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let resolved_global =
+            std::fs::canonicalize(&global_skills).unwrap_or_else(|_| global_skills.clone());
+        if resolved_path.starts_with(&resolved_global) {
             let manifest = CACHED_MANIFEST
                 .get_or_init(|| crate::bundled::manifest::InstallRegistry::load(&global_skills));
             if let Some(manifest) = manifest {
-                if let Ok(relative) = path.strip_prefix(&global_skills) {
+                if let Ok(relative) = resolved_path.strip_prefix(&resolved_global) {
                     if let Some(skill_name) = relative.components().next() {
                         let name = skill_name.as_os_str().to_string_lossy();
                         if manifest.is_official(&name) {
@@ -1089,6 +1092,37 @@ Content."#,
         assert!(is_skill_file(Path::new("/some/dir/skill.md")));
         assert!(!is_skill_file(Path::new("/some/dir/README.md")));
         assert!(!is_skill_file(Path::new("/some/dir/")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn guess_source_canonicalizes_symlinked_global_skills() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real_aleph = tmp.path().join(".aleph");
+        let real_skills = real_aleph.join("skills");
+        std::fs::create_dir_all(&real_skills).unwrap();
+        std::fs::write(
+            real_skills.join("SKILL.md"),
+            b"---\nname: Demo\ndescription: d\n---\nbody",
+        )
+        .unwrap();
+
+        let alt_root = tmp.path().join("alt");
+        std::fs::create_dir_all(&alt_root).unwrap();
+        let link = alt_root.join("link_to_skills");
+        std::os::unix::fs::symlink(&real_skills, &link).unwrap();
+        let via_link = link.join("SKILL.md");
+
+        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(tmp.path());
+        let _aleph_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&real_aleph);
+
+        let via_link_result = guess_source(&via_link);
+        let direct_result = guess_source(&real_skills.join("SKILL.md"));
+        assert_eq!(via_link_result, direct_result);
+        assert!(
+            matches!(via_link_result, SkillSource::Global | SkillSource::Bundled),
+            "symlinked skills dir must classify identically to literal, got {via_link_result:?}"
+        );
     }
 
     #[tokio::test]

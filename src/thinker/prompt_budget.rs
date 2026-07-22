@@ -34,12 +34,10 @@ pub const MAX_PROMPT_CHARS: usize = 480_000;
 /// satisfy this).
 #[must_use]
 pub fn window_char_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: usize) -> usize {
-    // Lossy cast is intentional: a window beyond usize::MAX is implausible and
-    // the subsequent clamp keeps the result bounded regardless.
-    // tokens → chars via the crate-wide prose ratio (single source in
-    // `context::budget::pressure`), replacing the drifted local `/4` constant.
+    const MAX_PRECISE_F64: u64 = 1u64 << 53;
+    let capped = window_tokens.min(MAX_PRECISE_F64);
     let scaled_chars =
-        window_tokens as f64 * fraction * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
+        capped as f64 * fraction * crate::context::budget::pressure::DEFAULT_PROSE_RATIO;
     (scaled_chars as usize).clamp(floor, ceil)
 }
 
@@ -129,17 +127,14 @@ pub fn truncate_with_head_tail(
         return content.to_string();
     }
 
-    // Marker is pure ASCII, so its byte length equals its character length; the
-    // `+ 10` reserves room for the inserted digit count and the " chars " text.
-    let marker_template = "\n\n[... truncated ...]\n\n";
-    let marker_overhead = marker_template.len() + 10;
+    let reserved_marker = format!("\n\n[... {total_chars} chars truncated ...]\n\n");
 
     // Too small for head+tail+marker: just take the head (char-accurate).
-    if max_chars <= marker_overhead {
+    if max_chars <= reserved_marker.len() {
         return take_chars(content, max_chars);
     }
 
-    let usable = max_chars - marker_overhead;
+    let usable = max_chars - reserved_marker.len();
     let sum = head_ratio + tail_ratio;
     let head_chars = if sum == 0.0 {
         usable / 2
@@ -308,10 +303,56 @@ mod tests {
     }
 
     #[test]
+    fn window_char_budget_handles_extreme_u64_safely() {
+        assert_eq!(
+            window_char_budget(u64::MAX, 0.10, 5_000, 50_000),
+            50_000,
+            "u64::MAX must clamp to ceil without f64 precision artifacts"
+        );
+        assert_eq!(
+            window_char_budget(u64::MAX >> 1, 0.10, 5_000, 50_000),
+            50_000,
+            "huge values must clamp to ceil"
+        );
+        assert_eq!(
+            window_char_budget(1u64 << 53, 0.10, 5_000, 50_000),
+            window_char_budget(1u64 << 52, 0.10, 5_000, 50_000),
+            "2^53 and 2^52 must round to the same usize (precision cap kicks in)"
+        );
+    }
+
+    #[test]
     fn truncate_short_content_unchanged() {
         let content = "Hello, world!";
         let result = truncate_with_head_tail(content, 100, 0.7, 0.2);
         assert_eq!(result, content);
+    }
+
+    #[test]
+    fn truncate_marker_intact_when_truncated_count_has_many_digits() {
+        let content: String = "A".repeat(100_000);
+        let result = truncate_with_head_tail(&content, 60, 0.7, 0.2);
+        assert!(
+            result.contains("truncated ...]"),
+            "marker closing clipped: {result:?}"
+        );
+        assert!(
+            result.ends_with("]\n\n"),
+            "marker tail must be intact: {result:?}"
+        );
+        assert!(
+            result.chars().count() <= 60,
+            "result must respect budget, got {} chars",
+            result.chars().count()
+        );
+    }
+
+    #[test]
+    fn truncate_marker_with_six_digit_count_stays_within_budget() {
+        let content: String = "B".repeat(1_000_000);
+        let result = truncate_with_head_tail(&content, 80, 0.5, 0.5);
+        assert!(result.contains("chars truncated ...]"));
+        assert!(result.chars().count() <= 80);
     }
 
     #[test]

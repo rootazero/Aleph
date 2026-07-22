@@ -366,9 +366,12 @@ impl ContextAggregator {
         interaction: &InteractionManifest,
         security: &SecurityContext,
     ) -> EnvironmentContract {
+        let mut active_capabilities: Vec<Capability> =
+            interaction.capabilities.iter().cloned().collect();
+        active_capabilities.sort_by_key(|c| c.prompt_hint().0);
         EnvironmentContract {
             paradigm: interaction.paradigm,
-            active_capabilities: interaction.capabilities.iter().cloned().collect(),
+            active_capabilities,
             constraints: interaction.constraints.clone(),
             security_notes: security.security_notes(),
         }
@@ -559,6 +562,52 @@ mod tests {
             canvas_disabled.reason,
             DisableReason::UnsupportedByChannel
         ));
+    }
+}
+
+#[cfg(test)]
+mod active_capabilities_order_tests {
+    use super::*;
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+    use crate::thinker::security_context::SecurityContext;
+    use std::collections::HashSet;
+
+    fn render_capability_names(ctx: &ResolvedContext) -> Vec<String> {
+        ctx.environment_contract
+            .active_capabilities
+            .iter()
+            .map(|c| c.prompt_hint().0.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn active_capabilities_are_sorted_by_name() {
+        let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
+        let ctx = ContextAggregator::resolve(&interaction, &SecurityContext::permissive(), &[]);
+        let names = render_capability_names(&ctx);
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "active_capabilities must be sorted");
+        assert!(
+            names.contains(&"canvas".to_string()),
+            "WebRich must include canvas, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn active_capabilities_order_is_independent_of_set_insertion_order() {
+        let mut a = InteractionManifest::new(InteractionParadigm::WebRich);
+        let mut b = InteractionManifest::new(InteractionParadigm::WebRich);
+        let cap_set: HashSet<Capability> = a.capabilities.iter().cloned().collect();
+        b.capabilities = cap_set.clone();
+        a.capabilities = cap_set;
+        let ctx_a = ContextAggregator::resolve(&a, &SecurityContext::permissive(), &[]);
+        let ctx_b = ContextAggregator::resolve(&b, &SecurityContext::permissive(), &[]);
+        assert_eq!(
+            render_capability_names(&ctx_a),
+            render_capability_names(&ctx_b),
+            "render order must not depend on HashSet iteration"
+        );
     }
 }
 

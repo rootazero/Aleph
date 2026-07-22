@@ -1,4 +1,4 @@
-//! `ExecutionPlanLayer` — emits `<execution_plan>` at priority 1755 (Dynamic).
+//! `ExecutionPlanLayer` — emits `<execution_plan>` at priority 1756 (Dynamic).
 //!
 //! Re-surfaces the session's active scratchpad execution list (objective +
 //! checklist + current step) into the system prompt **every turn** while
@@ -30,7 +30,7 @@ impl PromptLayer for ExecutionPlanLayer {
     }
 
     fn priority(&self) -> u32 {
-        1755
+        1756
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -107,8 +107,8 @@ mod tests {
     }
 
     #[test]
-    fn priority_is_1755() {
-        assert_eq!(ExecutionPlanLayer.priority(), 1755);
+    fn priority_is_1756() {
+        assert_eq!(ExecutionPlanLayer.priority(), 1756);
     }
 
     #[test]

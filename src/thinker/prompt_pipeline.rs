@@ -675,6 +675,23 @@ mod stability_tests {
     }
 
     #[test]
+    fn default_layers_have_unique_priorities() {
+        use std::collections::HashMap;
+        let pipeline = PromptPipeline::default_layers();
+        let mut seen: HashMap<u32, &str> = HashMap::new();
+        for layer in &pipeline.layers {
+            if let Some(prev) = seen.insert(layer.priority(), layer.name()) {
+                panic!(
+                    "priority {} is shared by '{}' and '{}'",
+                    layer.priority(),
+                    prev,
+                    layer.name()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn layer_breakdown_sums_to_assembled_prompt() {
         let pipeline = PromptPipeline::default_layers();
         let config = PromptConfig::default();

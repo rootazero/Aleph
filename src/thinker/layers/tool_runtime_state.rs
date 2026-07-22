@@ -1,4 +1,4 @@
-//! `ToolRuntimeStateLayer` — emits `<tool_runtime_state>` XML at priority 1702.
+//! `ToolRuntimeStateLayer` — emits `<tool_runtime_state>` XML at priority 1703.
 //!
 //! Surfaces per-tool runtime state (depth limits, sandbox availability,
 //! "unavailable: reason" hints) so the LLM has live context that the
@@ -31,7 +31,7 @@ impl PromptLayer for ToolRuntimeStateLayer {
     }
 
     fn priority(&self) -> u32 {
-        1702
+        1703
     }
 
     fn stability(&self) -> LayerStability {
@@ -91,7 +91,7 @@ mod tests {
     /// invalidated the whole conversation's prompt cache.
     #[test]
     fn layer_is_dynamic_and_lives_in_the_per_request_zone() {
-        assert_eq!(ToolRuntimeStateLayer.priority(), 1702);
+        assert_eq!(ToolRuntimeStateLayer.priority(), 1703);
         assert!(ToolRuntimeStateLayer.priority() >= 1700);
         assert_eq!(ToolRuntimeStateLayer.stability(), LayerStability::Dynamic);
     }

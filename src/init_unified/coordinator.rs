@@ -516,7 +516,7 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn install_skills(&self) -> Result<(), InitError> {
-        use crate::skill::SkillSystem;
+        use crate::skill::shared_skill_system;
 
         let skills_dir = self.config_dir.join("skills");
 
@@ -526,8 +526,7 @@ impl InitializationCoordinator {
         // The bundle_skills_dir path is not available from Rust core
         // Directory was created in phase 1; this phase validates the skills system
 
-        // Initialize and validate skills system
-        let system = SkillSystem::new();
+        let system = shared_skill_system().clone();
         system.init(vec![skills_dir.clone()]).await.map_err(|e| {
             InitError::new("skills", format!("Failed to initialize skill system: {e}"))
         })?;

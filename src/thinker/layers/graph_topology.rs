@@ -1,4 +1,4 @@
-//! `GraphTopologyLayer` — emits `<loop_graph_context>` at priority 1753.
+//! `GraphTopologyLayer` — emits `<loop_graph_context>` at priority 1754.
 //!
 //! A governed session is TOLD its place in the governance topology every
 //! turn — who watches it, who owns its reference (and the proposal-note
@@ -24,7 +24,7 @@ impl PromptLayer for GraphTopologyLayer {
     }
 
     fn priority(&self) -> u32 {
-        1753
+        1754
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
@@ -106,6 +106,6 @@ mod tests {
     #[test]
     fn name_and_priority_slot_before_standing_goal() {
         assert_eq!(GraphTopologyLayer.name(), "graph_topology");
-        assert_eq!(GraphTopologyLayer.priority(), 1753);
+        assert_eq!(GraphTopologyLayer.priority(), 1754);
     }
 }

@@ -51,7 +51,7 @@ pub trait SessionEventStore: Send + Sync + 'static {
         session_id: &SessionId,
     ) -> Result<Vec<SessionEventRecord>, SessionError>;
 
-    /// Load events with seq in [from..=to]. Either bound may be None.
+    /// Load events with seq in [from..to). Either bound may be None.
     async fn load_events_range(
         &self,
         session_id: &SessionId,
@@ -343,7 +343,7 @@ impl SessionEventStore for SqliteEventStore {
             .prepare(
                 "SELECT seq, payload_json, created_at
                  FROM session_events
-                 WHERE session_id = ?1 AND seq >= ?2 AND seq <= ?3
+                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
                    AND retired_at IS NULL
                  ORDER BY seq ASC",
             )
@@ -939,6 +939,29 @@ mod tests {
         assert!(matches!(loaded[1].event, SessionEvent::UserMessage { .. }));
         assert_eq!(loaded[0].created_at_ms, at);
         assert_eq!(loaded[1].created_at_ms, at + 1);
+    }
+
+    #[tokio::test]
+    async fn load_range_uses_half_open_upper_bound() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for seq in 1..=4u64 {
+            store
+                .append(&sid, seq, &turn_started(tid, at), at)
+                .await
+                .unwrap();
+        }
+
+        let events = store
+            .load_events_range(&sid, Some(2), Some(4))
+            .await
+            .unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[tokio::test]

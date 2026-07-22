@@ -59,7 +59,7 @@ pub async fn run_timer_loop<C: Clock>(
     executor: JobExecutorFn,
     alert_dispatcher: Option<AlertDispatcherFn>,
 ) {
-    let interval_secs = state.config.check_interval_secs.min(60);
+    let interval_secs = state.config.check_interval_secs.clamp(1, 60);
 
     info!(interval_secs, "cron timer loop started");
 
@@ -275,7 +275,7 @@ pub async fn run_worker_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::cron::config::{RunStatus, TriggerSource};
+    use crate::tasks::cron::config::{CronConfig, RunStatus, TriggerSource};
 
     fn mock_executor(status: RunStatus) -> JobExecutorFn {
         Arc::new(move |snapshot: JobSnapshot| {
@@ -339,5 +339,26 @@ mod tests {
         let executor = mock_executor(RunStatus::Ok);
         let results = run_worker_pool(Vec::new(), 2, &executor).await;
         assert!(results.is_empty(), "empty input should yield empty output");
+    }
+
+    #[test]
+    fn cron_check_interval_is_clamped_at_loop_entry() {
+        let cfg = |s: u64| CronConfig {
+            check_interval_secs: s,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg(0).check_interval_secs.clamp(1, 60),
+            1,
+            "0 must clamp to 1, not spin"
+        );
+        assert_eq!(cfg(1).check_interval_secs.clamp(1, 60), 1);
+        assert_eq!(cfg(30).check_interval_secs.clamp(1, 60), 30);
+        assert_eq!(cfg(60).check_interval_secs.clamp(1, 60), 60);
+        assert_eq!(
+            cfg(1_000).check_interval_secs.clamp(1, 60),
+            60,
+            "absurd interval must clamp to 60"
+        );
     }
 }

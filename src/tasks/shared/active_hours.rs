@@ -88,16 +88,21 @@ impl TimeWindow {
 }
 
 impl ActiveHoursSchedule {
-    /// Resolve the schedule's timezone, falling back to UTC.
-    fn tz(&self) -> Tz {
-        self.timezone
-            .as_deref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(chrono_tz::UTC)
+    /// Resolve the schedule's timezone. Missing → UTC; unparseable → `None`.
+    fn tz(&self) -> Option<Tz> {
+        match self.timezone.as_deref() {
+            None => Some(chrono_tz::UTC),
+            Some(s) => s.parse().ok(),
+        }
     }
 
     /// Check every defined window for basic well-formedness.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(tz_str) = self.timezone.as_deref() {
+            let _: Tz = tz_str
+                .parse()
+                .map_err(|e| format!("invalid timezone '{tz_str}': {e}"))?;
+        }
         for (i, day) in self.windows.iter().enumerate() {
             for (j, win) in day.iter().enumerate() {
                 win.validate()
@@ -113,7 +118,11 @@ impl ActiveHoursSchedule {
     /// schedule's timezone) contains the current minute-of-day.
     #[must_use]
     pub fn is_open_at(&self, now_ms: i64) -> bool {
-        let dt = match self.tz().timestamp_millis_opt(now_ms).single() {
+        let tz = match self.tz() {
+            Some(tz) => tz,
+            None => return false,
+        };
+        let dt = match tz.timestamp_millis_opt(now_ms).single() {
             Some(dt) => dt,
             None => return false, // ambiguous DST boundary — treat as closed
         };
@@ -126,13 +135,13 @@ impl ActiveHoursSchedule {
 
     /// Compute the next ms-since-epoch when this schedule opens, starting
     /// strictly after `now_ms`. Returns `None` if no window is defined
-    /// anywhere in the week (gate is permanently closed).
+    /// anywhere in the week or the configured timezone is unparseable.
     ///
     /// The search is bounded to at most 7 days, so the cost is O(7) per
     /// call regardless of how sparse the schedule is.
     #[must_use]
     pub fn next_open_after(&self, now_ms: i64) -> Option<i64> {
-        let tz = self.tz();
+        let tz = self.tz()?;
         let now = tz.timestamp_millis_opt(now_ms).single()?;
 
         // Start from today; if no remaining window today, advance one day at a time.
@@ -306,13 +315,39 @@ mod tests {
     }
 
     #[test]
-    fn invalid_timezone_falls_back_to_utc() {
+    fn validate_rejects_invalid_timezone() {
+        let sched = ActiveHoursSchedule {
+            timezone: Some("Mars/Olympus_Mons".into()),
+            windows: std::array::from_fn(|_| Vec::new()),
+        };
+        assert!(
+            sched.validate().is_err(),
+            "validate() must reject unparseable timezone strings"
+        );
+    }
+
+    #[test]
+    fn invalid_timezone_fails_closed_at_runtime() {
         let sched = ActiveHoursSchedule {
             timezone: Some("Mars/Olympus_Mons".into()),
             ..business_hours_utc()
         };
-        // Wed 10:00 UTC is open under UTC schedule.
-        assert!(sched.is_open_at(ms(2024, 1, 3, 10, 0)));
+        assert!(!sched.is_open_at(ms(2024, 1, 3, 10, 0)));
+        assert!(sched.next_open_after(ms(2024, 1, 3, 10, 0)).is_none());
+    }
+
+    #[test]
+    fn missing_timezone_still_uses_default_open() {
+        let sched = business_hours_utc();
+        let same_no_tz = ActiveHoursSchedule {
+            timezone: None,
+            ..business_hours_utc()
+        };
+        assert!(same_no_tz.validate().is_ok());
+        assert_eq!(
+            sched.is_open_at(ms(2024, 1, 3, 10, 0)),
+            same_no_tz.is_open_at(ms(2024, 1, 3, 10, 0)),
+        );
     }
 
     #[test]

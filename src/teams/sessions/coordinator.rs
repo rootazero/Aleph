@@ -50,8 +50,7 @@ impl SessionCoordinator {
 
         let session = self.session_store.create_session(input).await?;
 
-        // Log SessionStarted event
-        let _ = self
+        if let Err(e) = self
             .event_store
             .log_event(NewTeamEvent {
                 team_id: team_id.clone(),
@@ -63,13 +62,20 @@ impl SessionCoordinator {
                     "participants": participants,
                 }),
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                session_id = %session.id,
+                team_id = %team_id,
+                error = %e,
+                "SessionCoordinator: SessionStarted event log failed; session remains active"
+            );
+        }
 
-        // Notify all participants via a system message
-        let _ = self
+        if let Err(e) = self
             .msg_router
             .send(SendRequest {
-                team_id,
+                team_id: team_id.clone(),
                 from_agent: "system".to_string(),
                 to: participants,
                 cc: vec![],
@@ -82,7 +88,15 @@ impl SessionCoordinator {
                 reply_to: None,
                 attachments: vec![],
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                session_id = %session.id,
+                team_id = %team_id,
+                error = %e,
+                "SessionCoordinator: participant notification failed; session remains active but participants may be unaware"
+            );
+        }
 
         debug!(session_id = %session.id, "Session started");
         Ok(session)
@@ -566,5 +580,40 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| e.event_type == TeamEventType::SessionDeadlocked));
+    }
+
+    #[tokio::test]
+    async fn test_start_session_records_event_and_notification() {
+        let coord = make_coordinator().await;
+
+        let session = coord
+            .start_session(
+                NewSession {
+                    team_id: "team-1".to_string(),
+                    participants: vec!["agent-a".to_string(), "agent-b".to_string()],
+                    topic: "Observability probe".to_string(),
+                    trigger: SessionTrigger::Explicit {
+                        requested_by: "agent-a".to_string(),
+                    },
+                    thread_id: None,
+                    max_rounds: 5,
+                },
+                "agent-a",
+            )
+            .await
+            .unwrap();
+
+        let events = coord
+            .event_store
+            .get_events("team-1", None, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.event_type == TeamEventType::SessionStarted));
+        assert_eq!(
+            session.status,
+            crate::teams::sessions::types::SessionStatus::Active
+        );
     }
 }

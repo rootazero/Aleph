@@ -3,7 +3,7 @@
 
 use crate::domain::skill::SkillId;
 use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::skills::shared_system;
+use crate::gateway::handlers::skills::{ensure_shared_system_initialized, shared_system};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::mcp::manager::McpManagerHandle;
 use crate::skill::SkillConfigUpdate;
@@ -44,6 +44,9 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
             "toggle requires an installed (local:) id",
         );
     };
+    if kind == "skill" {
+        ensure_shared_system_initialized().await;
+    }
     let result: Result<(), String> = match kind {
         "mcp" => match mcp {
             Some(mcp) => {
@@ -94,6 +97,9 @@ pub async fn handle_uninstall(
             "uninstall requires an installed (local:) id",
         );
     };
+    if kind == "skill" {
+        ensure_shared_system_initialized().await;
+    }
     let result: Result<(), String> = match kind {
         "mcp" => match mcp {
             Some(mcp) => mcp.remove_server(backend).await.map_err(|e| e.to_string()),

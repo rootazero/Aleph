@@ -8,7 +8,7 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use tokio::sync::Mutex;
 
 use super::types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
@@ -105,6 +105,14 @@ pub trait MessageStore: Send + Sync {
         team_id: &str,
         thread_id: &str,
     ) -> crate::error::Result<u32>;
+
+    async fn try_send_first_system_notification(
+        &self,
+        input: NewMessage,
+        ttl: Duration,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<Option<TeamMessage>>;
 
     /// Expire all pending messages for a team (used on disband).
     async fn expire_all_for_team(&self, team_id: &str) -> crate::error::Result<usize>;
@@ -310,6 +318,102 @@ impl SqliteMessageStore {
         })
     }
 
+    async fn try_send_first_system_notification_impl(
+        &self,
+        input: NewMessage,
+        ttl: Duration,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<Option<TeamMessage>> {
+        let mut conn = self.conn.lock().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let expires_at = now + ttl;
+        let expires_at_str = expires_at.to_rfc3339();
+
+        let resolved_thread_id = Self::resolve_thread_id(&conn, &id, &input.reply_to)?;
+
+        let mut seen = std::collections::HashSet::new();
+        let recipients: Vec<Recipient> = input
+            .recipients
+            .into_iter()
+            .filter(|r| seen.insert(r.agent_id.clone()))
+            .collect();
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM team_messages \
+                 WHERE team_id = ?1 AND thread_id = ?2 \
+                   AND msg_type = 'system_notification' \
+                   AND from_agent = ?3)",
+                params![team_id, thread_id, input.from_agent],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        if exists {
+            tx.rollback().map_err(db_err)?;
+            return Ok(None);
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                id,
+                input.team_id,
+                input.from_agent,
+                input.msg_type.as_str(),
+                input.subject,
+                input.content,
+                input.reply_to,
+                resolved_thread_id,
+                now_str,
+                expires_at_str,
+            ],
+        )
+        .map_err(db_err)?;
+
+        for recipient in &recipients {
+            tx.execute(
+                "INSERT INTO message_recipients (message_id, agent_id, role) VALUES (?1, ?2, ?3)",
+                params![id, recipient.agent_id, recipient.role.as_str()],
+            )
+            .map_err(db_err)?;
+        }
+
+        for artifact_id in &input.attachments {
+            tx.execute(
+                "INSERT INTO message_attachments (message_id, artifact_id) VALUES (?1, ?2)",
+                params![id, artifact_id],
+            )
+            .map_err(db_err)?;
+        }
+
+        tx.commit().map_err(db_err)?;
+
+        Ok(Some(TeamMessage {
+            id,
+            team_id: input.team_id,
+            from_agent: input.from_agent,
+            msg_type: input.msg_type,
+            subject: input.subject,
+            content: input.content,
+            recipients,
+            reply_to: input.reply_to,
+            thread_id: Some(resolved_thread_id),
+            attachments: input.attachments,
+            created_at: now,
+            expires_at: Some(expires_at),
+        }))
+    }
+
     /// Read the flat fields from a `team_messages` row (no sub-queries).
     fn read_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessage> {
         Ok(RawMessage {
@@ -451,6 +555,17 @@ impl MessageStore for SqliteMessageStore {
         ttl: Duration,
     ) -> crate::error::Result<TeamMessage> {
         self.send_impl(input, ttl).await
+    }
+
+    async fn try_send_first_system_notification(
+        &self,
+        input: NewMessage,
+        ttl: Duration,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<Option<TeamMessage>> {
+        self.try_send_first_system_notification_impl(input, ttl, team_id, thread_id)
+            .await
     }
 
     async fn read_inbox(

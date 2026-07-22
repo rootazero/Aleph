@@ -23,11 +23,15 @@ use crate::teams::TeamStore;
 /// borrow `tasks` mutably-or-not freely.
 pub(super) fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usize>, usize)> {
     let n = tasks.len();
-    let id_to_idx: HashMap<&str, usize> = tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id.as_str(), i))
-        .collect();
+    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(n);
+    for (i, t) in tasks.iter().enumerate() {
+        if id_to_idx.insert(t.id.clone(), i).is_some() {
+            return Err(AlephError::ConfigError {
+                message: format!("snapshot task graph has duplicate id: '{}'", t.id),
+                suggestion: None,
+            });
+        }
+    }
     let mut in_degree = vec![0usize; n];
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut edge_count = 0usize;
@@ -353,4 +357,52 @@ pub async fn restore_snapshot(
     let mut diff = diff;
     diff.team_id = effective_team_id;
     Ok(diff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::swarm::tasks::Priority;
+
+    fn task(id: &str, deps: &[&str]) -> CoordTask {
+        CoordTask {
+            id: id.to_string(),
+            team_id: Some("team-1".into()),
+            subject: id.into(),
+            description: String::new(),
+            status: CoordTaskStatus::Pending,
+            owner: None,
+            priority: Priority::Normal,
+            result: None,
+            metadata: serde_json::json!({}),
+            dependencies: deps.iter().map(|s| s.to_string()).collect(),
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            locked_by: None,
+            locked_at: None,
+        }
+    }
+
+    #[test]
+    fn topo_sort_rejects_duplicate_task_ids() {
+        let tasks = vec![task("dup", &[]), task("dup", &[])];
+        let err = topo_sort_and_count_edges(&tasks).unwrap_err();
+        assert!(format!("{err:?}").contains("duplicate"));
+    }
+
+    #[test]
+    fn topo_sort_accepts_unique_ids_with_cycle() {
+        let tasks = vec![task("a", &["b"]), task("b", &["a"])];
+        let err = topo_sort_and_count_edges(&tasks).unwrap_err();
+        assert!(format!("{err:?}").contains("cycle"));
+    }
+
+    #[test]
+    fn topo_sort_accepts_unique_acyclic_graph() {
+        let tasks = vec![task("a", &[]), task("b", &["a"]), task("c", &["a", "b"])];
+        let (order, edges) = topo_sort_and_count_edges(&tasks).unwrap();
+        assert_eq!(order.len(), 3);
+        assert_eq!(edges, 3);
+    }
 }

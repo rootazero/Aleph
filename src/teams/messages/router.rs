@@ -211,21 +211,7 @@ impl MessageRouter {
             return;
         }
 
-        // Check if we already sent a SystemNotification in this thread
-        let thread_msgs = match self.msg_store.read_thread(team_id, thread_id).await {
-            Ok(msgs) => msgs,
-            Err(_) => return,
-        };
-
-        let already_notified = thread_msgs
-            .iter()
-            .any(|m| m.msg_type == MessageType::SystemNotification && m.from_agent == "system");
-
-        if already_notified {
-            return;
-        }
-
-        // Send escalation notification to leader
+        let ttl = chrono::Duration::minutes(15);
         let notification = NewMessage {
             team_id: team_id.to_string(),
             from_agent: "system".to_string(),
@@ -244,17 +230,27 @@ impl MessageRouter {
             attachments: vec![],
         };
 
-        // Best-effort: the escalation hint is advisory (the thread keeps working
-        // either way), but a silent drop hid genuine store failures. Surface it
-        // so a broken message store is observable — consistent with the explicit
-        // `warn!` on park failure in the dispatcher's clarify path.
-        if let Err(e) = self.msg_store.send_message(notification).await {
-            tracing::warn!(
-                thread_id = %thread_id,
-                leader_id = %leader_id,
-                error = %e,
-                "team router: failed to deliver thread-escalation suggestion"
-            );
+        match self
+            .msg_store
+            .try_send_first_system_notification(notification, ttl, team_id, thread_id)
+            .await
+        {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    leader_id = %leader_id,
+                    "team router: thread-escalation already notified; skipping duplicate send"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    leader_id = %leader_id,
+                    error = %e,
+                    "team router: failed to deliver thread-escalation suggestion"
+                );
+            }
         }
     }
 }
@@ -499,5 +495,118 @@ mod tests {
             .await
             .unwrap();
         assert!(inbox.is_empty());
+    }
+
+    #[tokio::test]
+    async fn try_send_first_system_notification_dedups_within_thread() {
+        use super::super::store::MessageStore;
+        let (msg_store, _event_store) = make_stores().await;
+
+        let notification = NewMessage {
+            team_id: "team-dedup".into(),
+            from_agent: "system".into(),
+            msg_type: MessageType::SystemNotification,
+            subject: "Escalation".into(),
+            content: "first".into(),
+            recipients: vec![Recipient {
+                agent_id: "leader-1".into(),
+                role: RecipientRole::To,
+            }],
+            reply_to: Some("thread-x".into()),
+            attachments: vec![],
+        };
+
+        let first = msg_store
+            .try_send_first_system_notification(
+                notification.clone(),
+                chrono::Duration::minutes(15),
+                "team-dedup",
+                "thread-x",
+            )
+            .await
+            .unwrap();
+        assert!(first.is_some(), "first call inserts the notification");
+
+        let second = msg_store
+            .try_send_first_system_notification(
+                notification,
+                chrono::Duration::minutes(15),
+                "team-dedup",
+                "thread-x",
+            )
+            .await
+            .unwrap();
+        assert!(
+            second.is_none(),
+            "second call within the same thread must NOT insert a duplicate"
+        );
+
+        let inbox = msg_store
+            .read_inbox(
+                "leader-1",
+                "team-dedup",
+                Some(&MessageType::SystemNotification),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox.len(),
+            1,
+            "exactly one SystemNotification despite two send attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn try_send_first_system_notification_isolates_threads() {
+        use super::super::store::MessageStore;
+        let (msg_store, _event_store) = make_stores().await;
+
+        let build = |content: &str| NewMessage {
+            team_id: "team-iso".into(),
+            from_agent: "system".into(),
+            msg_type: MessageType::SystemNotification,
+            subject: "Escalation".into(),
+            content: content.into(),
+            recipients: vec![Recipient {
+                agent_id: "leader-1".into(),
+                role: RecipientRole::To,
+            }],
+            reply_to: Some(content.into()),
+            attachments: vec![],
+        };
+
+        let a = msg_store
+            .try_send_first_system_notification(
+                build("thread-A"),
+                chrono::Duration::minutes(15),
+                "team-iso",
+                "thread-A",
+            )
+            .await
+            .unwrap();
+        let b = msg_store
+            .try_send_first_system_notification(
+                build("thread-B"),
+                chrono::Duration::minutes(15),
+                "team-iso",
+                "thread-B",
+            )
+            .await
+            .unwrap();
+        assert!(a.is_some() && b.is_some(), "different threads both insert");
+
+        let inbox = msg_store
+            .read_inbox(
+                "leader-1",
+                "team-iso",
+                Some(&MessageType::SystemNotification),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox.len(),
+            2,
+            "one SystemNotification per thread, not per team"
+        );
     }
 }

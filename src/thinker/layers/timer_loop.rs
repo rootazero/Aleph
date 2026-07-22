@@ -2,7 +2,7 @@
 //!
 //! Re-surfaces the session's active timer loop into the system prompt every
 //! turn while it runs — the clock-gated sibling of `StandingGoalLayer`
-//! (1754). Between ticks the model had no idea a watch was running in this
+//! (1755). Between ticks the model had no idea a watch was running in this
 //! session (the tick reminder exists only inside tick turns), so on an
 //! ordinary user turn it could neither report on the loop nor avoid starting
 //! a duplicate. Pure scaffolding: the content is the user's own watch prompt

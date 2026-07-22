@@ -125,27 +125,26 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
     ) -> Result<HeartbeatL2Result, String> {
         let start = std::time::Instant::now();
 
-        // Resolve agent — fall back to "main" if the requested agent is not found
-        let agent = self.agent_registry.get(agent_id).await.or_else(|| {
-            warn!(agent_id, "heartbeat agent not found, trying 'main'");
-            // Cannot await inside or_else, use blocking get pattern
-            None
-        });
-
-        // If first lookup failed, try "main" separately
-        let agent = match agent {
-            Some(a) => a,
-            None => self.agent_registry.get("main").await.ok_or_else(|| {
-                format!("Agent '{agent_id}' not found and fallback 'main' unavailable")
-            })?,
+        let (agent, resolved_agent_id) = match self.agent_registry.get(agent_id).await {
+            Some(a) => (a, agent_id.to_string()),
+            None => {
+                warn!(
+                    agent_id,
+                    "heartbeat agent not found, falling back to 'main'"
+                );
+                let a = self.agent_registry.get("main").await.ok_or_else(|| {
+                    format!("Agent '{agent_id}' not found and fallback 'main' unavailable")
+                })?;
+                let resolved_agent_id = a.id().to_string();
+                (a, resolved_agent_id)
+            }
         };
 
-        // Build request following cron executor pattern
         let run_id = Uuid::new_v4().to_string();
         let task_id = format!("hb-{run_id}");
-        let session_key = SessionKey::task(agent_id, "heartbeat", &task_id);
+        let session_key = SessionKey::task(&resolved_agent_id, "heartbeat", &task_id);
 
-        let metadata = heartbeat_run_metadata(agent_id);
+        let metadata = heartbeat_run_metadata(&resolved_agent_id);
 
         // System-initiated: heartbeat has no parent run, so no project
         // context to inherit. Same round-3 follow-up as cron applies if
@@ -171,7 +170,11 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
             Arc::clone(&collector) as _;
 
-        info!(agent_id, "executing heartbeat L2 agent turn");
+        info!(
+            agent_id,
+            resolved_agent_id = %resolved_agent_id,
+            "executing heartbeat L2 agent turn"
+        );
 
         match self.adapter.execute(request, agent, emitter).await {
             Ok(()) => {
@@ -256,6 +259,7 @@ fn classify_l2_outcome(events: &[StreamEvent]) -> HeartbeatL2Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::execution_engine::RunStatus;
     use crate::tasks::heartbeat::config::{ProbeConfig, TriggerCondition};
     use serde_json::json;
 
@@ -383,5 +387,128 @@ mod tests {
 
         let prompt = build_heartbeat_prompt(&task, &probe_result, Some("user requested"));
         assert!(prompt.contains("Wake reason: user requested"));
+    }
+
+    async fn registry_with_main() -> (tempfile::TempDir, Arc<AgentRegistry>) {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
+        use crate::gateway::session_store::sqlite_backend::{
+            SqliteSessionStore, SqliteSessionStoreConfig,
+        };
+        use crate::gateway::session_store::SessionStore;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(
+            SqliteSessionStore::new(SqliteSessionStoreConfig {
+                db_path: temp.path().join("s.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let registry = Arc::new(AgentRegistry::new());
+        let main = AgentInstance::new(
+            AgentInstanceConfig {
+                agent_id: "main".to_string(),
+                workspace: temp.path().join("ws"),
+                agent_dir: temp.path().join("agents/main"),
+                ..Default::default()
+            },
+            store,
+        )
+        .unwrap();
+        registry.register(main).await;
+        (temp, registry)
+    }
+
+    struct CaptureAdapter {
+        captured: std::sync::Mutex<Option<(SessionKey, std::collections::HashMap<String, String>)>>,
+    }
+
+    impl CaptureAdapter {
+        fn new() -> Self {
+            Self {
+                captured: std::sync::Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::gateway::execution_adapter::ExecutionAdapter for CaptureAdapter {
+        async fn execute(
+            &self,
+            request: RunRequest,
+            _agent: Arc<crate::gateway::agent_instance::AgentInstance>,
+            _emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            *self.captured.lock().unwrap() = Some((request.session_key, request.metadata));
+            Ok(())
+        }
+        async fn cancel(&self, _run_id: &str) -> Result<(), ExecutionError> {
+            Err(ExecutionError::RunNotFound(_run_id.to_string()))
+        }
+        async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+            None
+        }
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_heartbeat_session_key_and_metadata_use_resolved_agent_after_fallback() {
+        let (_t, registry) = registry_with_main().await;
+        let capture = Arc::new(CaptureAdapter::new());
+        let adapter = DefaultHeartbeatAdapter::new(
+            capture.clone() as Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+            registry,
+        );
+
+        adapter
+            .execute_heartbeat("ghost", "prompt", 60)
+            .await
+            .expect("fallback to main must succeed");
+
+        let (session, metadata) = capture
+            .captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("adapter captured the request");
+        assert_eq!(
+            session.agent_id(),
+            "main",
+            "session_key must follow the resolved agent, not the requested ghost"
+        );
+        assert_eq!(
+            metadata.get("heartbeat_agent_id").map(String::as_str),
+            Some("main"),
+            "metadata must follow the resolved agent, not the requested ghost"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_heartbeat_session_key_uses_requested_agent_when_present() {
+        let (_t, registry) = registry_with_main().await;
+        let capture = Arc::new(CaptureAdapter::new());
+        let adapter = DefaultHeartbeatAdapter::new(
+            capture.clone() as Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+            registry,
+        );
+
+        adapter
+            .execute_heartbeat("main", "prompt", 60)
+            .await
+            .expect("request for main must hit");
+
+        let (session, metadata) = capture
+            .captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("adapter captured the request");
+        assert_eq!(session.agent_id(), "main");
+        assert_eq!(
+            metadata.get("heartbeat_agent_id").map(String::as_str),
+            Some("main")
+        );
     }
 }
