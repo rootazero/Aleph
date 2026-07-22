@@ -422,7 +422,6 @@ mod tests {
         use std::collections::HashMap;
         let pattern = format!("*{secret_substring}*");
         let policy = ConfigApprovalPolicy::new(PolicyConfig {
-            version: 1,
             defaults: HashMap::new(),
             allowlist: vec![],
             blocklist: vec![PolicyRule {

@@ -20,8 +20,6 @@ use super::types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision}
 /// Top-level policy configuration, deserialized from JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyConfig {
-    /// Schema version (currently 1).
-    pub version: u32,
     /// Per-action-type default decisions.
     pub defaults: HashMap<ActionType, DefaultDecision>,
     /// Rules that unconditionally allow matching actions.
@@ -269,43 +267,11 @@ impl ConfigApprovalPolicy {
     /// allow or deny. This ensures configuration errors cannot weaken security.
     fn safe_default() -> Self {
         Self::new(PolicyConfig {
-            version: 1,
             defaults: HashMap::new(),
             allowlist: vec![],
             blocklist: vec![],
         })
     }
-
-    /// Permissive fallback used when **no** policy file exists.
-    ///
-    /// Every action type defaults to [`ApprovalDecision::Allow`].
-    ///
-    /// No longer reachable from `load_from` (missing files now use
-    /// `safe_default`), but retained for explicit opt-in and tests.
-    #[allow(dead_code)]
-    fn permissive_default() -> Self {
-        let mut defaults = HashMap::new();
-        defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
-        defaults.insert(ActionType::BrowserClick, DefaultDecision::Allow);
-        defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
-        defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
-        defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopClick, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopType, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
-        defaults.insert(ActionType::DesktopAutomation, DefaultDecision::Allow);
-        defaults.insert(ActionType::PimWrite, DefaultDecision::Allow);
-        defaults.insert(ActionType::MediaCapture, DefaultDecision::Allow);
-
-        Self::new(PolicyConfig {
-            version: 1,
-            defaults,
-            allowlist: vec![],
-            blocklist: vec![],
-        })
-    }
-}
 
 impl Default for ConfigApprovalPolicy {
     /// Sensible defaults:
@@ -328,7 +294,6 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::MediaCapture, DefaultDecision::Ask);
 
         Self::new(PolicyConfig {
-            version: 1,
             defaults,
             allowlist: vec![],
             blocklist: vec![],
@@ -577,7 +542,6 @@ mod tests {
         use std::collections::HashMap;
         let pattern = format!("*{secret}*");
         ConfigApprovalPolicy::new(PolicyConfig {
-            version: 1,
             defaults: HashMap::new(),
             allowlist: vec![],
             blocklist: vec![PolicyRule {

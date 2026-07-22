@@ -108,7 +108,6 @@ mod tests {
             .collect();
 
         ConfigApprovalPolicy::new(PolicyConfig {
-            version: 1,
             defaults: defaults_map,
             allowlist: allowlist_rules,
             blocklist: blocklist_rules,
@@ -311,6 +310,7 @@ mod tests {
             ActionType::DesktopLaunchApp,
             ActionType::DesktopAutomation,
             ActionType::PimWrite,
+            ActionType::MediaCapture,
         ];
 
         for action in all {
@@ -323,7 +323,6 @@ mod tests {
     #[test]
     fn test_policy_config_deserialization() {
         let json = r#"{
-            "version": 1,
             "defaults": {
                 "browser_navigate": "allow",
                 "browser_click": "allow",
@@ -347,7 +346,6 @@ mod tests {
         }"#;
 
         let config: PolicyConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.version, 1);
         assert_eq!(config.defaults.len(), 10);
         assert_eq!(config.allowlist.len(), 2);
         assert_eq!(config.blocklist.len(), 2);
@@ -378,7 +376,7 @@ mod tests {
     #[test]
     fn test_invalid_default_value_rejected_by_serde() {
         let json =
-            r#"{"version":1,"defaults":{"desktop_click":"Deny"},"allowlist":[],"blocklist":[]}"#;
+            r#"{"defaults":{"desktop_click":"Deny"},"allowlist":[],"blocklist":[]}"#;
         let result: Result<PolicyConfig, _> = serde_json::from_str(json);
         assert!(result.is_err(), "Serde should reject capitalized 'Deny'");
     }
