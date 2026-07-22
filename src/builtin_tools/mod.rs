@@ -129,7 +129,27 @@ pub use arena::{
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
-pub use browser_tools::*;
+pub use browser_tools::{
+    BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserConsoleArgs,
+    BrowserConsoleOutput, BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput,
+    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool,
+    BrowserDragArgs, BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs,
+    BrowserEmulateOutput, BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput,
+    BrowserEvaluateTool, BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool,
+    BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool, BrowserNavigateArgs,
+    BrowserNavigateOutput, BrowserNavigateTool, BrowserNetworkArgs, BrowserNetworkOutput,
+    BrowserNetworkTool, BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool,
+    BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool, BrowserPressKeyArgs,
+    BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs, BrowserProfileOutput,
+    BrowserProfileTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
+    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
+    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
+    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
+    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
+    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput,
+    BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
+    BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
+};
 pub use channel_manage::{
     ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
 };

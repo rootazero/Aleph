@@ -25,7 +25,7 @@ use crate::error::{AlephError, Result};
 
 use super::types::{
     BrowseApiResponse, BrowseResponse, DetailApiResponse, SearchApiResponse, SkillDetail,
-    SkillSearchResult, SortOrder, VersionInfo,
+    SkillSearchResult, SortOrder,
 };
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
