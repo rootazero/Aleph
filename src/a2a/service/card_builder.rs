@@ -32,7 +32,6 @@ impl CardBuilder {
                 name: s.name.clone(),
                 description: s.description.clone(),
                 aliases: None,
-                examples: None,
                 input_types: Some(vec!["text".to_string()]),
                 output_types: Some(vec!["text".to_string()]),
             })

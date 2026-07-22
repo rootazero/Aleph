@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::a2a::domain::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent, UpdateEvent};
+use crate::a2a::domain::{TaskStatusUpdateEvent, UpdateEvent};
 use crate::a2a::port::{A2AResult, A2AStreamingHandler};
 use crate::a2a::service::notification::NotificationService;
 use crate::sync_primitives::{Arc, AsyncRwLock};
@@ -99,46 +99,6 @@ impl Default for StreamHub {
 
 #[async_trait::async_trait]
 impl A2AStreamingHandler for StreamHub {
-    async fn subscribe_status(
-        &self,
-        task_id: &str,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>> {
-        let sender = self.get_or_create_sender(task_id).await;
-        let receiver = sender.subscribe();
-        let task_id_owned = task_id.to_string();
-
-        let stream = BroadcastStream::new(receiver).filter_map(move |result| match result {
-            Ok(UpdateEvent::StatusUpdate(event)) => Some(Ok(event)),
-            Ok(_) => None, // Skip artifact events
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::warn!(task_id = %task_id_owned, skipped = n, "Status subscriber lagged");
-                None
-            }
-        });
-
-        Ok(Box::pin(stream))
-    }
-
-    async fn subscribe_artifacts(
-        &self,
-        task_id: &str,
-    ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>> {
-        let sender = self.get_or_create_sender(task_id).await;
-        let receiver = sender.subscribe();
-        let task_id_owned = task_id.to_string();
-
-        let stream = BroadcastStream::new(receiver).filter_map(move |result| match result {
-            Ok(UpdateEvent::ArtifactUpdate(event)) => Some(Ok(event)),
-            Ok(_) => None, // Skip status events
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::warn!(task_id = %task_id_owned, skipped = n, "Artifact subscriber lagged");
-                None
-            }
-        });
-
-        Ok(Box::pin(stream))
-    }
-
     async fn subscribe_all(
         &self,
         task_id: &str,
@@ -181,25 +141,6 @@ impl A2AStreamingHandler for StreamHub {
         Ok(())
     }
 
-    async fn broadcast_artifact(
-        &self,
-        task_id: &str,
-        update: TaskArtifactUpdateEvent,
-    ) -> A2AResult<()> {
-        if let Some(notification) = self.notification.clone() {
-            let task_id_owned = task_id.to_string();
-            let event = update.clone();
-            tokio::spawn(async move {
-                notification
-                    .notify_artifact_update(&task_id_owned, &event)
-                    .await;
-            });
-        }
-        let sender = self.get_or_create_sender(task_id).await;
-        let _ = sender.send(UpdateEvent::ArtifactUpdate(update));
-        Ok(())
-    }
-
     async fn cleanup_task(&self, task_id: &str) -> A2AResult<()> {
         self.remove_channel(task_id).await;
         Ok(())
@@ -209,7 +150,6 @@ impl A2AStreamingHandler for StreamHub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::a2a::domain::message::{Artifact, Part};
     use crate::a2a::domain::task::{TaskState, TaskStatus};
     use chrono::Utc;
     use tokio_stream::StreamExt;
@@ -224,25 +164,6 @@ mod tests {
                 timestamp: Utc::now(),
             },
             is_final,
-            metadata: None,
-        }
-    }
-
-    fn make_artifact_event(task_id: &str) -> TaskArtifactUpdateEvent {
-        TaskArtifactUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id: "ctx-1".to_string(),
-            artifact: Artifact {
-                artifact_id: "art-1".to_string(),
-                kind: "text".to_string(),
-                parts: vec![Part::Text {
-                    text: "hello".to_string(),
-                    metadata: None,
-                }],
-                metadata: None,
-            },
-            append: false,
-            last_chunk: true,
             metadata: None,
         }
     }
@@ -291,44 +212,6 @@ mod tests {
         // Should not error even with no subscribers
         let result = hub.broadcast_status("task-1", event).await;
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn subscribe_status_filters_out_artifact_events() {
-        let hub = StreamHub::new();
-        let mut stream = hub.subscribe_status("task-1").await.unwrap();
-
-        // Broadcast an artifact event — should be filtered out
-        let artifact = make_artifact_event("task-1");
-        hub.broadcast_artifact("task-1", artifact).await.unwrap();
-
-        // Broadcast a status event — should come through
-        let status = make_status_event("task-1", TaskState::Completed, true);
-        hub.broadcast_status("task-1", status).await.unwrap();
-
-        let received = stream.next().await.unwrap().unwrap();
-        assert_eq!(received.task_id, "task-1");
-        assert_eq!(received.status.state, TaskState::Completed);
-        assert!(received.is_final);
-    }
-
-    #[tokio::test]
-    async fn subscribe_artifacts_filters_out_status_events() {
-        let hub = StreamHub::new();
-        let mut stream = hub.subscribe_artifacts("task-1").await.unwrap();
-
-        // Broadcast a status event — should be filtered out
-        let status = make_status_event("task-1", TaskState::Working, false);
-        hub.broadcast_status("task-1", status).await.unwrap();
-
-        // Broadcast an artifact event — should come through
-        let artifact = make_artifact_event("task-1");
-        hub.broadcast_artifact("task-1", artifact).await.unwrap();
-
-        let received = stream.next().await.unwrap().unwrap();
-        assert_eq!(received.task_id, "task-1");
-        assert_eq!(received.artifact.artifact_id, "art-1");
-        assert!(received.last_chunk);
     }
 
     #[tokio::test]

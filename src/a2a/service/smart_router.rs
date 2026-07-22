@@ -287,7 +287,6 @@ mod tests {
             name: name.to_string(),
             description: Some(format!("{} skill", name)),
             aliases,
-            examples: None,
             input_types: None,
             output_types: None,
         }

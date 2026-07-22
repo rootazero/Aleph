@@ -713,24 +713,6 @@ mod tests {
 
     #[async_trait::async_trait]
     impl A2AStreamingHandler for StubStreamingHandler {
-        async fn subscribe_status(
-            &self,
-            _task_id: &str,
-        ) -> A2AResult<
-            Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>,
-        > {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn subscribe_artifacts(
-            &self,
-            _task_id: &str,
-        ) -> A2AResult<
-            Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>,
-        > {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
         async fn subscribe_all(
             &self,
             _task_id: &str,
@@ -744,14 +726,6 @@ mod tests {
             &self,
             _task_id: &str,
             _update: TaskStatusUpdateEvent,
-        ) -> A2AResult<()> {
-            Ok(())
-        }
-
-        async fn broadcast_artifact(
-            &self,
-            _task_id: &str,
-            _update: TaskArtifactUpdateEvent,
         ) -> A2AResult<()> {
             Ok(())
         }

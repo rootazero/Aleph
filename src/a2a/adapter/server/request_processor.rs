@@ -452,8 +452,8 @@ impl A2ARequestProcessor {
 mod tests {
     use super::*;
     use crate::a2a::domain::{
-        A2ATask, Artifact, ListTasksResult, SecurityScheme, TaskArtifactUpdateEvent, TaskState,
-        TaskStatusUpdateEvent, UpdateEvent,
+        A2ATask, Artifact, ListTasksResult, SecurityScheme, TaskState, TaskStatusUpdateEvent,
+        UpdateEvent,
     };
 
     #[test]
@@ -657,22 +657,6 @@ mod tests {
 
         #[async_trait::async_trait]
         impl A2AStreamingHandler for MockStreamingHandler {
-            async fn subscribe_status(
-                &self,
-                _task_id: &str,
-            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>>
-            {
-                Ok(Box::pin(futures::stream::empty()))
-            }
-
-            async fn subscribe_artifacts(
-                &self,
-                _task_id: &str,
-            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>>
-            {
-                Ok(Box::pin(futures::stream::empty()))
-            }
-
             async fn subscribe_all(
                 &self,
                 _task_id: &str,
@@ -684,14 +668,6 @@ mod tests {
                 &self,
                 _task_id: &str,
                 _update: TaskStatusUpdateEvent,
-            ) -> A2AResult<()> {
-                Ok(())
-            }
-
-            async fn broadcast_artifact(
-                &self,
-                _task_id: &str,
-                _update: TaskArtifactUpdateEvent,
             ) -> A2AResult<()> {
                 Ok(())
             }

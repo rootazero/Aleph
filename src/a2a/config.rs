@@ -31,10 +31,6 @@ pub struct A2AConfig {
 /// A2A server endpoint configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct A2AServerConfig {
-    /// Enable A2A server endpoints
-    #[serde(default)]
-    pub enabled: bool,
-
     /// Agent Card name
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_name: Option<String>,

@@ -59,7 +59,6 @@ fn test_agent_card() -> AgentCard {
             name: "General".to_string(),
             description: Some("General purpose".to_string()),
             aliases: None,
-            examples: None,
             input_types: Some(vec!["text".to_string()]),
             output_types: Some(vec!["text".to_string()]),
         }],
@@ -176,7 +175,6 @@ fn local_auth_principal() -> A2AAuthPrincipal {
 #[tokio::test]
 async fn test_agent_card_discovery() {
     let config = A2AServerConfig {
-        enabled: true,
         card_name: Some("Integration Test Agent".to_string()),
         card_description: Some("An agent for testing".to_string()),
         card_version: Some("0.5.0".to_string()),

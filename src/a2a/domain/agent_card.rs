@@ -67,8 +67,6 @@ pub struct AgentSkill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aliases: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub examples: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_types: Option<Vec<String>>,
@@ -109,7 +107,6 @@ mod tests {
                 name: "Code Review".to_string(),
                 description: Some("Review code changes".to_string()),
                 aliases: Some(vec!["review".to_string()]),
-                examples: Some(vec!["Review this PR".to_string()]),
                 input_types: Some(vec!["text".to_string()]),
                 output_types: Some(vec!["text".to_string()]),
             }],

@@ -251,7 +251,6 @@ mod tests {
             name: name.to_string(),
             description: description.map(|s| s.to_string()),
             aliases: None,
-            examples: None,
             input_types: None,
             output_types: None,
         }

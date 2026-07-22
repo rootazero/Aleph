@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::a2a::domain::{
-    A2AError, A2AMessage, A2ATask, AgentCard, ListTasksParams, ListTasksResult, UpdateEvent,
+    A2AError, A2AMessage, A2ATask, AgentCard, UpdateEvent,
 };
 use crate::a2a::port::A2AResult;
 
@@ -280,39 +280,6 @@ impl A2AClient {
             response,
             STREAM_IDLE_TIMEOUT,
         ))
-    }
-
-    /// Get task status
-    pub async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<usize>,
-    ) -> A2AResult<A2ATask> {
-        let mut params = json!({ "id": task_id });
-        if let Some(len) = history_length {
-            params
-                .as_object_mut()
-                .expect("invariant: params created as a JSON object literal")
-                .insert("historyLength".to_string(), json!(len));
-        }
-        let result = self.rpc_call("tasks/get", params).await?;
-        serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
-    }
-
-    /// Cancel a task
-    pub async fn cancel_task(&self, task_id: &str) -> A2AResult<A2ATask> {
-        let result = self
-            .rpc_call("tasks/cancel", json!({ "id": task_id }))
-            .await?;
-        serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
-    }
-
-    /// List tasks
-    pub async fn list_tasks(&self, params: &ListTasksParams) -> A2AResult<ListTasksResult> {
-        let params_value = serde_json::to_value(params)
-            .map_err(|e| A2AError::InternalError(format!("Failed to serialize params: {e}")))?;
-        let result = self.rpc_call("tasks/list", params_value).await?;
-        serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }
 
     /// Get the base URL
