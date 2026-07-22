@@ -118,7 +118,7 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 /// Quit/close an application by name or bundle ID.
 ///
 /// - **macOS**: Uses `NSRunningApplication` to find and terminate the app by bundle ID.
-/// - **Linux**: Uses `pkill -f <app_name>`.
+/// - **Linux**: Uses `pkill -x <app_name>` (exact process-name match).
 /// - **Windows**: Matches running processes by executable name (not window
 ///   title) and posts `WM_CLOSE` to each of their visible windows.
 ///
@@ -150,7 +150,7 @@ pub fn quit_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let status = std::process::Command::new("pkill")
-            .args(["-f", app_name])
+            .args(["-x", "--", app_name])
             .status()
             .map_err(|e| DesktopError::InputFailed(format!("Failed to quit app: {e}")))?;
         if !status.success() {

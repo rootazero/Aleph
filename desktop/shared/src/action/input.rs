@@ -8,6 +8,10 @@ use crate::error::DesktopError;
 use crate::error::Result;
 use crate::MouseButton;
 
+/// Maximum scroll clicks accepted from untrusted IPC. Prevents the Linux enigo
+/// implementation from looping billions of times on a malicious `i32::MAX`.
+const MAX_SCROLL_CLICKS: i32 = 10_000;
+
 /// Move the mouse to (x, y) and click the specified button.
 ///
 /// # Errors
@@ -219,7 +223,11 @@ pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
 /// - [`DesktopError::InputFailed`] if the direction is invalid, enigo cannot
 ///   be created, or the scroll operation fails.
 pub fn scroll(direction: &str, amount: i32) -> Result<()> {
-    // `amount` arrives from untrusted IPC; negating `i32::MIN` would overflow
+    // `amount` arrives from untrusted IPC; clamp it before negation so the
+    // Linux enigo backend cannot be asked to emit billions of click events.
+    let amount = amount.clamp(-MAX_SCROLL_CLICKS, MAX_SCROLL_CLICKS);
+
+    // `amount` is documented as positive, but negating `i32::MIN` would overflow
     // (panic in debug). `saturating_neg` is identical for all valid positive
     // inputs and keeps the helper panic-free at the boundary (P7).
     let (axis, length) = match direction {
