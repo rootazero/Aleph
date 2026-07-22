@@ -2,7 +2,7 @@
 
 #[cfg(windows)]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use aleph_desktop::platform::EscapeAbort;
@@ -40,6 +40,13 @@ pub struct WindowsEscapeListener {
     /// does not move this heap allocation, so `LISTENER_PTR` remains valid.
     #[cfg_attr(not(windows), allow(dead_code))]
     state: Mutex<Option<Box<ListenerState>>>,
+    /// Dedicated message-loop thread that owns the hook. The thread is joined
+    /// in `stop` so the hook is removed and the heap state is freed safely.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Thread id of `thread`, used to post `WM_QUIT` from `stop`.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    thread_id: AtomicU32,
 }
 
 /// Address of the active listener's heap state, published so the process-global
@@ -54,6 +61,8 @@ impl WindowsEscapeListener {
         Self {
             hook: Mutex::new(None),
             state: Mutex::new(None),
+            thread: Mutex::new(None),
+            thread_id: AtomicU32::new(0),
         }
     }
 }
@@ -70,6 +79,7 @@ impl EscapeAbort for WindowsEscapeListener {
         {
             use windows::Win32::Foundation::HINSTANCE;
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows::Win32::System::Threading::GetCurrentThreadId;
             use windows::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD_LL};
 
             let mut state_guard = self
@@ -92,33 +102,101 @@ impl EscapeAbort for WindowsEscapeListener {
                 ))
             })?;
 
-            // SAFETY: installs a process-wide low-level keyboard hook bound to
-            // the `'static` `keyboard_hook_proc`; removed again by `stop`.
-            let hook = unsafe {
-                SetWindowsHookExW(
-                    WH_KEYBOARD_LL,
-                    Some(keyboard_hook_proc),
-                    HINSTANCE(hmod.0),
-                    0,
-                )
-            }
-            .map_err(|e| {
-                LISTENER_PTR.store(0, Ordering::SeqCst);
-                let _ = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
-                aleph_desktop::DesktopError::PlatformError(format!(
-                    "failed to install keyboard hook: {e}"
-                ))
-            })?;
+            let (tx, rx) =
+                std::sync::mpsc::channel::<std::result::Result<(isize, u32), String>>();
+            let module = HINSTANCE(hmod.0);
 
-            *self
-                .hook
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook.0 as isize);
-            Ok(())
+            // Spawn a dedicated thread to install the hook and pump Win32
+            // messages. `WH_KEYBOARD_LL` callbacks are dispatched by the OS
+            // through that thread's message queue, so a tokio worker thread
+            // without a message loop would never see the callback.
+            let worker = std::thread::spawn(move || {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    DispatchMessageW, GetMessageW, TranslateMessage, UnhookWindowsHookEx, MSG,
+                };
+
+                // SAFETY: installs a process-wide low-level keyboard hook bound
+                // to the `'static` `keyboard_hook_proc`; removed again before
+                // this thread exits.
+                match unsafe {
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), module, 0)
+                } {
+                    Ok(hook) => {
+                        let tid = unsafe { GetCurrentThreadId() };
+                        let hook_addr = hook.0 as isize;
+                        if tx.send(Ok((hook_addr, tid))).is_err() {
+                            let _ = unsafe { UnhookWindowsHookEx(hook) };
+                            return;
+                        }
+
+                        // Pump messages until `stop` posts `WM_QUIT`; the OS
+                        // dispatches low-level hook callbacks via this queue.
+                        loop {
+                            let mut msg = std::mem::MaybeUninit::<MSG>::uninit();
+                            // SAFETY: `msg` is valid for writing.
+                            let ret = unsafe { GetMessageW(msg.as_mut_ptr(), None, 0, 0) };
+                            if ret.0 == 0 {
+                                // `WM_QUIT`.
+                                break;
+                            }
+                            if ret.0 < 0 {
+                                // Message-loop error; exit rather than spin.
+                                break;
+                            }
+                            // SAFETY: `GetMessageW` returned a message.
+                            let msg = unsafe { msg.assume_init() };
+                            // SAFETY: standard message-dispatch calls.
+                            let _ = unsafe { TranslateMessage(&msg) };
+                            unsafe { DispatchMessageW(&msg) };
+                        }
+
+                        // SAFETY: `hook` is the `HHOOK` returned above.
+                        let _ = unsafe { UnhookWindowsHookEx(hook) };
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("failed to install keyboard hook: {e}")));
+                    }
+                }
+            });
+
+            match rx.recv() {
+                Ok(Ok((hook_addr, tid))) => {
+                    *self
+                        .hook
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(hook_addr);
+                    self.thread_id.store(tid, Ordering::SeqCst);
+                    *self
+                        .thread
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(worker);
+                    Ok(())
+                }
+                Ok(Err(e)) => {
+                    let _ = worker.join();
+                    LISTENER_PTR.store(0, Ordering::SeqCst);
+                    let _ = self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    Err(aleph_desktop::DesktopError::PlatformError(e))
+                }
+                Err(_) => {
+                    let _ = worker.join();
+                    LISTENER_PTR.store(0, Ordering::SeqCst);
+                    let _ = self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    Err(aleph_desktop::DesktopError::PlatformError(
+                        "keyboard hook thread exited before reporting status".into(),
+                    ))
+                }
+            }
         }
         #[cfg(not(windows))]
         {
@@ -131,7 +209,10 @@ impl EscapeAbort for WindowsEscapeListener {
     fn stop(&self) {
         #[cfg(windows)]
         {
-            use windows::Win32::UI::WindowsAndMessaging::{UnhookWindowsHookEx, HHOOK};
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                PostThreadMessageW, UnhookWindowsHookEx, HHOOK, WM_QUIT,
+            };
 
             if let Some(addr) = self
                 .hook
@@ -143,12 +224,27 @@ impl EscapeAbort for WindowsEscapeListener {
                 // `SetWindowsHookExW` and not yet unhooked.
                 let _ = unsafe { UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void)) };
             }
-            // Clear BEFORE dropping: any in-flight `keyboard_hook_proc`
-            // that has already loaded LISTENER_PTR into a local would
-            // otherwise dereference the freed `ListenerState` (UAF).
-            // Yield to let that callback observe the zero, then drop.
+
+            let tid = self.thread_id.swap(0, Ordering::SeqCst);
+            if tid != 0 {
+                // SAFETY: `tid` is the id of the message-loop thread spawned in
+                // `start`; posting `WM_QUIT` wakes `GetMessageW` so it can exit.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+            }
+
+            // After unhooking, no new callbacks start. Clear the pointer and
+            // join the thread before freeing `ListenerState` so any callback
+            // already in flight has returned.
             LISTENER_PTR.store(0, Ordering::SeqCst);
-            std::thread::yield_now();
+            if let Some(handle) = self
+                .thread
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                let _ = handle.join();
+            }
+
             let _ = self
                 .state
                 .lock()
