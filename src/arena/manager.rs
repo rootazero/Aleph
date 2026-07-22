@@ -1,7 +1,7 @@
 //! `ArenaManager` — lifecycle management for `SharedArena` instances.
 //!
 //! Responsible for creating arenas, distributing handles to participants,
-//! tracking active arenas per agent, and settling arenas when collaboration ends.
+//! querying arena state, and settling arenas when collaboration ends.
 
 use std::collections::HashMap;
 
@@ -91,30 +91,6 @@ impl ArenaManager {
             participant.permissions.clone(),
         );
         Ok(handle)
-    }
-
-    /// Returns arena IDs where the given agent is a participant and the arena is not Archived.
-    #[must_use]
-    pub fn active_arenas_for(&self, agent_id: &AgentId) -> Vec<ArenaId> {
-        self.arenas
-            .iter()
-            .filter_map(|(arena_id, shared)| {
-                let arena = shared.read().unwrap_or_else(|e| e.into_inner());
-                if arena.status() == ArenaStatus::Archived {
-                    return None;
-                }
-                let is_participant = arena
-                    .manifest()
-                    .participants
-                    .iter()
-                    .any(|p| p.agent_id == *agent_id);
-                if is_participant {
-                    Some(arena_id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
     }
 
     /// Query arena state as a JSON snapshot (for RPC handlers).
@@ -290,23 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn active_arenas_for_agent() {
-        let mut manager = ArenaManager::new();
-
-        let manifest = test_manifest(&["agent-a", "agent-b"]);
-        let (arena_id, _) = manager.create_arena(manifest).unwrap();
-
-        // agent-a is a participant
-        let active = manager.active_arenas_for(&"agent-a".to_string());
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0], arena_id);
-
-        // unknown agent is not a participant
-        let active = manager.active_arenas_for(&"unknown".to_string());
-        assert!(active.is_empty());
-    }
-
-    #[test]
     fn query_arena_returns_slots_sorted_by_agent_id() {
         let mut manager = ArenaManager::new();
         // Participants supplied out of alphabetical order (coordinator is first).
@@ -346,8 +305,10 @@ mod tests {
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].content, "Important discovery");
 
-        // Arena should now be Archived — no longer active
-        let active = manager.active_arenas_for(&"agent-a".to_string());
-        assert!(active.is_empty());
+        // Arena should now be Archived — removed from manager and no longer queryable
+        assert!(
+            manager.query_arena(&arena_id).is_none(),
+            "Archived arena should have been removed from the manager"
+        );
     }
 }
