@@ -176,6 +176,7 @@ async fn subagent_base_carries_4_p1_fields() {
         cancel: CancellationToken::new(),
         isolation: None,
         strategy: None,
+        session_mode: None,
     };
 
     let result = spawn(&base, req).await.expect("spawn should succeed");

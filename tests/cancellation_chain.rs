@@ -233,6 +233,7 @@ async fn run_subagent_with_hanging_llm(cancel: CancellationToken) -> Result<Loop
         cancel,
         isolation: None,
         strategy: None,
+        session_mode: None,
     };
     spawn(&base, req).await
 }
@@ -252,6 +253,7 @@ async fn run_subagent_with_hanging_tool(
         cancel,
         isolation: None,
         strategy: None,
+        session_mode: None,
     };
     spawn(&base, req).await
 }
