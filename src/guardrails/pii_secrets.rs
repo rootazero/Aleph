@@ -13,6 +13,7 @@
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::error::ErrorClass;
@@ -103,30 +104,91 @@ impl PiiSecretsGuardrail {
             Err(e) => {
                 tracing::error!(error = %e, "RuntimeSecurityGuard error; failing closed");
                 GuardrailDecision::Block {
-                    reason: format!("Security check unavailable: {e}"),
+                    // Keep the internal error text in the trace only — the
+                    // block reason can reach the model/user.
+                    reason: "Security check unavailable".to_string(),
                     class: ErrorClass::Unexpected,
                 }
             }
         }
     }
 
-    /// For `tool_call` we always want a fresh, rendered args payload back to
-    /// the caller, even if the orchestrator returned `Clean { text }` where
-    /// the only change was placeholder substitution. So we wrap `Clean`'s
-    /// text as `Sanitize` iff the text differs from the original.
-    fn map_tool_call(
-        original: &str,
-        result: Result<GuardResult, SecurityGuardError>,
-    ) -> GuardrailDecision {
-        match result {
-            Ok(GuardResult::Clean { text }) if text != original => {
-                GuardrailDecision::Sanitize(Replacement {
-                    text,
-                    source: "pii_secrets (placeholder substitution)".to_string(),
-                })
+    /// Scan one string leaf of the tool args through the orchestrator and
+    /// return the text to put back into the rebuilt `Value`. `Err` carries
+    /// the decision the whole tool call must return (a `Block`). A `Clean`
+    /// result whose text differs from the leaf carries a resolved
+    /// placeholder — the caller always wants the rendered args back, so it
+    /// counts as a changed leaf (the old `map_tool_call` special case).
+    async fn scan_tool_arg_leaf(
+        &self,
+        leaf: &str,
+        resolver_ref: Option<&dyn AsyncSecretResolver>,
+        warnings: &mut Vec<String>,
+        sources: &mut Vec<String>,
+    ) -> Result<String, GuardrailDecision> {
+        let ctx = SecurityContext::default();
+        let r = self.guard.process_outbound(leaf, resolver_ref, ctx).await;
+        if let Ok(GuardResult::Clean { text }) = &r {
+            if text != leaf {
+                sources.push("pii_secrets (placeholder substitution)".to_string());
+                return Ok(text.clone());
             }
-            other => Self::map_outbound(original, other),
         }
+        match Self::map_outbound(leaf, r) {
+            GuardrailDecision::Allow => Ok(leaf.to_string()),
+            GuardrailDecision::Warn { reason } => {
+                warnings.push(reason);
+                Ok(leaf.to_string())
+            }
+            GuardrailDecision::Sanitize(rep) => {
+                sources.push(rep.source);
+                Ok(rep.text)
+            }
+            block => Err(block),
+        }
+    }
+
+    /// Walk string leaves (and object keys) of `args`, scanning each through
+    /// the orchestrator, and rebuild the value with the results.
+    fn scan_tool_args<'a>(
+        &'a self,
+        value: &'a Value,
+        resolver_ref: Option<&'a dyn AsyncSecretResolver>,
+        warnings: &'a mut Vec<String>,
+        sources: &'a mut Vec<String>,
+    ) -> BoxFuture<'a, Result<Value, GuardrailDecision>> {
+        Box::pin(async move {
+            match value {
+                Value::String(s) => Ok(Value::String(
+                    self.scan_tool_arg_leaf(s, resolver_ref, warnings, sources)
+                        .await?,
+                )),
+                Value::Array(items) => {
+                    let mut out = Vec::with_capacity(items.len());
+                    for item in items {
+                        out.push(
+                            self.scan_tool_args(item, resolver_ref, warnings, sources)
+                                .await?,
+                        );
+                    }
+                    Ok(Value::Array(out))
+                }
+                Value::Object(map) => {
+                    let mut out = serde_json::Map::with_capacity(map.len());
+                    for (key, val) in map {
+                        let new_key = self
+                            .scan_tool_arg_leaf(key, resolver_ref, warnings, sources)
+                            .await?;
+                        let new_val = self
+                            .scan_tool_args(val, resolver_ref, warnings, sources)
+                            .await?;
+                        out.insert(new_key, new_val);
+                    }
+                    Ok(Value::Object(out))
+                }
+                _ => Ok(value.clone()),
+            }
+        })
     }
 }
 
@@ -160,26 +222,51 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         NAME
     }
     async fn evaluate_tool_call(&self, _tool_name: &str, args: &Value) -> GuardrailDecision {
-        let serialized = match serde_json::to_string(args) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to serialize tool args for guardrail scan; failing closed");
-                return GuardrailDecision::Block {
-                    reason: format!("Guardrail serialization failed: {e}"),
-                    class: ErrorClass::Unexpected,
-                };
-            }
-        };
-        let ctx = SecurityContext::default();
+        // Scan and rebuild the args leaf by leaf instead of substituting
+        // into the serialized JSON text: `RuntimeSecurityGuard` performs raw
+        // string replacement, so a secret containing `"`, `\` or a newline
+        // would corrupt the payload — the caller's reparse then fails and
+        // silently falls back to the ORIGINAL args, delivering the
+        // unresolved `{{secret:NAME}}` placeholder to the tool. Rebuilding
+        // the `Value` keeps it structured, so re-serialization escapes the
+        // secret correctly. Each leaf is scanned with the placeholder still
+        // in place (the orchestrator substitutes after its own scan), so
+        // injected secrets are registered and leak detection behaves exactly
+        // as the single-shot path did.
         let resolver_ref = self
             .resolver
             .as_ref()
             .map(|a| a.as_ref() as &dyn AsyncSecretResolver);
-        let r = self
-            .guard
-            .process_outbound(&serialized, resolver_ref, ctx)
-            .await;
-        Self::map_tool_call(&serialized, r)
+        let mut warnings = Vec::new();
+        let mut sources = Vec::new();
+        let resolved = match self
+            .scan_tool_args(args, resolver_ref, &mut warnings, &mut sources)
+            .await
+        {
+            Ok(v) => v,
+            Err(decision) => return decision,
+        };
+        if resolved != *args {
+            match serde_json::to_string(&resolved) {
+                Ok(text) => GuardrailDecision::Sanitize(Replacement {
+                    text,
+                    source: sources.join("; "),
+                }),
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to serialize rebuilt tool args; failing closed");
+                    GuardrailDecision::Block {
+                        reason: format!("Guardrail serialization failed: {e}"),
+                        class: ErrorClass::Unexpected,
+                    }
+                }
+            }
+        } else if !warnings.is_empty() {
+            GuardrailDecision::Warn {
+                reason: warnings.join("; "),
+            }
+        } else {
+            GuardrailDecision::Allow
+        }
     }
 }
 
@@ -235,11 +322,15 @@ mod delegation_tests {
 
     struct StubResolver;
 
+    /// Secret value carrying JSON metacharacters — quote, backslash, newline.
+    const SPECIAL_SECRET: &str = "line1\n\"quoted\"\\tail";
+
     #[async_trait]
     impl AsyncSecretResolver for StubResolver {
         async fn resolve(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
             match name {
                 "test_key" => Ok(DecryptedSecret::new("resolved-VAL".to_string())),
+                "special_key" => Ok(DecryptedSecret::new(SPECIAL_SECRET.to_string())),
                 _ => Err(SecretError::NotFound(name.to_string())),
             }
         }
@@ -312,6 +403,29 @@ mod delegation_tests {
                 assert!(!rep.text.contains("resolved-VAL"));
             }
             other => panic!("expected Allow or pass-through Sanitize, got {:?}", other),
+        }
+    }
+
+    /// Regression: a secret containing JSON metacharacters (`"`, `\`,
+    /// newline) must survive the tool-call surface. Substitution used to
+    /// happen on the serialized JSON text; such a secret corrupted the
+    /// payload, the caller's reparse failed, and it silently fell back to
+    /// the ORIGINAL args — passing the unresolved placeholder to the tool.
+    #[tokio::test]
+    async fn tool_call_secret_with_json_metacharacters_round_trips() {
+        let g = guard(true);
+        let args = serde_json::json!({ "command": "echo {{secret:special_key}}" });
+        let dec = g.evaluate_tool_call("bash_exec", &args).await;
+        match dec {
+            GuardrailDecision::Sanitize(rep) => {
+                let parsed: Value = serde_json::from_str(&rep.text)
+                    .expect("sanitized args must reparse as JSON");
+                assert_eq!(
+                    parsed["command"].as_str(),
+                    Some(format!("echo {SPECIAL_SECRET}").as_str()),
+                );
+            }
+            other => panic!("expected Sanitize, got {:?}", other),
         }
     }
 

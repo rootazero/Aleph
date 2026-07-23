@@ -2,10 +2,11 @@
 //! a single `Arc`-shareable handle. Constructed once at startup, held by
 //! `HarnessDeps` as `Option<Arc<GuardrailRegistry>>`.
 //!
-//! Sequential evaluation per surface: stops at the first non-`Allow`
-//! decision. `disable_all()` flips an `AtomicBool` so every evaluation
-//! short-circuits to `Allow` — the high-risk runtime rollback knob from
-//! master spec § Stage 5.
+//! Sequential evaluation per surface: stops at the first `Block` or
+//! `Sanitize`. `Warn`s are collected along the way and the last one is
+//! returned when nothing stronger fires. `disable_all()` flips an
+//! `AtomicBool` so every evaluation short-circuits to `Allow` — the
+//! high-risk runtime rollback knob from master spec § Stage 5.
 
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
