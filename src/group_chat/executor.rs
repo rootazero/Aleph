@@ -6,6 +6,8 @@
 //! 3. Invokes each selected persona's LLM in order
 //! 4. Records each persona response and returns the collected messages
 
+use std::fmt::Write as _;
+
 use crate::agents::thinking::ThinkLevel;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -134,7 +136,7 @@ impl GroupChatExecutor {
                 tracing::warn!(
                     subsystem = "group_chat",
                     error = %e,
-                    "failed to persist group chat turn to database"
+                    "group chat turn persistence task failed to join"
                 );
             }
             Ok(Ok(())) => {}
@@ -169,7 +171,7 @@ impl GroupChatExecutor {
         if session.status != GroupChatStatus::Active {
             return Err(GroupChatError::SessionInactive(session.id.clone()));
         }
-        let round = session.current_round + 1;
+        let round = session.current_round.saturating_add(1);
 
         // Step 1: Record user message as a System turn
         session.add_turn(round, Speaker::System, user_message.to_string());
@@ -256,6 +258,7 @@ impl GroupChatExecutor {
         let mut sorted_respondents = plan.respondents.clone();
         sorted_respondents.sort_by_key(|r| r.order);
         let total_respondents = sorted_respondents.len();
+        let session_id = session.id.clone();
 
         for (i, respondent) in sorted_respondents.iter().enumerate() {
             // Find the persona in the session participants
@@ -324,12 +327,12 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona
-            prior_discussion.push_str(&format!("[{}]: {}\n\n", persona_name, persona_response));
+            let _ = writeln!(prior_discussion, "[{}]: {}\n", persona_name, persona_response);
 
             // Build output message
             let is_final = i == total_respondents - 1;
             messages.push(GroupChatMessage {
-                session_id: session.id.clone(),
+                session_id: session_id.clone(),
                 speaker,
                 content: persona_response,
                 round,

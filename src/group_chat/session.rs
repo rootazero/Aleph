@@ -3,6 +3,8 @@
 //! Tracks the runtime state of a group chat session including participants,
 //! conversation history, and lifecycle status.
 
+use std::fmt::Write as _;
+
 use super::protocol::{GroupChatStatus, Persona, Speaker};
 
 /// A single turn in a group chat conversation.
@@ -93,7 +95,7 @@ impl GroupChatSession {
     pub fn build_history_text(&self) -> String {
         let mut text = String::new();
         for turn in &self.history {
-            text.push_str(&format!("[{}]: {}\n\n", turn.speaker.name(), turn.content));
+            let _ = writeln!(text, "[{}]: {}\n", turn.speaker.name(), turn.content);
         }
         text
     }
