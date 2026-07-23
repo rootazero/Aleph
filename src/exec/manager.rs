@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
-use super::decision::ExecApprovalRequest;
+use super::decision::{ApprovalRequest, ExecApprovalRequest};
 use super::socket::ApprovalDecisionType;
 
 /// Default timeout for approval requests (2 minutes)
