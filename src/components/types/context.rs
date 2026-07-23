@@ -455,9 +455,9 @@ impl ExecutionContext {
             "Goal: {}\nKnown: {}",
             self.current_goal.description,
             if knowledge_str.is_empty() {
-                "(none)".to_string()
+                "(none)"
             } else {
-                knowledge_str
+                &knowledge_str
             }
         )
     }

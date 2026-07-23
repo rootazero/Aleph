@@ -50,7 +50,11 @@ impl StreamingTextPart {
         if self.content.len() < MAX_CONTENT_BYTES {
             let remaining = MAX_CONTENT_BYTES - self.content.len();
             let chunk = if delta.len() > remaining {
-                &delta[..remaining]
+                let mut end = remaining;
+                while end > 0 && !delta.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &delta[..end]
             } else {
                 delta
             };

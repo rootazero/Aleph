@@ -14,7 +14,7 @@ mod tests;
 pub use status::{ReminderType, SessionStatus, SystemReminderPart};
 
 // Re-export session types
-pub use session::{Complexity, ComponentContext, Decision, ExecutionSession, ToolCallRecord};
+pub use session::{ExecutionSession, ToolCallRecord};
 
 // Re-export context types
 pub use context::{
