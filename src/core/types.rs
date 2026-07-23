@@ -12,6 +12,7 @@ use std::fmt;
 
 /// Media type classification for attachments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum MediaType {
     /// Image content (PNG, JPEG, GIF, etc.)
@@ -37,6 +38,7 @@ impl fmt::Display for MediaType {
 
 /// Content encoding format for attachment data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum ContentEncoding {
     /// Binary content encoded as Base64 (images, PDFs)
@@ -62,6 +64,7 @@ impl fmt::Display for ContentEncoding {
 /// - "base64": Binary content encoded as Base64 (images, PDFs)
 /// - "utf8": Plain text content (markdown, txt, extracted text)
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MediaAttachment {
     /// Content type classification
     pub media_type: MediaType,
@@ -92,6 +95,7 @@ impl fmt::Debug for MediaAttachment {
 
 /// Captured context from active application (Swift → Rust)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CapturedContext {
     /// Window title of the active application, if available
     pub window_title: Option<String>,
@@ -105,6 +109,7 @@ pub struct CapturedContext {
 ///
 /// Used for displaying compression status in Settings UI
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CompressionStats {
     /// Total number of raw memories (Layer 1)
     pub total_raw_memories: u64,
@@ -119,6 +124,7 @@ pub struct CompressionStats {
 
 /// Memory entry for API responses
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MemoryEntry {
     /// Unique identifier for the memory entry
     pub id: String,
@@ -133,7 +139,7 @@ pub struct MemoryEntry {
     /// Cosine similarity score from vector search, if applicable. NaN/Inf
     /// values are silently dropped at deserialize time (poisoning a sort /
     /// rank downstream is worse than no score at all).
-    #[serde(deserialize_with = "deserialize_finite_f32_opt")]
+    #[serde(default, deserialize_with = "deserialize_finite_f32_opt")]
     pub similarity_score: Option<f32>,
 }
 
