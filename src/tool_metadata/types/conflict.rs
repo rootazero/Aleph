@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 /// 5. Plugin (2) - Plugin tools from manifests
 /// 6. Skill (1) - Claude Agent skills
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum ToolPriority {
     /// Lowest priority - Claude Agent skills
     Skill = 1,
@@ -66,6 +67,7 @@ pub struct ConflictInfo {
 
 /// Resolution strategy for naming conflicts
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConflictResolution {
     /// Rename the existing tool (new tool has higher priority)
     RenameExisting {
@@ -94,6 +96,7 @@ pub enum ConflictResolution {
 /// Identifies where a tool comes from, enabling proper routing
 /// and UI grouping (badges, icons).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "type", content = "payload")]
 pub enum ToolSource {
     /// Built-in native capabilities (Search, Video)

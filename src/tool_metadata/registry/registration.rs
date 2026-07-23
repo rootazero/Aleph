@@ -13,15 +13,12 @@ use super::helpers::{extract_command_name, truncate_description};
 use super::types::ToolStorage;
 
 /// Registration functionality for `ToolCatalog`
-pub struct ToolRegistrar {
-    #[allow(dead_code)]
-    tools: ToolStorage,
-}
+pub struct ToolRegistrar;
 
 impl ToolRegistrar {
-    /// Create a new registrar with the given storage
-    pub const fn new(tools: ToolStorage) -> Self {
-        Self { tools }
+    /// Create a new registrar
+    pub const fn new(_tools: ToolStorage) -> Self {
+        Self
     }
 
     /// Register builtin tools

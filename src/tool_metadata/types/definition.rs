@@ -21,6 +21,7 @@ use serde_json::Value;
 /// - UI to display tool information
 /// - Registry to route tool calls
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolDefinition {
     /// Unique tool name used in function calls (e.g., "search")
     pub name: String,
@@ -146,6 +147,7 @@ impl ToolDefinition {
 /// Provides precise enumeration of what a tool can do, helping LLM
 /// make accurate tool selection decisions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Capability {
     /// Action verb (e.g., "search", "read", "write")
     pub action: String,
@@ -187,6 +189,7 @@ impl Capability {
 /// Helps LLM choose between tools with overlapping functionality
 /// by explicitly stating when to use this tool vs. another.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolDiff {
     /// The other tool being compared
     pub other_tool: String,
@@ -237,6 +240,7 @@ impl ToolDiff {
 /// - Differentiation from similar tools
 /// - Typical use cases (positive examples)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StructuredToolMeta {
     /// Core capabilities (precise enumeration)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

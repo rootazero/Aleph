@@ -18,6 +18,7 @@ use serde_json::Value;
 
 /// How a command is dispatched when invoked by user
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DispatchMode {
     /// Execute directly, bypass Agent Loop (e.g., /help, /status)
     Direct,
@@ -28,6 +29,7 @@ pub enum DispatchMode {
 
 /// Channel types for visibility filtering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ChannelType {
     Panel,
     Telegram,
@@ -41,6 +43,7 @@ pub enum ChannelType {
 /// All tools (Native, MCP, Skills, Custom, Builtin) are normalized to this structure
 /// for consistent handling across routing, UI display, and prompt generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnifiedTool {
     /// Unique identifier
     /// Format: "{`source_type}:{name`}" (e.g., "native:search", "`mcp:github:git_status`")

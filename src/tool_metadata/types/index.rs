@@ -35,6 +35,7 @@ use std::fmt;
 /// // Inject prompt into LLM context
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolIndexEntry {
     /// Tool command name (e.g., "`github:pr_list`")
     pub name: String,
@@ -99,6 +100,7 @@ impl ToolIndexEntry {
 ///
 /// Simplified category for tool index grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum ToolIndexCategory {
     /// Core tools (always available with full schema)
@@ -158,6 +160,7 @@ impl From<&ToolSource> for ToolIndexCategory {
 /// Contains all tool index entries grouped by category.
 /// Used to generate compact tool lists for LLM prompts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolIndex {
     /// Core tools (always available)
     pub core: Vec<ToolIndexEntry>,

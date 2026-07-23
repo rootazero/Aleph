@@ -14,6 +14,7 @@ use std::fmt;
 /// - **Custom**: User-defined custom tools
 /// - **`GeneratedSkill`**: Auto-generated from skill evolution (Skill Compiler)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCategory {
     /// Built-in rig-core tools
