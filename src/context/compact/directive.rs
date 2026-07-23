@@ -85,125 +85,97 @@ pub async fn apply_budget_directive(
     budget_tool_tokens: usize,
 ) -> DirectiveOutcome {
     // 2c. Compact when directive calls for it and a compactor is wired.
-    if matches!(directive, LoopDirective::CompactAndContinue) {
-        if let Some(compactor) = compactor {
-            // `fresh_tail = 0` lets the compactor fall back to its own
-            // config default for how much tail to keep verbatim. The session id enables
-            // the compactor's zero-API-cost reuse of hierarchical session
-            // summaries when a memory backend is wired.
-            let session_key_str = session_id.to_key_string();
-            match compactor
-                .compact(messages, 0, Some(session_key_str.as_str()))
-                .await
-            {
-                Ok(_) => {
-                    // Re-arm the circuit breaker only when this compaction
-                    // actually reduced pressure. An ineffective compaction
-                    // leaves the breaker counting, so a thrashing run still
-                    // escalates to `SplitSession` → `CompactToFit`'s
-                    // deterministic truncation floor (hermes anti-thrash).
-                    if let Some(budget) = budget {
-                        budget.lock().await.note_compaction_effect(
-                            messages,
-                            system_prompt,
-                            budget_tool_tokens,
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        ?session_id,
-                        ?e,
-                        "context compactor failed; continuing with uncompacted messages",
-                    );
-                }
-            }
-        }
-    }
-
-    // 2c-fit. `CompactToFit` directive — critical pressure (or a split cap
-    // reached). Compact aggressively down to the model's window, then FALL
-    // THROUGH to the normal LLM call. A run must never end just because
-    // context filled (never-break guarantee). R10-safe: mechanical dispatch
-    // to the external fit helper; no policy, no completion judgement.
-    if matches!(directive, LoopDirective::CompactToFit) {
-        compact_to_fit_and_note(
-            budget,
-            compactor,
-            session_id,
-            messages,
-            system_prompt,
-            budget_tool_tokens,
-            true,
-        )
-        .await;
-        // no early return — control falls through to the LLM call below.
-    }
-
-    // 2c-split. `SplitSession` directive — attempt compaction-driven session
-    // split. On success, return `TurnState::Continue` with the child session
-    // id so `run()` can rebind `current_session`. On failure or when the
-    // registrar/compactor is not wired, fall back to compact-to-fit and
-    // continue (never-break). R10-safe: mechanical dispatch to
-    // `perform_session_split` (lives outside the harness); no intent
-    // classification, no new heuristic.
-    if matches!(directive, LoopDirective::SplitSession) {
-        let split_child = match (compactor, registrar) {
-            (Some(compactor), Some(registrar)) => {
-                match crate::context::compact::session_split::perform_session_split(
-                    session,
-                    registrar.as_ref(),
-                    compactor,
-                    session_id,
-                    events,
-                    tail_start,
-                )
-                .await
+    match directive {
+        LoopDirective::CompactAndContinue => {
+            if let Some(compactor) = compactor {
+                let session_key_str = session_id.to_key_string();
+                match compactor
+                    .compact(messages, 0, Some(session_key_str.as_str()))
+                    .await
                 {
-                    Ok(outcome) => {
+                    Ok(_) => {
                         if let Some(budget) = budget {
-                            budget.lock().await.record_split();
+                            budget.lock().await.note_compaction_effect(
+                                messages,
+                                system_prompt,
+                                budget_tool_tokens,
+                            );
                         }
-                        tracing::info!(
-                            ?session_id,
-                            child = ?outcome.child_session_id,
-                            "session split: continuing run in child session",
-                        );
-                        Some(outcome.child_session_id)
                     }
                     Err(e) => {
                         tracing::warn!(
                             ?session_id,
-                            %e,
-                            "session split failed; falling back to compact-to-fit",
+                            ?e,
+                            "context compactor failed; continuing with uncompacted messages",
                         );
-                        None
                     }
                 }
             }
-            _ => None, // compactor or registrar not wired — fall back to compact-to-fit
-        };
-
-        if let Some(child) = split_child {
-            // Continue the run in the child; run() rebinds current_session.
-            return DirectiveOutcome::SplitTo(child);
         }
-        // Fail-soft: registrar/compactor unavailable or the split failed.
-        // Rather than hard-stop (the old ContextBudgetExhausted + grace),
-        // compact to fit and FALL THROUGH to the normal LLM call — the
-        // never-break guarantee. R10-safe: same mechanical fit helper as the
-        // `CompactToFit` arm; no policy, no error-recovery strategy choice.
-        compact_to_fit_and_note(
-            budget,
-            compactor,
-            session_id,
-            messages,
-            system_prompt,
-            budget_tool_tokens,
-            true,
-        )
-        .await;
-        // no early return — control falls through to the LLM call below.
+        LoopDirective::CompactToFit => {
+            compact_to_fit_and_note(
+                budget,
+                compactor,
+                session_id,
+                messages,
+                system_prompt,
+                budget_tool_tokens,
+                true,
+            )
+            .await;
+        }
+        LoopDirective::SplitSession => {
+            let split_child = match (compactor, registrar) {
+                (Some(compactor), Some(registrar)) => {
+                    match crate::context::compact::session_split::perform_session_split(
+                        session,
+                        registrar.as_ref(),
+                        compactor,
+                        session_id,
+                        events,
+                        tail_start,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => {
+                            if let Some(budget) = budget {
+                                budget.lock().await.record_split();
+                            }
+                            tracing::info!(
+                                ?session_id,
+                                child = ?outcome.child_session_id,
+                                "session split: continuing run in child session",
+                            );
+                            Some(outcome.child_session_id)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                ?session_id,
+                                %e,
+                                "session split failed; falling back to compact-to-fit",
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(child) = split_child {
+                return DirectiveOutcome::SplitTo(child);
+            }
+            compact_to_fit_and_note(
+                budget,
+                compactor,
+                session_id,
+                messages,
+                system_prompt,
+                budget_tool_tokens,
+                true,
+            )
+            .await;
+        }
+        LoopDirective::Continue => {}
     }
 
     DirectiveOutcome::FellThrough

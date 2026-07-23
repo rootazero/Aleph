@@ -47,8 +47,11 @@ fn escape_prompt_boundaries(s: &str) -> String {
     ];
     let mut out = String::with_capacity(s.len() + 16);
     let mut rest = s;
-    while let Some(pos) = rest.find(MARKERS.iter().map(|m| (m, rest.find(m))).min_by_key(|(_, p)| p.unwrap_or(usize::MAX)).unwrap().0) {
-        let (marker, _) = MARKERS.iter().map(|m| (m, rest.find(m))).min_by_key(|(_, p)| p.unwrap_or(usize::MAX)).unwrap();
+    while let Some((pos, marker)) = MARKERS
+        .iter()
+        .filter_map(|&m| rest.find(m).map(|p| (p, m)))
+        .min_by_key(|(p, _)| *p)
+    {
         out.push_str(&rest[..pos]);
         out.push('[');
         out.push_str(marker);

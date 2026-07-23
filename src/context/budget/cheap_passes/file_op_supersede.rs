@@ -379,15 +379,25 @@ impl PreflightStage for FileOpSupersedeStage {
 /// image-only result therefore never clears the no-win guard and is left
 /// intact for `HistoricalImageStrippingStage` to police.
 fn joined_text(blocks: &[ContentBlock]) -> String {
-    blocks
-        .iter()
-        .map(|b| match b {
-            ContentBlock::Text { text, .. } => text.clone(),
-            ContentBlock::Json { value } => value.to_string(),
-            _ => String::new(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut result = String::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Text { text, .. } => {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(text);
+            }
+            ContentBlock::Json { value } => {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(&value.to_string());
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 /// Extract the canonical file path from a `ToolCall.arguments` value.

@@ -74,26 +74,27 @@ fn looks_like_code(text: &str) -> bool {
         ">=", // Operators
     ];
 
-    let lines: Vec<&str> = text.lines().take(20).collect();
-    if lines.is_empty() {
+    let mut line_count = 0usize;
+    let mut indicator_count = 0usize;
+    for line in text.lines().take(20) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        line_count += 1;
+        if code_indicators
+            .iter()
+            .any(|indicator| trimmed.contains(indicator))
+        {
+            indicator_count += 1;
+        }
+    }
+
+    if line_count == 0 {
         return false;
     }
 
-    let indicator_count = lines
-        .iter()
-        .filter(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return false;
-            }
-            code_indicators
-                .iter()
-                .any(|indicator| trimmed.contains(indicator))
-        })
-        .count();
-
-    let ratio = indicator_count as f64 / lines.len() as f64;
-    ratio > 0.40
+    (indicator_count as f64 / line_count as f64) > 0.40
 }
 
 /// Default chars-per-token ratio for English prose. Used as the prose anchor by

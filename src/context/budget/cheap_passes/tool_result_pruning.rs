@@ -105,22 +105,16 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             if original_tokens < self.min_tokens_to_prune {
                 continue;
             }
-            let tool_name_owned = tool_name.to_string();
-            // Content-type-aware structured reduction (headroom's routing
-            // insight): a stale log / search result / diff keeps its *signal*
-            // (errors, matched lines, +/- changes) instead of collapsing to a
-            // bare first line. Prose and unrecognized content fall through to
-            // the first-line placeholder, preserving the old behaviour.
             let replacement = match structured::reduce(&original_text) {
                 Some(reduction) => {
                     let rendered = reduction.render();
                     if estimate_tokens_smart(&rendered) < original_tokens {
                         rendered
                     } else {
-                        first_line_placeholder(&tool_name_owned, original_tokens, &original_text)
+                        first_line_placeholder(tool_name, original_tokens, &original_text)
                     }
                 }
-                None => first_line_placeholder(&tool_name_owned, original_tokens, &original_text),
+                None => first_line_placeholder(tool_name, original_tokens, &original_text),
             };
             let new_tokens = estimate_tokens_smart(&replacement);
             if new_tokens >= original_tokens {

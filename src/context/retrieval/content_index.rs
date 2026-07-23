@@ -578,11 +578,13 @@ fn rrf_fuse(porter: Vec<RankedRow>, trigram: Vec<RankedRow>) -> Vec<FusedHit> {
         for (rank, row) in list.into_iter().enumerate() {
             let key = (row.source.clone(), row.chunk_no);
             let contrib = 1.0 / (RRF_K + (rank as f64 + 1.0));
-            match acc.get_mut(&key) {
-                Some(entry) => entry.0 += contrib,
-                None => {
-                    order.push(key.clone());
-                    acc.insert(key, (contrib, row));
+            match acc.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().0 += contrib;
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    order.push(entry.key().clone());
+                    entry.insert((contrib, row));
                 }
             }
         }
