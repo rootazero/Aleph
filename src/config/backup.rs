@@ -232,7 +232,7 @@ impl ConfigBackup {
         }
 
         // Sort by timestamp ascending (oldest first)
-        entries.sort_by_key(|e| e.timestamp.clone());
+        entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
         debug!(count = entries.len(), "Listed backup entries");
         Ok(entries)

@@ -700,10 +700,13 @@ pub(crate) fn deep_merge(target: &mut serde_json::Value, source: &serde_json::Va
                     target_obj.remove(key);
                     continue;
                 }
-                let target_val = target_obj
-                    .entry(key.clone())
-                    .or_insert(serde_json::Value::Null);
-                deep_merge(target_val, source_val);
+                if let Some(target_val) = target_obj.get_mut(key) {
+                    deep_merge(target_val, source_val);
+                } else {
+                    let mut new_val = serde_json::Value::Null;
+                    deep_merge(&mut new_val, source_val);
+                    target_obj.insert(key.clone(), new_val);
+                }
             }
         }
         _ => {

@@ -50,15 +50,9 @@ impl Config {
     /// * `None` - No valid default provider
     #[must_use]
     pub fn get_default_provider(&self) -> Option<String> {
-        self.general.default_provider.as_ref().and_then(|name| {
-            self.providers.get(name).and_then(|config| {
-                if config.enabled {
-                    Some(name.clone())
-                } else {
-                    None
-                }
-            })
-        })
+        let name = self.general.default_provider.as_deref()?;
+        let config = self.providers.get(name)?;
+        config.enabled.then(|| name.to_string())
     }
 
     /// Set the default provider with validation

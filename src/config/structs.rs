@@ -375,11 +375,13 @@ impl Config {
                 continue;
             };
 
-            let config = if let serde_json::Value::Object(mut map) = value.clone() {
-                map.remove("type");
-                serde_json::Value::Object(map)
-            } else {
-                value.clone()
+            let config = match value {
+                serde_json::Value::Object(map) => {
+                    let mut map = map.clone();
+                    map.remove("type");
+                    serde_json::Value::Object(map)
+                }
+                other => other.clone(),
             };
 
             instances.push(ChannelInstanceConfig {

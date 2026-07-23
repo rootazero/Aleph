@@ -64,11 +64,13 @@ impl Config {
             "Config file read successfully, parsing TOML"
         );
 
+        let config_dir = crate::utils::paths::get_config_dir().ok();
+
         // Load defaults override BEFORE parsing config.toml
         // because serde calls fn default_*() during deserialization,
         // and those functions need to read from the OnceLock.
-        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
-            let defaults_path = config_dir.join("defaults.toml");
+        if let Some(ref dir) = config_dir {
+            let defaults_path = dir.join("defaults.toml");
             let defaults = crate::config::defaults_override::load_defaults_override(&defaults_path);
             crate::config::defaults_override::init_defaults_override(defaults);
         }
@@ -117,15 +119,11 @@ impl Config {
         config.merge_builtin_rules();
 
         // Load presets override from ~/.aleph/presets.toml
-        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
-            let presets_path = config_dir.join("presets.toml");
+        if let Some(ref dir) = config_dir {
+            let presets_path = dir.join("presets.toml");
             config.presets_override =
                 crate::config::presets_override::load_presets_override(&presets_path);
-        }
-
-        // Load prompts override from ~/.aleph/prompts.toml
-        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
-            let prompts_path = config_dir.join("prompts.toml");
+            let prompts_path = dir.join("prompts.toml");
             config.prompts_override =
                 crate::config::prompts_override::load_prompts_override(&prompts_path);
         }

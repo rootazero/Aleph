@@ -400,7 +400,7 @@ impl Config {
         // Validate language preference
         if let Some(ref language) = self.general.language {
             // List of supported language codes (must match .lproj directory names)
-            let supported_languages = vec!["en", "zh-Hans"];
+            let supported_languages = ["en", "zh-Hans"];
 
             if !supported_languages.contains(&language.as_str()) {
                 tracing::warn!(

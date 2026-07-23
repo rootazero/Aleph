@@ -335,26 +335,8 @@ impl Config {
                     continue;
                 }
 
-                // Navigate to the value in current config
-                let mut node: &toml::Value = &current;
-                let mut found = true;
-                for part in &parts {
-                    match node {
-                        toml::Value::Table(t) => match t.get(*part) {
-                            Some(v) => node = v,
-                            None => {
-                                found = false;
-                                break;
-                            }
-                        },
-                        _ => {
-                            found = false;
-                            break;
-                        }
-                    }
-                }
-                if found {
-                    section_values.push((section, parts, node.clone()));
+                if let Some(val) = parts.iter().try_fold(&current, |n, p| n.get(p)) {
+                    section_values.push((section, parts, val.clone()));
                 } else {
                     warn!(
                         section = %section,
