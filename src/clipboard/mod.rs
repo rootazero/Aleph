@@ -108,16 +108,19 @@ impl ImageData {
             ))
         })?;
 
-        let format = match mime_type.trim().to_ascii_lowercase().as_str() {
-            "image/png" => ImageFormat::Png,
-            "image/jpeg" => ImageFormat::Jpeg,
-            "image/gif" => ImageFormat::Gif,
-            "image/webp" => ImageFormat::WebP,
-            _ => {
-                return Err(AlephError::other(format!(
-                    "Unsupported image MIME type: {mime_type}"
-                )));
-            }
+        let trimmed_mime = mime_type.trim();
+        let format = if trimmed_mime.eq_ignore_ascii_case("image/png") {
+            ImageFormat::Png
+        } else if trimmed_mime.eq_ignore_ascii_case("image/jpeg") {
+            ImageFormat::Jpeg
+        } else if trimmed_mime.eq_ignore_ascii_case("image/gif") {
+            ImageFormat::Gif
+        } else if trimmed_mime.eq_ignore_ascii_case("image/webp") {
+            ImageFormat::WebP
+        } else {
+            return Err(AlephError::other(format!(
+                "Unsupported image MIME type: {mime_type}"
+            )));
         };
 
         // Tolerate ASCII whitespace in the payload: data URIs are frequently
