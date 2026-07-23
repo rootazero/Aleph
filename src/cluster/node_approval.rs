@@ -72,17 +72,14 @@ impl ApprovalRequester for CenterApprovalRequester {
             .await
         {
             Ok(resp) if resp.is_success() => {
-                let outcome = resp
-                    .result
-                    .as_ref()
+                let result = resp.result.as_ref();
+                let outcome = result
                     .and_then(|r| r.get("outcome"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("denied");
                 // The operator's own words, when the center attached them to a
                 // denial — optional field, absent from older centers.
-                let deny_reason = resp
-                    .result
-                    .as_ref()
+                let deny_reason = result
                     .and_then(|r| r.get("deny_reason"))
                     .and_then(|v| v.as_str())
                     .map(String::from);

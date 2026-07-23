@@ -22,9 +22,7 @@ const B64: base64::engine::general_purpose::GeneralPurpose =
 
 /// 十六进制 sha256。两端用同一算法做完整性校验。
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// 把请求里的 `path` 解析进节点 workspace jail。相对路径 join workspace；
@@ -161,19 +159,14 @@ impl NodeCommand for FileReadCommand {
             .and_then(|v| v.as_str())
             .ok_or("file.read: missing string field `path`")?;
         let src = resolve_in_jail(path, &self.workspace_dir).await?;
-        if !tokio::fs::try_exists(&src)
-            .await
-            .map_err(|e| format!("file.read: {e}"))?
-        {
-            return Err("file.read: not found".to_string());
-        }
-        // Compare the raw u64 before any cast: `len() as usize` truncates on a
-        // 32-bit node, letting a huge file whose size mod 2^32 is under the cap
-        // pass the check and then OOM in tokio::fs::read below.
-        let size = tokio::fs::metadata(&src)
-            .await
-            .map_err(|e| format!("file.read: {e}"))?
-            .len();
+        let metadata = match tokio::fs::metadata(&src).await {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err("file.read: not found".to_string());
+            }
+            Err(e) => return Err(format!("file.read: {e}")),
+        };
+        let size = metadata.len();
         if size > MAX_FILE_BYTES as u64 {
             return Err(format!(
                 "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"

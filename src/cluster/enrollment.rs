@@ -35,14 +35,13 @@ pub enum NodeAdmission {
 /// 取 UUID 前 16 位以满足表上的 UNIQUE 约束。
 pub fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String, String> {
     let device_id = uuid::Uuid::new_v4().to_string();
-    let fingerprint: String = device_id.chars().take(16).collect();
     store
         .upsert_device(&DeviceUpsertData {
             device_id: &device_id,
             device_name: node_name,
             device_type: None,
             public_key: &[0u8; 32],
-            fingerprint: &fingerprint,
+            fingerprint: &device_id[..16],
             role: "node",
             scopes: &["node".to_string()],
         })
@@ -112,13 +111,13 @@ pub fn admit_node(
                 // Unknown id: the node holds a persisted identity this center has
                 // no record of (fresh DB, restored backup). Adopt it and backfill
                 // the row so the offline fleet view stays honest.
-                let fingerprint: String = id.chars().take(16).collect();
+                let fingerprint = &id[..id.len().min(16)];
                 if let Err(e) = store.upsert_device(&DeviceUpsertData {
                     device_id: id,
                     device_name: node_name,
                     device_type: None,
                     public_key: &[0u8; 32],
-                    fingerprint: &fingerprint,
+                    fingerprint,
                     role: "node",
                     scopes: &["node".to_string()],
                 }) {

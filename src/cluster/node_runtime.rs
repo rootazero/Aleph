@@ -48,7 +48,7 @@ impl CommandTable {
     pub fn descriptors(&self) -> Vec<CommandDescriptor> {
         let mut out: Vec<CommandDescriptor> =
             self.commands.values().map(|c| c.descriptor()).collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         out
     }
 

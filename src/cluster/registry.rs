@@ -137,13 +137,13 @@ impl NodeRegistry {
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
             return false;
         };
-        match inner.nodes_by_id.get(&node_id) {
-            Some(s) if s.conn_id == conn_id => {
-                inner.nodes_by_id.remove(&node_id);
-                true
+        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id) {
+            if entry.get().conn_id == conn_id {
+                entry.remove();
+                return true;
             }
-            _ => false,
         }
+        false
     }
 
     /// 在线节点的只读投影快照。结果按 `(name, id)` 稳定排序——`nodes_by_id` 是
@@ -272,12 +272,11 @@ impl NodeRegistry {
     /// 与 [`deregister`](Self::deregister)（按 `conn_id` 的断线对账）正交。
     pub fn forget(&self, node_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        match inner.nodes_by_id.remove(node_id) {
-            Some(s) => {
-                inner.nodes_by_conn.remove(&s.conn_id);
-                true
-            }
-            None => false,
+        if let Some(s) = inner.nodes_by_id.remove(node_id) {
+            inner.nodes_by_conn.remove(&s.conn_id);
+            true
+        } else {
+            false
         }
     }
 }
@@ -288,7 +287,7 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
     let mut labels: Vec<String> = sessions
         .iter()
         .map(|s| {
-            let short: String = s.node_id.chars().take(8).collect();
+            let short = &s.node_id[..s.node_id.len().min(8)];
             format!("{} ({})", s.device_name, short)
         })
         .collect();
