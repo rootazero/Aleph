@@ -124,21 +124,16 @@ impl MergedMessage {
         }
     }
 
-    /// Merge a batch of inbound contexts (must be non-empty).
+    /// Merge a batch of inbound contexts.
     ///
     /// Text is joined by newlines; attachments are aggregated in order.
     /// The first context becomes the primary (used for routing).
+    ///
+    /// Returns `None` when `contexts` is empty.
     #[must_use]
-    pub fn from_batch(contexts: Vec<InboundContext>) -> Self {
-        assert!(
-            !contexts.is_empty(),
-            "from_batch requires at least one context"
-        );
-
+    pub fn from_batch(contexts: Vec<InboundContext>) -> Option<Self> {
         let mut iter = contexts.into_iter();
-        let first = iter
-            .next()
-            .expect("from_batch requires at least one context");
+        let first = iter.next()?;
 
         let mut texts = vec![first.message.text.clone()];
         let mut attachments = first.message.attachments.clone();
@@ -151,13 +146,13 @@ impl MergedMessage {
         }
 
         let merge_count = ids.len();
-        Self {
+        Some(Self {
             text: texts.join("\n"),
             attachments,
             primary_context: first,
             merged_message_ids: ids,
             merge_count,
-        }
+        })
     }
 }
 
@@ -393,7 +388,7 @@ mod tests {
             vec![make_attachment("a2", "application/pdf")],
         );
 
-        let merged = MergedMessage::from_batch(vec![c1, c2, c3]);
+        let merged = MergedMessage::from_batch(vec![c1, c2, c3]).expect("non-empty batch");
 
         assert_eq!(merged.text, "First\nSecond\nThird");
         assert_eq!(merged.merge_count, 3);

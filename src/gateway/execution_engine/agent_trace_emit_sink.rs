@@ -65,7 +65,7 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
 /// event to the inner sink.
 pub struct AgentTraceEmitSink {
     inner: Arc<dyn TraceSink>,
-    tx: mpsc::UnboundedSender<LoopTraceEvent>,
+    tx: mpsc::Sender<LoopTraceEvent>,
 }
 
 impl AgentTraceEmitSink {
@@ -73,7 +73,10 @@ impl AgentTraceEmitSink {
     /// step-relevant event as `StreamEvent::AgentTrace` for `run_id` via
     /// `emitter`. The task ends when this sink (and its sender) drops.
     pub fn new(inner: Arc<dyn TraceSink>, emitter: Arc<dyn EventEmitter>, run_id: String) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<LoopTraceEvent>();
+        // Bounded queue: trace events fire per agent-loop step, faster than
+        // the WebSocket consumer may drain. Overflow drops the event
+        // (best-effort mirror), same as a closed receiver.
+        let (tx, mut rx) = mpsc::channel::<LoopTraceEvent>(256);
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
                 // `emit_agent_trace` assigns the next seq and pushes
@@ -88,8 +91,9 @@ impl AgentTraceEmitSink {
 impl TraceSink for AgentTraceEmitSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
         if is_step_event(event) {
-            // Non-blocking; drop on closed receiver (drain task gone).
-            let _ = self.tx.send(event.clone());
+            // Non-blocking; drop when the queue is full (slow consumer) or the
+            // receiver is closed (drain task gone) — the mirror is best-effort.
+            let _ = self.tx.try_send(event.clone());
         }
         self.inner.on_trace(event);
     }

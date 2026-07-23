@@ -62,12 +62,16 @@ pub async fn handle_voices(
         };
 
         if !voices_url.is_empty() {
-            if let Ok(voices) = fetch_voices_from_api(&voices_url, key).await {
-                if !voices.is_empty() {
+            match fetch_voices_from_api(&voices_url, key).await {
+                Ok(voices) if !voices.is_empty() => {
                     return JsonRpcResponse::success(
                         request.id,
                         serde_json::to_value(voices).unwrap_or_default(),
                     );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(error = %e, "dynamic voice fetch failed; using static list");
                 }
             }
         }
@@ -83,7 +87,7 @@ pub async fn handle_voices(
 async fn fetch_voices_from_api(
     url: &str,
     api_key: &str,
-) -> Result<Vec<crate::generation::VoiceInfo>, ()> {
+) -> Result<Vec<crate::generation::VoiceInfo>, String> {
     let client = reqwest::Client::new();
     let resp = client
         .get(url)
@@ -91,14 +95,18 @@ async fn fetch_voices_from_api(
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
-        .map_err(|_| ())?;
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        return Err(());
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("GET {url} returned HTTP {status}"));
     }
 
     // Try OpenAI-style response: { "voices": [...] } or direct array
-    let body: serde_json::Value = resp.json().await.map_err(|_| ())?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("GET {url}: failed to parse JSON body: {e}"))?;
 
     // Format: { "voices": [{ "voice_id": "...", "name": "..." }] }
     if let Some(arr) = body.get("voices").and_then(|v| v.as_array()) {
@@ -134,7 +142,7 @@ async fn fetch_voices_from_api(
         }
     }
 
-    Err(())
+    Err(format!("GET {url}: response contains no voices array"))
 }
 
 /// Detect appropriate voice list based on model names and provider type.

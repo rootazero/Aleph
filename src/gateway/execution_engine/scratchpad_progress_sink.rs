@@ -114,7 +114,7 @@ pub(crate) fn scratchpad_progress_line(event: &LoopTraceEvent) -> Option<String>
 /// event to the inner sink.
 pub struct ScratchpadProgressSink {
     inner: Arc<dyn TraceSink>,
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
 }
 
 impl ScratchpadProgressSink {
@@ -127,7 +127,10 @@ impl ScratchpadProgressSink {
         channel_id: String,
         chat_id: String,
     ) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        // Bounded queue: a chatty agent loop must not grow memory without
+        // bound behind a network-bound consumer. Overflow drops the progress
+        // line (best-effort mirror), same as a closed receiver.
+        let (tx, mut rx) = mpsc::channel::<String>(256);
         tokio::spawn(async move {
             let channel = ChannelId::new(channel_id);
             while let Some(line) = rx.recv().await {
@@ -144,8 +147,9 @@ impl ScratchpadProgressSink {
 impl TraceSink for ScratchpadProgressSink {
     fn on_trace(&self, event: &LoopTraceEvent) {
         if let Some(line) = scratchpad_progress_line(event) {
-            // Non-blocking; drop on closed receiver (drain task gone).
-            let _ = self.tx.send(line);
+            // Non-blocking; drop when the queue is full (slow consumer) or the
+            // receiver is closed (drain task gone) — progress is best-effort.
+            let _ = self.tx.try_send(line);
         }
         self.inner.on_trace(event);
     }

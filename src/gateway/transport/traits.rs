@@ -21,6 +21,7 @@ use std::fmt;
 /// peeking into variant-specific fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum BridgeEvent {
     /// Bridge has finished initialization and is ready to accept commands.
     Ready,
