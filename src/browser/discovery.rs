@@ -64,7 +64,7 @@ pub fn find_chromium() -> Result<PathBuf, BrowserError> {
 /// Return platform-specific default Chromium installation paths.
 ///
 /// Uses conditional compilation to provide the correct paths for each OS.
-pub fn platform_paths() -> Vec<PathBuf> {
+pub(crate) fn platform_paths() -> Vec<PathBuf> {
     platform_paths_impl()
 }
 
