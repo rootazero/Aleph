@@ -30,3 +30,6 @@ pub struct ExecApprovalRequest {
     /// member's action. See `ManagerCallbackSink::handle_callback`.
     pub originator_user_id: Option<String>,
 }
+
+/// Backward compatibility type alias
+pub type ApprovalRequest = ExecApprovalRequest;

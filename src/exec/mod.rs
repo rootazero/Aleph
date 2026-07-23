@@ -24,7 +24,7 @@ pub mod socket;
 
 pub use analysis::CommandAnalysis;
 pub use bridge::ApprovalBridge;
-pub use decision::ExecApprovalRequest;
+pub use decision::{ApprovalRequest, ExecApprovalRequest};
 pub use kernel::SecurityKernel;
 pub use leak_detector::{LeakAction, LeakDetector, ScanResult};
 pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};

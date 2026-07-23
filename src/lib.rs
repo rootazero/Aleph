@@ -268,7 +268,7 @@ pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};
 
 // Core types (for backward compatibility)
-pub use crate::core::types::MediaType as AttachmentMediaType;
+pub use crate::core::MediaType as AttachmentMediaType;
 pub use crate::core::{
     CapturedContext, CompressionStats, ContentEncoding, MediaAttachment, MemoryEntry,
 };
