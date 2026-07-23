@@ -22,6 +22,9 @@ pub struct HostState {
     pub workspace_root: std::path::PathBuf,
 }
 
+/// Maximum bytes `workspace_read` will load from a single file.
+const MAX_WORKSPACE_READ_BYTES: u64 = 1024 * 1024;
+
 host_fn!(pub host_log(state: HostState; level: String, message: String) {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -59,6 +62,18 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     };
     if !canonical.starts_with(&root) {
         return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string());
+    }
+    // Cap the read: a plugin with the workspace capability must not pull
+    // arbitrarily large files into guest memory.
+    let file_len = match std::fs::metadata(&canonical) {
+        Ok(m) => m.len(),
+        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+    };
+    if file_len > MAX_WORKSPACE_READ_BYTES {
+        return Ok(serde_json::json!({
+            "error": format!("file {file_len} bytes exceeds cap {MAX_WORKSPACE_READ_BYTES}")
+        })
+        .to_string());
     }
     match std::fs::read_to_string(&canonical) {
         Ok(content) => Ok(serde_json::json!({"content": content}).to_string()),
@@ -145,6 +160,11 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
 
                         let client = reqwest::blocking::Client::builder()
                             .timeout(timeout)
+                            // Do not follow redirects: the allowlist was
+                            // validated against the request URL only, and a
+                            // 30x from an allowlisted host would otherwise
+                            // silently egress to an arbitrary target.
+                            .redirect(reqwest::redirect::Policy::none())
                             .build()
                             .map_err(|e| format!("client build failed: {e}"))?;
                         let parsed_method = reqwest::Method::from_bytes(method.as_bytes())

@@ -924,8 +924,21 @@ impl ExtensionManager {
 
         let mut executor = self.hook_executor.write().await;
         // HookExecutor was already reset (via load_all's clear path or reload).
-        // Convert HookRegistration → HookConfig for the executor.
+        // Convert HookRegistration → HookConfig for the executor, consuming
+        // each registration by value so its fields move into the config.
         for hr in hook_regs {
+            let HookRegistration {
+                event,
+                priority,
+                handler,
+                plugin_id,
+                kind,
+                matcher,
+                actions,
+                plugin_root,
+                timeout_secs,
+                ..
+            } = hr;
             // Registrations carrying concrete actions (plugin-shipped
             // hooks.json shell hooks) dispatch those directly — through the
             // consent gate for command/http. Registrations without actions
@@ -933,13 +946,14 @@ impl ExtensionManager {
             // the executor invokes the plugin's exported `handler` via the
             // process-global ExtensionManager when the event fires. The
             // `handler` field is kept for diagnostics display either way.
-            let actions = if hr.actions.is_empty() {
+            let runtime_hook = actions.is_empty();
+            let actions = if runtime_hook {
                 vec![HookAction::Plugin {
-                    plugin_id: hr.plugin_id.clone(),
-                    handler: hr.handler.clone(),
+                    plugin_id: plugin_id.clone(),
+                    handler: handler.clone(),
                 }]
             } else {
-                hr.actions.clone()
+                actions
             };
             // Kind: explicit registration wins. Otherwise file-based action
             // hooks get the same per-event default the user-hooks loader
@@ -948,28 +962,28 @@ impl ExtensionManager {
             // (WASM) handler hooks keep their historical Observer default —
             // flipping them implicitly would turn a handler error into a
             // fail-closed tool block existing plugins never signed up for.
-            let kind = hr.kind.unwrap_or_else(|| {
-                if hr.actions.is_empty() {
+            let kind = kind.unwrap_or_else(|| {
+                if runtime_hook {
                     HookKind::default()
                 } else {
-                    hooks::default_kind_for_event(hr.event)
+                    hooks::default_kind_for_event(event)
                 }
             });
             let hook_config = HookConfig {
-                event: hr.event,
+                event,
                 kind,
-                priority: match hr.priority {
+                priority: match priority {
                     i if i <= HookPriority::System.as_i32() => HookPriority::System,
                     i if i <= HookPriority::High.as_i32() => HookPriority::High,
                     i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
                     _ => HookPriority::Normal,
                 },
-                matcher: hr.matcher.clone(),
+                matcher,
                 actions,
-                plugin_name: hr.plugin_id.clone(),
-                plugin_root: hr.plugin_root.clone().unwrap_or_default(),
-                handler: Some(hr.handler.clone()),
-                timeout_secs: hr.timeout_secs,
+                plugin_name: plugin_id,
+                plugin_root: plugin_root.unwrap_or_default(),
+                handler: Some(handler),
+                timeout_secs,
             };
             executor.add_hook(hook_config);
         }

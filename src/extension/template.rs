@@ -14,6 +14,14 @@ use std::path::{Path, PathBuf};
 /// Matches @./relative/path or @/absolute/path, stopping at whitespace or common delimiters
 static FILE_REF_REGEX: OnceCell<Regex> = OnceCell::new();
 
+/// Maximum bytes a single `@./file` reference expands to. Keeps a skill that
+/// references a large file from inflating memory and the model context
+/// window (mirrors the hook executor's `MAX_HOOK_OUTPUT_BYTES` cap).
+const MAX_FILE_REF_BYTES: usize = 64 * 1024;
+
+/// Maximum number of `@./file` references expanded per render.
+const MAX_FILE_REFS: usize = 32;
+
 /// Returns the compiled file-reference regex, initializing it on first use.
 fn file_ref_regex() -> ExtensionResult<&'static Regex> {
     FILE_REF_REGEX.get_or_try_init(|| {
@@ -88,6 +96,11 @@ impl SkillTemplate {
 
         // Find all file references
         for cap in file_ref_regex()?.captures_iter(content) {
+            if replacements.len() >= MAX_FILE_REFS {
+                return Err(ExtensionError::template_error(format!(
+                    "too many file references (cap {MAX_FILE_REFS})"
+                )));
+            }
             let full_match = cap
                 .get(0)
                 .ok_or_else(|| ExtensionError::template_error("regex capture group 0 missing"))?;
@@ -176,11 +189,32 @@ impl SkillTemplate {
         Ok(())
     }
 
-    /// Read a file's content
+    /// Read a file's content, capped at [`MAX_FILE_REF_BYTES`] with a
+    /// truncation marker appended when the file exceeds the cap.
     async fn read_file(&self, path: &Path) -> ExtensionResult<String> {
-        tokio::fs::read_to_string(path)
+        use tokio::io::AsyncReadExt;
+
+        // Read at most cap+1 bytes so an oversized file is detected without
+        // being loaded whole into memory.
+        let file = tokio::fs::File::open(path).await.map_err(|e| {
+            ExtensionError::file_reference(path, format!("Failed to open file: {e}"))
+        })?;
+        let mut buf = Vec::new();
+        file.take(MAX_FILE_REF_BYTES as u64 + 1)
+            .read_to_end(&mut buf)
             .await
-            .map_err(|e| ExtensionError::file_reference(path, format!("Failed to read file: {e}")))
+            .map_err(|e| {
+                ExtensionError::file_reference(path, format!("Failed to read file: {e}"))
+            })?;
+        let truncated = buf.len() > MAX_FILE_REF_BYTES;
+        if truncated {
+            buf.truncate(MAX_FILE_REF_BYTES);
+        }
+        let mut content = String::from_utf8_lossy(&buf).into_owned();
+        if truncated {
+            content.push_str("\n...[truncated: file exceeds 64 KiB cap]");
+        }
+        Ok(content)
     }
 }
 

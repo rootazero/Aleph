@@ -12,7 +12,9 @@ impl ExtensionManager {
     /// Call a tool on a runtime plugin (Node.js or WASM).
     ///
     /// Auto-loads the plugin if not already loaded (lazy initialization).
-    /// Acquires a write lock on the plugin loader for IPC.
+    /// Acquires a write lock on the plugin loader for IPC. The guest call is
+    /// CPU-bound untrusted code, so it runs on the blocking pool (bounded by
+    /// the Extism manifest timeout) rather than on an async worker thread.
     pub async fn call_plugin_tool(
         &self,
         plugin_id: &str,
@@ -29,10 +31,12 @@ impl ExtensionManager {
             }
         }
 
-        self.plugin_loader
-            .write()
+        let loader = self.plugin_loader.clone().write_owned().await;
+        let plugin_id = plugin_id.to_string();
+        let handler = handler.to_string();
+        tokio::task::spawn_blocking(move || loader.call_tool(&plugin_id, &handler, args))
             .await
-            .call_tool(plugin_id, handler, args)
+            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     async fn ensure_plugin_active(&self, plugin_id: &str) -> ExtensionResult<()> {
@@ -106,10 +110,14 @@ impl ExtensionManager {
             }
         }
 
-        self.plugin_loader
-            .read()
-            .await
-            .execute_hook(plugin_id, handler, event_data)
+        let loader = self.plugin_loader.clone().read_owned().await;
+        let plugin_id = plugin_id.to_string();
+        let handler = handler.to_string();
+        tokio::task::spawn_blocking(move || {
+            loader.execute_hook(&plugin_id, &handler, event_data)
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Execute a direct command on a runtime plugin.
@@ -128,10 +136,14 @@ impl ExtensionManager {
             }
         }
 
-        self.plugin_loader
-            .read()
-            .await
-            .execute_command(plugin_id, handler, args)
+        let loader = self.plugin_loader.clone().read_owned().await;
+        let plugin_id = plugin_id.to_string();
+        let handler = handler.to_string();
+        tokio::task::spawn_blocking(move || {
+            loader.execute_command(&plugin_id, &handler, args)
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Get the plugin registry (read access).
@@ -224,9 +236,21 @@ impl ExtensionManager {
                 .collect()
         };
         if !service_registrations.is_empty() {
-            let mut service_manager = self.service_manager.write().await;
-            let loader = self.plugin_loader.read().await;
-            service_manager.stop_plugin_services(plugin_id, &service_registrations, &loader);
+            let service_manager = self.service_manager.clone().write_owned().await;
+            let loader = self.plugin_loader.clone().read_owned().await;
+            let plugin_id_owned = plugin_id.to_string();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                let mut service_manager = service_manager;
+                service_manager.stop_plugin_services(
+                    &plugin_id_owned,
+                    &service_registrations,
+                    &loader,
+                );
+            })
+            .await
+            {
+                tracing::warn!(error = %e, "stop_plugin_services task join failed");
+            }
         }
 
         let result = self.plugin_loader.write().await.unload_plugin(plugin_id);

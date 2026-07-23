@@ -77,6 +77,7 @@ impl WasmRuntime {
         // Parse capabilities from manifest (default = zero permissions)
         let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
         let limits = manifest.wasm_resource_limits.clone().unwrap_or_default();
+        let call_timeout = std::time::Duration::from_secs(limits.timeout_secs);
 
         // Create per-plugin capability kernel
         let kernel = Arc::new(WasmCapabilityKernel::new(
@@ -91,7 +92,13 @@ impl WasmRuntime {
             workspace_root: manifest.root_dir.clone(),
         });
 
-        let extism_manifest = ExtismManifest::new([Wasm::file(&wasm_path)]);
+        // Enforce a wall-clock deadline on guest execution: this is
+        // marketplace-supplied untrusted code, so an infinite loop must not
+        // run forever. Extism interrupts the call once the deadline is hit
+        // (the plugin instance cannot continue afterwards and must be
+        // reloaded).
+        let extism_manifest =
+            ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
 
         let plugin = PluginBuilder::new(extism_manifest)
             .with_wasi(true)

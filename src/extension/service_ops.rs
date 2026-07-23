@@ -25,9 +25,16 @@ impl ExtensionManager {
                 "start_service: failed to load plugin runtime"
             );
         }
-        let mut service_manager = self.service_manager.write().await;
-        let loader = self.plugin_loader.read().await;
-        service_manager.start_service(&registration, &loader)
+        let service_manager = self.service_manager.clone().write_owned().await;
+        let loader = self.plugin_loader.clone().read_owned().await;
+        // The start handler is untrusted guest code — run it off the async
+        // worker pool (bounded by the Extism manifest timeout).
+        tokio::task::spawn_blocking(move || {
+            let mut service_manager = service_manager;
+            service_manager.start_service(&registration, &loader)
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Stop a background service.
@@ -39,9 +46,14 @@ impl ExtensionManager {
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
-        let mut service_manager = self.service_manager.write().await;
-        let loader = self.plugin_loader.read().await;
-        service_manager.stop_service(&registration, &loader)
+        let service_manager = self.service_manager.clone().write_owned().await;
+        let loader = self.plugin_loader.clone().read_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let mut service_manager = service_manager;
+            service_manager.stop_service(&registration, &loader)
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Start the `auto_start` services declared by a single (already-loaded)
@@ -62,34 +74,43 @@ impl ExtensionManager {
             return 0;
         }
 
-        let mut running = 0;
-        let mut service_manager = self.service_manager.write().await;
-        let loader = self.plugin_loader.read().await;
-        for registration in &pending {
-            match service_manager.start_service(registration, &loader) {
-                Ok(info) if info.state == crate::extension::types::ServiceState::Running => {
-                    running += 1;
-                }
-                Ok(info) => {
-                    tracing::warn!(
-                        plugin = %plugin_id,
-                        service = %registration.id,
-                        state = ?info.state,
-                        error = ?info.error,
-                        "autostart service did not reach Running state"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        plugin = %plugin_id,
-                        service = %registration.id,
-                        error = %e,
-                        "failed to autostart service"
-                    );
+        let service_manager = self.service_manager.clone().write_owned().await;
+        let loader = self.plugin_loader.clone().read_owned().await;
+        let plugin_id = plugin_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut service_manager = service_manager;
+            let mut running = 0;
+            for registration in &pending {
+                match service_manager.start_service(registration, &loader) {
+                    Ok(info) if info.state == crate::extension::types::ServiceState::Running => {
+                        running += 1;
+                    }
+                    Ok(info) => {
+                        tracing::warn!(
+                            plugin = %plugin_id,
+                            service = %registration.id,
+                            state = ?info.state,
+                            error = ?info.error,
+                            "autostart service did not reach Running state"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            plugin = %plugin_id,
+                            service = %registration.id,
+                            error = %e,
+                            "failed to autostart service"
+                        );
+                    }
                 }
             }
-        }
-        running
+            running
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "autostart services task join failed");
+            0
+        })
     }
 
     /// Load active plugins that declare `auto_start` services and start those
@@ -138,9 +159,17 @@ impl ExtensionManager {
     /// Stop every running plugin service (best-effort). Called at daemon
     /// shutdown so plugin background work is torn down before process exit.
     pub async fn stop_all_services(&self) -> usize {
-        let mut service_manager = self.service_manager.write().await;
-        let loader = self.plugin_loader.read().await;
-        service_manager.stop_all(&loader).len()
+        let service_manager = self.service_manager.clone().write_owned().await;
+        let loader = self.plugin_loader.clone().read_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let mut service_manager = service_manager;
+            service_manager.stop_all(&loader).len()
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "stop_all_services task join failed");
+            0
+        })
     }
 
     /// Stop running services whose plugin is no longer active (removed or
@@ -155,11 +184,19 @@ impl ExtensionManager {
                 .map(|r| r.id.clone())
                 .collect()
         };
-        let mut service_manager = self.service_manager.write().await;
-        let loader = self.plugin_loader.read().await;
-        service_manager
-            .stop_orphaned(|id| active.contains(id), &loader)
-            .len()
+        let service_manager = self.service_manager.clone().write_owned().await;
+        let loader = self.plugin_loader.clone().read_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let mut service_manager = service_manager;
+            service_manager
+                .stop_orphaned(|id| active.contains(id), &loader)
+                .len()
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "stop_orphaned_services task join failed");
+            0
+        })
     }
 
     /// Get service status.

@@ -38,10 +38,10 @@
 //! use alephcore::extension::{ServiceManager, PluginLoader, ServiceRegistration};
 //!
 //! let mut manager = ServiceManager::new();
-//! let mut loader = PluginLoader::new();
+//! let loader = PluginLoader::new();
 //!
 //! // Start a service
-//! let info = manager.start_service(&registration, &mut loader).await?;
+//! let info = manager.start_service(&registration, &loader)?;
 //!
 //! // Check service status
 //! if let Some(info) = manager.get_service("my-plugin", "worker") {
@@ -49,7 +49,7 @@
 //! }
 //!
 //! // Stop a service
-//! let info = manager.stop_service(&registration, &mut loader).await?;
+//! let info = manager.stop_service(&registration, &loader)?;
 //! ```
 
 use std::collections::HashMap;

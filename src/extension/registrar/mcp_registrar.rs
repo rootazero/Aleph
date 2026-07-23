@@ -14,8 +14,8 @@ use anyhow::Result;
 
 /// Registrar for MCP-based plugins using collect-then-batch pattern.
 pub struct McpRegistrar {
-    pub plugin_id: String,
-    pub permissions: Vec<PluginPermission>,
+    plugin_id: String,
+    permissions: Vec<PluginPermission>,
 }
 
 impl McpRegistrar {

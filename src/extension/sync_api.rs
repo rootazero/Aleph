@@ -56,7 +56,13 @@ impl SyncExtensionManager {
         Ok(Self { inner, runtime })
     }
 
-    /// Create from an existing async manager (for integration with existing async code)
+    /// Create from an existing async manager (for integration with existing async code).
+    ///
+    /// This builds a second, independent tokio runtime and every method
+    /// `block_on`s it. Constraints: never call these methods from within a
+    /// tokio runtime thread (blocking inside a runtime panics), and note the
+    /// manager's internal tasks (timers, spawns) run on *this* runtime, not
+    /// the one the manager was originally created on.
     pub fn from_async(manager: Arc<RwLock<ExtensionManager>>) -> ExtensionResult<Self> {
         let runtime = Runtime::new()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to create tokio runtime: {e}")))?;
@@ -244,19 +250,5 @@ impl SyncExtensionManager {
     pub fn aleph_home(&self) -> ExtensionResult<PathBuf> {
         self.runtime
             .block_on(async { self.inner.read().await.aleph_home() })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sync_manager_creation() {
-        // This test verifies that we can create a sync manager
-        // Note: This may fail in CI without proper directory setup
-        let result = SyncExtensionManager::new();
-        // Just verify it doesn't panic - actual functionality depends on environment
-        assert!(result.is_ok() || result.is_err());
     }
 }

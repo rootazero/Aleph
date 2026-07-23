@@ -10,8 +10,30 @@ use std::process::Command;
 // Clone / Pull
 // =============================================================================
 
+/// Validate an `owner/repo` slug before it is embedded into a GitHub URL:
+/// exactly two non-empty segments of `[A-Za-z0-9_.-]`, and neither may be a
+/// `.`/`..` segment (mirrors the `marketplace_name` validation in
+/// `sync_github_marketplace`).
+fn is_valid_owner_repo(owner_repo: &str) -> bool {
+    let mut parts = owner_repo.split('/');
+    let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let valid_segment = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    valid_segment(owner) && valid_segment(repo)
+}
+
 /// Clone a GitHub repository (`owner/repo`) into `target`.
 pub fn clone_github_repo(owner_repo: &str, target: &Path) -> Result<(), String> {
+    if !is_valid_owner_repo(owner_repo) {
+        return Err(format!("Invalid GitHub repository '{owner_repo}'"));
+    }
     let url = format!("https://github.com/{owner_repo}.git");
 
     let output = Command::new("git")
