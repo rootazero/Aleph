@@ -197,9 +197,13 @@ impl FalProvider {
         }
 
         // Bring through any provider-specific overrides verbatim.
-        for (k, v) in &request.params.extra {
-            input.insert(k.clone(), v.clone());
-        }
+        input.extend(
+            request
+                .params
+                .extra
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
 
         Value::Object(input)
     }

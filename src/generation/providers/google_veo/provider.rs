@@ -318,8 +318,9 @@ impl GoogleVeoProvider {
                 return Err(GenerationError::provider(
                     error
                         .message
-                        .clone()
-                        .unwrap_or_else(|| "Operation failed".to_string()),
+                        .as_deref()
+                        .unwrap_or("Operation failed")
+                        .to_string(),
                     error.code,
                     "google-veo",
                 ));
@@ -386,7 +387,7 @@ impl GenerationProvider for GoogleVeoProvider {
             let request_id = request.request_id.clone();
 
             info!(
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 model = %self.model,
                 "Starting Google Veo video generation"
             );

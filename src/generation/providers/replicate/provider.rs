@@ -135,7 +135,7 @@ impl GenerationProvider for ReplicateProvider {
             // Resolve model
             let model = self.resolve_model(&request)?;
             debug!(
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 model = %model,
                 "Starting Replicate generation"
             );

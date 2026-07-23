@@ -327,7 +327,7 @@ impl GenerationProvider for OpenAiImageProvider {
             let request_id = request.request_id.clone();
 
             debug!(
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 model = %self.model,
                 "Starting OpenAI image generation"
             );

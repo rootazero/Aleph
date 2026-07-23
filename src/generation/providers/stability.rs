@@ -373,7 +373,7 @@ impl GenerationProvider for StabilityImageProvider {
             let request_id = request.request_id.clone();
 
             debug!(
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 model = %self.model,
                 "Starting Stability AI image generation"
             );

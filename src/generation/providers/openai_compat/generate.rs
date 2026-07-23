@@ -43,7 +43,7 @@ impl GenerationProvider for OpenAiCompatProvider {
 
             debug!(
                 provider = %self.name,
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 model = %self.model,
                 "Starting OpenAI-compatible image generation"
             );

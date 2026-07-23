@@ -379,6 +379,9 @@ impl GenerationProviderRegistry {
     /// Get the first provider that supports a generation type
     ///
     /// Useful for simple cases where you just need any provider for a type.
+    /// When multiple providers support the type, the one with the
+    /// lexicographically smallest name is returned, so the choice is
+    /// deterministic regardless of `HashMap` iteration order.
     ///
     /// # Arguments
     ///
@@ -395,7 +398,8 @@ impl GenerationProviderRegistry {
     ) -> Option<(String, Arc<dyn GenerationProvider>)> {
         self.providers
             .iter()
-            .find(|(_, p)| p.supported_types().contains(&gen_type))
+            .filter(|(_, p)| p.supported_types().contains(&gen_type))
+            .min_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(name, p)| (name.clone(), p.clone()))
     }
 }

@@ -152,7 +152,7 @@ impl GenerationProvider for MidjourneyProvider {
             let request_id = request.request_id.clone();
 
             info!(
-                prompt = %request.prompt,
+                prompt_len = request.prompt.len(),
                 mode = %self.mode,
                 "Starting Midjourney image generation"
             );

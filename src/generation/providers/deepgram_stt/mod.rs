@@ -302,6 +302,20 @@ impl GenerationProvider for DeepgramSttProvider {
 
 async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
     let path_buf = PathBuf::from(path);
+    // The local path comes from user/LLM-controlled request fields
+    // (`request.prompt` or `params.reference_audio`) and its bytes are
+    // uploaded to a third-party API, so confine reads to recognized audio
+    // file types instead of any path on disk.
+    let ext = path_buf.extension().and_then(|s| s.to_str());
+    if !is_audio_extension(ext) {
+        return Err(GenerationError::invalid_parameters(
+            format!(
+                "Refusing to read '{}': expected an audio file (.mp3/.wav/.ogg/.flac/.m4a/.webm)",
+                path_buf.display()
+            ),
+            Some("file_path".to_string()),
+        ));
+    }
     // Async read: audio files can be hundreds of MB and a blocking
     // std::fs::read here would stall the tokio worker thread.
     let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {
@@ -310,8 +324,15 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
             Some("file_path".to_string()),
         )
     })?;
-    let mime = mime_from_extension(path_buf.extension().and_then(|s| s.to_str()));
+    let mime = mime_from_extension(ext);
     Ok((bytes, mime))
+}
+
+fn is_audio_extension(ext: Option<&str>) -> bool {
+    matches!(
+        ext.unwrap_or("").to_lowercase().as_str(),
+        "mp3" | "wav" | "ogg" | "oga" | "flac" | "m4a" | "mp4" | "webm"
+    )
 }
 
 fn mime_from_extension(ext: Option<&str>) -> String {

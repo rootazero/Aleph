@@ -337,6 +337,20 @@ impl GenerationProvider for OpenAiWhisperProvider {
 
 async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
     let path_buf = PathBuf::from(path);
+    // The local path comes from user/LLM-controlled request fields
+    // (`request.prompt` or `params.reference_audio`) and its bytes are
+    // uploaded to a third-party API, so confine reads to recognized audio
+    // file types instead of any path on disk.
+    let ext = path_buf.extension().and_then(|s| s.to_str());
+    if !is_audio_extension(ext) {
+        return Err(GenerationError::invalid_parameters(
+            format!(
+                "Refusing to read '{}': expected an audio file (.mp3/.wav/.ogg/.flac/.m4a/.webm)",
+                path_buf.display()
+            ),
+            Some("file_path".to_string()),
+        ));
+    }
     // Async read: a blocking std::fs::read here would stall the tokio
     // worker thread for large audio files.
     let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {
@@ -350,8 +364,15 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> 
         .and_then(|n| n.to_str())
         .unwrap_or("audio.bin")
         .to_string();
-    let mime = mime_from_extension(path_buf.extension().and_then(|s| s.to_str()));
+    let mime = mime_from_extension(ext);
     Ok((bytes, name, mime))
+}
+
+fn is_audio_extension(ext: Option<&str>) -> bool {
+    matches!(
+        ext.unwrap_or("").to_lowercase().as_str(),
+        "mp3" | "wav" | "ogg" | "oga" | "flac" | "m4a" | "mp4" | "webm"
+    )
 }
 
 fn mime_from_extension(ext: Option<&str>) -> String {

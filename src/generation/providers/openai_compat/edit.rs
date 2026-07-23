@@ -48,7 +48,7 @@ pub(crate) async fn edit_image_impl(
 
     debug!(
         provider = %provider.name,
-        prompt = %request.prompt,
+        prompt_len = request.prompt.len(),
         model = %provider.model,
         "Starting OpenAI-compatible image editing"
     );
@@ -311,7 +311,7 @@ async fn ark_edit_image_impl(
 
     debug!(
         provider = %provider.name,
-        prompt = %request.prompt,
+        prompt_len = request.prompt.len(),
         model = %model,
         "Starting Volcengine Ark image-to-image"
     );
