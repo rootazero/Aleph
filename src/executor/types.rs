@@ -22,6 +22,7 @@ use std::time::Duration;
 /// - Task results: Results from individual tasks (for `TaskGraph` plans)
 /// - Timing and success information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ExecutionResult {
     /// Final content/response from the execution
     pub content: String,
@@ -149,6 +150,7 @@ impl Default for ExecutionResult {
 /// - Result and success status
 /// - Execution timing
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolCallRecord {
     /// Name of the tool that was called
     pub tool_name: String,
@@ -180,6 +182,7 @@ impl ToolCallRecord {
     }
 
     /// Builder: set the result and success status
+    #[must_use]
     pub fn with_result(mut self, result: impl Into<String>, success: bool) -> Self {
         self.result = Some(result.into());
         self.success = success;
@@ -242,6 +245,7 @@ impl ToolCallRecord {
 /// Used when executing multi-step plans to track the outcome
 /// of each individual task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TaskExecutionResult {
     /// Unique identifier for the task
     pub task_id: String,
@@ -297,12 +301,14 @@ impl TaskExecutionResult {
     }
 
     /// Builder: set execution time from Duration
+    #[must_use]
     pub fn with_execution_time(mut self, time: Duration) -> Self {
         self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 
     /// Builder: set execution time in milliseconds
+    #[must_use]
     pub const fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
@@ -318,6 +324,7 @@ impl TaskExecutionResult {
 /// Provides contextual information that may affect how execution
 /// is performed, such as the current application or window.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExecutionContext {
     /// Current application context (e.g., "Safari", "`VSCode`")
     pub app_context: Option<String>,
@@ -402,8 +409,8 @@ impl ExecutionContext {
 /// Executor error types
 ///
 /// Represents the various ways execution can fail.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutorError {
     /// General execution failure
     ExecutionFailed(String),
@@ -442,7 +449,6 @@ impl std::fmt::Display for ExecutorError {
 
 impl std::error::Error for ExecutorError {}
 
-#[allow(dead_code)]
 impl ExecutorError {
     /// Create an execution failed error
     pub fn execution_failed(msg: impl Into<String>) -> Self {
