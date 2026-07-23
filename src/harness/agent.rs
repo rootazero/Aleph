@@ -618,6 +618,12 @@ impl AgentHarness {
                     vetoed,
                     split_child,
                 }) => {
+                    // A split turn's tail lives in the CHILD session, so the
+                    // parent-watermark fetch in the watchdog below would read
+                    // an empty/mismatched tail as a clean turn and silently
+                    // reset the consecutive-failure streak. Skip the watchdog
+                    // entirely on split turns.
+                    let split = split_child.is_some();
                     if let Some(child) = split_child {
                         current_session = child;
                     }
@@ -629,7 +635,7 @@ impl AgentHarness {
                     // Consecutive-failure watchdog (structural). Count this
                     // turn's tool errors vs successful executions over the
                     // events since the last assistant message.
-                    if !vetoed {
+                    if !vetoed && !split {
                         // Fetch only the just-finished turn's tail (everything
                         // appended past its prompt boundary: the assistant
                         // message plus tool results), not the full log — keeps

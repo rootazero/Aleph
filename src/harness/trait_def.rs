@@ -35,7 +35,7 @@ pub enum TurnState {
 pub struct TurnStep {
     /// Whether the loop continues or the model finished this turn.
     pub state: TurnState,
-    /// Number of tool calls actually executed this turn.
+    /// Number of tool calls that succeeded this turn (memo hits count; errors do not).
     pub executed: usize,
     /// `true` when a verifier vetoed the turn (forces Continue + retry).
     pub vetoed: bool,

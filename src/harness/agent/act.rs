@@ -46,7 +46,7 @@
 //!
 //! ## Cooperative steer checkpoint
 //!
-//! Before dispatching each serial tool call (and before each parallel
+//! Before dispatching each serial group (and before each parallel
 //! group), Act re-checks `AgentHarness::has_unanswered_user_message`. If a
 //! non-synthetic user message arrived after this turn's prompt boundary
 //! (the `last_prompt_seq` watermark) — the user changed their mind
@@ -142,6 +142,8 @@ impl AgentHarness {
                     iteration,
                     &budget_turn_id,
                     run_cancel,
+                    None,
+                    None,
                 )
                 .await;
         }
@@ -157,15 +159,18 @@ impl AgentHarness {
         // semantics (mirrors `can_parallel_dispatch`, which rejects duplicates).
         let mut seen = std::collections::HashSet::new();
         let mut has_duplicate = false;
+        // Canonical arg signatures and concurrency claims are computed once
+        // per batch here and threaded down to `dispatch_group` /
+        // `can_parallel_dispatch` / `act_parallel`, so the per-group paths do
+        // not re-serialize the args or re-query the claim per call.
+        let mut canonical: Vec<String> = Vec::with_capacity(tool_calls.len());
         let mut claims = Vec::with_capacity(tool_calls.len());
         for call in &tool_calls {
-            let key = (
-                call.name.clone(),
-                super::canonical_json_string(&call.arguments),
-            );
-            if !seen.insert(key) {
+            let canon = super::canonical_json_string(&call.arguments);
+            if !seen.insert((call.name.clone(), canon.clone())) {
                 has_duplicate = true;
             }
+            canonical.push(canon);
             claims.push(
                 self.deps
                     .tools
@@ -193,6 +198,8 @@ impl AgentHarness {
                     iteration,
                     &budget_turn_id,
                     run_cancel,
+                    Some(&canonical),
+                    Some(&claims),
                 )
                 .await;
         }
@@ -229,6 +236,8 @@ impl AgentHarness {
                     iteration,
                     &budget_turn_id,
                     run_cancel,
+                    Some(&canonical[start..end]),
+                    Some(&claims[start..end]),
                 )
                 .await
             {
@@ -297,6 +306,12 @@ impl AgentHarness {
     /// Tool failures are persisted as `SessionEvent::ToolError` and do NOT
     /// abort the group — all calls are attempted. Returns the number of tool
     /// calls that succeeded (not errored).
+    ///
+    /// `canonical` / `claims` carry the per-call canonical arg signatures and
+    /// concurrency claims pre-computed by `act()` (aligned by index with
+    /// `tool_calls`) so admission does not recompute them; `None` recomputes
+    /// on demand (the single-call / parallelism-disabled fast path, which
+    /// exits admission before either is needed).
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_group(
         &self,
@@ -307,6 +322,8 @@ impl AgentHarness {
         iteration: usize,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
         run_cancel: &CancellationToken,
+        canonical: Option<&[String]>,
+        claims: Option<&[crate::tools::concurrency::ConcurrencyClaim]>,
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
@@ -319,7 +336,10 @@ impl AgentHarness {
 
         // opencode-parity parallel fast path. Falls through to the serial loop
         // below when any precondition fails (see module docs).
-        if self.can_parallel_dispatch(&tool_calls).await {
+        if self
+            .can_parallel_dispatch(&tool_calls, canonical, claims)
+            .await
+        {
             return self
                 .act_parallel(
                     session_id,
@@ -329,6 +349,7 @@ impl AgentHarness {
                     iteration,
                     budget_turn_id,
                     run_cancel,
+                    canonical,
                 )
                 .await;
         }
@@ -341,25 +362,26 @@ impl AgentHarness {
         let offered_defs = self.deps.tools.dispatchable_list().await;
         let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
 
+        // Cooperative steer checkpoint, hoisted to once per group (was per
+        // tool call, which paid a seq-ranged session-store read for every
+        // call in the batch). If a non-synthetic user message arrived after
+        // this turn's prompt boundary (the user changed their mind
+        // mid-batch), defer every call in this group so the model sees the
+        // message next Think and decides to pivot or resume. A message
+        // arriving mid-group is now caught at the next group boundary
+        // (multi-group path) or by the run loop's Done-arm follow-up check.
+        // R7/R10: mechanical — no intent judgement here.
+        if self.has_unanswered_user_message(session_id).await {
+            self.emit_deferred_tool_results(session_id, turn_id, &tool_calls)
+                .await?;
+            if let Some(ref tracker) = self.stall_tracker {
+                tracker.record_activity().await;
+            }
+            return Ok(executed_count);
+        }
+
         let mut tool_iter = tool_calls.into_iter();
         while let Some(mut call) = tool_iter.next() {
-            // Cooperative steer checkpoint. If a non-synthetic user message
-            // arrived after this turn's prompt boundary (the user changed
-            // their mind mid-batch), stop launching further tools and defer
-            // the current call + everything still pending so the model sees
-            // the message next Think and decides to pivot or resume.
-            // R7/R10: mechanical — no intent judgement here.
-            if self.has_unanswered_user_message(session_id).await {
-                let mut deferred = Vec::with_capacity(1);
-                deferred.push(call);
-                deferred.extend(tool_iter.by_ref());
-                self.emit_deferred_tool_results(session_id, turn_id, &deferred)
-                    .await?;
-                if let Some(ref tracker) = self.stall_tracker {
-                    tracker.record_activity().await;
-                }
-                break;
-            }
             // G3 (opencode-inspired): mechanical tool-name auto-repair via the
             // unified resolver (`tools::name_repair`). Models emit names that
             // miss the offered set by case (`Read`→`read`), separator
@@ -622,7 +644,16 @@ impl AgentHarness {
     /// PASS 0 — the same prep/execute split Pi uses (sequential validate +
     /// approval, then concurrent execute) — so guardrailed deployments keep
     /// the parallel fast path instead of paying a full-serial penalty.
-    async fn can_parallel_dispatch(&self, tool_calls: &[NativeToolCall]) -> bool {
+    ///
+    /// `canonical` / `claims` are the per-call canonical arg signatures and
+    /// concurrency claims pre-computed by `act()` (aligned by index with
+    /// `tool_calls`); when `None` they are computed here on demand.
+    async fn can_parallel_dispatch(
+        &self,
+        tool_calls: &[NativeToolCall],
+        canonical: Option<&[String]>,
+        claims: Option<&[crate::tools::concurrency::ConcurrencyClaim]>,
+    ) -> bool {
         let Some(par_n) = self.deps.parallel_tool_concurrency else {
             return false;
         };
@@ -633,13 +664,24 @@ impl AgentHarness {
         // memo continues to own that semantics. (Duplicates are rare; the
         // common LLM pattern is N distinct read-only calls.)
         let mut seen = std::collections::HashSet::new();
-        for call in tool_calls {
-            let key = (
-                call.name.clone(),
-                super::canonical_json_string(&call.arguments),
-            );
-            if !seen.insert(key) {
-                return false;
+        match canonical {
+            Some(canonical) => {
+                for (call, canon) in tool_calls.iter().zip(canonical) {
+                    if !seen.insert((call.name.as_str(), canon.as_str())) {
+                        return false;
+                    }
+                }
+            }
+            None => {
+                for call in tool_calls {
+                    let key = (
+                        call.name.clone(),
+                        super::canonical_json_string(&call.arguments),
+                    );
+                    if !seen.insert(key) {
+                        return false;
+                    }
+                }
             }
         }
         // Resource-scope-aware admission: collect each call's concurrency
@@ -648,16 +690,24 @@ impl AgentHarness {
         // concurrent-safe" check — a batch of disjoint-path file mutations now
         // parallelizes, while same-path or whole-world mutations still fall
         // back to the serial loop. See `crate::tools::concurrency`.
-        let mut claims = Vec::with_capacity(tool_calls.len());
-        for call in tool_calls {
-            claims.push(
-                self.deps
-                    .tools
-                    .call_concurrency_claim(&call.name, &call.arguments)
-                    .await,
-            );
-        }
-        crate::tools::concurrency::batch_parallelizable(&claims)
+        let owned_claims;
+        let claims = match claims {
+            Some(claims) => claims,
+            None => {
+                let mut computed = Vec::with_capacity(tool_calls.len());
+                for call in tool_calls {
+                    computed.push(
+                        self.deps
+                            .tools
+                            .call_concurrency_claim(&call.name, &call.arguments)
+                            .await,
+                    );
+                }
+                owned_claims = computed;
+                &owned_claims
+            }
+        };
+        crate::tools::concurrency::batch_parallelizable(claims)
     }
 
     /// Parallel fast path. Pre-emits `ToolCallRequested` events in input
@@ -668,6 +718,11 @@ impl AgentHarness {
     ///
     /// Like the serial path, it owns no wall clock: each call's budget is
     /// enforced by the tool layer, below the approval gate.
+    ///
+    /// `canonical` carries the per-call canonical arg signatures pre-computed
+    /// by `act()` (aligned by index with `tool_calls`, pre-guardrail — PASS 0
+    /// re-canonicalizes any guardrail-sanitised call); when `None` they are
+    /// computed here on demand.
     #[allow(clippy::too_many_arguments)]
     async fn act_parallel(
         &self,
@@ -678,6 +733,7 @@ impl AgentHarness {
         iteration: usize,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
         run_cancel: &CancellationToken,
+        canonical: Option<&[String]>,
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
@@ -696,10 +752,13 @@ impl AgentHarness {
         // serial path: a guardrail-rewritten call whose original matched a past
         // failure would be wrongly skipped, and one whose sanitised form
         // matches a past failure would be wrongly run.
-        let mut canonical_args: Vec<String> = tool_calls
-            .iter()
-            .map(|c| super::canonical_json_string(&c.arguments))
-            .collect();
+        let mut canonical_args: Vec<String> = match canonical {
+            Some(canonical) => canonical.to_vec(),
+            None => tool_calls
+                .iter()
+                .map(|c| super::canonical_json_string(&c.arguments))
+                .collect(),
+        };
         let mut skip: Vec<bool> = vec![false; tool_calls.len()];
 
         // Per-index guardrail outcome, populated in PASS 0 (mirrors the serial

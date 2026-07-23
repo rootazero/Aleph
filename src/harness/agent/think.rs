@@ -1232,16 +1232,22 @@ impl AgentHarness {
             session_id,
         );
         // Race the grace call against cancel + turn-timeout, like every
-        // other LLM call in the harness. The grace turn fires precisely
-        // when things are already degraded, so a hung provider here must
-        // not hang the whole harness or ignore a user cancel.
+        // other LLM call in the harness, and additionally cap it at
+        // `GRACE_TIMEOUT_BUDGET`: `race_llm_call`'s timeout arm only exists
+        // when `deps.turn_timeout` is `Some`, so with turn timeouts disabled
+        // a hung provider here would hang a run that is already trying to
+        // terminate. The grace turn fires precisely when things are already
+        // degraded, so a hung provider here must not hang the whole harness
+        // or ignore a user cancel.
         let started = std::time::Instant::now();
-        let resp = match self
-            .race_llm_call(self.deps.llm.process(grace_payload), parent_cancel, started)
-            .await
+        let resp = match tokio::time::timeout(
+            super::GRACE_TIMEOUT_BUDGET,
+            self.race_llm_call(self.deps.llm.process(grace_payload), parent_cancel, started),
+        )
+        .await
         {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => {
+            Ok(Ok(Ok(resp))) => resp,
+            Ok(Ok(Err(e))) => {
                 tracing::warn!(
                     ?session_id,
                     ?e,
@@ -1249,11 +1255,19 @@ impl AgentHarness {
                 );
                 return;
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(
                     ?session_id,
                     ?e,
                     "grace turn cancelled or timed out; falling through to short-circuit",
+                );
+                return;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    ?session_id,
+                    grace_budget_secs = super::GRACE_TIMEOUT_BUDGET.as_secs(),
+                    "grace turn exceeded its budget; falling through to short-circuit",
                 );
                 return;
             }
