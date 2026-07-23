@@ -17,7 +17,7 @@ pub struct ToolRegistrar;
 
 impl ToolRegistrar {
     /// Create a new registrar
-    pub const fn new(_tools: ToolStorage) -> Self {
+    pub fn new(_tools: ToolStorage) -> Self {
         Self
     }
 
