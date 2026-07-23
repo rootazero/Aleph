@@ -132,8 +132,9 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
             provider: None, // Provider is resolved at routing time
             pattern: tool
                 .routing_regex
-                .clone()
-                .unwrap_or_else(|| tool.name.clone()),
+                .as_ref()
+                .unwrap_or(&tool.name)
+                .clone(),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {
             // Plugin tools live in the tool registry under their namespaced id
