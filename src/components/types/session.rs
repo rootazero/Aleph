@@ -1,8 +1,6 @@
 //! Execution session types
 
-use crate::event::EventBus;
-use crate::sync_primitives::{Arc, AsyncRwLock as RwLock, AtomicBool};
-use crate::tool_metadata::ToolCatalog;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
