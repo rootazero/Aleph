@@ -663,25 +663,21 @@ impl AgentHarness {
         // Reject batches with within-batch duplicates so the serial dedup
         // memo continues to own that semantics. (Duplicates are rare; the
         // common LLM pattern is N distinct read-only calls.)
-        let mut seen = std::collections::HashSet::new();
-        match canonical {
-            Some(canonical) => {
-                for (call, canon) in tool_calls.iter().zip(canonical) {
-                    if !seen.insert((call.name.as_str(), canon.as_str())) {
-                        return false;
-                    }
-                }
-            }
+        let owned_canonical: Vec<String>;
+        let canonical: &[String] = match canonical {
+            Some(canonical) => canonical,
             None => {
-                for call in tool_calls {
-                    let key = (
-                        call.name.clone(),
-                        super::canonical_json_string(&call.arguments),
-                    );
-                    if !seen.insert(key) {
-                        return false;
-                    }
-                }
+                owned_canonical = tool_calls
+                    .iter()
+                    .map(|call| super::canonical_json_string(&call.arguments))
+                    .collect();
+                &owned_canonical
+            }
+        };
+        let mut seen = std::collections::HashSet::new();
+        for (call, canon) in tool_calls.iter().zip(canonical) {
+            if !seen.insert((call.name.as_str(), canon.as_str())) {
+                return false;
             }
         }
         // Resource-scope-aware admission: collect each call's concurrency
