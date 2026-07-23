@@ -184,26 +184,13 @@ impl DirectoryScanner {
     pub fn discover_component(&self, component_name: &str) -> DiscoveryResult<Vec<DiscoveredPath>> {
         const MAX_COMPONENT_NAME_LEN: usize = 256;
 
-        if component_name.is_empty() {
-            return Err(DiscoveryError::InvalidPath(
-                "component name cannot be empty".to_string(),
-            ));
-        }
+        super::paths::validate_path_component(component_name)?;
+
         if component_name.len() > MAX_COMPONENT_NAME_LEN {
             return Err(DiscoveryError::InvalidPath(format!(
                 "component name too long (max {} bytes): got {} bytes",
                 MAX_COMPONENT_NAME_LEN,
                 component_name.len()
-            )));
-        }
-        if component_name.contains('/') || component_name.contains('\\') {
-            return Err(DiscoveryError::InvalidPath(format!(
-                "component name cannot contain path separators: {component_name}"
-            )));
-        }
-        if component_name.contains("..") {
-            return Err(DiscoveryError::InvalidPath(format!(
-                "component name cannot contain parent directory references: {component_name}"
             )));
         }
 

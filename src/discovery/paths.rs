@@ -155,6 +155,11 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
             "path component cannot be empty".to_string(),
         ));
     }
+    if name.contains('\0') {
+        return Err(DiscoveryError::InvalidPath(format!(
+            "path component cannot contain null bytes: {name}"
+        )));
+    }
     if name.contains('/') || name.contains('\\') {
         return Err(DiscoveryError::InvalidPath(format!(
             "path component cannot contain path separators: {name}"
