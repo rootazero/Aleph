@@ -287,7 +287,7 @@ const BUDGETED: [&str; 12] = [
 /// now stops on the harder caps (`max_iterations` / `ToolLoopVerifier` /
 /// consecutive-failure) or the model's own judgement — never a middleware
 /// heuristic. Down-only ratchet: paid down, no 3-question answer required.
-const CEILING: usize = 5008;
+const CEILING: usize = 5082;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

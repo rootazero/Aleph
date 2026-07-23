@@ -380,8 +380,7 @@ impl AgentHarness {
             return Ok(executed_count);
         }
 
-        let mut tool_iter = tool_calls.into_iter();
-        while let Some(mut call) = tool_iter.next() {
+        for mut call in tool_calls {
             // G3 (opencode-inspired): mechanical tool-name auto-repair via the
             // unified resolver (`tools::name_repair`). Models emit names that
             // miss the offered set by case (`Read`→`read`), separator

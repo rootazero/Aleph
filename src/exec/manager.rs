@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
-use super::decision::{ApprovalRequest, ExecApprovalRequest};
+use super::decision::ExecApprovalRequest;
 use super::socket::ApprovalDecisionType;
 
 /// Default timeout for approval requests (2 minutes)
@@ -710,6 +710,7 @@ impl Default for ExecApprovalManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::decision::ApprovalRequest;
     use crate::exec::analysis::CommandAnalysis;
 
     fn mock_request() -> ApprovalRequest {
