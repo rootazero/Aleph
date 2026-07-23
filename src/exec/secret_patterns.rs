@@ -4,18 +4,22 @@
 //! between the two consumers.
 
 use regex::Regex;
+use std::sync::OnceLock;
 
+#[derive(Clone)]
 pub(crate) struct SecretPattern {
     pub regex: Regex,
     pub replacement: &'static str,
 }
 
+#[derive(Clone)]
 pub(crate) struct LeakPatternDef {
     pub name: &'static str,
     pub regex: Regex,
     pub action: super::leak_detector::LeakAction,
 }
 
+#[derive(Clone)]
 pub(crate) struct LeakDetectorAssets {
     pub prefixes: Vec<&'static str>,
     pub patterns: Vec<LeakPatternDef>,
@@ -23,153 +27,151 @@ pub(crate) struct LeakDetectorAssets {
 
 #[must_use]
 pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
-    vec![
-        SecretPattern {
-            regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
-            replacement: "sk-***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
-            replacement: "sk-ant-***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
-            replacement: "AIza***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
-            replacement: "AKIA***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)\s*[=:]\s*['"]?([a-zA-Z0-9/+=]{40})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
-            replacement: "gh*_***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
-            replacement: "github_pat_***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        SecretPattern {
-            // HTTP header form `Authorization: Bearer <token>` — the space after
-            // `Bearer` the keyword=value rule above cannot reach. Mirrors the
-            // leak-detector `bearer_token` regex below to avoid drift, so a
-            // command carrying an `Authorization: Bearer …` header cannot leak
-            // its token into an approval summary / operator card / cluster frame.
-            regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
-            replacement: "Bearer ***REDACTED***",
-        },
-        SecretPattern {
-            // `curl -u user:password` / `--user user:password` basic-auth flag.
-            // Human-facing summary only (never re-executed), so mild
-            // over-redaction of a non-secret `-u uid:gid` is acceptable.
-            regex: Regex::new(r"(?i)(-u|--user)\s+[^\s:]+:[^\s]+").unwrap(),
-            replacement: "$1 ***REDACTED***",
-        },
-        SecretPattern {
-            // `[A-Z ]*` (zero-or-more, no mandatory surrounding spaces) so the
-            // common PKCS#8 header `-----BEGIN PRIVATE KEY-----` (no algorithm
-            // word) is redacted as well as `-----BEGIN RSA PRIVATE KEY-----`.
-            // Mirrors the leak-detector `private_key` regex below to avoid drift.
-            regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----").unwrap(),
-            replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
-        },
-        SecretPattern {
-            regex: Regex::new(r"://([^:]+):([^@]+)@").unwrap(),
-            replacement: "://$1:***REDACTED***@",
-        },
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)\s*[=:]\s*['"]?([^\s'"]{8,})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
-            replacement: "xox*-***REDACTED***",
-        },
-        SecretPattern {
-            regex: Regex::new(r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}").unwrap(),
-            replacement: "***DISCORD_TOKEN_REDACTED***",
-        },
-    ]
+    static PATTERNS: OnceLock<Vec<SecretPattern>> = OnceLock::new();
+    PATTERNS
+        .get_or_init(|| {
+            vec![
+                SecretPattern {
+                    regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
+                    replacement: "sk-***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+                    replacement: "sk-ant-***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+                    replacement: "AIza***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
+                    replacement: "AKIA***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)\s*[=:]\s*['"]?([a-zA-Z0-9/+=]{40})['"]?"#).unwrap(),
+                    replacement: "$1=***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+                    replacement: "gh*_***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
+                    replacement: "github_pat_***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
+                    replacement: "$1=***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
+                    replacement: "Bearer ***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"(?i)(-u|--user)\s+[^\s:]+:[^\s]+").unwrap(),
+                    replacement: "$1 ***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"://([^:]+):([^@]+)@").unwrap(),
+                    replacement: "://$1:***REDACTED***@",
+                },
+                SecretPattern {
+                    regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)\s*[=:]\s*['"]?([^\s'"]{8,})['"]?"#).unwrap(),
+                    replacement: "$1=***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
+                    replacement: "xox*-***REDACTED***",
+                },
+                SecretPattern {
+                    regex: Regex::new(r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}").unwrap(),
+                    replacement: "***DISCORD_TOKEN_REDACTED***",
+                },
+            ]
+        })
+        .clone()
 }
 
 #[must_use]
 pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
-    let prefixes = vec![
-        "sk-",
-        "AIza",
-        "AKIA",
-        "ghp_",
-        "gho_",
-        "ghu_",
-        "ghs_",
-        "ghr_",
-        "github_pat_",
-        "xoxb-",
-        "xoxa-",
-        "xoxp-",
-        "xoxr-",
-        "xoxs-",
-        "-----BEGIN",
-        "bearer ",
-        "Bearer ",
-    ];
+    static ASSETS: OnceLock<LeakDetectorAssets> = OnceLock::new();
+    ASSETS
+        .get_or_init(|| {
+            let prefixes = vec![
+                "sk-",
+                "AIza",
+                "AKIA",
+                "ghp_",
+                "gho_",
+                "ghu_",
+                "ghs_",
+                "ghr_",
+                "github_pat_",
+                "xoxb-",
+                "xoxa-",
+                "xoxp-",
+                "xoxr-",
+                "xoxs-",
+                "-----BEGIN",
+                "bearer ",
+                "Bearer ",
+            ];
 
-    let patterns = vec![
-        LeakPatternDef {
-            name: "openai_key",
-            regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "anthropic_key",
-            regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "google_api_key",
-            regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "aws_access_key",
-            regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "github_token",
-            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "github_fine_grained_pat",
-            regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "slack_token",
-            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "private_key",
-            regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
-            action: super::leak_detector::LeakAction::Block,
-        },
-        LeakPatternDef {
-            name: "bearer_token",
-            regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
-            action: super::leak_detector::LeakAction::Redact,
-        },
-    ];
+            let patterns = vec![
+                LeakPatternDef {
+                    name: "openai_key",
+                    regex: Regex::new(r"\bsk-[a-zA-Z0-9]{20,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "anthropic_key",
+                    regex: Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "google_api_key",
+                    regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "aws_access_key",
+                    regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "github_token",
+                    regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "github_fine_grained_pat",
+                    regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "slack_token",
+                    regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "private_key",
+                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    action: super::leak_detector::LeakAction::Block,
+                },
+                LeakPatternDef {
+                    name: "bearer_token",
+                    regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
+                    action: super::leak_detector::LeakAction::Redact,
+                },
+            ];
 
-    LeakDetectorAssets { prefixes, patterns }
+            LeakDetectorAssets { prefixes, patterns }
+        })
+        .clone()
 }
 
 #[cfg(test)]

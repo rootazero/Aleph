@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
-use super::decision::ApprovalRequest;
+use super::decision::ExecApprovalRequest;
 use super::socket::ApprovalDecisionType;
 
 /// Default timeout for approval requests (2 minutes)
@@ -73,9 +73,9 @@ pub struct ExecApprovalRecord {
 }
 
 impl ExecApprovalRecord {
-    /// Create from `ApprovalRequest`
+    /// Create from `ExecApprovalRequest`
     #[must_use]
-    pub fn from_request(request: &ApprovalRequest, timeout_ms: u64) -> Self {
+    pub fn from_request(request: &ExecApprovalRequest, timeout_ms: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -241,7 +241,7 @@ impl ExecApprovalManager {
     /// # Returns
     ///
     /// The approval record
-    pub fn create(&self, request: &ApprovalRequest, timeout_ms: u64) -> ExecApprovalRecord {
+    pub fn create(&self, request: &ExecApprovalRequest, timeout_ms: u64) -> ExecApprovalRecord {
         let record = ExecApprovalRecord::from_request(request, timeout_ms);
         debug!(id = %record.id, command = %record.command, "Created approval request");
         record

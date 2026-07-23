@@ -4,7 +4,7 @@ use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 use crate::sync_primitives::Arc;
 use tokio::time::timeout;
 
-use crate::exec::decision::ApprovalRequest;
+use crate::exec::decision::ExecApprovalRequest;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage};
 use crate::gateway::channel_approval::ApprovalAction;
@@ -71,7 +71,7 @@ impl ChannelApprovalBridge {
             session_key.to_string()
         };
 
-        let request = ApprovalRequest {
+        let request = ExecApprovalRequest {
             id: uuid::Uuid::new_v4().to_string(),
             // The redacted ACTION, not the bare tool name — this is the string
             // the user reads before deciding, on every surface.

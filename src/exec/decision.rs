@@ -4,7 +4,7 @@ use super::analysis::CommandAnalysis;
 
 /// Request for user approval
 #[derive(Debug, Clone)]
-pub struct ApprovalRequest {
+pub struct ExecApprovalRequest {
     /// Unique request ID
     pub id: String,
     /// Full command string

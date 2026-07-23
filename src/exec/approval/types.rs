@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Trust stage for capability approval
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum TrustStage {
     /// Tool just generated, waiting for first approval

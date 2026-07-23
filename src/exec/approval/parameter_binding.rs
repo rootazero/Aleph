@@ -15,6 +15,7 @@ pub struct ParameterBinding {
 
 /// Validation rule for parameter values
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationRule {
     IsFile,
@@ -26,6 +27,7 @@ pub enum ValidationRule {
 
 /// Mapping type for parameter binding
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum MappingType {
     #[default]

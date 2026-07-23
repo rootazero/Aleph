@@ -31,14 +31,13 @@ pub struct LeakPattern {
 }
 
 /// A single finding from a scan.
-#[allow(clippy::manual_non_exhaustive)]
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ScanFinding {
     /// Name of the pattern that matched.
     pub pattern_name: &'static str,
     /// Action recommended for this finding.
     pub action: LeakAction,
-    _private: (),
 }
 
 /// Result of scanning content for leaks.
@@ -141,7 +140,6 @@ impl LeakDetector {
                 findings.push(ScanFinding {
                     pattern_name: pattern.name,
                     action: pattern.action,
-                    _private: (),
                 });
             }
         }
