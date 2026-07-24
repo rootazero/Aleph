@@ -391,7 +391,13 @@ impl AgentHarnessRunner {
         // MODEL_PERCEIVABLE_ECOSYSTEM.md.
         let mcp_instructions = match &self.mcp_handle {
             Some(handle) => {
-                let instructions = handle.aggregate_instructions().await.unwrap_or_default();
+                let instructions = match handle.aggregate_instructions().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "MCP aggregate_instructions failed; proceeding without server instructions");
+                        Vec::new()
+                    }
+                };
                 (!instructions.is_empty()).then_some(instructions)
             }
             None => None,

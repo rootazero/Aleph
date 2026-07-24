@@ -9,6 +9,7 @@ use crate::harness::StallConfig;
 ///
 /// Returned as a struct (not tuple) so consumers can name fields and future
 /// additions don't break callers.
+#[derive(Debug, Clone)]
 pub struct StabilityTriple {
     pub stall_config: Option<StallConfig>,
     pub consecutive_failure_cap: Option<usize>,

@@ -28,7 +28,7 @@ pub struct ContextEstimate {
 /// (system prompt + tool schemas) in tokens. Keyed so a model change is a
 /// natural miss; no eviction (overhead drifts only on tool/skill/identity
 /// edits, where a slightly stale `≈` estimate is acceptable — spec D5).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct OverheadCache {
     inner: Mutex<HashMap<(String, String), usize>>,
 }

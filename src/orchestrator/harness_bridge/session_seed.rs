@@ -78,7 +78,10 @@ async fn seed_history(
         .get_events(session_id, None, Some(2))
         .await
         .map(|e| !e.is_empty())
-        .unwrap_or(false);
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "session log read failed; treating as empty for seed guard");
+            false
+        });
     if !existing {
         for turn in turns {
             match turn {
