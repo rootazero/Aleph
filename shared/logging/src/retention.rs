@@ -60,8 +60,8 @@ pub fn cleanup_old_logs(
             if !file_name.starts_with("aleph-") {
                 continue;
             }
-            file_name.ends_with(".log")
-                || file_name.rsplit_once(".log.").is_some_and(|(_, suffix)| {
+            file_name.to_ascii_lowercase().ends_with(".log")
+                || file_name.to_ascii_lowercase().rsplit_once(".log.").is_some_and(|(_, suffix)| {
                     suffix.len() == 10
                         && suffix.chars().nth(4) == Some('-')
                         && suffix.chars().nth(7) == Some('-')
@@ -71,15 +71,8 @@ pub fn cleanup_old_logs(
             continue;
         }
 
-        let metadata = match fs::metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let modified = match metadata.modified() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+        let Ok(metadata) = fs::metadata(&path) else { continue; };
+        let Ok(modified) = metadata.modified() else { continue; };
 
         if modified < cutoff {
             match fs::remove_file(&path) {

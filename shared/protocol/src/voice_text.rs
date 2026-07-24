@@ -123,7 +123,7 @@ fn is_token_loop(text: &str) -> bool {
         if tokens.len() < n * min_reps || !tokens.len().is_multiple_of(n) {
             continue;
         }
-        let head = &tokens[..n];
+        let Some(head) = tokens.get(..n) else { continue; };
         if tokens.chunks(n).all(|c| c == head) {
             return true;
         }
@@ -153,7 +153,7 @@ fn is_char_loop(normalized: &str) -> bool {
         if chars.len() < n * min_reps || !chars.len().is_multiple_of(n) {
             continue;
         }
-        let head = &chars[..n];
+        let Some(head) = chars.get(..n) else { continue; };
         if chars.chunks(n).all(|c| c == head) {
             return true;
         }

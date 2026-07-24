@@ -11,7 +11,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Return a fresh process-unique id, e.g. `"id-42"`. Monotonic; never repeats
 /// within a process.
-pub(crate) fn next_id() -> String {
+pub fn next_id() -> String {
     format!("id-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
