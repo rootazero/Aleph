@@ -315,6 +315,7 @@ impl TeamDispatcher {
             &team_id,
             &task_id,
             input,
+            uuid::Uuid::new_v4().to_string(),
             timeout_secs,
             isolate,
             model_override,

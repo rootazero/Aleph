@@ -387,20 +387,17 @@ impl AlephTool for TeamDelegateTool {
             }
         }
 
-        // W12 — running-only registration so the leader session's Interrupt
-        // demote guard (`steering::session_is_interruptible` →
-        // `session_has_running`) sees this in-flight delegation and queues a
-        // mid-task correction instead of tearing the leader (and this member
-        // run) down. RAII: delists when the run settles — no completed entry,
-        // so nothing feeds the proactive announce (the reply is returned
-        // inline below). The token is a placeholder: `execute_member_task`
-        // has no in-flight abort channel (documented stack-B behaviour), so
-        // cancelling this entry only signals a token nothing observes.
-        // Skipped when no caller session is wired (nothing to guard).
+        // W12 + delegate-interrupt: register the member run under its REAL
+        // engine run_id and this leader's root_session, so cancelling the
+        // leader (cancel_session) can enumerate this in-flight delegation via
+        // running_runs_of_session and fire the engine per-run token. RAII
+        // delists on settle. Skipped when no caller session is wired
+        // (nothing to guard).
+        let member_run_id = uuid::Uuid::new_v4().to_string();
         let running_reg = caller_session.as_deref().map(|caller| {
             crate::agents::background_tracker::RunningRegistration::register(
                 crate::agents::background_tracker::BackgroundAgentTracker::global(),
-                uuid::Uuid::new_v4().to_string(),
+                member_run_id.clone(),
                 tokio_util::sync::CancellationToken::new(),
                 format!("team_delegate → {}: {}", args.agent_id, args.task),
                 crate::agents::background_tracker::SpawnMeta {
@@ -422,6 +419,7 @@ impl AlephTool for TeamDelegateTool {
             &args.team_id,
             &task.id,
             args.task.clone(),
+            member_run_id,
             args.timeout_seconds,
             false,
             // team_delegate is the synchronous leader path with no per-step
@@ -506,5 +504,25 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(b.timeout_seconds, 90);
+    }
+
+    #[test]
+    fn delegate_style_registration_is_discoverable_by_leader_walk() {
+        let tracker = crate::agents::background_tracker::BackgroundAgentTracker::global();
+        let leader = "agent:leader-disc-test:main";
+        let run_id = "engine-run-xyz";
+        let _reg = crate::agents::background_tracker::RunningRegistration::register(
+            std::sync::Arc::clone(&tracker),
+            run_id.to_string(),
+            tokio_util::sync::CancellationToken::new(),
+            "team_delegate → worker: t".to_string(),
+            crate::agents::background_tracker::SpawnMeta {
+                parent_id: None,
+                depth: 1,
+                root_session: leader.to_string(),
+                model: None,
+            },
+        );
+        assert!(tracker.running_runs_of_session(leader).contains(&run_id.to_string()));
     }
 }

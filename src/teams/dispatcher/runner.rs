@@ -129,12 +129,19 @@ pub struct MemberRunOutcome {
 /// delivered via the run's `think_level` metadata — the same per-run channel a
 /// composer pill uses. `None` keeps the session default. Ignored for
 /// `AcpSession` targets, exactly like `model_override`.
+///
+/// `run_id` is the caller-minted engine run id used as `RunRequest::run_id`.
+/// Callers that register the run in the `BackgroundAgentTracker` (e.g.
+/// `team_delegate`) pass the SAME id as the tracker `request_id`, so the run
+/// is addressable for cancellation; callers with no such registration (the
+/// autonomous dispatcher) just supply a fresh id.
 pub async fn execute_member_task(
     context: &GatewayContext,
     target: &MemberDispatchTarget,
     team_id: &str,
     task_id: &str,
     task_text: String,
+    run_id: String,
     timeout_secs: u64,
     isolate_workspace: bool,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
@@ -194,7 +201,6 @@ pub async fn execute_member_task(
         .map(|h| Arc::new(WorktreeSandbox::new(h.path().to_path_buf())) as Arc<dyn Sandbox>);
 
     let session_key = SessionKey::task(agent_id, "team", task_id);
-    let run_id = uuid::Uuid::new_v4().to_string();
     // Deliberately carries no `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
     // goal continuations: a member run has no channel, so a confirm-gated tool
     // resolves through `OperatorApprovalRequester` to a Panel card that the user
