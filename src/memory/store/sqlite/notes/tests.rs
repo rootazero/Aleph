@@ -1172,4 +1172,27 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    #[tokio::test]
+    async fn increment_review_retry_counts_up_and_survives_reads() {
+        let backend = make_backend();
+        let id = backend
+            .enqueue_review("agent1", "{}", "med", 0.4, "low confidence")
+            .await
+            .unwrap();
+
+        // Fresh row starts at retry_count 0.
+        let pending = backend.list_pending_review("agent1", i64::MAX).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].retry_count, 0);
+
+        // Each increment returns the new count monotonically.
+        assert_eq!(backend.increment_review_retry(&id).await.unwrap(), 1);
+        assert_eq!(backend.increment_review_retry(&id).await.unwrap(), 2);
+        assert_eq!(backend.increment_review_retry(&id).await.unwrap(), 3);
+
+        // And it is persisted on the row (so the stage can enforce a ceiling).
+        let pending = backend.list_pending_review("agent1", i64::MAX).await.unwrap();
+        assert_eq!(pending[0].retry_count, 3);
+    }
 }

@@ -58,12 +58,22 @@ impl DreamStage for SkillDistillStage {
         let mut applied = 0usize;
         let dim_hint = ctx.embedder.dimensions() as u32;
 
-        // Fingerprints of supersedes the recall-evidence gate rejected on
-        // prior cycles — loaded once so re-proposals drop without re-gating.
-        let rejected_fingerprints = ctx
+        // Supersedes the recall-evidence gate rejected on prior cycles. The
+        // fingerprints drive the O(1) drop in `gate_action_evidence`; the full
+        // records feed the prompt as negative feedback so the LLM stops
+        // re-proposing losing edits (SkillOpt's rejected-edit buffer).
+        let reject_records = ctx
             .database
-            .distill_rejects(&ctx.agent_id)
+            .distill_reject_records(&ctx.agent_id)
             .unwrap_or_default();
+        let rejected_fingerprints: Vec<String> = reject_records
+            .iter()
+            .map(|r| r.fingerprint.clone())
+            .collect();
+        let rejected_feedback: Vec<(String, String, String)> = reject_records
+            .into_iter()
+            .map(|r| (r.target, r.summary, r.reason))
+            .collect();
 
         for path in &synthesis_paths {
             let content = match ctx.load_content(path).await {
@@ -97,6 +107,7 @@ impl DreamStage for SkillDistillStage {
                 "skill",
                 self.max_per_cycle,
                 &candidates,
+                &rejected_feedback,
             );
             let system = "You are a skill distillation engine. Choose the right \
                           DistillAction variant per the schema. Reference candidate \
@@ -187,6 +198,15 @@ impl DreamStage for SkillDistillStage {
                     ctx.report.distill_actions.push(record);
                     continue;
                 }
+                // Destructive-edit budget: a Supersede replaces an existing
+                // skill note and spends the shared per-cycle budget; additive
+                // New/Strengthen are free.
+                if let Some(record) =
+                    super::charge_distill_budget(&mut ctx.evolution_budget, &action, "skill_distill")
+                {
+                    ctx.report.distill_actions.push(record);
+                    continue;
+                }
                 match ctx
                     .indexer
                     .apply_distill_action(&ctx.agent_id, "skill", &action)
@@ -242,6 +262,7 @@ pub fn build_distill_prompt_with_candidates(
     source_category: &str,
     max_per_cycle: usize,
     candidates: &[(String, f32)],
+    rejected: &[(String, String, String)],
 ) -> String {
     let candidates_block = if candidates.is_empty() {
         "[]".to_string()
@@ -252,6 +273,7 @@ pub fn build_distill_prompt_with_candidates(
             .collect();
         format!("[\n{}\n]", entries.join(",\n"))
     };
+    let rejected_block = super::render_rejected_block(rejected);
     format!(
         "Analyze this synthesis note from the '{source_category}' category and \
          decide whether each insight is:\n\
@@ -263,6 +285,7 @@ pub fn build_distill_prompt_with_candidates(
          Existing skill-note candidates (you MUST reference these IDs verbatim \
          if you choose strengthen or supersede):\n\
          existing_candidates: {candidates_block}\n\n\
+         {rejected_block}\
          Quality bar: each NEW or SUPERSEDE rule must be a transferable procedure or \
          invariant (not a one-off fact); use a kebab-case title; prefer a \
          symptom→cause→fix shape; calibrate confidence to evidence strength and set \
@@ -346,6 +369,7 @@ mod tests {
             "skill",
             5,
             &[("skill/async-error-handling".to_string(), 0.71)],
+            &[],
         );
         assert!(
             prompt.contains("Quality bar:"),
@@ -354,6 +378,29 @@ mod tests {
         // existing contract preserved
         assert!(prompt.contains("existing_candidates"));
         assert!(prompt.contains("strengthen") && prompt.contains("supersede"));
+        // No rejected feedback → no rejected block (byte-compatible baseline).
+        assert!(!prompt.contains("Previously REJECTED"));
+    }
+
+    #[test]
+    fn build_distill_prompt_includes_rejected_feedback() {
+        let prompt = build_distill_prompt_with_candidates(
+            "synthesis text",
+            "skill",
+            5,
+            &[("skill/async-error-handling".to_string(), 0.71)],
+            &[(
+                "skill/retry-policy".to_string(),
+                "retry-with-jitter".to_string(),
+                "recall-evidence gate: confidence 0.40 does not beat support 0.60".to_string(),
+            )],
+        );
+        assert!(
+            prompt.contains("Previously REJECTED"),
+            "prompt must replay rejected edits as negative feedback:\n{prompt}"
+        );
+        assert!(prompt.contains("skill/retry-policy"), "must name the rejected target");
+        assert!(prompt.contains("retry-with-jitter"), "must include the proposed title (summary)");
     }
 
     #[test]
@@ -367,6 +414,7 @@ mod tests {
             "skill",
             3,
             &candidates,
+            &[],
         );
         assert!(
             prompt.contains("existing_candidates"),
@@ -396,7 +444,7 @@ mod tests {
 
     #[test]
     fn build_distill_prompt_with_no_candidates_still_works() {
-        let prompt = build_distill_prompt_with_candidates("text", "skill", 3, &[]);
+        let prompt = build_distill_prompt_with_candidates("text", "skill", 3, &[], &[]);
         assert!(prompt.contains("existing_candidates"));
         assert!(prompt.contains("[]") || prompt.contains("(none)"));
     }

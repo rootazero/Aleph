@@ -43,6 +43,12 @@ pub struct PersistedDreamReport {
     pub feedback_distilled: u32,
     pub errors: Option<String>,
     pub namespace: String,
+    /// Serialized `EvolutionOutcome` for this cycle (SkillOpt gate verdict:
+    /// baseline/candidate/best health + accept/reject). `None` for rows written
+    /// before the column existed, or when the cycle produced no gate decision
+    /// (e.g. a Conserve run). Stored as JSON so the schema stays forward-
+    /// compatible if the outcome shape grows. Read by `dreaming.list_insights`.
+    pub evolution_json: Option<String>,
 }
 
 /// One `GROUP BY pipeline_type` bucket of dream activity within a time window.
@@ -86,8 +92,8 @@ impl SqliteMemoryBackend {
             "INSERT INTO dream_reports \
              (id, pipeline_type, started_at, finished_at, duration_ms, \
               synthesis_count, notes_consolidated, notes_woven, notes_archived, \
-              feedback_distilled, errors, namespace) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              feedback_distilled, errors, namespace, evolution_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 report.id,
                 report.pipeline_type,
@@ -101,6 +107,7 @@ impl SqliteMemoryBackend {
                 report.feedback_distilled,
                 report.errors,
                 report.namespace,
+                report.evolution_json,
             ],
         )
         .map_err(|e| AlephError::config(format!("insert_dream_report: {e}")))?;
@@ -122,7 +129,7 @@ impl SqliteMemoryBackend {
             .prepare(
                 "SELECT id, pipeline_type, started_at, finished_at, duration_ms, \
                  synthesis_count, notes_consolidated, notes_woven, notes_archived, \
-                 feedback_distilled, errors, namespace \
+                 feedback_distilled, errors, namespace, evolution_json \
                  FROM dream_reports ORDER BY started_at DESC LIMIT ?1",
             )
             .map_err(|e| AlephError::config(format!("recent_dream_reports prepare: {e}")))?;
@@ -142,6 +149,7 @@ impl SqliteMemoryBackend {
                     feedback_distilled: row.get("feedback_distilled")?,
                     errors: row.get("errors")?,
                     namespace: row.get("namespace")?,
+                    evolution_json: row.get("evolution_json")?,
                 })
             })
             .map_err(|e| AlephError::config(format!("recent_dream_reports query: {e}")))?;
@@ -256,6 +264,7 @@ mod tests {
             feedback_distilled: 5,
             errors: None,
             namespace: "owner".to_string(),
+            evolution_json: None,
         }
     }
 
@@ -282,6 +291,21 @@ mod tests {
         assert_eq!(r.feedback_distilled, 5);
         assert!(r.errors.is_none());
         assert_eq!(r.namespace, "owner");
+        assert!(r.evolution_json.is_none());
+    }
+
+    #[test]
+    fn evolution_json_round_trips() {
+        let store = setup();
+        let mut report = sample_report("r1", 1000, 2000);
+        report.evolution_json = Some(r#"{"outcome":"accept_new_best","best":0.7}"#.to_string());
+        store.insert_dream_report(&report).unwrap();
+
+        let reports = store.recent_dream_reports(10).unwrap();
+        assert_eq!(
+            reports[0].evolution_json.as_deref(),
+            Some(r#"{"outcome":"accept_new_best","best":0.7}"#)
+        );
     }
 
     #[test]
@@ -320,6 +344,7 @@ mod tests {
             feedback_distilled: 0,
             errors: None,
             namespace: "owner".to_string(),
+            evolution_json: None,
         }
     }
 

@@ -201,6 +201,29 @@ pub fn migrate_dream_reports_add_activity_counters(conn: &Connection) -> Result<
     Ok(())
 }
 
+/// Add the nullable `evolution_json` column to existing `dream_reports` rows.
+///
+/// Holds the serialized `EvolutionOutcome` (SkillOpt gate verdict) so the
+/// per-cycle accept/reject decision is queryable via `dreaming.list_insights`
+/// instead of living only in `dream_events.jsonl`. Pre-existing rows keep
+/// `evolution_json = NULL`. Idempotent: checks column existence first.
+pub fn migrate_dream_reports_add_evolution(conn: &Connection) -> Result<(), AlephError> {
+    let existing: std::collections::BTreeSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .map_err(|e| AlephError::other(format!("pragma: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| AlephError::other(format!("pragma rows: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    if !existing.contains("evolution_json") {
+        conn.execute("ALTER TABLE dream_reports ADD COLUMN evolution_json TEXT", [])
+            .map_err(|e| AlephError::other(format!("add col evolution_json: {e}")))?;
+    }
+    Ok(())
+}
+
 /// Add the nullable `relation` column to existing `notes_links` rows.
 ///
 /// Pre-existing edges keep `relation = NULL` (untyped body wikilinks). Typed

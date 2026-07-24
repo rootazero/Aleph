@@ -319,7 +319,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | └─ RAW_MEMORY.md | [docs/reference/memory/RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) |
 | └─ NOTES.md | [docs/reference/memory/NOTES.md](docs/reference/memory/NOTES.md) |
 | └─ RETRIEVAL.md | [docs/reference/memory/RETRIEVAL.md](docs/reference/memory/RETRIEVAL.md) |
-| └─ DREAM_DAEMON.md | [docs/reference/memory/DREAM_DAEMON.md](docs/reference/memory/DREAM_DAEMON.md) |
+| └─ DREAM_DAEMON.md | [docs/reference/memory/DREAM_DAEMON.md](docs/reference/memory/DREAM_DAEMON.md) — 离线做梦维护 + **自进化纪律（SkillOpt 移植）**：strict-`>` 进化门 / EditBudget textual-learning-rate / recall-evidence 门 / rejected-edit buffer 回喂 prompt / best_health 持久化（§3.1；FEATURE_LOCATOR §2.17）。**`DreamGate` 已删（零消费者，勿复活）** |
 | EXTENSION_SYSTEM.md | [docs/reference/EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
 | PLUGIN_SYSTEM.md | [docs/reference/PLUGIN_SYSTEM.md](docs/reference/PLUGIN_SYSTEM.md) |
 | WORKFLOW_INTEROP.md | [docs/reference/WORKFLOW_INTEROP.md](docs/reference/WORKFLOW_INTEROP.md) |

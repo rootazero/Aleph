@@ -126,6 +126,11 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
                     "duration_ms": r.duration_ms,
                     "synthesis_count": r.synthesis_count,
                     "errors": r.errors,
+                    // SkillOpt gate verdict (baseline/candidate/best + accept/reject),
+                    // parsed from the stored JSON; null on pre-migration rows or
+                    // cycles without a gate decision.
+                    "evolution": r.evolution_json.as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
                 })
             })
             .collect::<Vec<_>>(),
@@ -197,5 +202,52 @@ mod tests {
         assert_eq!(daily[0]["source_memory_count"], 4);
         assert!(v.get("synthesis").unwrap().is_array());
         assert!(v.get("runs").unwrap().is_array());
+    }
+
+    #[tokio::test]
+    async fn list_insights_surfaces_evolution_gate_verdict() {
+        use crate::memory::dreaming::{EvolutionOutcome, GateOutcome};
+        use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        // Serialize an EvolutionOutcome exactly as the daemon does before insert.
+        let evolution = EvolutionOutcome {
+            baseline: 0.5,
+            candidate: 0.72,
+            best: 0.72,
+            outcome: GateOutcome::AcceptNewBest,
+            merges_rejected: 1,
+        };
+        backend
+            .insert_dream_report(&PersistedDreamReport {
+                id: "d1".into(),
+                pipeline_type: "synthesize".into(),
+                started_at: 1000,
+                finished_at: 2000,
+                duration_ms: 1000,
+                synthesis_count: 2,
+                notes_consolidated: 0,
+                notes_woven: 0,
+                notes_archived: 0,
+                feedback_distilled: 0,
+                errors: None,
+                namespace: "owner".into(),
+                evolution_json: Some(serde_json::to_string(&evolution).unwrap()),
+            })
+            .unwrap();
+        let db: crate::memory::store::MemoryBackend = Arc::new(backend);
+
+        let req = JsonRpcRequest::with_id("dreaming.list_insights", None, json!(5));
+        let resp = handle_list_insights(req, db).await;
+        assert!(resp.is_success(), "expected success: {:?}", resp.error);
+        let v = resp.result.expect("result payload");
+        let runs = v.get("runs").and_then(|r| r.as_array()).expect("runs array");
+        let run = runs.iter().find(|r| r["id"] == "d1").expect("the inserted run");
+        let evo = &run["evolution"];
+        assert!(evo.is_object(), "evolution must parse back to an object: {run}");
+        assert_eq!(evo["outcome"], "accept_new_best");
+        assert_eq!(evo["candidate"], 0.72);
     }
 }

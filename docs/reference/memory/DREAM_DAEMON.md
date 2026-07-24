@@ -12,39 +12,23 @@ The Dream Daemon is the **offline** counterpart to the realtime compression pipe
 
 `LAST_ACTIVITY_TS: AtomicI64` is updated by `record_activity()`; `idle_seconds()` must exceed `config.idle_threshold_seconds` (default 900 s). `is_within_window()` checks local time against `window_start_local` / `window_end_local` (defaults `02:00` / `05:00`), with explicit midnight-wrap. Which pipeline runs is decided per cycle by the signal-driven `StrategySelector` (`selector.rs`): corpus metrics (`SignalSnapshot`) plus the `MutationGate`'s churn decision select a `DreamStrategy` (`Consolidate` / `Synthesize` / `Conserve` — see §6). `check_and_run` consults `dream_status.last_run_at` and short-circuits if a `success` row exists for today; a successful run claims an `AtomicBool` (`is_running`). The run is wrapped in `tokio::time::timeout(max_duration_seconds)` (default 600 s); `last_status` transitions `running → success | error | timeout | cancelled`.
 
-## 3. `DreamGate`
+## 3. Gating: what decides a cycle runs
 
-`src/memory/dreaming/gate.rs` provides a three-level cheap→expensive gate chain.
+There is **no** standalone `DreamGate` type. Whether a cycle runs at all is decided by the daemon's own preconditions in `check_and_run` (§2): `config.enabled` → `is_within_window()` → `idle_seconds() >= idle_threshold_seconds` → `is_running` compare-exchange latch → `should_skip_scheduled_run` (once-per-day). *Which* pipeline runs is the signal-driven `StrategySelector` + `MutationGate` (§2, §6). *Whether an already-formed edit is kept* is the `evolution/` gate (§3.1).
 
-```rust
-/// Configuration for the DreamGate chain.
-#[derive(Debug, Clone)]
-pub struct DreamGateConfig {
-    /// Minimum hours that must have elapsed since the last successful
-    /// consolidation before the gate will pass.  Default: 6.0
-    pub min_hours: f64,
-    /// Minimum number of pending facts required for consolidation to proceed.
-    /// Default: 20
-    pub min_pending_facts: usize,
-    /// Minimum average cosine distance across pending facts required to proceed.
-    /// Values below this indicate the memory landscape hasn't drifted enough.
-    /// Default: 0.3
-    pub drift_threshold: f32,
-    /// Suggested polling interval for the background scheduler.  Default: 4 h
-    pub background_interval: Duration,
-}
+> An earlier three-level `DreamGate` (time/count/drift) abstraction existed in `src/memory/dreaming/gate.rs` but had **zero production consumers** (the daemon always used the inline checks above) and was removed under R10/YAGNI. Do not reintroduce it; add cycle-entry preconditions to `check_and_run` instead.
 
-pub enum GateResult { Pass, Blocked(BlockReason) }
+### 3.1 Evolution discipline (`src/memory/dreaming/evolution/`)
 
-pub enum BlockReason {
-    TooRecent         { hours_since: f64 },    // hours_since < min_hours
-    InsufficientFacts { count: usize },        // pending_facts < min_pending_facts
-    LowDrift          { avg_distance: f32 },   // avg_distance < drift_threshold
-    AlreadyRunning,                            // is_running.load() is true
-}
-```
+Ported from SkillOpt (arXiv 2605.23904): a bounded, validation-gated edit loop layered over the LLM-proposed edits (R7: the *content* is the model's; this layer only enforces discipline).
 
-`DreamGate::evaluate(pending_facts, avg_drift)` runs the four checks in cheap→expensive order and, on `Pass`, atomically claims `is_running`. Lifecycle: `mark_complete()` records timestamp + releases lock; `mark_failed()` releases lock only (retry fires sooner); `record_consolidation()` updates the timestamp manually.
+- **Strict-improvement gate** — `evolution/gate.rs::evaluate_gate(candidate, current, best, ε)` keeps an edit only when it *strictly* improves a score (`> current + ε`, ties rejected), returning `AcceptNewBest` / `Accept` / `Reject`. At cycle level (`mod.rs` Phase 5.5) it scores `memory_health_score` before vs after this cycle's edits; a degrading cycle arms a 2-cycle Conserve cooldown (it does not roll back — edits are already on disk).
+- **Best-checkpoint persistence** — `best_health` is loaded from `dream_best_health__{agent}` (`dream_kv.rs`) in `from_config` and re-persisted on every `AcceptNewBest`, so the honest historical best survives a restart instead of resetting to 0.
+- **Edit budget ("textual learning rate")** — `evolution/budget.rs::EditBudget` (default 32 edits / 256 KiB) is shared across the **destructive** stages — `NoteConsolidate` (merges), `NoteDecay` (archival), and the distill `Supersede` action (`SkillDistill` / `FeedbackDistill`, via `stages::charge_distill_budget`). Additive growth (new synthesis notes, distill `New`/`Strengthen`, weave links) is **not** budgeted, so the growth path is never starved.
+- **Recall-evidence gate** — `evolution/evidence.rs::gate_supersede_evidence` demands the LLM's confidence strictly beat a note's saturating recall support before a destructive `Supersede` lands (production recall is Aleph's cheap stand-in for a held-out split).
+- **Rejected-edit buffer** — rejected supersedes are fingerprinted and stored as `DistillRejectRecord`s (`distill_rejects__{agent}`, backward-compatible with the legacy fingerprint-only list). They both drop re-proposals in code (`stages/mod.rs::gate_action_evidence`) *and* are replayed into the next distill prompt as negative feedback (`stages/mod.rs::render_rejected_block`) so the model stops re-proposing losing edits.
+
+The cycle-level gate outcome (`EvolutionOutcome`) is persisted to `dream_reports.evolution_json` (§8) and surfaced via `dreaming.list_insights`.
 
 ## 4. Core Types
 
@@ -87,7 +71,9 @@ pub struct DreamContext {
     /// Optional wiki orientation — used by `IndexRefresherStage`.
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Per-cycle edit budget ("textual learning rate") bounding how much memory
-    /// destructive stages may rewrite this cycle. Consumed by `NoteConsolidate`.
+    /// destructive stages may rewrite this cycle. Shared across `NoteConsolidate`
+    /// (merges), `NoteDecay` (archival) and the distill `Supersede` action;
+    /// additive growth is not budgeted (§3.1).
     pub evolution_budget: EditBudget,
 }
 ```
@@ -301,29 +287,23 @@ CREATE TABLE IF NOT EXISTS dream_status (
 
 The `CHECK (id = 1)` enforces singleton semantics. `last_status` transitions `running → success | error | timeout | cancelled` (§2).
 
-**`dream_reports`** — one row per run (legacy columns `facts_*` / `nodes_*` / `edges_*` are holdovers from the pre-notes schema; current writers populate only `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, `errors` — all legacy columns default to 0):
+**`dream_reports`** — one row per run. Current writers populate `pipeline_type`, `started_at`, `finished_at`, `duration_ms`, `synthesis_count`, the notes-era activity counters (`notes_consolidated` / `notes_woven` / `notes_archived` / `feedback_distilled`, added by `migrate_dream_reports_add_activity_counters`), `errors`, and the nullable `evolution_json` (serialized `EvolutionOutcome` — the SkillOpt gate verdict, added by `migrate_dream_reports_add_evolution`; NULL on pre-migration rows or cycles with no gate decision). Legacy `facts_*` / `nodes_*` / `edges_*` columns from the pre-notes schema were dropped by `migrate_dream_reports_drop_legacy_cols`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS dream_reports (
-    id                    TEXT PRIMARY KEY,
-    pipeline_type         TEXT NOT NULL,
-    started_at            INTEGER NOT NULL,
-    finished_at           INTEGER NOT NULL,
-    duration_ms           INTEGER NOT NULL,
-    facts_collected       INTEGER NOT NULL DEFAULT 0,
-    clusters_found        INTEGER NOT NULL DEFAULT 0,
-    drift_detected        INTEGER NOT NULL DEFAULT 0,
-    drift_summary         TEXT,
-    candidates_evaluated  INTEGER NOT NULL DEFAULT 0,
-    facts_promoted        INTEGER NOT NULL DEFAULT 0,
-    promotion_details     TEXT,
-    facts_decayed         INTEGER NOT NULL DEFAULT 0,
-    facts_pruned          INTEGER NOT NULL DEFAULT 0,
-    nodes_decayed         INTEGER NOT NULL DEFAULT 0,
-    edges_decayed         INTEGER NOT NULL DEFAULT 0,
-    synthesis_count       INTEGER NOT NULL DEFAULT 0,
-    errors                TEXT,
-    namespace             TEXT NOT NULL DEFAULT 'owner'
+    id                 TEXT PRIMARY KEY,
+    pipeline_type      TEXT NOT NULL,
+    started_at         INTEGER NOT NULL,
+    finished_at        INTEGER NOT NULL,
+    duration_ms        INTEGER NOT NULL,
+    synthesis_count    INTEGER NOT NULL DEFAULT 0,
+    notes_consolidated INTEGER NOT NULL DEFAULT 0,
+    notes_woven        INTEGER NOT NULL DEFAULT 0,
+    notes_archived     INTEGER NOT NULL DEFAULT 0,
+    feedback_distilled INTEGER NOT NULL DEFAULT 0,
+    errors             TEXT,
+    namespace          TEXT NOT NULL DEFAULT 'owner',
+    evolution_json     TEXT   -- serialized EvolutionOutcome (SkillOpt gate verdict), nullable
 );
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started ON dream_reports(started_at);
 ```

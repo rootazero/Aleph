@@ -7,7 +7,6 @@
 pub mod distill_action;
 pub mod event_log;
 pub mod evolution;
-pub mod gate;
 pub mod mutation_gate;
 pub mod report;
 pub mod selector;
@@ -40,9 +39,6 @@ use tracing::{info, warn};
 
 // Re-export distill action enum (Phase 2 Task 14)
 pub use distill_action::{DistillAction, DistillActionRecord, DistillOutcome};
-
-// Re-export gate types
-pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
 
 // Re-export report types
 pub use report::{DreamReport, DreamReportStatus};
@@ -120,7 +116,9 @@ pub struct DreamContext {
     /// Optional wiki orientation — used by `IndexRefresherStage`.
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Per-cycle edit budget ("textual learning rate") bounding how much memory
-    /// destructive stages may rewrite this cycle. Consumed by `NoteConsolidate`.
+    /// destructive stages may rewrite this cycle. Shared across `NoteConsolidate`
+    /// (merges), `NoteDecay` (archival) and the distill `Supersede` action
+    /// (`SkillDistill` / `FeedbackDistill`); additive growth is not budgeted.
     pub evolution_budget: EditBudget,
 }
 
@@ -560,8 +558,10 @@ pub struct DreamDaemon {
     /// Mutation gate tracking evolution pathologies.
     mutation_gate: crate::sync_primitives::Mutex<MutationGate>,
     /// Best-ever memory-health score, tracked across cycles for the evolution
-    /// gate (SkillOpt's best-checkpoint). In-memory: resets on restart, which
-    /// is safe — the gate simply re-establishes the best from the next cycle.
+    /// gate (SkillOpt's best-checkpoint). Loaded from `dream_best_health__*` at
+    /// construction and persisted on every `AcceptNewBest` so the honest
+    /// absolute best survives a restart instead of resetting to 0 (which would
+    /// let a worse-than-historical cycle masquerade as a new best).
     best_health: crate::sync_primitives::Mutex<f64>,
     /// Whether per-project memory namespacing is enabled (mirrors
     /// `MemoryConfig.project_scoped`). When on, the daemon additionally fans
@@ -574,6 +574,15 @@ pub struct DreamDaemon {
 impl DreamDaemon {
     pub fn from_config(database: MemoryBackend, config: &MemoryConfig) -> Result<Self, AlephError> {
         let (window_start, window_end) = parse_window(&config.dreaming)?;
+
+        // Restore the persisted best-ever health so the evolution gate does not
+        // forget its historical best on every reboot. A read failure or missing
+        // value degrades to 0.0 — byte-compatible with the pre-persistence
+        // behaviour (gate re-establishes best from the next accepted cycle).
+        let best_health = database
+            .get_best_health(DEFAULT_AGENT_ID)
+            .unwrap_or(None)
+            .unwrap_or(0.0);
 
         Ok(Self {
             database,
@@ -591,9 +600,16 @@ impl DreamDaemon {
             orientation: None,
             selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
             mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
-            best_health: crate::sync_primitives::Mutex::new(0.0),
+            best_health: crate::sync_primitives::Mutex::new(best_health),
             project_scoped: config.project_scoped,
         })
+    }
+
+    /// Test-only view of the in-memory best-health checkpoint, for asserting
+    /// that `from_config` reloads the persisted value across a "restart".
+    #[cfg(test)]
+    pub(crate) fn best_health_for_test(&self) -> f64 {
+        *self.best_health.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Attach an AI provider for LLM-powered dream stages.
@@ -890,6 +906,13 @@ impl DreamDaemon {
                     // rust-doctor-disable-next-line excessive-clone
                     errors: report.errors.clone(),
                     namespace: "owner".to_string(),
+                    // Serialize the SkillOpt gate verdict so the accept/reject
+                    // decision is queryable, not just buried in the event log.
+                    // A serialization failure degrades to NULL (non-fatal).
+                    evolution_json: report
+                        .evolution
+                        .as_ref()
+                        .and_then(|e| serde_json::to_string(e).ok()),
                 };
                 if let Err(e) = self.database.insert_dream_report(&persisted) {
                     warn!(error = %e, "failed to persist dream report row");
@@ -1171,13 +1194,40 @@ impl DreamDaemon {
             // rust-doctor-disable-next-line excessive-clone
             .map(|n| (n.path.clone(), n.content_hash.clone()))
             .collect();
+        // L1 format validation: read a bounded, newest-first sample of the
+        // post-cycle corpus off disk and check frontmatter / category / non-empty
+        // body. Previously hardcoded to a vacuous pass (`checks_run: 0`), leaving
+        // `run_l1_validation` — a fully-implemented, tested function — with zero
+        // production callers. Bounded by `L1_MAX_NOTES` so a large corpus can't
+        // turn the nightly cycle into thousands of reads; newest-first because a
+        // malformed note is almost always one this cycle just wrote. A failed
+        // L1 only nudges the selector's personality pass-rate down (non-
+        // destructive), matching L2's existing contract.
+        const L1_MAX_NOTES: usize = 200;
+        let l1_format = {
+            let mut by_recency: Vec<&NoteIndexEntry> = post_index.iter().collect();
+            by_recency.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
+            let mut contents: HashMap<String, String> = HashMap::new();
+            for entry in by_recency.into_iter().take(L1_MAX_NOTES) {
+                let file_path = memory_dir
+                    .join(&entry.agent_id)
+                    .join(&entry.category)
+                    .join(format!("{}.md", entry.filename));
+                if let Ok(content) = tokio::fs::read_to_string(&file_path).await {
+                    contents.insert(entry.path.clone(), content);
+                }
+            }
+            validation::run_l1_validation(&contents)
+        };
+        if !l1_format.passed {
+            warn!(
+                checks_run = l1_format.checks_run,
+                issues = l1_format.issues.len(),
+                "Dream L1 validation found malformed notes"
+            );
+        }
         let validation_report = DreamValidationReport {
-            l1_format: ValidationTier {
-                passed: true,
-                checks_run: 0,
-                checks_passed: 0,
-                issues: vec![],
-            },
+            l1_format,
             l2_consistency: validation::run_l2_validation(&l2_pairs),
             l3_semantic: None,
             l4_retrospective: None,
@@ -1216,6 +1266,14 @@ impl DreamDaemon {
             best_before
         };
         *self.best_health.lock().unwrap_or_else(|e| e.into_inner()) = new_best;
+        // Persist the checkpoint only when it actually advanced, so the honest
+        // best survives a restart. A write failure is non-fatal (the in-memory
+        // value still governs this process's remaining cycles).
+        if gate_outcome == GateOutcome::AcceptNewBest {
+            if let Err(e) = self.database.set_best_health(DEFAULT_AGENT_ID, new_best) {
+                warn!(error = %e, "failed to persist best_health checkpoint");
+            }
+        }
         report.evolution = Some(EvolutionOutcome {
             baseline: baseline_health,
             candidate: candidate_health,
@@ -1675,6 +1733,26 @@ mod tests {
             .with_provider(Arc::new(MockProvider::new("")))
             .with_embedder(Arc::new(StubEmbedder))
             .with_note_memory_dir(dir)
+    }
+
+    #[tokio::test]
+    async fn from_config_reloads_persisted_best_health() {
+        // The evolution gate's best-ever checkpoint must survive a restart:
+        // a fresh daemon built from the same store reloads the persisted value
+        // instead of resetting to 0 (which would let a worse-than-historical
+        // cycle masquerade as a new best).
+        let temp = std::env::temp_dir().join(format!("aleph_besthealth_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+
+        // First run: no persisted value → 0.0.
+        let cold = DreamDaemon::from_config(store.clone(), &MemoryConfig::default())
+            .expect("valid config");
+        assert_eq!(cold.best_health_for_test(), 0.0);
+
+        // Persist a best, then a "restart" (fresh from_config) reloads it.
+        store.set_best_health(DEFAULT_AGENT_ID, 0.62).unwrap();
+        let warm = DreamDaemon::from_config(store, &MemoryConfig::default()).expect("valid config");
+        assert!((warm.best_health_for_test() - 0.62).abs() < 1e-9);
     }
 
     #[tokio::test]

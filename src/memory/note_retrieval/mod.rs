@@ -236,15 +236,20 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .unwrap_or_default()
     }
 
-    /// Producer half of the hot-floating loop: record recall signals for the
-    /// notes a retrieval actually surfaced, so frequently-recalled notes accrue
-    /// reinforcement salience ("popular memories float to top") that `fetch_reinforcement_counts`
-    /// later consumes. Best-effort — a write failure never breaks recall — and
-    /// gated on `reinforcement_enabled` so disabling hot-floating also stops
-    /// recording. The store dedups per `(note_path, query, day, channel)`, so a
-    /// note must surface across *distinct* queries/days to genuinely heat up.
+    /// Producer of the `recall_signals` table — the raw access signal three
+    /// independent consumers depend on: hot-floating reinforcement ranking
+    /// (`fetch_reinforcement_counts`), `NoteDecay`'s `access_weight`, and the
+    /// evolution recall-evidence gate (`recall_hit_counts`). Recording is
+    /// therefore **unconditional** (only skipped on an empty result set): it is
+    /// NOT gated on `reinforcement_enabled`, because disabling hot-floating
+    /// ranking must not silently blind decay and the evolution gate to which
+    /// notes are actually being used (which made every note look never-recalled
+    /// and biased archival). The reinforcement *ranking boost* stays gated in
+    /// `apply_scoring`. Best-effort — a write failure never breaks recall. The
+    /// store dedups per `(note_path, query, day, channel)`, so a note must
+    /// surface across *distinct* queries/days to genuinely heat up.
     async fn record_recall(&self, query: &str, agent_id: &str, ranked: &[ScoredFact]) {
-        if !self.scoring.reinforcement_enabled || ranked.is_empty() {
+        if ranked.is_empty() {
             return;
         }
         let hits: Vec<(String, f32)> = ranked
@@ -1059,12 +1064,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_recall_empty_or_disabled_writes_nothing() {
+    async fn record_recall_empty_writes_nothing_but_disabled_still_records() {
         let (retrieval, _dir) = create_retrieval().await;
         // Empty result set → no write, no panic (reinforcement default-on).
         retrieval.record_recall("q", "default", &[]).await;
 
-        // Reinforcement disabled → recording is skipped even with surfaced notes.
+        // Reinforcement RANKING disabled must NOT blind the recall signal:
+        // NoteDecay's access_weight and the evolution recall-evidence gate both
+        // consume `recall_signals` independently of hot-floating. Recording is
+        // therefore decoupled from `reinforcement_enabled`.
         let off = NoteFactRetrieval::new(
             retrieval.indexer.clone(),
             retrieval.embedder.clone().unwrap(),
@@ -1079,9 +1087,10 @@ mod tests {
             .recall_hit_counts("default", &["notes/x.md".to_string()])
             .await
             .unwrap();
-        assert!(
-            counts.is_empty(),
-            "disabled reinforcement must not record signals"
+        assert_eq!(
+            counts.get("notes/x.md"),
+            Some(&1),
+            "recall must be recorded even when reinforcement ranking is disabled"
         );
     }
 
