@@ -86,7 +86,7 @@ async fn feedback_loop_end_to_end() {
 
     // 4. Build the FeedbackDistill prompt with empty candidates (first cycle —
     //    no prior feedback notes exist yet).
-    let prompt = build_feedback_distill_prompt(&corrections, &[], 3);
+    let prompt = build_feedback_distill_prompt(&corrections, &[], 3, &[]);
     // Each correction body must be wrapped in </correction_candidate>.
     assert_eq!(
         prompt.matches("</correction_candidate>").count(),

@@ -586,6 +586,15 @@ pub trait NoteStore: Send + Sync {
         Ok(())
     }
 
+    /// Increment a queued review row's `retry_count` (transient failure that
+    /// left it queued). Returns the new count so the caller can enforce a retry
+    /// ceiling and evict rows that never adjudicate. Default no-op returns 0 so
+    /// existing test mocks compile unchanged.
+    async fn increment_review_retry(&self, queue_id: &str) -> Result<i64, AlephError> {
+        let _ = queue_id;
+        Ok(0)
+    }
+
     /// Move a decided review row from `notes_review_queue` to
     /// `notes_review_archive` atomically.
     async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {

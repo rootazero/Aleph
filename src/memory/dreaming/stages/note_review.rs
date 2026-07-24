@@ -6,8 +6,10 @@
 //! candidate to disk), `reject` (archive and discard), or `rewrite` (write with
 //! a corrected `facts` list). A provider error or an unparseable verdict leaves
 //! the row in the queue for a later cycle rather than rubber-stamping it, so the
-//! governance gate's Defer actually holds. Retry-count eviction of rows that
-//! never parse remains a follow-up (`max_retries` is not yet consulted here).
+//! governance gate's Defer actually holds — but each such failure bumps
+//! `retry_count`, and once it reaches `max_retries` the row is evicted
+//! (`archive_review` with `max_retries_exceeded`) so a permanently
+//! un-adjudicable candidate cannot grow the queue without bound.
 
 use async_trait::async_trait;
 
@@ -86,8 +88,20 @@ impl DreamStage for NoteReviewStage {
                 Err(e) => {
                     // Transient provider failure: leave the row queued so a later
                     // cycle can adjudicate it. Rubber-stamping here would void the
-                    // gate's Defer; discarding would lose the candidate.
-                    tracing::warn!(error = %e, queue_id = %row.id, "note_review LLM call failed; leaving row queued");
+                    // gate's Defer; discarding would lose the candidate. But bump
+                    // the retry counter and evict once it has failed `max_retries`
+                    // times, so a permanently un-adjudicable row cannot grow the
+                    // queue unbounded (the previously-dead `max_retries` field).
+                    let retries = store
+                        .increment_review_retry(&row.id)
+                        .await
+                        .unwrap_or(row.retry_count + 1);
+                    if retries >= self.max_retries {
+                        tracing::warn!(error = %e, queue_id = %row.id, retries, "note_review: LLM call failed max_retries times; evicting row");
+                        let _ = store.archive_review(&row.id, "max_retries_exceeded").await;
+                    } else {
+                        tracing::warn!(error = %e, queue_id = %row.id, retries, "note_review LLM call failed; leaving row queued");
+                    }
                     continue;
                 }
             };
@@ -96,7 +110,19 @@ impl DreamStage for NoteReviewStage {
             let verdict = match parse_review_verdict(&resp_text) {
                 Some(v) => v,
                 None => {
-                    tracing::warn!(queue_id = %row.id, "note_review: unparseable verdict; leaving row queued");
+                    // Unparseable verdict: same retry-ceiling eviction as a
+                    // transient provider failure — bounded so a row the model
+                    // never answers cleanly cannot loop forever.
+                    let retries = store
+                        .increment_review_retry(&row.id)
+                        .await
+                        .unwrap_or(row.retry_count + 1);
+                    if retries >= self.max_retries {
+                        tracing::warn!(queue_id = %row.id, retries, "note_review: unparseable verdict max_retries times; evicting row");
+                        let _ = store.archive_review(&row.id, "max_retries_exceeded").await;
+                    } else {
+                        tracing::warn!(queue_id = %row.id, retries, "note_review: unparseable verdict; leaving row queued");
+                    }
                     continue;
                 }
             };
@@ -322,5 +348,99 @@ mod tests {
         assert!(parse_review_verdict("not json at all").is_none());
         assert!(parse_review_verdict(r#"{"verdict":"maybe"}"#).is_none());
         assert!(parse_review_verdict("{}").is_none());
+    }
+
+    // --- stage-level eviction test (the revived `max_retries` field) ---
+
+    struct ReviewStubEmbedder;
+    #[async_trait]
+    impl crate::memory::embedding_provider::EmbeddingProvider for ReviewStubEmbedder {
+        async fn embed(&self, _t: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _t: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    #[tokio::test]
+    async fn unparseable_verdict_evicts_row_at_max_retries() {
+        use crate::memory::dreaming::{DreamReport, DreamStrategy};
+        use crate::memory::notes::governance::gate::{CandidateNote, NoteWriteAction};
+        use crate::memory::notes::{KnowledgeNote, NoteIndexer};
+        use crate::memory::store::SqliteMemoryBackend;
+        use crate::providers::mock::MockProvider;
+        use crate::sync_primitives::Arc;
+
+        let temp = std::env::temp_dir().join(format!("aleph_review_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp).await.unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+
+        // A parseable candidate so we reach the LLM call (not the json-parse
+        // immediate-archive path). The MockProvider returns non-JSON, so the
+        // verdict is unparseable → the retry/eviction branch runs.
+        let candidate = CandidateNote {
+            agent_id: "default".into(),
+            category: "learning".into(),
+            note: KnowledgeNote {
+                title: "t".into(),
+                category: "learning".into(),
+                ..Default::default()
+            },
+            source_path: None,
+            fact_provenance: vec![],
+            action: NoteWriteAction::Create,
+            bypass_review: false,
+            contradicts_existing: false,
+            replay_op: None,
+        };
+        let json = serde_json::to_string(&candidate).unwrap();
+        let id = store
+            .enqueue_review("default", &json, "med", 0.4, "low confidence")
+            .await
+            .unwrap();
+
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new("not-a-json-verdict"));
+        let ctx = DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder: std::sync::Arc::new(ReviewStubEmbedder),
+            report: DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: DreamStrategy::Consolidate,
+            orientation: None,
+            evolution_budget: crate::memory::dreaming::EditBudget::default(),
+        };
+
+        // dwell_seconds negative → the just-enqueued row is "old enough";
+        // max_retries=1 → the first unparseable verdict hits the ceiling.
+        let stage = NoteReviewStage {
+            dwell_seconds: -100,
+            max_retries: 1,
+        };
+        let _ = stage.execute(ctx).await.unwrap();
+
+        // Row evicted from the pending queue rather than looping forever.
+        let pending = store.list_pending_review("default", i64::MAX).await.unwrap();
+        assert!(
+            !pending.iter().any(|r| r.id == id),
+            "row must be evicted after max_retries unparseable verdicts"
+        );
     }
 }

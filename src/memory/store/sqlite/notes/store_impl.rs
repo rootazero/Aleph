@@ -2240,6 +2240,23 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    async fn increment_review_retry(&self, queue_id: &str) -> Result<i64, AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.execute(
+            "UPDATE notes_review_queue SET retry_count = retry_count + 1 WHERE id = ?1",
+            params![queue_id],
+        )
+        .map_err(|e| AlephError::config(format!("increment_review_retry update: {e}")))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT retry_count FROM notes_review_queue WHERE id = ?1",
+                params![queue_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("increment_review_retry read: {e}")))?;
+        Ok(count)
+    }
+
     async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
         // Wrap INSERT + DELETE in a single transaction so a crash mid-archive

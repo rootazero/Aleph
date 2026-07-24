@@ -221,6 +221,7 @@ mod tests {
                 feedback_distilled: 3,
                 errors: None,
                 namespace: "owner".to_string(),
+                evolution_json: None,
             })
             .unwrap();
 

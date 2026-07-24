@@ -18,8 +18,8 @@
 //!   nightly churn.
 //!
 //! Boundary with the sibling gates (R7 / no overlap):
-//! * [`super::gate::DreamGate`] decides *whether a cycle runs at all*
-//!   (time/count/drift) — a pre-condition, orthogonal to this module.
+//! * The daemon's window/idle/once-per-day checks (`super::DreamDaemon`) decide
+//!   *whether a cycle runs at all* — a pre-condition, orthogonal to this module.
 //! * [`super::mutation_gate::MutationGate`] detects *churn pathologies*
 //!   (oscillation, repeated merges) and enforces cooldown — reactive.
 //! * This module prevents *degrading* edits and provides monotonic-improvement

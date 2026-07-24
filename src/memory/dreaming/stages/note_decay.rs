@@ -226,24 +226,48 @@ impl DreamStage for NoteDecayStage {
             // Honour the per-note `permanent: true` flag and High/Critical
             // severity — neither of which the lightweight index `tags` (checked
             // in the first loop) can see. Only archival candidates are read
-            // here, so this stays cheap.
-            if let Ok(content) = tokio::fs::read_to_string(&source_path).await {
-                if let Ok(note) = KnowledgeNote::from_markdown(filename, &content) {
-                    if note.is_permanent() {
-                        notes_protected += 1;
-                        tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
-                        continue;
+            // here, so this stays cheap. The read length also feeds the edit
+            // budget below (a proxy for the knowledge removed).
+            let note_bytes = match tokio::fs::read_to_string(&source_path).await {
+                Ok(content) => {
+                    if let Ok(note) = KnowledgeNote::from_markdown(filename, &content) {
+                        if note.is_permanent() {
+                            notes_protected += 1;
+                            tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
+                            continue;
+                        }
+                        // Critical/High notes have their confidence floored at
+                        // 0.85/0.7 by the C2.7 pass below; archiving them out of
+                        // the index would make that floor meaningless. Exempt
+                        // them from archival (Med/Low still archive on low
+                        // activity).
+                        if matches!(note.severity, Severity::High | Severity::Critical) {
+                            notes_protected += 1;
+                            tracing::debug!(
+                                path,
+                                "NoteDecay: high-severity note exempt from archival"
+                            );
+                            continue;
+                        }
                     }
-                    // Critical/High notes have their confidence floored at
-                    // 0.85/0.7 by the C2.7 pass below; archiving them out of the
-                    // index would make that floor meaningless. Exempt them from
-                    // archival (Med/Low still archive on low activity).
-                    if matches!(note.severity, Severity::High | Severity::Critical) {
-                        notes_protected += 1;
-                        tracing::debug!(path, "NoteDecay: high-severity note exempt from archival");
-                        continue;
-                    }
+                    content.len() as u64
                 }
+                // Unreadable candidate still archives (unchanged behaviour);
+                // charge a nominal cost so the budget is not free to bypass.
+                Err(_) => 512,
+            };
+
+            // Archival is a destructive edit — bound it by the cycle's shared
+            // `EditBudget` ("textual learning rate") so one night cannot
+            // mass-archive the corpus. Exempt notes already `continue`d above,
+            // so only genuine archives spend budget. On exhaustion, defer the
+            // rest to the next cycle rather than churning unbounded.
+            if !ctx.evolution_budget.try_spend(note_bytes) {
+                tracing::info!(
+                    remaining_edits = ctx.evolution_budget.edits_remaining,
+                    "NoteDecay: edit budget exhausted; deferring remaining archival to next cycle"
+                );
+                break;
             }
 
             let archive_dir = ctx
@@ -1000,6 +1024,48 @@ mod tests {
         assert!(
             cat_dir.join("stale-crit.md").exists(),
             "stale High-severity note must stay in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn archival_stops_when_edit_budget_exhausted() {
+        // Two ancient, unlinked, Low-severity notes — both score-based archival
+        // candidates (recency-only score ≈ 0.01 < 0.2, cleared the >7-day age
+        // protection). With a shared budget of exactly one destructive edit, the
+        // loop archives one and breaks, deferring the second — proving the "one
+        // night cannot mass-archive the corpus" bound is live.
+        let (mut ctx, _store) = build_decay_ctx().await;
+        let now = chrono::Utc::now().timestamp();
+        let old = now - 400 * 86400;
+        let mem_dir = ctx.indexer.memory_dir().to_path_buf();
+        let cat_dir = mem_dir.join("default").join("notes");
+        tokio::fs::create_dir_all(&cat_dir).await.unwrap();
+        for name in ["alpha", "beta"] {
+            let md = KnowledgeNote {
+                title: name.into(),
+                category: "notes".into(),
+                facts: vec![format!("{name} cold fact")],
+                severity: crate::memory::notes::Severity::Low,
+                content_hash: format!("h_{name}"),
+                created_at: old,
+                updated_at: old,
+                ..Default::default()
+            }
+            .to_markdown();
+            tokio::fs::write(cat_dir.join(format!("{name}.md")), &md)
+                .await
+                .unwrap();
+        }
+        ctx.notes = vec![
+            decay_entry("notes/alpha", old, old),
+            decay_entry("notes/beta", old, old),
+        ];
+        ctx.evolution_budget = crate::memory::dreaming::EditBudget::new(1, 1_000_000);
+
+        let out = NoteDecayStage::default().execute(ctx).await.unwrap();
+        assert_eq!(
+            out.report.notes_archived, 1,
+            "a one-edit budget must cap archival at one note; the second defers to next cycle"
         );
     }
 }

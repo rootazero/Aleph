@@ -1,8 +1,14 @@
 //! Edit budget — SkillOpt's "textual learning rate" for one dream cycle.
 //!
-//! Bounds how much memory a single cycle may rewrite, so a runaway pipeline
-//! can't churn the whole corpus in one night. Destructive stages call
-//! [`EditBudget::try_spend`] before each edit and stop when it is exhausted.
+//! Bounds how much memory a single cycle may *rewrite*, so a runaway pipeline
+//! can't churn the whole corpus in one night. The budget is shared across all
+//! **destructive** stages — the ones that overwrite or remove existing
+//! knowledge: `NoteConsolidate` (merges), `NoteDecay` (archival), and the
+//! distill `Supersede` action (`SkillDistill` / `FeedbackDistill`). Each calls
+//! [`EditBudget::try_spend`] before an edit and stops when it is exhausted.
+//! **Additive** growth (new synthesis notes, distill `New` / `Strengthen`, weave
+//! links) is deliberately *not* budgeted, so the growth path is never starved
+//! by earlier destructive stages within the same cycle.
 
 use serde::{Deserialize, Serialize};
 

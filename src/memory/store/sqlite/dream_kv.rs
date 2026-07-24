@@ -9,10 +9,33 @@
 //! `CompressionStore`'s own keys (`last_timestamp`, `session_*`).
 
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
 
 use super::SqliteMemoryBackend;
+
+/// A rejected distill edit, remembered across cycles.
+///
+/// Extends the original fingerprint-only buffer with human-readable context so
+/// the *next* distill reflection can be told what was already tried and
+/// rejected — SkillOpt's "rejected-edit buffer fed back into reflection". The
+/// `fingerprint` alone still drives the O(1) code-level dedup drop; `target` /
+/// `summary` / `reason` exist purely to render negative feedback into the LLM
+/// prompt so it stops re-proposing the same losing edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistillRejectRecord {
+    pub fingerprint: String,
+    /// Path of the note the rejected edit targeted (e.g. `skill/foo`).
+    #[serde(default)]
+    pub target: String,
+    /// Short human-readable summary (the proposed title).
+    #[serde(default)]
+    pub summary: String,
+    /// Why the gate rejected it.
+    #[serde(default)]
+    pub reason: String,
+}
 
 fn key_for(consumer: &str, agent_id: &str) -> String {
     format!("dream_watermark__{consumer}__{agent_id}")
@@ -20,6 +43,10 @@ fn key_for(consumer: &str, agent_id: &str) -> String {
 
 fn rejects_key_for(agent_id: &str) -> String {
     format!("distill_rejects__{agent_id}")
+}
+
+fn best_health_key_for(agent_id: &str) -> String {
+    format!("dream_best_health__{agent_id}")
 }
 
 /// Cap on remembered rejected-edit fingerprints per agent (FIFO eviction).
@@ -77,9 +104,14 @@ impl SqliteMemoryBackend {
         Ok(())
     }
 
-    /// Fingerprints of distill edits the recall-evidence gate rejected for
-    /// this agent, oldest first. Empty on first run or after a reset.
-    pub fn distill_rejects(&self, agent_id: &str) -> Result<Vec<String>, AlephError> {
+    /// Full rejected-edit records for this agent, oldest first. Empty on first
+    /// run or after a reset. Reads the rich `DistillRejectRecord` list, falling
+    /// back to the legacy fingerprint-only `Vec<String>` format (mapped to
+    /// records with empty context) so pre-upgrade buffers still load.
+    pub fn distill_reject_records(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<DistillRejectRecord>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let key = rejects_key_for(agent_id);
 
@@ -88,27 +120,45 @@ impl SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("distill_rejects prepare: {e}")))?;
 
         match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
-            Ok(value) => serde_json::from_str(&value).map_err(|e| {
-                AlephError::config(format!("distill_rejects parse {key}={value:?}: {e}"))
-            }),
+            Ok(value) => {
+                // New rich format first; fall back to the legacy fingerprint list.
+                if let Ok(records) = serde_json::from_str::<Vec<DistillRejectRecord>>(&value) {
+                    Ok(records)
+                } else if let Ok(fps) = serde_json::from_str::<Vec<String>>(&value) {
+                    Ok(fps
+                        .into_iter()
+                        .map(|fingerprint| DistillRejectRecord {
+                            fingerprint,
+                            target: String::new(),
+                            summary: String::new(),
+                            reason: String::new(),
+                        })
+                        .collect())
+                } else {
+                    Err(AlephError::config(format!(
+                        "distill_rejects parse {key}={value:?}"
+                    )))
+                }
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
             Err(e) => Err(AlephError::config(format!("distill_rejects: {e}"))),
         }
     }
 
-    /// Remember a rejected-edit fingerprint so the same bad edit is dropped
-    /// on later cycles without re-running the gate. Deduped; FIFO-capped at
-    /// [`MAX_DISTILL_REJECTS`].
+    /// Remember a rejected distill edit so the same bad edit is dropped on later
+    /// cycles without re-running the gate, *and* so its context can be replayed
+    /// as negative feedback into the next distill prompt. Deduped by fingerprint;
+    /// FIFO-capped at [`MAX_DISTILL_REJECTS`].
     pub fn record_distill_reject(
         &self,
         agent_id: &str,
-        fingerprint: &str,
+        record: &DistillRejectRecord,
     ) -> Result<(), AlephError> {
-        let mut rejects = self.distill_rejects(agent_id)?;
-        if rejects.iter().any(|f| f == fingerprint) {
+        let mut rejects = self.distill_reject_records(agent_id)?;
+        if rejects.iter().any(|r| r.fingerprint == record.fingerprint) {
             return Ok(());
         }
-        rejects.push(fingerprint.to_string());
+        rejects.push(record.clone());
         if rejects.len() > MAX_DISTILL_REJECTS {
             let overflow = rejects.len() - MAX_DISTILL_REJECTS;
             rejects.drain(..overflow);
@@ -124,6 +174,44 @@ impl SqliteMemoryBackend {
             params![rejects_key_for(agent_id), value],
         )
         .map_err(|e| AlephError::config(format!("record_distill_reject: {e}")))?;
+        Ok(())
+    }
+
+    /// Read the best-ever memory-health score for this agent. Persisted across
+    /// restarts so the evolution gate's best-checkpoint (SkillOpt's best-ever
+    /// score) survives a reboot instead of resetting to 0 and re-accepting a
+    /// worse-than-historical cycle as a "new best". `None` on first run.
+    pub fn get_best_health(&self, agent_id: &str) -> Result<Option<f64>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let key = best_health_key_for(agent_id);
+
+        let mut stmt = conn
+            .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
+            .map_err(|e| AlephError::config(format!("get_best_health prepare: {e}")))?;
+
+        match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
+            Ok(value) => {
+                let v = value.parse::<f64>().map_err(|e| {
+                    AlephError::config(format!("get_best_health parse {key}={value:?}: {e}"))
+                })?;
+                Ok(Some(v))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AlephError::config(format!("get_best_health: {e}"))),
+        }
+    }
+
+    /// Persist the best-ever memory-health score for this agent. Idempotent
+    /// upsert keyed by agent; only the monotonic best need be written.
+    pub fn set_best_health(&self, agent_id: &str, value: f64) -> Result<(), AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO compression_metadata (key, value) \
+             VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![best_health_key_for(agent_id), value.to_string()],
+        )
+        .map_err(|e| AlephError::config(format!("set_best_health: {e}")))?;
         Ok(())
     }
 }
@@ -196,33 +284,98 @@ mod tests {
         );
     }
 
+    fn fp_record(fp: &str) -> DistillRejectRecord {
+        DistillRejectRecord {
+            fingerprint: fp.to_string(),
+            target: format!("skill/{fp}"),
+            summary: format!("summary for {fp}"),
+            reason: "recall-evidence gate".to_string(),
+        }
+    }
+
+    /// The stored fingerprints, oldest first (dedup key for the gate).
+    fn fps(backend: &SqliteMemoryBackend, agent: &str) -> Vec<String> {
+        backend
+            .distill_reject_records(agent)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.fingerprint)
+            .collect()
+    }
+
     #[test]
     fn distill_rejects_round_trip_dedupe_and_agent_isolation() {
         let backend = make_backend();
 
         // Empty store returns empty.
-        assert!(backend.distill_rejects("main").unwrap().is_empty());
+        assert!(fps(&backend, "main").is_empty());
 
-        backend.record_distill_reject("main", "fp_a").unwrap();
-        backend.record_distill_reject("main", "fp_b").unwrap();
+        backend.record_distill_reject("main", &fp_record("fp_a")).unwrap();
+        backend.record_distill_reject("main", &fp_record("fp_b")).unwrap();
         // Duplicate is a no-op.
-        backend.record_distill_reject("main", "fp_a").unwrap();
+        backend.record_distill_reject("main", &fp_record("fp_a")).unwrap();
         assert_eq!(
-            backend.distill_rejects("main").unwrap(),
+            fps(&backend, "main"),
             vec!["fp_a".to_string(), "fp_b".to_string()]
         );
+        // Rich context survives the round-trip for prompt feedback.
+        let records = backend.distill_reject_records("main").unwrap();
+        assert_eq!(records[0].summary, "summary for fp_a");
+        assert_eq!(records[0].target, "skill/fp_a");
 
         // Different agent is isolated.
-        assert!(backend.distill_rejects("alice").unwrap().is_empty());
+        assert!(fps(&backend, "alice").is_empty());
+    }
+
+    #[test]
+    fn distill_rejects_reads_legacy_fingerprint_only_format() {
+        // A buffer written by the pre-upgrade code is a bare JSON string array.
+        let backend = make_backend();
+        {
+            let conn = backend.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "INSERT INTO compression_metadata (key, value) VALUES (?1, ?2)",
+                params![rejects_key_for("main"), r#"["legacy_a","legacy_b"]"#],
+            )
+            .unwrap();
+        }
+        let records = backend.distill_reject_records("main").unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].fingerprint, "legacy_a");
+        assert!(records[0].summary.is_empty(), "legacy rows carry no context");
+        assert_eq!(
+            fps(&backend, "main"),
+            vec!["legacy_a".to_string(), "legacy_b".to_string()]
+        );
+    }
+
+    #[test]
+    fn best_health_round_trips_and_is_agent_isolated() {
+        let backend = make_backend();
+
+        // Empty store returns None (first run → gate starts best at 0.0).
+        assert_eq!(backend.get_best_health("main").unwrap(), None);
+
+        backend.set_best_health("main", 0.73).unwrap();
+        assert_eq!(backend.get_best_health("main").unwrap(), Some(0.73));
+
+        // Idempotent overwrite keeps a single row.
+        backend.set_best_health("main", 0.81).unwrap();
+        assert_eq!(backend.get_best_health("main").unwrap(), Some(0.81));
+
+        // Different agent is isolated.
+        assert_eq!(backend.get_best_health("alice").unwrap(), None);
     }
 
     #[test]
     fn distill_rejects_evict_oldest_beyond_cap() {
         let backend = make_backend();
         for i in 0..(MAX_DISTILL_REJECTS + 3) {
-            backend.record_distill_reject("main", &format!("fp_{i}")).unwrap();
+            backend
+                .record_distill_reject("main", &fp_record(&format!("fp_{i}")))
+                .unwrap();
         }
-        let rejects = backend.distill_rejects("main").unwrap();
+        let rejects = fps(&backend, "main");
         assert_eq!(rejects.len(), MAX_DISTILL_REJECTS);
         // Oldest three evicted, newest retained.
         assert_eq!(rejects.first().unwrap(), "fp_3");

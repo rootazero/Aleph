@@ -152,6 +152,7 @@ mod tests {
             vec![
                 "duration_ms",
                 "errors",
+                "evolution_json",
                 "feedback_distilled",
                 "finished_at",
                 "id",
@@ -166,7 +167,8 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>(),
-            "dream_reports must retain the 8 core columns plus the 4 notes-era activity counters"
+            "dream_reports must retain the 8 core columns, the 4 notes-era activity \
+             counters, and the evolution_json gate-verdict column"
         );
 
         let row_count: i64 = conn
