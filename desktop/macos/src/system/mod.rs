@@ -70,6 +70,9 @@ fn user_idle_seconds() -> f64 {
     }
 
     // kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = ~0u (0xFFFFFFFF)
+    // SAFETY: CoreGraphics C function taking two by-value integer arguments and
+    // holding no pointer preconditions; both values are the documented sentinels
+    // above and the result (a `CFTimeInterval`) is range-checked by the caller.
     let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(0, 0xFFFFFFFF) };
 
     // Guard against NaN/Infinity (edge case on machines without input devices)

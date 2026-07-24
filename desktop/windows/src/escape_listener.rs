@@ -127,6 +127,10 @@ impl EscapeAbort for WindowsEscapeListener {
                         let tid = unsafe { GetCurrentThreadId() };
                         let hook_addr = hook.0 as isize;
                         if tx.send(Ok((hook_addr, tid))).is_err() {
+                            // SAFETY: `hook` is the valid `HHOOK` just returned by
+                            // `SetWindowsHookExW` above and has not been unhooked
+                            // yet; removing it here on the send-failure path is the
+                            // documented teardown for a hook we own.
                             let _ = unsafe { UnhookWindowsHookEx(hook) };
                             return;
                         }

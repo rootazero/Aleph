@@ -13,6 +13,9 @@ pub fn read() -> Result<ClipboardContent> {
     let pb = NSPasteboard::generalPasteboard();
 
     // Read text
+    // SAFETY: `pb` is the shared general pasteboard and `NSPasteboardTypeString`
+    // is a framework constant; `stringForType:` reads the string for that type
+    // (a nil result maps to `None` via the generated binding).
     let text = unsafe {
         pb.stringForType(NSPasteboardTypeString)
             .map(|s| s.to_string())
@@ -34,6 +37,9 @@ pub fn write(text: &str) -> Result<()> {
     pb.clearContents();
 
     let ns_str = NSString::from_str(text);
+    // SAFETY: `pb` is the general pasteboard, `ns_str` a live `NSString`, and
+    // `NSPasteboardTypeString` a framework constant; `setString:forType:` copies
+    // the string into the pasteboard and returns whether it succeeded.
     let ok = unsafe { pb.setString_forType(&ns_str, NSPasteboardTypeString) };
     if !ok {
         return Err(DesktopError::InputFailed(
@@ -52,6 +58,8 @@ fn read_image(pb: &NSPasteboard) -> (bool, Option<String>) {
     };
 
     // Check if any image type is present
+    // SAFETY: both are `NSPasteboardType` framework constant statics, valid for
+    // the process lifetime; dereferencing them only reads the constant value.
     let png_type: &NSString = unsafe { NSPasteboardTypePNG };
     let tiff_type: &NSString = unsafe { NSPasteboardTypeTIFF };
     let has_png = types.iter().any(|t| *t == *png_type);
@@ -63,6 +71,9 @@ fn read_image(pb: &NSPasteboard) -> (bool, Option<String>) {
 
     // Try PNG first (preferred — no conversion needed)
     if has_png {
+        // SAFETY: `pb` is the general pasteboard and `NSPasteboardTypePNG` a
+        // framework constant; `dataForType:` returns the data for that type
+        // (nil maps to `None`).
         if let Some(data) = unsafe { pb.dataForType(NSPasteboardTypePNG) } {
             let bytes = data.to_vec();
             let b64 = general_purpose::STANDARD.encode(&bytes);
@@ -72,6 +83,9 @@ fn read_image(pb: &NSPasteboard) -> (bool, Option<String>) {
 
     // Fall back to TIFF → PNG conversion
     if has_tiff {
+        // SAFETY: `pb` is the general pasteboard and `NSPasteboardTypeTIFF` a
+        // framework constant; `dataForType:` returns the data for that type
+        // (nil maps to `None`).
         if let Some(data) = unsafe { pb.dataForType(NSPasteboardTypeTIFF) } {
             let bytes = data.to_vec();
             if let Some(b64) = tiff_to_png_base64(&bytes) {

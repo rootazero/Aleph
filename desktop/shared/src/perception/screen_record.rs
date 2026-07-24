@@ -121,6 +121,9 @@ pub(super) mod sc_recording_delegate {
         #[name = "AlephSCRecordingDelegate"]
         pub struct SCRecordingDelegate;
 
+        // SAFETY: the class implements every `SCRecordingOutputDelegate` method
+        // below with the exact selector and C ABI ScreenCaptureKit invokes, so
+        // declaring conformance to the protocol is sound.
         unsafe impl SCRecordingOutputDelegate for SCRecordingDelegate {
             #[unsafe(method(recordingOutputDidStartRecording:))]
             fn _did_start(&self, _recording_output: &SCRecordingOutput) {
@@ -160,6 +163,9 @@ pub(super) mod sc_recording_delegate {
             }
         }
 
+        // SAFETY: `SCRecordingDelegate` derives from `NSObject` (see the
+        // `#[unsafe(super(NSObject))]` above), which supplies every
+        // `NSObjectProtocol` method, so declaring conformance is sound.
         unsafe impl NSObjectProtocol for SCRecordingDelegate {}
     );
 }

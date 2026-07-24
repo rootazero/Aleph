@@ -44,7 +44,26 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     app.state::<crate::update::Updater>()
         .attach_update_item(update_item.clone());
 
-    let app_menu = Submenu::with_items(
+    let app_menu = build_app_menu(app, &update_item)?;
+    let edit_menu = build_edit_menu(app)?;
+    let view_menu = build_view_menu(app)?;
+    let window_menu = build_window_menu(app)?;
+    let help_menu = build_help_menu(app)?;
+
+    Menu::with_items(
+        app,
+        &[&app_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+    )
+}
+
+/// Aleph submenu: about, show / browser / connect, the shared update item, and
+/// the app-owned quit variants. `update_item` is already registered with the
+/// updater so its label stays in sync with the tray.
+fn build_app_menu(
+    app: &AppHandle,
+    update_item: &MenuItem<Wry>,
+) -> tauri::Result<Submenu<Wry>> {
+    Submenu::with_items(
         app,
         "Aleph",
         true,
@@ -61,7 +80,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 None::<&str>,
             )?,
             &MenuItem::with_id(app, ID_CONNECT_LOCAL, "Back to Local", true, None::<&str>)?,
-            &update_item,
+            update_item,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -78,10 +97,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )?,
             &MenuItem::with_id(app, ID_QUIT_STOP, "Quit & Stop Aleph", true, None::<&str>)?,
         ],
-    )?;
+    )
+}
 
-    // Predefined Edit items so the webview gets native text editing.
-    let edit_menu = Submenu::with_items(
+/// Predefined Edit items so the webview gets native text editing.
+fn build_edit_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    Submenu::with_items(
         app,
         "Edit",
         true,
@@ -94,32 +115,35 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
         ],
-    )?;
+    )
+}
 
-    // View — Panel-level actions exposed via menu so they're discoverable
-    // without dropping to the tray. DevTools only ships in debug builds:
-    // production users never need it, and a release menu item that
-    // dead-ends would confuse them.
-    let view_menu = {
-        let reload = MenuItem::with_id(app, ID_RELOAD_PANEL, "Reload Panel", true, Some("Cmd+R"))?;
-        #[cfg(debug_assertions)]
-        {
-            let devtools = MenuItem::with_id(
-                app,
-                ID_OPEN_DEVTOOLS,
-                "Open DevTools",
-                true,
-                Some("Cmd+Alt+I"),
-            )?;
-            Submenu::with_items(app, "View", true, &[&reload, &devtools])?
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            Submenu::with_items(app, "View", true, &[&reload])?
-        }
-    };
+/// View — Panel-level actions exposed via menu so they're discoverable
+/// without dropping to the tray. DevTools only ships in debug builds:
+/// production users never need it, and a release menu item that
+/// dead-ends would confuse them.
+fn build_view_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    let reload = MenuItem::with_id(app, ID_RELOAD_PANEL, "Reload Panel", true, Some("Cmd+R"))?;
+    #[cfg(debug_assertions)]
+    {
+        let devtools = MenuItem::with_id(
+            app,
+            ID_OPEN_DEVTOOLS,
+            "Open DevTools",
+            true,
+            Some("Cmd+Alt+I"),
+        )?;
+        Submenu::with_items(app, "View", true, &[&reload, &devtools])
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        Submenu::with_items(app, "View", true, &[&reload])
+    }
+}
 
-    let window_menu = Submenu::with_items(
+/// Window submenu: the standard minimize / fullscreen / close predefined items.
+fn build_window_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    Submenu::with_items(
         app,
         "Window",
         true,
@@ -129,11 +153,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
-    )?;
+    )
+}
 
-    // Help — external resources. Opens via the system browser (no in-app
-    // navigation away from the Panel), reusing external_link::open_url.
-    let help_menu = Submenu::with_items(
+/// Help — external resources. Opens via the system browser (no in-app
+/// navigation away from the Panel), reusing external_link::open_url.
+fn build_help_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    Submenu::with_items(
         app,
         "Help",
         true,
@@ -147,11 +173,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )?,
             &MenuItem::with_id(app, ID_REPORT_ISSUE, "Report an Issue…", true, None::<&str>)?,
         ],
-    )?;
-
-    Menu::with_items(
-        app,
-        &[&app_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
     )
 }
 

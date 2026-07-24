@@ -125,6 +125,8 @@ impl EscapeAbort for EscapeListener {
         }
 
         // Accessibility check — degrade gracefully.
+        // SAFETY: ApplicationServices C function taking no arguments; it only
+        // reads whether this process is currently AX-trusted and never prompts.
         let trusted = unsafe { AXIsProcessTrusted() };
         if !trusted {
             warn!(

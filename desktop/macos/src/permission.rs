@@ -76,6 +76,8 @@ impl MacOSPermission {
 fn check_screen_recording() -> PermissionStatus {
     // CGPreflightScreenCaptureAccess returns false for both NotDetermined
     // and Denied. We conservatively map to NotDetermined.
+    // SAFETY: CoreGraphics C function taking no arguments and holding no
+    // preconditions; it only reads the current screen-capture TCC status.
     let granted = unsafe { CGPreflightScreenCaptureAccess() };
     if granted {
         PermissionStatus::Granted
@@ -85,33 +87,45 @@ fn check_screen_recording() -> PermissionStatus {
 }
 
 fn check_camera() -> PermissionStatus {
+    // SAFETY: reads the `AVMediaTypeVideo` framework constant; the generated
+    // binding is `Option`, so a null/unavailable symbol is handled explicitly.
     let media_type = unsafe {
         match AVMediaTypeVideo {
             Some(mt) => mt,
             None => return PermissionStatus::Unknown,
         }
     };
+    // SAFETY: `media_type` is a valid framework constant; this class method
+    // only reads the current camera TCC status and never prompts.
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
     av_status_to_permission(status)
 }
 
 fn check_microphone() -> PermissionStatus {
+    // SAFETY: reads the `AVMediaTypeAudio` framework constant; the generated
+    // binding is `Option`, so a null/unavailable symbol is handled explicitly.
     let media_type = unsafe {
         match AVMediaTypeAudio {
             Some(mt) => mt,
             None => return PermissionStatus::Unknown,
         }
     };
+    // SAFETY: `media_type` is a valid framework constant; this class method
+    // only reads the current microphone TCC status and never prompts.
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
     av_status_to_permission(status)
 }
 
 fn check_speech_recognition() -> PermissionStatus {
+    // SAFETY: class method that only reads the current speech-recognition TCC
+    // status; it takes no arguments and holds no preconditions.
     let status = unsafe { SFSpeechRecognizer::authorizationStatus() };
     sf_status_to_permission(status)
 }
 
 fn check_accessibility() -> PermissionStatus {
+    // SAFETY: ApplicationServices C function taking no arguments; it only reads
+    // whether this process is currently AX-trusted and never prompts.
     let trusted = unsafe { AXIsProcessTrusted() };
     if trusted {
         PermissionStatus::Granted
@@ -132,6 +146,9 @@ fn check_notifications() -> PermissionStatus {
 
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+        // SAFETY: `settings` is a non-null `UNNotificationSettings` handed to
+        // this completion block by UserNotifications.framework; it is valid for
+        // the duration of the callback, so reading `authorizationStatus` is sound.
         let status = unsafe { settings.as_ref().authorizationStatus() };
         let _ = tx.send(status);
     });
@@ -149,6 +166,8 @@ fn check_notifications() -> PermissionStatus {
 // ---------------------------------------------------------------------------
 
 fn request_screen_recording() -> PermissionStatus {
+    // SAFETY: CoreGraphics C function taking no arguments; it prompts for (and
+    // returns) screen-capture access. Sibling of `CGPreflightScreenCaptureAccess`.
     let granted = unsafe { CGRequestScreenCaptureAccess() };
     if granted {
         PermissionStatus::Granted
