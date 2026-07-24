@@ -1,3 +1,5 @@
+use std::process::Stdio;
+
 use aleph_desktop::{
     error::{DesktopError, Result},
     traits::{InhibitorGuard, PowerCapability},
@@ -20,6 +22,16 @@ impl Default for LinuxPower {
 
 impl PowerCapability for LinuxPower {
     fn inhibit_sleep(&self, _reason: &str) -> Result<InhibitorGuard> {
+        // Silence the child's stdio. `spawn()` succeeds whenever the binary
+        // exists (systemd is present on most servers), so a headless box with no
+        // active logind session still spawns `systemd-inhibit`, which then has
+        // its own inhibit request denied by polkit and prints
+        // "Failed to inhibit: Access denied" to stderr. Because the child
+        // inherits the parent's stdio by default, on a daemon whose stdout/stderr
+        // are redirected to a log file that message floods the log — once per
+        // agent turn. Redirect the child's stdout/stderr to /dev/null so its
+        // chatter never reaches our stream. On a real desktop session the child
+        // succeeds silently, so this is a no-op there.
         let child = std::process::Command::new("systemd-inhibit")
             .args([
                 "--what=sleep:idle",
@@ -29,6 +41,8 @@ impl PowerCapability for LinuxPower {
                 "sleep",
                 "infinity",
             ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .or_else(|_| {
                 std::process::Command::new("gnome-session-inhibit")
@@ -43,6 +57,8 @@ impl PowerCapability for LinuxPower {
                         "sleep",
                         "infinity",
                     ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .spawn()
             })
             .map_err(|e| {

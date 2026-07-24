@@ -1,0 +1,37 @@
+# logrotate config for a manually-redirected aleph-server raw log.
+#
+# WHEN YOU NEED THIS
+#   Only when you run aleph-server in the FOREGROUND and redirect its
+#   stdout/stderr yourself, e.g.
+#       aleph-server start >> ~/.aleph/server.log 2>&1
+#   A shell-owned redirect fd cannot be rotated by Aleph, so a system-level
+#   rotator (logrotate) is the right tool.
+#
+# WHEN YOU DON'T
+#   - Daemon mode (`aleph-server start --daemon --log-file <path>`) already
+#     rotates its redirect log on start: a file from an earlier day, or one past
+#     ~5 MB, is archived to `<name>.YYYY-MM-DD` and aged out after 7 days.
+#   - The STRUCTURED logs under `~/.aleph/logs/aleph-server.log.YYYY-MM-DD`
+#     already rotate daily with 7-day retention (they are also timestamped and
+#     are the better target to grep).
+#
+# INSTALL
+#   1. Replace /home/YOUR_USER below with the real absolute path — logrotate
+#      does NOT expand `~`, and it runs as root, so `$HOME` is root's home.
+#   2. Copy to the drop-in dir:  sudo cp aleph-server.logrotate /etc/logrotate.d/aleph-server
+#   3. Dry-run to verify:        sudo logrotate -d /etc/logrotate.d/aleph-server
+#
+# Grep the current boot with the per-boot marker Aleph emits on every start:
+#   grep ALEPH-BOOT ~/.aleph/server.log | tail -1   # everything after it = this run
+
+/home/YOUR_USER/.aleph/server.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    # The foreground server keeps the fd open and is not a service we can signal
+    # to reopen, so copy-then-truncate in place instead of rename-and-create.
+    copytruncate
+}

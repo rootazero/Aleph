@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::cli::Args;
 use crate::daemon::expand_path;
 
+use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::session_store::SessionStore;
@@ -21,7 +22,6 @@ use alephcore::tasks::cron::service::timer::run_timer_loop;
 use alephcore::tasks::cron::{CronService, SharedCronService};
 use alephcore::tasks::heartbeat::store::HeartbeatStore;
 use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
-use alephcore::executor::BuiltinToolRegistry;
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
@@ -45,7 +45,8 @@ mod helpers;
 use helpers::{
     build_http_provider, build_sqlite_session_service, format_socket_addr,
     initialize_extension_manager, initialize_session_store, initialize_tracing,
-    load_gateway_config, print_startup_banner, setup_graceful_shutdown, validate_bind_address,
+    load_gateway_config, print_boot_marker, print_startup_banner, setup_graceful_shutdown,
+    validate_bind_address,
 };
 
 mod runtime_warmup;
@@ -112,6 +113,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Daemonization is handled in main() before tokio starts (fork safety).
 
     initialize_tracing(args);
+
+    // Emit the boot boundary marker to the raw stdout stream immediately, before
+    // config load / bind validation, so even a boot that fails downstream still
+    // leaves an unambiguous start line in a redirected `server.log`. Unlike the
+    // startup banner below, this is NOT gated on `!args.daemon` — daemon mode is
+    // exactly where `server.log` otherwise has no boot boundary at all.
+    print_boot_marker();
 
     // Phase 4: read ALEPH_HARNESS_V2 for discoverability. Production code path
     // still routes through AgentLoop; the v2 Harness is exercised only by
@@ -2686,10 +2694,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     start_webchat_server(args, &final_bind, final_port).await;
 
-    let endpoint_url = alephcore::cli::endpoint::build_endpoint_url(
-        addr,
-        full_config.gateway.tls.enabled,
-    );
+    let endpoint_url =
+        alephcore::cli::endpoint::build_endpoint_url(addr, full_config.gateway.tls.enabled);
 
     if !args.daemon {
         let addr_display = format_socket_addr(&final_bind, final_port);

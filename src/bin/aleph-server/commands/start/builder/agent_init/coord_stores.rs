@@ -275,8 +275,7 @@ pub(super) fn build_team_components(
                 // be right here). The escalation thresholds are mapped from the
                 // optional [team_messages] TOML at the boot site (parallel to
                 // the [team_dispatcher] / [team_broadcast] mappings).
-                let mut router =
-                    MessageRouter::new(ms.clone(), es.clone(), escalation_rules, None);
+                let mut router = MessageRouter::new(ms.clone(), es.clone(), escalation_rules, None);
                 if let Some(ts) = team_store.as_ref() {
                     router = router.with_team_store(ts.clone());
                 }

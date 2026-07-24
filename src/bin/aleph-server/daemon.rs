@@ -6,36 +6,83 @@
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::time::SystemTime;
 
 use alephcore::cli::endpoint::{read_endpoint, remove_endpoint, IpcEndpoint};
 
-/// Cap on the daemon's stdout/stderr redirect file (`gateway.log`). Beyond
-/// this it is rotated out at the next daemon start so it never grows unbounded.
+/// Size cap on the daemon's stdout/stderr redirect file (`gateway.log`) that
+/// forces a rotation regardless of age. The redirect fd cannot be rotated while
+/// the daemon holds it open (there is no in-flight rotation), so this only bites
+/// at the next daemon start; day-boundary rotation (below) is what keeps a
+/// low-traffic server's log from accumulating across restarts.
 #[cfg(unix)]
 const MAX_GATEWAY_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
-/// Rotate `log_path` out of the way if it already exceeds `max_bytes`, keeping
-/// the daemon's redirect target bounded across restarts. The oversized file is
-/// renamed to `<file_name>.YYYY-MM-DD` (UTC) — a name `cleanup_old_logs` can
-/// later age out — and the next append starts a fresh file. No-op when the
-/// file is absent or within budget. Same-day re-rotation overwrites that day's
-/// backup (atomic rename replace), which is acceptable for a catch-all stream.
+/// Decide whether the daemon's redirect log should be rotated out before the
+/// next append, and under which `YYYY-MM-DD` archive suffix.
+///
+/// Returns `None` when the live file should keep being appended (empty, or
+/// last written today and still within the size budget). Returns `Some(date)`
+/// — the file's own last-write day — when it should be archived, because either:
+/// - it was last written on an *earlier* calendar day (so even a low-traffic
+///   server that never reaches `max_bytes` still gets one file per day instead
+///   of one file that accumulates every boot forever), or
+/// - it exceeds `max_bytes`.
+///
+/// Suffixing with the file's last-write day (not "today") makes the archive
+/// name reflect the window it actually covers, and keeps it a 10-char
+/// `YYYY-MM-DD` string that `cleanup_old_logs` can later age out. Pure so the
+/// rotation decision is unit-testable without touching the filesystem.
 #[cfg(unix)]
-fn rotate_oversized_log(log_path: &Path, max_bytes: u64) -> std::io::Result<()> {
+fn rotation_suffix_date(
+    len: u64,
+    modified: SystemTime,
+    now: SystemTime,
+    max_bytes: u64,
+) -> Option<chrono::NaiveDate> {
+    if len == 0 {
+        return None;
+    }
+    let modified_date = chrono::DateTime::<chrono::Utc>::from(modified).date_naive();
+    let today = chrono::DateTime::<chrono::Utc>::from(now).date_naive();
+    if modified_date < today || len > max_bytes {
+        Some(modified_date)
+    } else {
+        None
+    }
+}
+
+/// Rotate `log_path` out of the way when it is stale (last written on an earlier
+/// day) or oversized, keeping the daemon's redirect target from accumulating
+/// across restarts. The file is renamed to `<file_name>.YYYY-MM-DD` (its own
+/// last-write day) — a name `cleanup_old_logs` can later age out — and the next
+/// append starts a fresh file. No-op when the file is absent, empty, or a
+/// same-day file within budget (same-day restarts keep appending, disambiguated
+/// by the per-boot `ALEPH-BOOT` marker). Same-day re-rotation overwrites that
+/// day's backup (atomic rename replace), which is acceptable for a catch-all
+/// stream whose full history also lives in the timestamped `~/.aleph/logs/`
+/// stream.
+#[cfg(unix)]
+fn rotate_stale_or_oversized_log(log_path: &Path, max_bytes: u64) -> std::io::Result<()> {
     let metadata = match std::fs::metadata(log_path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     };
-    if metadata.len() <= max_bytes {
+    // A file whose mtime is unreadable is treated as "today" (only size can
+    // then trigger rotation) rather than blocking startup.
+    let modified = metadata.modified().unwrap_or_else(|_| SystemTime::now());
+    let Some(date) = rotation_suffix_date(metadata.len(), modified, SystemTime::now(), max_bytes)
+    else {
         return Ok(());
-    }
+    };
     let file_name = log_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("gateway.log");
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    let rotated = log_path.with_file_name(format!("{file_name}.{date}"));
+    let suffix = date.format("%Y-%m-%d");
+    let rotated = log_path.with_file_name(format!("{file_name}.{suffix}"));
     std::fs::rename(log_path, rotated)
 }
 
@@ -411,11 +458,12 @@ pub fn daemonize(
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)?;
 
-            // Keep the redirect target bounded: rotate it out if it has grown
-            // past the cap, then age out old rotations with the same 7-day
-            // retention aleph-server.log uses. Best-effort — logging hygiene
-            // must never block daemon startup.
-            if let Err(e) = rotate_oversized_log(&log_path, MAX_GATEWAY_LOG_BYTES) {
+            // Keep the redirect target from accumulating across restarts: rotate
+            // it out when it is from an earlier day or has grown past the cap,
+            // then age out old rotations with the same 7-day retention
+            // aleph-server.log uses. Best-effort — logging hygiene must never
+            // block daemon startup.
+            if let Err(e) = rotate_stale_or_oversized_log(&log_path, MAX_GATEWAY_LOG_BYTES) {
                 eprintln!("Warning: failed to rotate {}: {e}", log_path.display());
             }
             if let Some(prefix) = log_path
@@ -510,7 +558,7 @@ mod rotation_tests {
         let dir = TempDir::new().unwrap();
         let log = dir.path().join("gateway.log");
         write_file(&log, 100);
-        rotate_oversized_log(&log, 1024).unwrap();
+        rotate_stale_or_oversized_log(&log, 1024).unwrap();
         assert!(log.exists());
         assert!(
             siblings(dir.path(), "gateway.log").is_empty(),
@@ -523,7 +571,7 @@ mod rotation_tests {
         let dir = TempDir::new().unwrap();
         let log = dir.path().join("gateway.log");
         write_file(&log, 2048);
-        rotate_oversized_log(&log, 1024).unwrap();
+        rotate_stale_or_oversized_log(&log, 1024).unwrap();
         // Original name freed for a fresh file; exactly one dated backup exists.
         assert!(!log.exists());
         let rotated = siblings(dir.path(), "gateway.log");
@@ -540,8 +588,62 @@ mod rotation_tests {
     fn missing_file_is_noop() {
         let dir = TempDir::new().unwrap();
         let log = dir.path().join("gateway.log");
-        rotate_oversized_log(&log, 1024).unwrap();
+        rotate_stale_or_oversized_log(&log, 1024).unwrap();
         assert!(!log.exists());
+    }
+
+    // Day-boundary rotation logic. Exercised through the pure decision function
+    // because a stale mtime can't easily be forged on a temp file without an
+    // extra dev-dependency, and this is where the "one file per day instead of
+    // one file forever" behavior lives.
+    fn at(y: i32, m: u32, d: u32, hh: u32) -> SystemTime {
+        let ts = chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(hh, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64)
+    }
+
+    const MAX: u64 = 5 * 1024 * 1024;
+
+    #[test]
+    fn empty_file_never_rotates() {
+        // A zero-length file is nothing to archive, even if stale/"oversized".
+        assert_eq!(
+            rotation_suffix_date(0, at(2026, 7, 17, 9), at(2026, 7, 24, 9), MAX),
+            None
+        );
+    }
+
+    #[test]
+    fn same_day_within_budget_keeps_appending() {
+        // Same-day restarts append to one file; the ALEPH-BOOT marker separates
+        // boots within it, so no rotation here.
+        assert_eq!(
+            rotation_suffix_date(1024, at(2026, 7, 24, 9), at(2026, 7, 24, 15), MAX),
+            None
+        );
+    }
+
+    #[test]
+    fn earlier_day_rotates_under_its_own_date() {
+        // A file last written on 07-17 archives as gateway.log.2026-07-17 —
+        // named for the window it covers, not for today.
+        assert_eq!(
+            rotation_suffix_date(1024, at(2026, 7, 17, 23), at(2026, 7, 24, 1), MAX),
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 17)
+        );
+    }
+
+    #[test]
+    fn oversized_same_day_still_rotates() {
+        // Size cap forces a rotation even within the same day.
+        assert_eq!(
+            rotation_suffix_date(MAX + 1, at(2026, 7, 24, 9), at(2026, 7, 24, 15), MAX),
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 24)
+        );
     }
 }
 
