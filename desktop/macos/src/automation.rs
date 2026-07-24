@@ -171,14 +171,14 @@ mod tests {
 
         let mut contents = String::new();
         for _ in 0..40 {
-            contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+            contents = tokio::fs::read_to_string(&log_path).await.unwrap_or_default();
             if contents.contains("bg-ok") {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(contents.contains("bg-ok"), "log was: {contents:?}");
-        let _ = std::fs::remove_file(&log_path);
+        let _ = tokio::fs::remove_file(&log_path).await;
     }
 
     #[tokio::test]

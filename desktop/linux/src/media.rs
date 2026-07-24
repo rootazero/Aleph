@@ -133,7 +133,7 @@ impl MediaCapability for LinuxMedia {
             img.dimensions()
         });
 
-        let _ = std::fs::remove_file(&out_str);
+        let _ = tokio::fs::remove_file(&out_str).await;
 
         Ok(CameraSnapResult {
             image_base64: general_purpose::STANDARD.encode(&bytes),
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        LinuxMedia;
+        let _ = LinuxMedia;
     }
 
     #[test]

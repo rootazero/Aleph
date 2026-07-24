@@ -145,7 +145,7 @@ impl SwiftBridge {
     /// install the process into `self.state`; it returns the live
     /// [`BridgeProcess`] so the caller (`ensure_running`) can store it while
     /// still holding the state lock, closing the double-spawn race.
-    async fn spawn_process(&self) -> Result<BridgeProcess> {
+    fn spawn_process(&self) -> Result<BridgeProcess> {
         let mut cmd = Command::new(&self.binary_path);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -304,7 +304,7 @@ impl SwiftBridge {
         }
 
         // Gate cleared — attempt a spawn (does not touch state or gate).
-        match self.spawn_process().await {
+        match self.spawn_process() {
             Ok(proc) => {
                 *guard = Some(proc);
                 self.gate.lock().await.record_spawn();

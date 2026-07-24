@@ -85,6 +85,6 @@ mod tests {
 
     #[test]
     fn create_default() {
-        LinuxPower;
+        let _ = LinuxPower;
     }
 }

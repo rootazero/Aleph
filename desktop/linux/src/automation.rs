@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        LinuxAutomation;
+        let _ = LinuxAutomation;
     }
 
     #[tokio::test]
