@@ -179,8 +179,8 @@ impl ProtocolLoader {
     /// ```
     pub fn start_watching() -> Result<Option<Debouncer<RecommendedWatcher, FileIdMap>>> {
         // Get ~/.aleph/protocols path
-        let home = std::env::var("HOME").map_err(|_| {
-            AlephError::invalid_config("HOME environment variable not set".to_string())
+        let home = std::env::var("HOME").map_err(|e| {
+            AlephError::invalid_config(format!("Failed to resolve HOME: {e}"))
         })?;
         let protocols_dir = PathBuf::from(home).join(".aleph").join("protocols");
 
