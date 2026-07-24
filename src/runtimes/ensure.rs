@@ -6,7 +6,7 @@
 use crate::error::AlephError;
 use crate::runtimes::bootstrap::{self, BootstrapResult};
 use crate::runtimes::ledger::{
-    CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus,
+    now_secs, CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus,
 };
 use crate::runtimes::probe;
 use crate::sync_primitives::Arc;
@@ -40,12 +40,6 @@ fn capability_lock(capability: &str) -> Arc<tokio::sync::Mutex<()>> {
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         // rust-doctor-disable-next-line excessive-clone
         .clone()
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 /// Ensure a capability is ready, probing and bootstrapping if needed.

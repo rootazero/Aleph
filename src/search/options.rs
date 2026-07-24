@@ -263,7 +263,7 @@ impl SearchOptions {
 }
 
 /// Quota information for rate-limited providers
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaInfo {
     /// Remaining searches in current period
     pub remaining: Option<u32>,

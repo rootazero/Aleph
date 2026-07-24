@@ -314,7 +314,10 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             if let Some(mut child_stdin) = child.stdin.take() {
                 if let Some(data) = command.stdin.as_deref() {
-                    let _ = child_stdin.write_all(data).await;
+                    child_stdin
+                        .write_all(data)
+                        .await
+                        .map_err(|e| crate::sandbox::SandboxError::Io(format!("stdin write failed: {e}")))?;
                 }
                 drop(child_stdin);
             }

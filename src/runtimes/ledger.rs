@@ -375,7 +375,7 @@ pub fn build_enhanced_path() -> std::io::Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Current time as Unix seconds (monotonic-safe fallback to 0).
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

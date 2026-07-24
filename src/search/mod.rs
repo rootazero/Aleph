@@ -60,7 +60,7 @@ pub use web_fetch_fallback::WebFetchSerpFallback;
 /// Result of testing a search provider connection
 ///
 /// Used by the UI to display provider status and validate configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderTestResult {
     /// Whether the test was successful
     pub success: bool,
@@ -178,7 +178,7 @@ mod tests {
 ///
 /// This allows testing provider credentials without saving to config file.
 /// Used by the UI to validate provider settings before committing changes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchProviderTestConfig {
     /// Provider type
     pub provider_type: SearchProviderType,

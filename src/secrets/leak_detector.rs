@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashSet;
 
 use super::injection::{InjectedSecret, INJECTED_HASH_KEY0, INJECTED_HASH_KEY1};
 
@@ -183,7 +184,7 @@ struct CompiledCustomPattern {
 
 /// Bidirectional leak detector for secret values.
 pub struct LeakDetector {
-    injected_hashes: std::collections::HashSet<u64>,
+    injected_hashes: HashSet<u64>,
     injected_values: Vec<String>,
     custom_patterns: Vec<CompiledCustomPattern>,
 }
@@ -192,7 +193,7 @@ impl LeakDetector {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            injected_hashes: std::collections::HashSet::new(),
+            injected_hashes: HashSet::new(),
             injected_values: Vec::new(),
             custom_patterns: Vec::new(),
         }

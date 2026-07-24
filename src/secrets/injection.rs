@@ -56,7 +56,7 @@ pub async fn render_with_secrets(
     let refs = extract_secret_refs(input)?;
 
     if refs.is_empty() {
-        return Ok((input.to_string(), vec![]));
+        return Ok((input.to_string(), Vec::new()));
     }
 
     let mut result = String::with_capacity(input.len());

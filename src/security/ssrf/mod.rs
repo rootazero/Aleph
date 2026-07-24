@@ -113,9 +113,6 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
     }
     let url = validate_url_common(url_str, policy)?;
 
-    if !policy.enabled {
-        return Ok(url);
-    }
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
     let allowlisted = is_allowlisted(host, &policy.allowed_hosts);
     if !allowlisted

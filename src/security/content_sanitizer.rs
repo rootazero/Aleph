@@ -3,6 +3,7 @@
 //! Wraps untrusted external content with boundary markers before LLM injection.
 //! Follows R8 (LLM Sovereignty) — marks patterns but lets LLM decide trust.
 
+use once_cell::sync::Lazy;
 use rand::RngExt;
 
 /// Source of external content being sanitized.
@@ -277,22 +278,25 @@ pub fn wrap_external_content_with_report(content: &str, source: ContentSource) -
     }
 }
 
+static ALL_MARKERS: Lazy<Vec<&'static str>> = Lazy::new(|| {
+    TOKENIZER_MARKERS
+        .iter()
+        .chain(FORMAT_MARKERS.iter())
+        .copied()
+        .collect()
+});
+
 /// Replace every tokenizer / format marker with [`SCRUBBED_TOKEN_REPLACEMENT`].
 ///
 /// Returns `(scrubbed_text, replacement_count)`. The text is returned even if
 /// nothing was replaced so callers do not need to branch.
 pub(crate) fn scrub_special_tokens(text: &str) -> (String, usize) {
-    let markers: Vec<&str> = TOKENIZER_MARKERS
-        .iter()
-        .chain(FORMAT_MARKERS.iter())
-        .copied()
-        .collect();
     let mut out = String::with_capacity(text.len());
     let mut count = 0usize;
     let mut i = 0;
     while i < text.len() {
         let mut matched = false;
-        for marker in &markers {
+        for marker in ALL_MARKERS.iter() {
             if text[i..].starts_with(marker) {
                 out.push_str(SCRUBBED_TOKEN_REPLACEMENT);
                 count += 1;

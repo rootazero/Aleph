@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
+use tracing::warn;
 
 use super::os::TargetOs;
 use super::post_install;
@@ -290,6 +291,8 @@ fn prepend_existing_dirs(candidates: Vec<PathBuf>) {
     prepended.extend(std::env::split_paths(&current));
     if let Ok(joined) = std::env::join_paths(&prepended) {
         std::env::set_var("PATH", joined);
+    } else {
+        warn!("failed to join PATH components, leaving PATH unchanged");
     }
 }
 
