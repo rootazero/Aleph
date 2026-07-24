@@ -301,7 +301,7 @@ pub async fn materialize(
             // plumbing. `None` leaves the row byte-identical (helpers are
             // no-ops on None).
             let meta =
-                crate::agents::swarm::tasks::timeout::with_task_timeout(meta, step.timeout_secs);
+                crate::agents::swarm::tasks::timeout::with_task_timeout(meta, step.timeout_seconds);
             let meta = crate::agents::swarm::tasks::retry::with_max_retries(meta, step.max_retries);
             (step.agent.clone(), meta)
         };
@@ -413,7 +413,7 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
-            timeout_secs: None,
+            timeout_seconds: None,
             max_retries: None,
         }
     }
@@ -427,7 +427,7 @@ mod tests {
             kind: crate::workflow::def::WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
-            timeout_secs: None,
+            timeout_seconds: None,
             max_retries: None,
         }
     }
@@ -908,7 +908,7 @@ mod tests {
         use crate::agents::swarm::tasks::timeout::effective_timeout_secs;
         let store = setup_store().await;
         let mut def = linear_def();
-        def.steps[0].timeout_secs = Some(1800);
+        def.steps[0].timeout_seconds = Some(1800);
         def.steps[0].max_retries = Some(0);
         let mat = materialize(&def, "x", "team-1", &store, None, None, None, None, None)
             .await

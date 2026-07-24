@@ -40,9 +40,9 @@ pub struct TeamDelegateArgs {
     /// Task description / instruction to send to the agent
     pub task: String,
 
-    /// Timeout in seconds (default: 300)
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    /// Per-task wall-clock timeout in seconds. Accepts the legacy `timeout_secs` spelling.
+    #[serde(default = "default_timeout", alias = "timeout_secs")]
+    pub timeout_seconds: u64,
 }
 
 const fn default_timeout() -> u64 {
@@ -422,7 +422,7 @@ impl AlephTool for TeamDelegateTool {
             &args.team_id,
             &task.id,
             args.task.clone(),
-            args.timeout_secs,
+            args.timeout_seconds,
             false,
             // team_delegate is the synchronous leader path with no per-step
             // model or effort override — keep the member on its default
@@ -475,7 +475,7 @@ impl AlephTool for TeamDelegateTool {
             MemberRunStatus::Timeout => {
                 let error = outcome
                     .error
-                    .unwrap_or_else(|| format!("Timed out after {} seconds", args.timeout_secs));
+                    .unwrap_or_else(|| format!("Timed out after {} seconds", args.timeout_seconds));
                 self.finish_task(&task.id, CoordTaskStatus::Failed, error.clone())
                     .await;
                 Ok(TeamDelegateOutput {
@@ -486,5 +486,25 @@ impl AlephTool for TeamDelegateTool {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn team_delegate_timeout_accepts_canonical_and_legacy_alias() {
+        let a: TeamDelegateArgs = serde_json::from_value(serde_json::json!({
+            "agent_id": "w", "task": "t", "team_id": "tm", "timeout_seconds": 90
+        }))
+        .unwrap();
+        assert_eq!(a.timeout_seconds, 90);
+
+        let b: TeamDelegateArgs = serde_json::from_value(serde_json::json!({
+            "agent_id": "w", "task": "t", "team_id": "tm", "timeout_secs": 90
+        }))
+        .unwrap();
+        assert_eq!(b.timeout_seconds, 90);
     }
 }

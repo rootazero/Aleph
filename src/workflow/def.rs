@@ -102,9 +102,14 @@ pub struct WorkflowStepDef {
     /// channel `task_create` uses), so a deep-research step and a quick
     /// formatting step no longer share the dispatcher's one global budget.
     /// `None` → the global `[team_dispatcher] task_timeout_secs`. Absent on
-    /// the wire when unset (byte-identical legacy templates).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_secs: Option<u64>,
+    /// the wire when unset (byte-identical legacy templates). Accepts the
+    /// legacy `timeout_secs` spelling for old saved workflows.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "timeout_secs"
+    )]
+    pub timeout_seconds: Option<u64>,
     /// Per-step automatic retry ceiling. Stamped into the materialised task's
     /// metadata (`max_retries`), overriding the dispatcher's
     /// `default_max_retries` for this step only. `0` = first failure is
@@ -173,9 +178,9 @@ impl WorkflowDef {
                             step.id
                         )));
                     }
-                    if step.timeout_secs.is_some() || step.max_retries.is_some() {
+                    if step.timeout_seconds.is_some() || step.max_retries.is_some() {
                         return Err(AlephError::invalid_input(format!(
-                            "clarify step '{}' cannot set timeout_secs/max_retries — it runs no agent",
+                            "clarify step '{}' cannot set timeout_seconds/max_retries — it runs no agent",
                             step.id
                         )));
                     }
@@ -184,9 +189,9 @@ impl WorkflowDef {
             // A zero timeout would create a born-dead step (the very first
             // attempt times out immediately) — reject at the boundary (P7).
             // `max_retries: 0` is legitimate ("first failure is terminal").
-            if step.timeout_secs == Some(0) {
+            if step.timeout_seconds == Some(0) {
                 return Err(AlephError::invalid_input(format!(
-                    "step '{}' has timeout_secs=0 — omit the field for the global default",
+                    "step '{}' has timeout_seconds=0 — omit the field for the global default",
                     step.id
                 )));
             }
@@ -299,7 +304,7 @@ mod tests {
             kind: WorkflowStepKind::Agent,
             choices: vec![],
             review: false,
-            timeout_secs: None,
+            timeout_seconds: None,
             max_retries: None,
         }
     }
@@ -313,7 +318,7 @@ mod tests {
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
-            timeout_secs: None,
+            timeout_seconds: None,
             max_retries: None,
         }
     }
@@ -517,12 +522,12 @@ mod tests {
     #[test]
     fn timeout_and_retries_roundtrip_and_skip_when_unset() {
         let mut d = def(vec![step("a", &[])]);
-        d.steps[0].timeout_secs = Some(1800);
+        d.steps[0].timeout_seconds = Some(1800);
         d.steps[0].max_retries = Some(0);
         assert!(d.validate().is_ok(), "{:?}", d.validate());
         let s = serde_json::to_string(&d).unwrap();
         let back: WorkflowDef = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.steps[0].timeout_secs, Some(1800));
+        assert_eq!(back.steps[0].timeout_seconds, Some(1800));
         assert_eq!(
             back.steps[0].max_retries,
             Some(0),
@@ -538,16 +543,28 @@ mod tests {
     #[test]
     fn validate_rejects_zero_timeout() {
         let mut d = def(vec![step("a", &[])]);
-        d.steps[0].timeout_secs = Some(0);
+        d.steps[0].timeout_seconds = Some(0);
         let err = d.validate().unwrap_err().to_string();
-        assert!(err.contains("timeout_secs=0"), "got: {err}");
+        assert!(err.contains("timeout_seconds=0"), "got: {err}");
     }
 
     #[test]
     fn validate_rejects_timeout_on_clarify_step() {
         let mut d = def(vec![clarify_step("ask", "Pick env", &[], &[])]);
-        d.steps[0].timeout_secs = Some(60);
+        d.steps[0].timeout_seconds = Some(60);
         let err = d.validate().unwrap_err().to_string();
         assert!(err.contains("runs no agent"), "got: {err}");
+    }
+
+    #[test]
+    fn workflow_step_timeout_accepts_legacy_alias_for_saved_workflows() {
+        let step: WorkflowStepDef = serde_json::from_value(serde_json::json!({
+            "id": "a",
+            "agent": "w",
+            "prompt": "go",
+            "timeout_secs": 300
+        }))
+        .unwrap();
+        assert_eq!(step.timeout_seconds, Some(300));
     }
 }

@@ -101,7 +101,7 @@ pub struct WorkflowManifestStep {
     /// wire when false (byte-identical to legacy manifests).
     #[serde(default, skip_serializing_if = "is_false")]
     pub review: bool,
-    /// Per-step run timeout in seconds (see `WorkflowStepDef::timeout_secs`).
+    /// Per-step run timeout in seconds (see `WorkflowStepDef::timeout_seconds`).
     /// Executable core; omitted on the wire when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
@@ -144,7 +144,7 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
-                    timeout_secs: s.timeout_secs,
+                    timeout_secs: s.timeout_seconds,
                     max_retries: s.max_retries,
                 })
                 .collect(),
@@ -198,7 +198,7 @@ impl WorkflowManifest {
                     kind: s.kind,
                     choices: s.choices.clone(),
                     review: s.review,
-                    timeout_secs: s.timeout_secs,
+                    timeout_seconds: s.timeout_secs,
                     max_retries: s.max_retries,
                 })
                 .collect(),
@@ -223,7 +223,7 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
-                    timeout_secs: None,
+                    timeout_seconds: None,
                     max_retries: None,
                 },
                 WorkflowStepDef {
@@ -234,7 +234,7 @@ mod tests {
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
                     review: false,
-                    timeout_secs: None,
+                    timeout_seconds: None,
                     max_retries: None,
                 },
             ],
@@ -407,7 +407,7 @@ mod tests {
                 kind: WorkflowStepKind::Clarify,
                 choices: vec!["staging".into(), "prod".into()],
                 review: false,
-                timeout_secs: None,
+                timeout_seconds: None,
                 max_retries: None,
             }],
         };
