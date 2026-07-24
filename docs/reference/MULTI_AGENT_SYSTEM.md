@@ -32,14 +32,16 @@ through Orchestrator → AgentHarness.
 | | Spawn | Delegate | Team | A2A |
 |---|---|---|---|---|
 | **Trigger** | LLM automatic | LLM automatic | User `/team` command | LLM automatic |
-| **Tools** | `subagent_spawn/steer/kill` | `session_send` | 9 team tools (see below) | `a2a_delegate`, `a2a_agents` |
+| **Tools** | `subagent` (actions: run/batch/wait/…) | `session_send` | 9 team tools (see below) | `a2a_delegate`, `a2a_agents` |
 | **Lifecycle** | Ephemeral (destroyed on completion) | Persistent (agents exist independently) | Persistent (disband to end) | Per-call (one remote task) |
 | **Relationship** | Vertical (parent → child) | Horizontal (peer ↔ peer) | Hierarchical (Leader → Members) | Cross-process (Aleph → remote agent) |
 | **Communication** | Return value | Messages (fire-and-forget or wait) | Three-layer: Tasks + Messages + Sessions | A2A protocol over HTTP (JSON-RPC 2.0) |
 
 ## Mode 1: Spawn (Sub-Agent Dispatch)
 
-**Tools**: `subagent_spawn`, `subagent_steer`, `subagent_kill`
+**Tool**: the single `subagent` tool — actions `run` (default; `batch_tasks`
+for parallel fan-out, MoA mode for mixture-of-agents), `check_status`, `wait`,
+`cancel`, `list`, `send_message`, `read_inbox`.
 
 The main agent spawns an ephemeral sub-agent to handle a focused sub-task. The
 sub-agent has its own tool registry (excluding subagent tools to prevent
@@ -329,16 +331,11 @@ All operations logged as `TeamEvent` with retention policy:
 pub enum TeamEventType {
     MessageSent,
     MessageRead,
-    TaskCreated,
     TaskCompleted,
     TaskFailed,
-    ArtifactSubmitted,
     SessionStarted,
     SessionConcluded,
     SessionDeadlocked,
-    DigestGenerated,
-    ShutdownRequested,
-    ShutdownResolved,
     PlanSubmitted,
     PlanResolved,
 
@@ -352,7 +349,45 @@ pub enum TeamEventType {
 }
 ```
 
+Five variants with zero producers and zero stored-string consumers
+(`TaskCreated`, `ArtifactSubmitted`, `DigestGenerated`, `ShutdownRequested`,
+`ShutdownResolved`) were cut on 2026-07-24; `read_event_row` skips unknown
+stored strings, so legacy rows need no migration.
+
 **Retention**: Active teams — events older than 72h pruned lazily (during `team_digest` generation or periodic cleanup). Disbanded teams — events older than 24h pruned. Used for `team_digest` generation.
+
+### Group Chat (`teams.chat.*`)
+
+A user message to a team fans out through the `GroupChatBroadcaster`
+(`src/teams/broadcast/mod.rs`): mentioned members (or `@all`) run concurrently,
+their replies can chain further @-mentions, and three storm gates cap the tree
+(chain depth, per-round fan-out width, cumulative activations — operator-tunable
+via `[team_broadcast]`). Lifecycle ownership (2026-07-24):
+
+- **Fan-out tree identity**: the `run_id` returned by `teams.chat.send` names
+  the whole fan-out tree. It is registered (`register_fanout`) in the
+  `BackgroundAgentTracker` *before* the dispatch task is spawned, so the id is
+  cancellable the instant the RPC returns; each member run registers under it
+  (`SpawnMeta.parent_id` = tree run_id) with a child token, so cancelling one
+  member never poisons the tree.
+- **`teams.chat.cancel`**: poison-then-walk — fires the tree's cancellation
+  token first (no new member spawns at any recursion level), then walks
+  `running_children_of(run_id)` and aborts each in-flight member through the
+  engine's per-run cancel (`ExecutionAdapter::cancel`, the same wire
+  `agent.cancel_run` uses). Residual race: members between the last-instant
+  poison check and engine run registration escape — bounded by one level's
+  fan-out width, each capped by the member timeout below.
+- **Member run timeout**: each member run carries
+  `member_run_timeout_secs` (default 600 s, `[team_broadcast]` knob;
+  previously `None` → the engine's 48 h fallback). A failed or timed-out
+  member posts a system line to the team transcript ("@X 的发言执行失败或超时")
+  instead of vanishing silently. Note the leader's group-chat turn is a member
+  run too — synchronous `team_delegate` calls must fit inside the window
+  (the delegate side's `SettleOnDrop` fence marks the coord task Failed if the
+  awaiting run is dropped mid-delegation).
+
+This is the teams peer group chat — distinct from the `src/group_chat/`
+persona roundtable (`[group_chat]` config), a separate system.
 
 ## Mode 4: A2A (Remote Agent Delegation)
 
@@ -589,9 +624,10 @@ the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 ### Spawn
 | Tool | Description |
 |------|-------------|
-| `subagent_spawn` | Spawn an ephemeral sub-agent for a focused task |
-| `subagent_steer` | Send guidance to a running sub-agent |
-| `subagent_kill` | Terminate a running sub-agent |
+| `subagent` (action=`run`) | Spawn an ephemeral sub-agent for a focused task (`batch_tasks` = parallel fan-out; `run_in_background` = fire-and-forget) |
+| `subagent` (action=`check_status`/`wait`) | Poll or event-park on a background sub-agent |
+| `subagent` (action=`cancel`/`list`) | Fire a run's CancellationToken / enumerate running+completed |
+| `subagent` (action=`send_message`/`read_inbox`) | Team-store messaging faces (`team_name` → team id via `TeammateManager::ensure_team`) |
 
 ### Delegate
 | Tool | Description |

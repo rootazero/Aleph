@@ -32,10 +32,10 @@
 |---|---|---|
 | 类型（6 词闭集边） | `src/loop_graph/types.rs` | `NodeKind`(loop_goal/loop_cron/loop_heartbeat/daemon/anchor/frozen/root)、`EdgeKind`(watches/owns_reference/arbitrates/audits/anchored_by/feeds)、`Origin`(human/llm，provenance 一等) |
 | 存储 | `src/loop_graph/store.rs` | 两表（graph_nodes/graph_edges，agent_id 作用域，PK 复合）；`open_sqlite_safe`；**root origin=human 是 store 级不变量**；无 FK 级联（悬空边=审计信号，显式 `gc` 才清）；`lint()` 纯结构检查（悬空/裸奔优化环/治理链未锚定 root/快环拥有慢环参照） |
-| 模板（智慧在此，R9） | `src/loop_graph/templates.rs` | `AUDIT_TEMPLATE`（七步审计）/`WATCH_TEMPLATE_*`（看守）/`STEWARD_TEMPLATE`（参照治理）/`ARBITRATION_TEMPLATE`（仲裁） |
+| 模板（智慧在此，R9） | `src/loop_graph/templates.rs` | `AUDIT_TEMPLATE`（七步审计）/`WATCH_TEMPLATE_HEADER`+`_FOOTER`（看守）。**仅此两类**——原 `STEWARD_TEMPLATE`/`ARBITRATION_TEMPLATE` 零消费者已 CUT（2026-07-24，R10 YAGNI）：steward/arbitration 的教义活在 `loop-governance` skill，此类环按需用 `cron_manage` 手建（仲裁刻意是事件非常驻服务，勿建安装器） |
 | 触发与会话服务 | `src/loop_graph/service.rs` | `notify_goal_settled`（胜利宣称时刻戳看守 cron，60s 去抖）、`governing_owner`（objective ACL 查询）、`render_session_topology`（prompt 注入渲染，**确定性字节**） |
 | 工具（R8 面） | `src/builtin_tools/loop_graph_manage.rs` | `loop_graph`(action: node/drop_node/link/unlink/list/status/gc/enable_audit/pair)；anchor 强制 body 声明 truth∈{exit_code,numeric,line_count}；status 做 live join（goal store/cron jobs 实时状态，永不缓存观测） |
-| 胜利宣称触发点 | `src/gateway/execution_engine/goal_continuation.rs` | gateless-terminal-complete 与 gate-pass 两处调 `notify_goal_settled` |
+| 胜利宣称触发点 | `src/gateway/execution_engine/goal_continuation.rs` + `src/builtin_tools/goal.rs` | **三处**调 `notify_goal_settled`：continuation hook 的 gateless-terminal-complete 与 gate-pass，加 goal 工具的 Passive-complete 臂（Passive goal 不经 continuation hook，2026-07-24 补线）。三处全走 store CAS `try_claim_settle_notify`——章键 `(id, completed_at_ms)`，`completed_at_ms` 只在进入 Complete 的转移瞬间盖、离开即清，完成后的 lesson/note 编辑不能再燃 |
 | objective 写保护 | `src/builtin_tools/goal.rs` (Set/Clear) | 被 `owns_reference` 治理的 goal：set 替换/clear＝拒绝+指路提案 note；逃生口＝用户确认后 unlink→改→relink（provenance 留痕） |
 | prompt 层 | `src/thinker/layers/graph_topology.rs` @1753 | 被治理会话逐轮被告知其拓扑位置+根参照原文；图不变→字节不变（cache 安全）；非图内会话零注入 |
 | root/frozen 人闸 | `src/config/types/policies/exec_tier.rs::asks_for_arguments` | Auto 档下 `loop_graph` 触及 `root:`/`frozen:` 的写调用参数级强制审批卡（复用 `src/tools/scoped/` 唯一强制点；背景会话无审批通道→fail-closed）。**残余**：Full 档按其契约不闸（用户显式选择全信任），见 spec §11 |
@@ -66,7 +66,7 @@ Graph RAG/多跳图检索（记忆检索议题）；Neo4j 等图数据库（红�
 
 ## 多智能体融合（2026-07-19 第二轮，spec: specs/2026-07-19-graph-multiagent-fusion-design.md）
 
-- **独立视角**：审计/看守模板默认 `subagent(agent_type="loop-auditor")` 独立取证（builtin agent：`ContextMode::Fresh` 零继承、READ_ONLY+bash、denied file_write/file_edit/search/web_fetch）——治「共读同套数据互证正确」。落点 `src/agents/registry.rs` + `src/loop_graph/templates.rs`。
+- **独立视角**：审计/看守模板默认 `subagent(agent_type="loop-auditor")` 独立取证（builtin agent：`ContextMode::Fresh` 零继承、READ_ONLY+bash+`governance_metrics`（2026-07-24 补——sandbox 使 bash 摸不到 `~/.aleph/data`，模板点名的常备探针此前必败；`cron_manage`/`loop_graph` 刻意不加，前者含写动作、后者能改图）、denied file_write/file_edit/search/web_fetch）——治「共读同套数据互证正确」。落点 `src/agents/registry.rs` + `src/loop_graph/templates.rs`。
 - **Team 显式入图**：`NodeKind::Team`（`team:<id>`）只经显式 node/pair 进图，快环 coord task 永不进表；status live-join `TeamStore`；`team_disband` 成功即胜利宣称 → `notify_team_settled` poke 看守（60s 去抖，与 goal 同内核 `notify_node_settled`）。落点 `src/loop_graph/{types,service}.rs` + `src/builtin_tools/{loop_graph_manage.rs,team/disband.rs}`。
 - **Grounding 进执行层**：`task_create(require_grounding=true)`（acceptance metadata 通道，零迁移）→ `task_review` approve 无 `grounding` 证据即 bounce（`grounding_required`）；证据 kind 闭集与 anchor truth 同词表（exit_code|numeric|line_count），以 `[grounding]` comment 存证供审计环核验。reject 永不要求锚（拒绝天然保守）。落点 `src/agents/swarm/tasks/acceptance.rs` + `src/builtin_tools/team/task_review.rs`。
 - **编排智慧**：leader prompt 三教义（防过度编排 / 审查独立触地 / 失败局部重跑），`src/teams/leader_prompt.rs`。

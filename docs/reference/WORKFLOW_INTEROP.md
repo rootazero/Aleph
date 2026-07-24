@@ -42,18 +42,25 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 ```
 
 - 必填:顶层 `name` / `steps`;步骤 `id` / `agent` / `prompt`。
-- 可选:`description` / `whenToUse` / `phases`(条目可选 `model` 相位级模型覆盖);步骤
-  `dependsOn`(缺省 `[]`)/ `label` / `model` / `phase` / `schema` / `isolation` /
-  `agentType` / `effort`(均为原样透传,Aleph 不解释、不执行,仅为忠实导出 `.workflow.js`)。
-  `effort`(推理档位 `low`/`medium`/`high`/`xhigh`/`max`,贴合动态 workflow 的 `agent(..,{effort})`)
-  与 `isolation`/`agentType` 同为 interchange-only;升级为可执行的 per-member 覆盖(像
-  per-step `model` 那样进任务元数据)留作后续 PR。
+- 可选:`description` / `whenToUse` / `phases`(条目可选 `model` 相位级模型覆盖,
+  interchange-only);步骤 `dependsOn`(缺省 `[]`)/ `label` / `phase` / `schema` /
+  `isolation` / `agentType`(原样透传,Aleph 不解释、不执行,仅为忠实导出
+  `.workflow.js`)。
+- **步骤 `model` 与 `effort` 是可执行覆盖**(2026-07-24 起 `effort` 兑现旧文
+  "留作后续 PR"):两者都**不进** `WorkflowDef`,而在 `run` 时由 workflow 工具从
+  manifest 取出、经 `materialize` 盖进任务元数据(`WORKFLOW_MODEL_KEY` /
+  `WORKFLOW_EFFORT_KEY`,byte-identical-when-absent 同款盖章模式),dispatcher
+  转成成员 run 的 `model_override` / `think_level`。`effort` 取值
+  `low`/`medium`/`high`/`xhigh`/`max`(贴合动态 workflow 的 `agent(..,{effort})`),
+  经活表 `normalize_think_level` 归一——`max`≡High 与全仓一致(不为 workflow
+  fork 档位词表);`validate()` 在 save/import 边界拒未知 effort 值。
 - **可执行扩展(2026-07-16 起)**:步骤 `review`(lead 审查门)/ `timeoutSecs`(每步运行
   超时秒)/ `maxRetries`(每步重试上限,`0`=首败即终)——三者进 `WorkflowDef` 可执行核心,
   materialize 时盖进任务元数据由 dispatcher 现有消费者执行;`.workflow.js` 侧渲染/解析为
   agent() 的 bare-literal opts(非字符串),header-stripped 的 bare 路径同样往返。
 - 只有 `name` / `description` / `steps{id,agent,prompt,dependsOn,review,timeoutSecs,maxRetries}`
-  映射进 `WorkflowDef`;其余字段仅在导出的 `.workflow.js` 头部内嵌块中保留。
+  映射进 `WorkflowDef`;其余字段存 manifest(导出时进 `.workflow.js` 头部内嵌块;
+  `model`/`effort` 另在 run 时盖任务元数据,见上)。
 
 ## `.workflow.js` ↔ DAG 映射
 
@@ -65,7 +72,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `agent([ "l1","l2" ].join("\n"))` 多行 prompt | ↔ 无损 | 工程格式签名惯用法:导出按 `\n` 拆行渲染数组,导入按 `.join` 分隔符还原(转义正确解码),裸路径亦对称 |
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
-| `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
+| `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;其中 `model`/`effort` 在 `run` 时盖任务元数据成为**可执行覆盖**(见上);`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
 | `opts.{review,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
