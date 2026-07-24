@@ -76,9 +76,10 @@ pub enum MoaManageArgs {
         /// Advisor fan-out cadence. Omit for `per_iteration` (hermes default).
         #[serde(default)]
         fanout: Option<MoaFanout>,
-        /// Per-advisor wall-clock budget in seconds. Omit for 120.
-        #[serde(default)]
-        advisor_timeout_secs: Option<u64>,
+        /// Per-advisor wall-clock budget in seconds. Omit for 120. Accepts the
+        /// legacy `advisor_timeout_secs` spelling.
+        #[serde(default, alias = "advisor_timeout_secs")]
+        advisor_timeout_seconds: Option<u64>,
         /// Caps only advisor output. Omit for no cap.
         #[serde(default)]
         advisor_max_tokens: Option<u32>,
@@ -183,7 +184,7 @@ impl JsonSchema for MoaManageArgs {
                     "enum": ["per_iteration", "user_turn"],
                     "description": "set_preset: advisor fan-out cadence. Default per_iteration."
                 },
-                "advisor_timeout_secs": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
+                "advisor_timeout_seconds": { "type": "integer", "description": "set_preset: per-advisor wall-clock budget in seconds. Default 120." },
                 "advisor_max_tokens": { "type": "integer", "description": "set_preset: cap advisor output tokens. Omit for no cap." },
                 "advisor_temperature": { "type": "number", "description": "set_preset: advisor sampling temperature. Omit for provider default." },
                 "aggregator_temperature": { "type": "number", "description": "set_preset: aggregator sampling temperature. Omit for provider default." },
@@ -444,7 +445,7 @@ impl MoaManageTool {
         aggregator: MoaSlot,
         enabled: Option<bool>,
         fanout: Option<MoaFanout>,
-        advisor_timeout_secs: Option<u64>,
+        advisor_timeout_seconds: Option<u64>,
         advisor_max_tokens: Option<u32>,
         advisor_temperature: Option<f32>,
         aggregator_temperature: Option<f32>,
@@ -455,7 +456,7 @@ impl MoaManageTool {
             advisors,
             aggregator,
             fanout: fanout.unwrap_or_default(),
-            advisor_timeout_secs: advisor_timeout_secs.unwrap_or_else(default_advisor_timeout_secs),
+            advisor_timeout_secs: advisor_timeout_seconds.unwrap_or_else(default_advisor_timeout_secs),
             advisor_max_tokens,
             advisor_temperature,
             aggregator_temperature,
@@ -615,7 +616,7 @@ impl AlephTool for MoaManageTool {
                 aggregator,
                 enabled,
                 fanout,
-                advisor_timeout_secs,
+                advisor_timeout_seconds,
                 advisor_max_tokens,
                 advisor_temperature,
                 aggregator_temperature,
@@ -627,7 +628,7 @@ impl AlephTool for MoaManageTool {
                     aggregator,
                     enabled,
                     fanout,
-                    advisor_timeout_secs,
+                    advisor_timeout_seconds,
                     advisor_max_tokens,
                     advisor_temperature,
                     aggregator_temperature,
@@ -699,6 +700,39 @@ mod tests {
             advisor_max_tokens: None,
             advisor_temperature: None,
             aggregator_temperature: None,
+        }
+    }
+
+    #[test]
+    fn moa_set_preset_advisor_timeout_accepts_canonical_and_legacy_alias() {
+        // `advisors`/`aggregator` are required fields of the `SetPreset`
+        // variant (no `#[serde(default)]`) — included here so the JSON
+        // actually deserializes; the brief's minimal JSON omitted them.
+        let a: MoaManageArgs = serde_json::from_value(serde_json::json!({
+            "action": "set_preset", "name": "p", "advisors": [],
+            "aggregator": {"provider": "anthropic", "model": "opus"},
+            "advisor_timeout_seconds": 120
+        }))
+        .unwrap();
+        match a {
+            MoaManageArgs::SetPreset {
+                advisor_timeout_seconds,
+                ..
+            } => assert_eq!(advisor_timeout_seconds, Some(120)),
+            _ => panic!("wrong variant"),
+        }
+        let b: MoaManageArgs = serde_json::from_value(serde_json::json!({
+            "action": "set_preset", "name": "p", "advisors": [],
+            "aggregator": {"provider": "anthropic", "model": "opus"},
+            "advisor_timeout_secs": 120
+        }))
+        .unwrap();
+        match b {
+            MoaManageArgs::SetPreset {
+                advisor_timeout_seconds,
+                ..
+            } => assert_eq!(advisor_timeout_seconds, Some(120)),
+            _ => panic!("wrong variant"),
         }
     }
 
@@ -966,7 +1000,7 @@ mod tests {
                 },
                 enabled: None,
                 fanout: None,
-                advisor_timeout_secs: None,
+                advisor_timeout_seconds: None,
                 advisor_max_tokens: None,
                 advisor_temperature: None,
                 aggregator_temperature: None,
@@ -1016,7 +1050,7 @@ mod tests {
                 },
                 enabled: None,
                 fanout: None,
-                advisor_timeout_secs: None,
+                advisor_timeout_seconds: None,
                 advisor_max_tokens: None,
                 advisor_temperature: None,
                 aggregator_temperature: None,
@@ -1044,7 +1078,7 @@ mod tests {
                 },
                 enabled: None,
                 fanout: None,
-                advisor_timeout_secs: None,
+                advisor_timeout_seconds: None,
                 advisor_max_tokens: None,
                 advisor_temperature: None,
                 aggregator_temperature: None,
@@ -1097,7 +1131,7 @@ mod tests {
             },
             enabled: Some(false),
             fanout: None,
-            advisor_timeout_secs: None,
+            advisor_timeout_seconds: None,
             advisor_max_tokens: None,
             advisor_temperature: None,
             aggregator_temperature: None,
