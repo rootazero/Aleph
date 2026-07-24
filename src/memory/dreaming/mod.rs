@@ -677,14 +677,17 @@ impl DreamDaemon {
         let run_start = now_timestamp();
         let run_date = Local::now().format("%Y-%m-%d").to_string();
 
-        let _ = self
+        if let Err(e) = self
             .database
             .set_dream_status(DreamStatus {
                 last_run_at: Some(run_start),
                 last_status: Some("running".to_string()),
                 last_duration_ms: None,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(error = %e, "failed to persist dream status (start)");
+        }
 
         // Bound the forced run by `max_duration_seconds`, exactly like the
         // scheduled path (`check_and_run`). Without this a hung LLM stage would
@@ -706,24 +709,30 @@ impl DreamDaemon {
 
         match &result {
             Ok((status, _report)) => {
-                let _ = self
+                if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some(status.as_str().to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to persist dream status (ok)");
+                }
             }
             Err(_) => {
-                let _ = self
+                if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("failed".to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to persist dream status (failed)");
+                }
             }
         }
 
@@ -841,14 +850,17 @@ impl DreamDaemon {
                     }
                 );
 
-                let _ = self
+                if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some(status.as_str().to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to persist dream status (completed)");
+                }
 
                 // Persist the run into the `dream_reports` audit table. This
                 // writer was orphaned during an earlier refactor (the run path
@@ -885,25 +897,31 @@ impl DreamDaemon {
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");
-                let _ = self
+                if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("error".to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to persist dream status (error)");
+                }
             }
             Err(_) => {
                 warn!("DreamDaemon run timed out");
-                let _ = self
+                if let Err(e) = self
                     .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("timeout".to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to persist dream status (timeout)");
+                }
             }
         }
 
@@ -1391,15 +1409,15 @@ async fn compute_raw_metrics(
 }
 
 fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime), AlephError> {
-    let start = NaiveTime::parse_from_str(&config.window_start_local, "%H:%M").map_err(|_| {
+    let start = NaiveTime::parse_from_str(&config.window_start_local, "%H:%M").map_err(|e| {
         AlephError::config(format!(
-            "Invalid dreaming.window_start_local '{}', expected HH:MM",
+            "Invalid dreaming.window_start_local '{}', expected HH:MM: {e}",
             config.window_start_local
         ))
     })?;
-    let end = NaiveTime::parse_from_str(&config.window_end_local, "%H:%M").map_err(|_| {
+    let end = NaiveTime::parse_from_str(&config.window_end_local, "%H:%M").map_err(|e| {
         AlephError::config(format!(
-            "Invalid dreaming.window_end_local '{}', expected HH:MM",
+            "Invalid dreaming.window_end_local '{}', expected HH:MM: {e}",
             config.window_end_local
         ))
     })?;

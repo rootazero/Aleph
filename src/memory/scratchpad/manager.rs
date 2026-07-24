@@ -318,7 +318,9 @@ impl ScratchpadManager {
         if self.config.backup_on_write && self.exists() {
             let backup_path = self.scratchpad_path().with_extension("md.bak");
             if let Ok(existing) = fs::read_to_string(self.scratchpad_path()).await {
-                let _ = fs::write(&backup_path, existing).await;
+                if let Err(e) = fs::write(&backup_path, &existing).await {
+                    tracing::warn!(error = %e, path = %backup_path.display(), "scratchpad backup write failed");
+                }
             }
         }
 

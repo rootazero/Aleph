@@ -337,7 +337,9 @@ impl CuratedMemoryStore {
             .lock_exclusive()
             .map_err(|e| CuratedError::Io(format!("acquire lock: {e}")))?;
         let result = self.with_lock_inner(mutate).await;
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!(error = %e, "unlock failed");
+        }
         result
     }
 
