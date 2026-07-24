@@ -349,23 +349,27 @@ impl SkillSystem {
     /// or when no registered dir knows the skill.
     async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
         let id_str = id.as_str();
-        // Reject any path-separator or parent-dir references to prevent traversal.
         if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
             tracing::warn!(skill_id = %id_str, "owning_dir: rejecting malformed skill id");
             return None;
         }
         let dirs = self.inner.skill_dirs.read().await.clone();
-        for dir in &dirs {
-            if dir.join(id_str).join("SKILL.md").exists() {
-                return Some(dir.clone());
+        let owned_id = id_str.to_string();
+        tokio::task::spawn_blocking(move || {
+            for dir in &dirs {
+                if dir.join(&owned_id).join("SKILL.md").exists() {
+                    return Some(dir.clone());
+                }
             }
-        }
-        for dir in &dirs {
-            if UsageStore::new(dir).get(id_str).is_some() {
-                return Some(dir.clone());
+            for dir in &dirs {
+                if UsageStore::new(dir).get(&owned_id).is_some() {
+                    return Some(dir.clone());
+                }
             }
-        }
-        None
+            None
+        })
+        .await
+        .unwrap_or(None)
     }
 
     /// Find the on-disk directory whose `SKILL.md` parses to `id`, without
@@ -379,28 +383,33 @@ impl SkillSystem {
             return None;
         }
         let dirs = self.inner.skill_dirs.read().await.clone();
-        for root in &dirs {
-            let entries = match std::fs::read_dir(root) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            for entry in entries.flatten() {
-                let sub = entry.path();
-                if !sub.is_dir() {
-                    continue;
-                }
-                let md = sub.join("SKILL.md");
-                if !md.exists() {
-                    continue;
-                }
-                if let Ok(m) = parse_skill_file(&md, guess_source(&sub)) {
-                    if m.id().as_str() == id_str {
-                        return Some(sub);
+        let owned_id = id_str.to_string();
+        tokio::task::spawn_blocking(move || {
+            for root in &dirs {
+                let entries = match std::fs::read_dir(root) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                for entry in entries.flatten() {
+                    let sub = entry.path();
+                    if !sub.is_dir() {
+                        continue;
+                    }
+                    let md = sub.join("SKILL.md");
+                    if !md.exists() {
+                        continue;
+                    }
+                    if let Ok(m) = parse_skill_file(&md, guess_source(&sub)) {
+                        if m.id().as_str() == owned_id {
+                            return Some(sub);
+                        }
                     }
                 }
             }
-        }
-        None
+            None
+        })
+        .await
+        .unwrap_or(None)
     }
 
     /// Locate the on-disk `SKILL.md` for a skill in the flat
@@ -466,33 +475,33 @@ impl SkillSystem {
 
     /// Install a dependency for a skill.
     pub async fn install_dependency(&self, id: &SkillId, spec_id: Option<&str>) -> InstallResult {
-        let registry = self.inner.registry.read().await;
-        let manifest = match registry.get(id) {
-            Some(m) => m.clone(),
-            None => {
-                return InstallResult {
-                    success: false,
-                    message: format!("Skill not found: {}", id.as_str()),
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: None,
-                };
+        let install_specs = {
+            let registry = self.inner.registry.read().await;
+            match registry.get(id) {
+                Some(m) => m.install_specs().to_vec(),
+                None => {
+                    return InstallResult {
+                        success: false,
+                        message: format!("Skill not found: {}", id.as_str()),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        exit_code: None,
+                    };
+                }
             }
         };
-        drop(registry);
 
         let config = self.inner.config.read().await;
         let prefs = config.install_preferences.clone();
         drop(config);
 
         let spec = if let Some(spec_id) = spec_id {
-            manifest
-                .install_specs()
+            install_specs
                 .iter()
                 .find(|s| s.id == spec_id)
                 .cloned()
         } else {
-            select_best_install(manifest.install_specs(), &prefs).cloned()
+            select_best_install(&install_specs, &prefs).cloned()
         };
 
         let spec = match spec {

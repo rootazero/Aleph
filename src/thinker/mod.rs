@@ -421,18 +421,20 @@ impl ProviderRegistry for MultiProviderRegistry {
         }
 
         // Try each candidate in order, skipping unhealthy ones.
-        // FailoverProvider::candidates() already filters the explicit fallback
-        // chain against the live registry, so we will never select a provider
-        // that has been removed at runtime.
-        for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
-            let health = state.health.get(provider_name).cloned().unwrap_or_default();
+        // Collect degraded candidates for the single-provider fallback.
+        let mut degraded_candidates: Vec<(String, String)> = Vec::new();
+        for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
+            let health = state.health.get(&provider_name).cloned().unwrap_or_default();
             if !health.is_usable() {
+                if matches!(health, ProviderHealth::Degraded { .. }) {
+                    degraded_candidates.push((provider_name, candidate_model));
+                }
                 continue;
             }
-            if state.providers.contains_key(provider_name) {
+            if state.providers.contains_key(&provider_name) {
                 return Ok(ResolvedModel {
-                    provider_name: provider_name.clone(),
-                    model: candidate_model.clone(),
+                    provider_name,
+                    model: candidate_model,
                     is_fallback: i > 0,
                     original_model: model.to_string(),
                 });
@@ -448,19 +450,19 @@ impl ProviderRegistry for MultiProviderRegistry {
         // `Unavailable` providers are always skipped — they require user
         // intervention.
         if state.providers.len() == 1 {
-            for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
-                let health = state.health.get(provider_name).cloned().unwrap_or_default();
+            for (provider_name, candidate_model) in degraded_candidates.into_iter() {
+                let health = state.health.get(&provider_name).cloned().unwrap_or_default();
                 if matches!(health, ProviderHealth::Degraded { .. })
-                    && state.providers.contains_key(provider_name)
+                    && state.providers.contains_key(&provider_name)
                 {
                     tracing::warn!(
                         provider = %provider_name,
                         "No healthy provider; retrying degraded provider as last resort"
                     );
                     return Ok(ResolvedModel {
-                        provider_name: provider_name.clone(),
-                        model: candidate_model.clone(),
-                        is_fallback: i > 0,
+                        provider_name,
+                        model: candidate_model,
+                        is_fallback: true,
                         original_model: model.to_string(),
                     });
                 }
