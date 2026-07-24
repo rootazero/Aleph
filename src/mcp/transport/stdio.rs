@@ -778,7 +778,7 @@ mod tests {
         .expect("spawn");
 
         for _ in 0..50 {
-            if let Ok(meta) = std::fs::metadata(tmp.path()) {
+            if let Ok(meta) = tokio::fs::metadata(tmp.path()).await {
                 if meta.len() > 0 {
                     break;
                 }
@@ -789,7 +789,7 @@ mod tests {
         let _ = transport.close().await;
         std::env::remove_var("ALEPH_TEST_STDIO_API_KEY");
 
-        let contents = std::fs::read_to_string(tmp.path()).expect("read report");
+        let contents = tokio::fs::read_to_string(tmp.path()).await.expect("read report");
         assert_eq!(
             contents.trim(),
             "STRIPPED",
@@ -823,7 +823,7 @@ mod tests {
         .expect("spawn");
 
         for _ in 0..50 {
-            if let Ok(meta) = std::fs::metadata(tmp.path()) {
+            if let Ok(meta) = tokio::fs::metadata(tmp.path()).await {
                 if meta.len() > 0 {
                     break;
                 }
@@ -834,7 +834,7 @@ mod tests {
         let _ = transport.close().await;
         std::env::remove_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC");
 
-        let contents = std::fs::read_to_string(tmp.path()).expect("read report");
+        let contents = tokio::fs::read_to_string(tmp.path()).await.expect("read report");
         assert_eq!(
             contents, "passthrough_value",
             "non-secret inherited env must pass through; got: {contents}"

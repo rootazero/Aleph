@@ -250,6 +250,7 @@ async fn reconcile_capability_tools(
         // rust-doctor-disable-next-line excessive-clone
         let list: Arc<dyn AlephToolDyn> = Arc::new(McpListResourcesTool::new(handle.clone()));
         // rust-doctor-disable-next-line excessive-clone
+        // rust-doctor-disable-next-line excessive-clone
         let templates: Arc<dyn AlephToolDyn> =
             Arc::new(McpListResourceTemplatesTool::new(handle.clone()));
         set_builtin(registry, RESOURCE_LIST_TOOL, want_resource, list);
