@@ -58,11 +58,16 @@ static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
 /// ignored, matching the write-once semantics of `defaults_override`. Takes the
 /// policy by reference (like `providers::retry` consumes `RetryPolicy`).
 pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
-    let _ = METRICS_RUNTIME.set(MetricsRuntime {
-        warning_multiplier: policy.warning_multiplier,
-        enable_logging: policy.enable_logging,
-        enable_warnings: policy.enable_warnings,
-    });
+    if METRICS_RUNTIME
+        .set(MetricsRuntime {
+            warning_multiplier: policy.warning_multiplier,
+            enable_logging: policy.enable_logging,
+            enable_warnings: policy.enable_warnings,
+        })
+        .is_err()
+    {
+        tracing::debug!("metrics runtime already initialised; ignoring reload");
+    }
 }
 
 fn metrics_runtime() -> MetricsRuntime {

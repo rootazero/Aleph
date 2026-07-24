@@ -184,8 +184,8 @@ impl MediaCache {
     }
 
     /// Read a cached file and return its base64-encoded content.
-    pub fn to_base64(cached: &CachedMedia) -> Result<String, CacheError> {
-        let bytes = std::fs::read(&cached.local_path)?;
+    pub async fn to_base64(cached: &CachedMedia) -> Result<String, CacheError> {
+        let bytes = tokio::fs::read(&cached.local_path).await?;
         Ok(BASE64.encode(&bytes))
     }
 
@@ -607,7 +607,7 @@ mod tests {
 
         let session_id = "test-base64";
         let cached = cache.resolve(&att, session_id).await.unwrap();
-        let b64 = MediaCache::to_base64(&cached).unwrap();
+        let b64 = MediaCache::to_base64(&cached).await.unwrap();
         assert_eq!(b64, "SGVsbG8="); // base64("Hello")
 
         let _ = MediaCache::cleanup_session(session_id);

@@ -107,12 +107,13 @@ impl HttpTransport {
     }
 
     async fn request_headers(&self, session: Option<&str>) -> Result<HeaderMap> {
-        let protocol_version = self
+        let version_guard = self
             .negotiated_version
             .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .unwrap_or_else(|| MCP_PROTOCOL_VERSION.to_string());
+            .unwrap_or_else(|e| e.into_inner());
+        let protocol_version = version_guard
+            .as_deref()
+            .unwrap_or(MCP_PROTOCOL_VERSION);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -125,7 +126,7 @@ impl HttpTransport {
         );
         headers.insert(
             HeaderName::from_static("mcp-protocol-version"),
-            HeaderValue::from_str(&protocol_version)
+            HeaderValue::from_str(protocol_version)
                 .map_err(|e| AlephError::IoError(format!("Invalid MCP protocol version: {e}")))?,
         );
         if let Some(session) = session {

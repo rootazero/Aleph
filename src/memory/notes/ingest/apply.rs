@@ -402,7 +402,9 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             }
             if let Err(e) = tokio::fs::rename(&s.staged_path, &s.target_path).await {
                 for (from, to) in moved.iter().rev() {
-                    let _ = tokio::fs::rename(to, from).await;
+                    if let Err(e) = tokio::fs::rename(to, from).await {
+                        tracing::warn!(error = %e, from = %to.display(), to = %from.display(), "undo rename failed during rollback");
+                    }
                 }
                 return Err(ApplyError::Other(AlephError::other(format!(
                     "rename {} → {}: {e}",
@@ -446,7 +448,9 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             report.touched_paths.push(old_path.clone());
         }
 
-        let _ = tokio::fs::remove_dir_all(&self.tx_root).await;
+        if let Err(e) = tokio::fs::remove_dir_all(&self.tx_root).await {
+            tracing::warn!(error = %e, tx_root = %self.tx_root.display(), "tx cleanup failed");
+        }
 
         let mut seen: BTreeSet<String> = BTreeSet::new();
         // rust-doctor-disable-next-line excessive-clone
@@ -532,9 +536,13 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
 
     pub async fn rollback(mut self) {
         for s in self.staged.drain(..).rev() {
-            let _ = tokio::fs::remove_file(&s.staged_path).await;
+            if let Err(e) = tokio::fs::remove_file(&s.staged_path).await {
+                tracing::warn!(error = %e, path = %s.staged_path.display(), "rollback cleanup failed");
+            }
         }
-        let _ = tokio::fs::remove_dir_all(&self.tx_root).await;
+        if let Err(e) = tokio::fs::remove_dir_all(&self.tx_root).await {
+            tracing::warn!(error = %e, tx_root = %self.tx_root.display(), "rollback dir cleanup failed");
+        }
         self.committed = true;
     }
 }
@@ -542,7 +550,9 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
 impl<'a, S: NoteStore + Send + Sync + 'static> Drop for CompoundApplyTx<'a, S> {
     fn drop(&mut self) {
         if !self.committed {
-            let _ = std::fs::remove_dir_all(&self.tx_root);
+            if let Err(e) = std::fs::remove_dir_all(&self.tx_root) {
+                tracing::warn!(error = %e, tx_root = %self.tx_root.display(), "drop cleanup failed");
+            }
         }
     }
 }

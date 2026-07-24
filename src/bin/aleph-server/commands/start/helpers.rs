@@ -43,6 +43,37 @@ pub(super) fn format_socket_addr(bind: &str, port: u16) -> String {
     }
 }
 
+/// Distinctive, grep-friendly token that begins every boot marker line.
+const BOOT_MARKER_TAG: &str = "ALEPH-BOOT";
+
+/// Format the single-line boot marker. Pure so the grep contract is testable.
+fn boot_marker_line(ts: &str, pid: u32, version: &str) -> String {
+    format!("{BOOT_MARKER_TAG} ts={ts} pid={pid} version={version}")
+}
+
+/// Emit one grep-friendly, timestamped boot marker to the raw stdout stream.
+///
+/// This is a plain `println!`, not a tracing event, on purpose: the redirected
+/// `server.log` (a `--log-file` daemon redirect or a foreground shell `>`) only
+/// captures raw stdout/stderr. The tracing console layer is dropped when stdout
+/// is not a TTY (see `initialize_tracing`), and the tracing *file* layer writes
+/// to the separate, already-rotated `~/.aleph/logs/` stream — so neither leaves
+/// a timestamped boundary in `server.log`. That stream appends across restarts,
+/// which makes an old boot's lines easy to mistake for the current boot's. This
+/// marker gives every boot an unambiguous start line in every run mode:
+///   grep ALEPH-BOOT ~/.aleph/server.log | tail -1
+/// is the current boot; everything after it is this run.
+pub(super) fn print_boot_marker() {
+    println!(
+        "{}",
+        boot_marker_line(
+            &chrono::Utc::now().to_rfc3339(),
+            std::process::id(),
+            env!("ALEPH_VERSION"),
+        )
+    );
+}
+
 /// Print the startup banner and available method list to stdout.
 pub(super) fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
     println!(
@@ -438,4 +469,20 @@ pub(super) fn build_http_provider(
         .ok_or_else(|| format!("Unknown protocol: '{protocol_name}'"))?;
 
     HttpProvider::new(name.to_string(), cfg, adapter).map_err(std::convert::Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_marker_is_greppable_and_carries_fields() {
+        let line = boot_marker_line("2026-07-24T00:00:00+00:00", 4242, "26.7.24");
+        // The grep contract: a stable leading tag so `grep ALEPH-BOOT | tail -1`
+        // always lands on a boot boundary, plus the three fields ops need.
+        assert!(line.starts_with(BOOT_MARKER_TAG));
+        assert!(line.contains("ts=2026-07-24T00:00:00+00:00"));
+        assert!(line.contains("pid=4242"));
+        assert!(line.contains("version=26.7.24"));
+    }
 }

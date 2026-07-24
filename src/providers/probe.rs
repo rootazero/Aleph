@@ -55,12 +55,12 @@ pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> Pro
         Ok(_) => ProbeOutcome {
             success: true,
             error: None,
-            latency_ms: Some(start.elapsed().as_millis() as u64),
+            latency_ms: Some(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
         Err(e) => ProbeOutcome {
             success: false,
             error: Some(format!("{e}")),
-            latency_ms: Some(start.elapsed().as_millis() as u64),
+            latency_ms: Some(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
     }
 }

@@ -17,6 +17,7 @@ static PASSTHROUGH_WARNED: AtomicBool = AtomicBool::new(false);
 /// use [`create_pii_scrubbing_layer`]; this struct is kept in the public
 /// API only for backward compatibility and the first time its `on_event`
 /// fires it emits a `warn!` so misconfiguration shows up in operator logs.
+#[derive(Debug)]
 pub struct PiiScrubbingLayer;
 
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
@@ -65,6 +66,7 @@ where
 }
 
 /// Custom event formatter that scrubs PII
+#[derive(Debug)]
 pub struct PiiScrubbingFormat;
 
 impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for PiiScrubbingFormat

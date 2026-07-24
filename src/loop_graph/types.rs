@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// entities (goal/cron/heartbeat/daemon) — never copies of their state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum NodeKind {
     /// A standing goal (`goal:<session_id>`).
     LoopGoal,
@@ -81,6 +82,7 @@ impl NodeKind {
 /// set only grows when a new verb brings its consumer with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EdgeKind {
     /// Watcher loop → optimizing loop (Goodhart pairing: counter-metric view).
     Watches,
@@ -126,6 +128,7 @@ impl EdgeKind {
 /// First-class provenance: who put this node/edge in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Origin {
     Human,
     Llm,
@@ -252,7 +255,7 @@ impl GraphEdge {
 /// Ordered pace rank for the known cadence classes; `None` for free text
 /// (which opts out of the fast-owns-slow lint).
 #[must_use]
-pub fn cadence_rank(cadence: &str) -> Option<u8> {
+pub(crate) fn cadence_rank(cadence: &str) -> Option<u8> {
     match cadence {
         "per_turn" => Some(0),
         "hourly" => Some(1),

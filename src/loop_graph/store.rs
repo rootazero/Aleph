@@ -287,100 +287,128 @@ impl LoopGraphStore {
         let edges = self.list_edges(agent_id)?;
         let by_id: std::collections::HashMap<&str, &GraphNode> =
             nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-        let mut findings = Vec::new();
 
-        for e in &edges {
-            let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
-                .into_iter()
-                .filter(|id| !by_id.contains_key(id))
-                .collect();
-            if !missing.is_empty() {
-                findings.push(format!(
-                    "悬空边: {} -[{}]-> {}（节点 {:?} 已消失——被治理的环不见了，需审计裁决或 gc）",
-                    e.from_id,
-                    e.kind.as_str(),
-                    e.to_id,
-                    missing
-                ));
-            }
-        }
-
-        for n in &nodes {
-            if !n.kind.is_optimization_loop() {
-                continue;
-            }
-            let watched = edges
-                .iter()
-                .any(|e| e.to_id == n.id && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits));
-            if !watched {
-                findings.push(format!(
-                    "裸奔优化环: {}（'{}'）没有任何 watches/audits 入边",
-                    n.id, n.label
-                ));
-            }
-        }
-
-        // Governance chains must terminate at a root node. Walk each governor
-        // upward through incoming owns_reference edges; bounded by node count
-        // so a cycle cannot loop forever.
-        let governors: Vec<&GraphNode> = nodes
-            .iter()
-            .filter(|n| {
-                edges
-                    .iter()
-                    .any(|e| e.from_id == n.id && e.kind == EdgeKind::OwnsReference)
-            })
-            .collect();
-        for g in governors {
-            let mut current = g.id.as_str();
-            let mut steps = 0;
-            let terminated_at_root = loop {
-                if by_id.get(current).is_some_and(|n| n.kind == NodeKind::Root) {
-                    break true;
-                }
-                let owner = edges
-                    .iter()
-                    .find(|e| e.to_id == current && e.kind == EdgeKind::OwnsReference)
-                    .map(|e| e.from_id.as_str());
-                match owner {
-                    Some(o) if steps < nodes.len() => {
-                        current = o;
-                        steps += 1;
-                    }
-                    _ => break false,
-                }
-            };
-            if !terminated_at_root {
-                findings.push(format!(
-                    "治理链未锚定: {} 拥有他环参照，但其向上的 owns_reference 链不汇于任何 root 节点（或成环）",
-                    g.id
-                ));
-            }
-        }
-
-        for e in &edges {
-            if e.kind != EdgeKind::OwnsReference {
-                continue;
-            }
-            let (Some(owner), Some(child)) =
-                (by_id.get(e.from_id.as_str()), by_id.get(e.to_id.as_str()))
-            else {
-                continue;
-            };
-            if let (Some(oc), Some(cc)) = (owner.cadence.as_deref(), child.cadence.as_deref()) {
-                if let (Some(or), Some(cr)) = (cadence_rank(oc), cadence_rank(cc)) {
-                    if or < cr {
-                        findings.push(format!(
-                            "快环拥有慢环参照: {}（{oc}）owns_reference {}（{cc}）——参照的所有者必须比被治理者更慢",
-                            e.from_id, e.to_id
-                        ));
-                    }
-                }
-            }
-        }
-
+        let mut findings = lint_dangling_edges(&edges, &by_id);
+        findings.extend(lint_naked_loops(&nodes, &edges));
+        findings.extend(lint_governance_chain(&nodes, &edges, &by_id));
+        findings.extend(lint_cadence_mismatch(&edges, &by_id));
         Ok(findings)
     }
+}
+
+fn lint_dangling_edges(
+    edges: &[GraphEdge],
+    by_id: &std::collections::HashMap<&str, &GraphNode>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    for e in edges {
+        let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
+            .into_iter()
+            .filter(|id| !by_id.contains_key(id))
+            .collect();
+        if !missing.is_empty() {
+            findings.push(format!(
+                "悬空边: {} -[{}]-> {}（节点 {:?} 已消失——被治理的环不见了，需审计裁决或 gc）",
+                e.from_id,
+                e.kind.as_str(),
+                e.to_id,
+                missing
+            ));
+        }
+    }
+    findings
+}
+
+fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
+    let mut findings = Vec::new();
+    for n in nodes {
+        if !n.kind.is_optimization_loop() {
+            continue;
+        }
+        let watched = edges
+            .iter()
+            .any(|e| e.to_id == n.id && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits));
+        if !watched {
+            findings.push(format!(
+                "裸奔优化环: {}（'{}'）没有任何 watches/audits 入边",
+                n.id, n.label
+            ));
+        }
+    }
+    findings
+}
+
+/// Walk each governor upward through incoming `owns_reference` edges; bounded
+/// by node count so a cycle cannot loop forever.
+fn lint_governance_chain(
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    by_id: &std::collections::HashMap<&str, &GraphNode>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    let governors: Vec<&GraphNode> = nodes
+        .iter()
+        .filter(|n| {
+            edges
+                .iter()
+                .any(|e| e.from_id == n.id && e.kind == EdgeKind::OwnsReference)
+        })
+        .collect();
+    for g in governors {
+        let mut current = g.id.as_str();
+        let mut steps = 0;
+        let terminated_at_root = loop {
+            if by_id.get(current).is_some_and(|n| n.kind == NodeKind::Root) {
+                break true;
+            }
+            let owner = edges
+                .iter()
+                .find(|e| e.to_id == current && e.kind == EdgeKind::OwnsReference)
+                .map(|e| e.from_id.as_str());
+            match owner {
+                Some(o) if steps < nodes.len() => {
+                    current = o;
+                    steps += 1;
+                }
+                _ => break false,
+            }
+        };
+        if !terminated_at_root {
+            findings.push(format!(
+                "治理链未锚定: {} 拥有他环参照，但其向上的 owns_reference 链不汇于任何 root 节点（或成环）",
+                g.id
+            ));
+        }
+    }
+    findings
+}
+
+fn lint_cadence_mismatch(
+    edges: &[GraphEdge],
+    by_id: &std::collections::HashMap<&str, &GraphNode>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    for e in edges {
+        if e.kind != EdgeKind::OwnsReference {
+            continue;
+        }
+        let (Some(owner), Some(child)) =
+            (by_id.get(e.from_id.as_str()), by_id.get(e.to_id.as_str()))
+        else {
+            continue;
+        };
+        if let (Some(oc), Some(cc)) = (owner.cadence.as_deref(), child.cadence.as_deref()) {
+            if let (Some(or), Some(cr)) = (cadence_rank(oc), cadence_rank(cc)) {
+                if or < cr {
+                    findings.push(format!(
+                        "快环拥有慢环参照: {}（{oc}）owns_reference {}（{cc}）——参照的所有者必须比被治理者更慢",
+                        e.from_id, e.to_id
+                    ));
+                }
+            }
+        }
+    }
+    findings
 }
 
 type NodeRow = std::result::Result<Option<GraphNode>, rusqlite::Error>;

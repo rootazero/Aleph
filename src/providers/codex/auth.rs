@@ -209,7 +209,9 @@ impl CodexAuth {
                             .unwrap_or("Unknown error");
                         error!(error = err, description = desc, "OAuth callback error");
                         if let Some(tx) = tx {
-                            let _ = tx.send(Err(format!("{err}: {desc}")));
+                            if tx.send(Err(format!("{err}: {desc}"))).is_err() {
+                                tracing::warn!("OAuth callback receiver already dropped");
+                            }
                         }
                         return axum::response::Html(
                             "<html><body><h1>Authentication Failed</h1><p>You can close this window.</p></body></html>"
@@ -220,9 +222,11 @@ impl CodexAuth {
                     match &query.state {
                         None => {
                             error!("OAuth callback missing state parameter");
-                            if let Some(tx) = tx {
-                                let _ = tx.send(Err("Missing state parameter".to_string()));
+                        if let Some(tx) = tx {
+                            if tx.send(Err("Missing state parameter".to_string())).is_err() {
+                                tracing::warn!("OAuth callback receiver already dropped");
                             }
+                        }
                             return axum::response::Html(
                                 "<html><body><h1>Authentication Failed</h1><p>Missing state parameter. You can close this window.</p></body></html>"
                                     .to_string(),
@@ -230,9 +234,11 @@ impl CodexAuth {
                         }
                         Some(received_state) if received_state != &expected_state => {
                             error!("OAuth state mismatch");
-                            if let Some(tx) = tx {
-                                let _ = tx.send(Err("State parameter mismatch".to_string()));
+                        if let Some(tx) = tx {
+                            if tx.send(Err("State parameter mismatch".to_string())).is_err() {
+                                tracing::warn!("OAuth callback receiver already dropped");
                             }
+                        }
                             return axum::response::Html(
                                 "<html><body><h1>Authentication Failed</h1><p>State mismatch. You can close this window.</p></body></html>"
                                     .to_string(),
@@ -244,9 +250,11 @@ impl CodexAuth {
                     match &query.code {
                         Some(code) => {
                             debug!("Received OAuth authorization code");
-                            if let Some(tx) = tx {
-                                let _ = tx.send(Ok(code.clone()));
+                        if let Some(tx) = tx {
+                            if tx.send(Ok(code.clone())).is_err() {
+                                tracing::warn!("OAuth callback receiver already dropped");
                             }
+                        }
                             axum::response::Html(
                                 "<html><body><h1>Authentication Successful</h1><p>You can close this window and return to Aleph.</p></body></html>"
                                     .to_string(),
@@ -254,9 +262,11 @@ impl CodexAuth {
                         }
                         None => {
                             error!("No authorization code in callback");
-                            if let Some(tx) = tx {
-                                let _ = tx.send(Err("No authorization code received".to_string()));
+                        if let Some(tx) = tx {
+                            if tx.send(Err("No authorization code received".to_string())).is_err() {
+                                tracing::warn!("OAuth callback receiver already dropped");
                             }
+                        }
                             axum::response::Html(
                                 "<html><body><h1>Authentication Failed</h1><p>No code received. You can close this window.</p></body></html>"
                                     .to_string(),

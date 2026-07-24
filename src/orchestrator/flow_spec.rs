@@ -38,6 +38,7 @@ pub enum FlowInput {
 /// One role-tagged turn in a replayed history. Used only by
 /// [`FlowInput::History`] for seeding the session log.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum FlowHistoryTurn {
     User(MessageContent),
     Assistant(MessageContent),
