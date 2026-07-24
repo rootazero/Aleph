@@ -57,13 +57,10 @@ pub struct TaskCreateArgs {
     /// dispatcher's default; `0` makes the first failure terminal.
     #[serde(default)]
     pub max_retries: Option<u32>,
-    /// Maximum seconds a single attempt of this task may run before the
-    /// dispatcher aborts it (and applies the retry policy). Use a larger value
-    /// for long, multi-tool subtasks and a smaller one for quick steps that
-    /// should fail fast. Omit to use the team dispatcher's global default
-    /// (`task_timeout_secs`); capped defensively at 24h.
-    #[serde(default)]
-    pub timeout_secs: Option<u64>,
+    /// Per-task wall-clock timeout in seconds (defaults to the global
+    /// `task_timeout_secs`). Accepts the legacy `timeout_secs` spelling.
+    #[serde(default, alias = "timeout_secs")]
+    pub timeout_seconds: Option<u64>,
     /// Arbitrary metadata JSON
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -175,7 +172,7 @@ impl AlephTool for TaskCreateTool {
                 ),
                 args.max_retries,
             ),
-            args.timeout_secs,
+            args.timeout_seconds,
         ));
 
         let new_task = NewCoordTask {
@@ -204,5 +201,25 @@ impl AlephTool for TaskCreateTool {
             status: task.status.as_str().to_string(),
             owner: task.owner,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_create_timeout_accepts_canonical_and_legacy_alias() {
+        // New canonical spelling.
+        let a: TaskCreateArgs = serde_json::from_value(
+            serde_json::json!({ "subject": "x", "timeout_seconds": 45 }),
+        )
+        .unwrap();
+        assert_eq!(a.timeout_seconds, Some(45));
+        // Legacy spelling still parses via alias (saved calls / prompts).
+        let b: TaskCreateArgs =
+            serde_json::from_value(serde_json::json!({ "subject": "x", "timeout_secs": 45 }))
+                .unwrap();
+        assert_eq!(b.timeout_seconds, Some(45));
     }
 }
