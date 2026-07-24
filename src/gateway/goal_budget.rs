@@ -196,6 +196,14 @@ pub async fn tree_tokens(
             return None;
         }
     };
+    // INVARIANT (single accounting rail): the tree total is own row + each
+    // ENROLLED member's disjoint gateway row, counted exactly once. In-process
+    // subagents bill a separate child-harness counter (harness/agent.rs) that
+    // touches no gateway session row and is never enrolled — so their spend is
+    // absent here BY DESIGN. Do not add a second accumulation of the same
+    // tokens (e.g. rolling a child's total into the owner row, or enrolling one
+    // run under two keys): that is the double-count this rail is built to avoid.
+    // Covered by session_manager::tests::goal_tree_budget_sums_own_plus_member_deltas_only.
     let mut total = own;
     for member in &goal.budget_members {
         let Some(key) = SessionKey::from_key_string(&member.session_id) else {

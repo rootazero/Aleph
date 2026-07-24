@@ -510,3 +510,44 @@ async fn test_get_total_tokens_none_then_accumulates() {
         meta.estimated_cost_usd
     );
 }
+
+#[tokio::test]
+async fn goal_tree_budget_sums_own_plus_member_deltas_only() {
+    use std::sync::Arc;
+    use crate::gateway::session_store::SessionStore;
+    use crate::gateway::goal_budget::tree_tokens;
+    use crate::goal::types::{Goal, BudgetMember};
+
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    // Owner session: seed 100+40 = 140 cumulative tokens.
+    let own_key = SessionKey::main("leader");
+    manager.get_or_create(&own_key).await.unwrap();
+    manager.update_session_usage(&own_key, 100, 40, 0.0, None, None).await.unwrap();
+
+    // Enrolled member (a delegated task session): seed 200+60 = 260; joined at 60.
+    let member_key = SessionKey::task("worker", "team", "task-1");
+    manager.get_or_create(&member_key).await.unwrap();
+    manager.update_session_usage(&member_key, 200, 60, 0.0, None, None).await.unwrap();
+
+    // An UNENROLLED session (stands in for an in-process subagent — never a budget member).
+    let stray_key = SessionKey::task("worker", "team", "stray");
+    manager.get_or_create(&stray_key).await.unwrap();
+    manager.update_session_usage(&stray_key, 9_999, 9_999, 0.0, None, None).await.unwrap();
+
+    // Goal owned by own_key; one enrolled member with tokens_at_join = 60.
+    let mut goal = Goal::new(&own_key.to_key_string(), "obj", 0, 0);
+    goal.token_budget = Some(10_000);
+    goal.budget_members = vec![BudgetMember {
+        session_id: member_key.to_key_string(),
+        tokens_at_join: 60,
+    }];
+
+    let store: Arc<dyn SessionStore> = Arc::new(manager);
+    let total = tree_tokens(&store, &goal, &own_key).await.expect("own total readable");
+
+    // own(140) + member_delta(260 - 60 = 200) = 340. The stray 19_998 is absent.
+    assert_eq!(total, 340, "only own row + enrolled member delta count; unenrolled spend is invisible");
+}
