@@ -197,57 +197,8 @@ impl MarkdownCliTool {
             "/tmp:rw,noexec,nosuid,size=100m".to_string(),
         ];
 
-        // Pass environment variables
-        if let Some(aleph_meta) = &self.spec.metadata.aleph {
-            if let Some(docker_cfg) = &aleph_meta.docker {
-                for env_var in &docker_cfg.env_vars {
-                    // Validate env var name: must be a valid identifier [A-Za-z_][A-Za-z0-9_]*
-                    if env_var.is_empty()
-                        || !env_var.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                        || !env_var
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    {
-                        warn!(
-                            env_var = %env_var,
-                            "Skipping env var with invalid name (must match [A-Za-z_][A-Za-z0-9_]*)"
-                        );
-                        continue;
-                    }
-                    if let Ok(value) = std::env::var(env_var) {
-                        // Sanitize: reject values containing newlines (could break Docker CLI parsing)
-                        if value.contains('\n') || value.contains('\r') {
-                            warn!(
-                                env_var = %env_var,
-                                "Skipping env var with newline characters (security risk)"
-                            );
-                            continue;
-                        }
-                        docker_args.push("-e".to_string());
-                        docker_args.push(format!("{env_var}={value}"));
-                        tracing::debug!(env_var = %env_var, "Passing env var to container");
-                    } else {
-                        warn!(
-                            env_var = %env_var,
-                            "Required env var not found in host environment"
-                        );
-                    }
-                }
-
-                // Extra flags — filtered through allowlist to prevent sandbox escape
-                for flag in &docker_cfg.extra_flags {
-                    if is_allowed_docker_flag(flag) {
-                        docker_args.push(flag.clone());
-                    } else {
-                        warn!(
-                            flag = %flag,
-                            tool = %self.spec.name,
-                            "Blocked disallowed Docker flag from skill config"
-                        );
-                    }
-                }
-            }
-        }
+        // Pass environment variables and extra flags (filtered through allowlist)
+        self.push_docker_runtime_args(&mut docker_args);
 
         docker_args.push(container_image);
         docker_args.push(bin.clone());
@@ -277,26 +228,13 @@ impl MarkdownCliTool {
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
-
-            match exit_code {
-                125 => anyhow::bail!("Docker runtime error (container failed to start): {stderr}"),
-                126 => anyhow::bail!("Command cannot be executed in container: {stderr}"),
-                127 => anyhow::bail!(
-                    "Command '{}' not found in container image '{}'. \
-                    Check metadata.aleph.docker.image configuration.",
-                    bin,
-                    self.get_docker_image().unwrap_or_default()
-                ),
-                137 => anyhow::bail!("Container killed (OOM or SIGKILL): {stderr}"),
-                _ => {
-                    // Tool itself failed (non-zero exit), return output
-                    warn!(
-                        tool = %self.spec.name,
-                        exit_code = exit_code,
-                        "Tool execution failed"
-                    );
-                }
-            }
+            let image = self.get_docker_image().unwrap_or_default();
+            check_docker_exit_code(exit_code, &stderr, bin, &image)?;
+            warn!(
+                tool = %self.spec.name,
+                exit_code = exit_code,
+                "Tool execution failed"
+            );
         }
 
         Ok(MarkdownToolOutput {
@@ -304,6 +242,59 @@ impl MarkdownCliTool {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             exit_code: output.status.code().unwrap_or(-1),
         })
+    }
+
+    /// Push Docker runtime args from the skill's `aleph.docker` config:
+    /// env vars (with validation) and extra flags (with allowlist filtering).
+    fn push_docker_runtime_args(&self, docker_args: &mut Vec<String>) {
+        let Some(aleph_meta) = &self.spec.metadata.aleph else {
+            return;
+        };
+        let Some(docker_cfg) = &aleph_meta.docker else {
+            return;
+        };
+        for env_var in &docker_cfg.env_vars {
+            if env_var.is_empty()
+                || !env_var.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                || !env_var
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                warn!(
+                    env_var = %env_var,
+                    "Skipping env var with invalid name (must match [A-Za-z_][A-Za-z0-9_]*)"
+                );
+                continue;
+            }
+            if let Ok(value) = std::env::var(env_var) {
+                if value.contains('\n') || value.contains('\r') {
+                    warn!(
+                        env_var = %env_var,
+                        "Skipping env var with newline characters (security risk)"
+                    );
+                    continue;
+                }
+                docker_args.push("-e".to_string());
+                docker_args.push(format!("{env_var}={value}"));
+                tracing::debug!(env_var = %env_var, "Passing env var to container");
+            } else {
+                warn!(
+                    env_var = %env_var,
+                    "Required env var not found in host environment"
+                );
+            }
+        }
+        for flag in &docker_cfg.extra_flags {
+            if is_allowed_docker_flag(flag) {
+                docker_args.push(flag.clone());
+            } else {
+                warn!(
+                    flag = %flag,
+                    tool = %self.spec.name,
+                    "Blocked disallowed Docker flag from skill config"
+                );
+            }
+        }
     }
 
     /// Get Docker image (STRICT: must be configured or known)
@@ -547,6 +538,25 @@ impl VirtualFsSandbox {
             pwd = %self.work_dir.display(),
             "Applied VirtualFs environment"
         );
+    }
+}
+
+/// Classify Docker container exit codes into actionable diagnostics.
+///
+/// Known exit codes (125=daemon error, 126=cmd non-executable,
+/// 127=cmd not found, 137=OOM/SIGKILL) are raised as errors;
+/// unknown non-zero codes pass through so the caller logs a warning
+/// and returns the tool's partial output.
+fn check_docker_exit_code(exit_code: i32, stderr: &str, bin: &str, image: &str) -> anyhow::Result<()> {
+    match exit_code {
+        125 => anyhow::bail!("Docker runtime error (container failed to start): {stderr}"),
+        126 => anyhow::bail!("Command cannot be executed in container: {stderr}"),
+        127 => anyhow::bail!(
+            "Command '{bin}' not found in container image '{image}'. \
+            Check metadata.aleph.docker.image configuration."
+        ),
+        137 => anyhow::bail!("Container killed (OOM or SIGKILL): {stderr}"),
+        _ => Ok(()),
     }
 }
 

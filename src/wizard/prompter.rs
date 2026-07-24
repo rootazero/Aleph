@@ -112,13 +112,13 @@ impl RpcPrompter {
 
         // Send step; on failure the pending sender would otherwise leak in
         // the answers map for the rest of the session, so remove it first.
-        if self.step_tx.send(step.clone()).await.is_err() {
+        if self.step_tx.send(step).await.is_err() {
             let mut answers = self.answers.write().unwrap_or_else(|e| e.into_inner());
             answers.remove(&step_id);
             return Err(WizardSessionError::Internal("Channel closed".to_string()));
         }
 
-        debug!(step_id = %step.id, "Waiting for answer");
+        debug!(step_id = %step_id, "Waiting for answer");
 
         // Wait for answer.  If the sender is dropped without sending,
         // treat it as an internal error (the flow task may have panicked

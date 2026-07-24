@@ -12,6 +12,7 @@ pub const MAX_IMAGE_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Input source for vision operations.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageInput {
     /// Base64-encoded image data with explicit format.
@@ -35,6 +36,7 @@ pub enum ImageInput {
 
 /// Supported image formats for vision operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
     Png,

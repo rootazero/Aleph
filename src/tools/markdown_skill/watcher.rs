@@ -127,7 +127,7 @@ impl SkillWatcher {
             debug!(event = ?event, "Received file system event");
 
             // Process only SKILL.md file changes
-            let skill_events = Self::filter_skill_events(&event);
+            let skill_events = Self::filter_skill_events(event);
 
             if skill_events.is_empty() {
                 continue;
@@ -146,18 +146,20 @@ impl SkillWatcher {
     }
 
     /// Filter events to only include SKILL.md file changes
-    fn filter_skill_events(event: &DebouncedEvent) -> Vec<SkillEvent> {
+    fn filter_skill_events(event: DebouncedEvent) -> Vec<SkillEvent> {
+        let notify_event = event.event;
+        let kind = &notify_event.kind;
         let mut skill_events = Vec::new();
 
-        for path in &event.paths {
-            if !Self::is_skill_file(path) {
+        for path in notify_event.paths {
+            if !Self::is_skill_file(&path) {
                 continue;
             }
 
-            let skill_event = match &event.event.kind {
-                EventKind::Create(_) => Some(SkillEvent::Created { path: path.clone() }),
-                EventKind::Modify(_) => Some(SkillEvent::Modified { path: path.clone() }),
-                EventKind::Remove(_) => Some(SkillEvent::Deleted { path: path.clone() }),
+            let skill_event = match kind {
+                EventKind::Create(_) => Some(SkillEvent::Created { path }),
+                EventKind::Modify(_) => Some(SkillEvent::Modified { path }),
+                EventKind::Remove(_) => Some(SkillEvent::Deleted { path }),
                 _ => None,
             };
 

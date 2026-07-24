@@ -152,146 +152,15 @@ impl ScopedToolService {
             });
         }
 
-        // Config-tier authorization gate. A chat-tier connection (remote device
-        // paired at "chat" level) may converse and read, but must not mutate
-        // Aleph's own configuration through tools (R8: config IS a tool, so the
-        // interception must live at the tool-dispatch chokepoint). The
-        // originating connection's role rides in TURN_CONTEXT, stamped at run
-        // start. Operator devices, the local no-auth daemon, and non-gateway
-        // runs (cron/internal) all pass.
-        // True once the operator gate below has approved THIS call. The two
-        // gate tool-sets overlap (`vault_store` / `agent_delete` are both
-        // operator-gated and confirm-gated), and an operator's `AllowOnce`
-        // writes nothing into session memory — so without this flag the
-        // confirmation gate would re-prompt the very call the operator just
-        // read and approved, breaking `confirm_with_memory`'s one-decision-
-        // per-call contract. Operator authority subsumes the requester's own
-        // confirmation for the same action; a session grant already shares
-        // through the fingerprint stores.
-        let mut approved_by_operator_gate = false;
-        if crate::gateway::method_authz::tool_requires_operator(name) {
-            let is_operator = crate::tools::turn_context::current_turn_context()
-                .is_none_or(|t| t.caller_is_operator());
-            if !is_operator {
-                // Phase 2b: suspend for live operator approval instead of an
-                // outright reject. Routes through the operator-targeted requester
-                // (publishes an operator-only `approval.requested`, waits on the
-                // exec-approval oneshot resolved via `exec.approval.resolve`).
-                // Reuses confirm_with_memory for session-grant memory + the
-                // denial-ledger blind-retry guard. No requester wired (tests /
-                // pre-boot) → fail closed (hard reject), never silent allow.
-                match &self.config_approval_requester {
-                    Some(req) => {
-                        let action = ApprovalAction::for_tool_call(
-                            name,
-                            &input,
-                            format!(
-                                "A chat-tier device asked to run `{name}`, which changes Aleph's \
-                                 own configuration. Approve to allow this change."
-                            ),
-                        );
-                        if let Err(denial) = self.confirm_with_memory(req, &action, &input).await {
-                            // An expired card is not a decision — mirror the
-                            // confirm gate below and return the retryable
-                            // ApprovalExpired instead of a hard PermissionDenied
-                            // the harness would ban non-retryably.
-                            if matches!(denial.outcome, ApprovalOutcome::Timeout) {
-                                return Err(ToolError::ApprovalExpired {
-                                    name: name.to_string(),
-                                    waited_ms: denial.waited_ms,
-                                });
-                            }
-                            let said = denial.user_reason_clause();
-                            return Err(ToolError::PermissionDenied {
-                                name: name.to_string(),
-                                reason: format!(
-                                    "config change via `{name}` was not authorized by the server \
-                                     operator ({:?}).{said} Do not retry until authorized.",
-                                    denial.outcome
-                                ),
-                            });
-                        }
-                        // Approved → fall through to normal execution.
-                        approved_by_operator_gate = true;
-                    }
-                    None => {
-                        return Err(ToolError::PermissionDenied {
-                            name: name.to_string(),
-                            reason: format!(
-                                "`{name}` changes Aleph's own configuration and requires operator \
-                                 authorization, but no approval channel is available. This device \
-                                 is paired at chat level. Do not retry."
-                            ),
-                        });
-                    }
-                }
-            }
-        }
+        // Config-tier authorization gate — suspended for live operator approval.
+        let approved_by_operator_gate =
+            self.check_operator_gate(name, &input).await?;
 
-        // Confirmation gate: tools flagged `requires_confirmation` must be
-        // approved by the user before they run. Fails closed when no approval
-        // transport is wired. A tool is gated when it declares
-        // `LoopTool::requires_confirmation()` — the per-tool,
-        // declaration-driven seam that lets builtin / MCP / extension / skill
-        // tools opt into approval without being hard-coded gateway-side — or
-        // when the merged permission policy resolves to `Ask` for this tool
-        // (the mechanism the exec tier's metadata rule feeds), or when the
-        // call's ARGUMENTS trip the tier's destructive-argument filter — the
-        // only gate that needs the input, because `file_ops` hides `delete`
-        // behind the same tool name as `list`. Skipped entirely when the
-        // operator gate above already approved this exact call.
-        if !approved_by_operator_gate
-            && (self.inner.requires_confirmation(name)
-                || self.is_permission_ask(name)
-                || self.tier_asks_for_arguments(name, &input))
-        {
-            match &self.approval_requester {
-                Some(requester) => {
-                    let action = ApprovalAction::for_tool_call(
-                        name,
-                        &input,
-                        format!("Tool `{name}` requires your confirmation to run."),
-                    );
-                    if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
-                    {
-                        // An expired card is not a refusal, and must not be
-                        // spoken as one. `DenialLedger::record_denial` already
-                        // drops a `DenialReason::Timeout` ("a timeout is not a
-                        // decision"); telling the model "the user did not
-                        // approve — do not retry" and handing the harness a
-                        // non-retryable error put the permanent ban straight
-                        // back, one layer up.
-                        if matches!(denial.outcome, ApprovalOutcome::Timeout) {
-                            return Err(ToolError::ApprovalExpired {
-                                name: name.to_string(),
-                                waited_ms: denial.waited_ms,
-                            });
-                        }
-                        let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
-                        let said = denial.user_reason_clause();
-                        return Err(ToolError::Execution {
-                            name: name.to_string(),
-                            cause: format!(
-                                "The user did not approve running `{name}` ({:?}).{said} Do not \
-                                 retry this call, do not rewrite it, and do not attempt to \
-                                 achieve the same result by other means.{hint} Ask the user what \
-                                 they would like to do instead.",
-                                denial.outcome
-                            ),
-                        });
-                    }
-                }
-                None => {
-                    return Err(ToolError::Execution {
-                        name: name.to_string(),
-                        cause: format!(
-                            "Tool `{name}` requires confirmation but no approval \
-                             channel is available. Do not retry."
-                        ),
-                    });
-                }
-            }
-        }
+        // Confirmation gate — user-approval for destructive / gated tools.
+        // Skipped entirely when the operator gate above already approved this
+        // exact call.
+        self.check_confirmation_gate(name, &input, approved_by_operator_gate)
+            .await?;
 
         // Fire pre-hook (legacy observational decorator).
         if let Some(ref hook) = self.hook_decorator {
@@ -404,6 +273,119 @@ impl ScopedToolService {
         }
 
         result
+    }
+
+    /// Operator authorization gate: chat-tier device trying to run a
+    /// config-mutating tool must obtain live operator approval or be denied.
+    /// Returns `Ok(true)` when the operator approved this specific call
+    /// (skipping the subsequent confirmation gate), or `Ok(false)` when the
+    /// gate isn't applicable (operator device / non-gated tool).
+    async fn check_operator_gate(
+        &self,
+        name: &str,
+        input: &Value,
+    ) -> Result<bool, ToolError> {
+        if !crate::gateway::method_authz::tool_requires_operator(name) {
+            return Ok(false);
+        }
+        let is_operator = crate::tools::turn_context::current_turn_context()
+            .is_none_or(|t| t.caller_is_operator());
+        if is_operator {
+            return Ok(false);
+        }
+        match &self.config_approval_requester {
+            Some(req) => {
+                let action = ApprovalAction::for_tool_call(
+                    name,
+                    input,
+                    format!(
+                        "A chat-tier device asked to run `{name}`, which changes Aleph's \
+                         own configuration. Approve to allow this change."
+                    ),
+                );
+                if let Err(denial) = self.confirm_with_memory(req, &action, input).await {
+                    if matches!(denial.outcome, ApprovalOutcome::Timeout) {
+                        return Err(ToolError::ApprovalExpired {
+                            name: name.to_string(),
+                            waited_ms: denial.waited_ms,
+                        });
+                    }
+                    let said = denial.user_reason_clause();
+                    return Err(ToolError::PermissionDenied {
+                        name: name.to_string(),
+                        reason: format!(
+                            "config change via `{name}` was not authorized by the server \
+                             operator ({:?}).{said} Do not retry until authorized.",
+                            denial.outcome
+                        ),
+                    });
+                }
+                Ok(true)
+            }
+            None => Err(ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: format!(
+                    "`{name}` changes Aleph's own configuration and requires operator \
+                     authorization, but no approval channel is available. This device \
+                     is paired at chat level. Do not retry."
+                ),
+            }),
+        }
+    }
+
+    /// Confirmation gate: tools flagged `requires_confirmation`, permission
+    /// `Ask` tier, or with destructive arguments must be approved by the user.
+    /// Skipped when `approved_by_operator_gate` is true.
+    async fn check_confirmation_gate(
+        &self,
+        name: &str,
+        input: &Value,
+        approved_by_operator_gate: bool,
+    ) -> Result<(), ToolError> {
+        if approved_by_operator_gate
+            || !(self.inner.requires_confirmation(name)
+                || self.is_permission_ask(name)
+                || self.tier_asks_for_arguments(name, input))
+        {
+            return Ok(());
+        }
+        match &self.approval_requester {
+            Some(requester) => {
+                let action = ApprovalAction::for_tool_call(
+                    name,
+                    input,
+                    format!("Tool `{name}` requires your confirmation to run."),
+                );
+                if let Err(denial) = self.confirm_with_memory(requester, &action, input).await {
+                    if matches!(denial.outcome, ApprovalOutcome::Timeout) {
+                        return Err(ToolError::ApprovalExpired {
+                            name: name.to_string(),
+                            waited_ms: denial.waited_ms,
+                        });
+                    }
+                    let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
+                    let said = denial.user_reason_clause();
+                    return Err(ToolError::Execution {
+                        name: name.to_string(),
+                        cause: format!(
+                            "The user did not approve running `{name}` ({:?}).{said} Do not \
+                             retry this call, do not rewrite it, and do not attempt to \
+                             achieve the same result by other means.{hint} Ask the user what \
+                             they would like to do instead.",
+                            denial.outcome
+                        ),
+                    });
+                }
+                Ok(())
+            }
+            None => Err(ToolError::Execution {
+                name: name.to_string(),
+                cause: format!(
+                    "Tool `{name}` requires confirmation but no approval \
+                     channel is available. Do not retry."
+                ),
+            }),
+        }
     }
 
     /// Run the call: route it to the subagent tool or the inner registry, through

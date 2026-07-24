@@ -17,6 +17,7 @@ use super::types::{WizardNextResult, WizardStatus, WizardStep};
 
 /// Wizard session errors
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WizardSessionError {
     #[error("Session cancelled")]
     Cancelled,
@@ -197,8 +198,8 @@ impl WizardSession {
                     let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
                     WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
                 }
-                // Running cannot appear here because of the guard above.
-                WizardStatus::Running => self.done_result(),
+                // Running (or future variants) cannot appear here because of the guard above.
+                _ => self.done_result(),
             };
         }
 
@@ -224,7 +225,7 @@ impl WizardSession {
                     }
                     // Channel closed while still Running — flow task
                     // terminated unexpectedly (likely panicked).
-                    WizardStatus::Running => {
+                    _ => {
                         WizardNextResult::error("Wizard flow terminated unexpectedly".to_string())
                     }
                 }
@@ -258,7 +259,7 @@ impl WizardSession {
         if let Some(sender) = sender {
             sender
                 .send(value)
-                .map_err(|_| WizardSessionError::Internal("Failed to send answer".to_string()))?;
+                .map_err(|e| WizardSessionError::Internal(format!("Failed to send answer: {e}")))?;
             Ok(())
         } else {
             Err(WizardSessionError::StepNotFound(step_id.to_string()))

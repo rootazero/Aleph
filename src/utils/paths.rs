@@ -476,17 +476,9 @@ pub fn get_plugin_skills_dirs(project_dir: Option<&std::path::Path>) -> Vec<Path
     dirs
 }
 
-pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
+/// Append the active agent's skills directory (if any) to `dirs`.
+fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
     use tracing::info;
-
-    let mut dirs = Vec::new();
-
-    // 0. Agent level (highest precedence): the currently-active agent's private
-    //    skills at `~/.aleph/agents/<id>/skills`, so an agent can ship/override
-    //    skills for its own runs. The id comes from the per-run task-local
-    //    (`with_agent_id`, set by the gateway run loop); absent outside a run /
-    //    in tests, in which case this is skipped. The directory is only READ —
-    //    never created — and the id is validated to stay inside the agents root.
     if let Some(agent_id) = crate::agents::current_agent_id() {
         if is_safe_agent_id(&agent_id) {
             if let Ok(config_dir) = get_config_dir() {
@@ -502,27 +494,12 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
             }
         }
     }
+}
 
-    // Determine start directory
-    let start_dir = match project_dir {
-        Some(p) => p.to_path_buf(),
-        None => std::env::current_dir()
-            .map_err(|e| AlephError::config(format!("Failed to get current directory: {e}")))?,
-    };
+/// Append global user-level skills directories to `dirs`.
+fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
+    use tracing::info;
 
-    info!(
-        start_dir = %start_dir.display(),
-        "get_all_skills_dirs: Starting discovery"
-    );
-
-    // Find git root to limit traversal
-    let git_root = find_git_root(&start_dir);
-    let stop_at = git_root.as_deref();
-
-    // 1. Project level: traverse up from start to git root
-    dirs.extend(collect_project_skills_dirs(&start_dir, stop_at));
-
-    // 2. User level: global directories
     let global_aleph = get_skills_dir()?;
     if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
         info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
@@ -531,8 +508,6 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
 
     if let Ok(home) = get_home_dir() {
         info!(home = %home.display(), "Checking global directories");
-
-        // ~/.claude/skills (Claude Code compatibility)
         let global_claude = home.join(".claude").join("skills");
         if global_claude.is_dir() && !dirs.contains(&global_claude) {
             info!(path = %global_claude.display(), "Found global ~/.claude/skills");
@@ -547,6 +522,51 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
         }
     }
 
+    Ok(())
+}
+
+/// Push `dir` into `dirs` if it's a directory that isn't already present.
+fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label: &str) {
+    use tracing::info;
+    if dir.is_dir() && !dirs.contains(dir) {
+        info!(path = %dir.display(), "Found {label}");
+        dirs.push(dir.to_path_buf());
+    }
+}
+
+pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<PathBuf>> {
+    use tracing::info;
+
+    let mut dirs = Vec::new();
+
+    // 0. Agent level (highest precedence): the currently-active agent's private
+    //    skills at `~/.aleph/agents/<id>/skills`, so an agent can ship/override
+    //    skills for its own runs. The id comes from the per-run task-local
+    //    (`with_agent_id`, set by the gateway run loop); absent outside a run /
+    //    in tests, in which case this is skipped. The directory is only READ —
+    //    never created — and the id is validated to stay inside the agents root.
+    agent_skills_dir(&mut dirs);
+
+    let start_dir = match project_dir {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir()
+            .map_err(|e| AlephError::config(format!("Failed to get current directory: {e}")))?,
+    };
+
+    info!(
+        start_dir = %start_dir.display(),
+        "get_all_skills_dirs: Starting discovery"
+    );
+
+    let git_root = find_git_root(&start_dir);
+    let stop_at = git_root.as_deref();
+
+    // 1. Project level: traverse up from start to git root
+    dirs.extend(collect_project_skills_dirs(&start_dir, stop_at));
+
+    // 2. User level: global directories
+    user_skills_dirs(&mut dirs)?;
+
     // 3. Plugin-shipped skills (lowest precedence). Two sources, unioned and
     //    deduped, appended last so a same-id user/project skill (scanned
     //    earlier) shadows a plugin's — `skill_read`/`skill_list` win by first
@@ -556,20 +576,14 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     //       and project .aleph/plugins/<p>/skills — works before the extension
     //       manager has loaded anything.
     for d in get_plugin_skills_dirs(project_dir) {
-        if !dirs.contains(&d) {
-            info!(path = %d.display(), "Found plugin skills dir");
-            dirs.push(d);
-        }
+        push_if_new_skills_dir(&mut dirs, &d, "plugin skills dir");
     }
     //    b) Base dirs published by the extension manager (`<plugin_root>/skills`)
     //       via `publish_plugin_skill_dirs` — covers plugin roots outside the
     //       well-known locations (e.g. `plugins/cache/<market>/<id>/skills`).
     //       Empty until the first `ExtensionManager::load_all`.
     for plugin_dir in plugin_skill_dirs() {
-        if plugin_dir.is_dir() && !dirs.contains(&plugin_dir) {
-            info!(path = %plugin_dir.display(), "Found plugin skills dir");
-            dirs.push(plugin_dir);
-        }
+        push_if_new_skills_dir(&mut dirs, &plugin_dir, "plugin skills dir");
     }
 
     info!(

@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Errors that can occur during vision operations.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum VisionError {
     /// No vision provider has been configured or registered.
     #[error("No vision provider configured")]

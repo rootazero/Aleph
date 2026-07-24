@@ -23,7 +23,7 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     schema: Value,
     registry: Arc<R>,
     /// Default working directory for `bash/code_exec` tools (agent workspace)
-    default_working_dir: Option<String>,
+    default_working_dir: Arc<Option<String>>,
 }
 
 /// Tools that should have `working_dir` injected when not specified by LLM
@@ -407,7 +407,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
         // Inject default working_dir for bash/code_exec if not provided by LLM
         let input = if WORKING_DIR_TOOLS.contains(&self.name.as_str()) {
-            if let Some(ref dir) = self.default_working_dir {
+            if let Some(dir) = self.default_working_dir.as_ref() {
                 let mut obj = match input {
                     Value::Object(m) => m,
                     _ => serde_json::Map::new(),
@@ -478,7 +478,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     default_working_dir: Option<String>,
 ) -> Vec<Box<dyn LoopTool>> {
     let mut adapters: Vec<Box<dyn LoopTool>> = Vec::new();
-    let default_working_dir = default_working_dir.clone();
+    let default_working_dir = Arc::new(default_working_dir.clone());
 
     for tool in unified_tools {
         if !tool.is_active {
@@ -495,7 +495,7 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
             description: tool.description.clone(),
             schema,
             registry: Arc::clone(&tool_registry),
-            default_working_dir: default_working_dir.clone(),
+            default_working_dir: Arc::clone(&default_working_dir),
         }));
     }
 

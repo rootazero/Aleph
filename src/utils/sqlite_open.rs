@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{ffi, Connection, OpenFlags};
 
 /// Open a `SQLite` connection with the cross-process safety pragmas:
 /// - `journal_mode=WAL`     — concurrent reads + writer-friendly
@@ -12,8 +12,12 @@ use rusqlite::{Connection, OpenFlags};
 pub fn open_sqlite_safe(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                rusqlite::Error::SqliteFailure(
+                    ffi::Error::new(ffi::SQLITE_CANTOPEN),
+                    Some(format!("failed to create parent directory: {e}")),
+                )
+            })?;
         }
     }
     let conn = Connection::open(path)?;

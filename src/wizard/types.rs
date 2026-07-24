@@ -8,6 +8,7 @@ use serde_json::Value;
 /// Wizard session status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum WizardStatus {
     /// Wizard is running
     #[default]
@@ -23,6 +24,7 @@ pub enum WizardStatus {
 /// Step type for wizard steps
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum StepType {
     /// Informational note (no input)
     Note,
@@ -43,6 +45,7 @@ pub enum StepType {
 /// Who executes this step
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum StepExecutor {
     /// Server executes and streams progress
     Gateway,

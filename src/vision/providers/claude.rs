@@ -13,7 +13,7 @@ use crate::providers::anthropic::{
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
 use crate::vision::types::{
-    ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult, MAX_IMAGE_FILE_SIZE,
+    ImageFormat, ImageInput, MAX_IMAGE_FILE_SIZE, OcrResult, VisionCapabilities, VisionResult,
 };
 
 const API_TIMEOUT: Duration = Duration::from_secs(60);
@@ -161,9 +161,8 @@ impl ClaudeVisionProvider {
                     )));
                 }
                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                let mime = Self::detect_mime_from_extension(
-                    path.extension().and_then(|e| e.to_str()),
-                )?;
+                let mime =
+                    Self::detect_mime_from_extension(path.extension().and_then(|e| e.to_str()))?;
                 Ok(ContentBlock::Image {
                     source: ImageSource {
                         source_type: "base64".to_string(),
@@ -227,7 +226,10 @@ impl ClaudeVisionProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("[body unreadable: {e}]"));
             return Err(VisionError::ProviderError(format!("API {status}: {body}")));
         }
 

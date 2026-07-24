@@ -75,7 +75,7 @@ impl<T> From<Vec<T>> for OneOrMany<T> {
 }
 
 /// Iterator for `OneOrMany`
-pub enum OneOrManyIter<'a, T> {
+pub(crate) enum OneOrManyIter<'a, T> {
     One(std::iter::Once<&'a T>),
     Many(std::slice::Iter<'a, T>),
 }
