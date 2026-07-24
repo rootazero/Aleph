@@ -1730,6 +1730,10 @@
         "normal": "普通",
         "high": "高",
         "critical": "紧急"
+      },
+      "confirm": {
+        "move_prompt": "确认执行此移动？",
+        "confirm": "确认"
       }
     },
     "drawer_runs": "运行记录",

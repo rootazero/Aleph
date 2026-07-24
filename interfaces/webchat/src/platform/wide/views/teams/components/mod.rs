@@ -1,8 +1,10 @@
 //! Kanban sub-components for the Teams tab.
 
 pub mod board;
+pub mod board_columns;
 pub mod column;
 pub mod create_form;
+pub mod lifecycle;
 pub mod task_card;
 pub mod task_drawer;
 pub mod team_selector;

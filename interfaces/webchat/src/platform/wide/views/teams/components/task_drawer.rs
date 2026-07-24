@@ -4,59 +4,12 @@
 //! and `team_events`.
 
 use super::format_relative_time;
-use crate::api::teams::{
-    CoordTaskDto, TaskCommentDto, TaskEventDto, TaskPatch, TaskRunDto, TeamsApi,
-};
+use super::lifecycle::{action_label, actions_for_status, apply_move, TaskAction, TaskMove};
+use crate::api::teams::{CoordTaskDto, TaskCommentDto, TaskEventDto, TaskRunDto, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-
-/// A lifecycle action the drawer can offer for a task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TaskAction {
-    Start,
-    Complete,
-    Fail,
-    Cancel,
-    Pause,
-    Resume,
-    Skip,
-    Retry,
-    Approve,
-    Reject,
-}
-
-/// The dedicated side-effecting backend verbs (everything except the four
-/// plain status writes, which go through `update_task`, and Reject, which
-/// needs a reason and is handled separately).
-#[derive(Debug, Clone, Copy)]
-enum Verb {
-    Pause,
-    Resume,
-    Skip,
-    Retry,
-    Approve,
-}
-
-/// Which lifecycle actions the drawer offers for a task in `status`.
-///
-/// Pure + total so it is unit-testable without a DOM. The backend remains the
-/// final authority on transition validity; this only hides the obviously
-/// invalid actions so the UI never offers a guaranteed no-op. Terminal and
-/// unknown statuses expose nothing.
-fn actions_for_status(status: &str) -> Vec<TaskAction> {
-    use TaskAction::*;
-    match status {
-        "pending" => vec![Start, Pause, Skip, Cancel],
-        "blocked" | "unsatisfiable" => vec![Pause, Skip, Cancel],
-        "in_progress" => vec![Complete, Fail, Pause, Cancel],
-        "waiting_review" => vec![Approve, Reject, Skip, Cancel],
-        "paused" => vec![Resume, Cancel],
-        "failed" => vec![Retry],
-        _ => vec![],
-    }
-}
 
 #[component]
 #[must_use]
@@ -160,7 +113,12 @@ pub fn TaskDetailDrawer(
         });
     };
 
-    let patch_status = move |new_status: &'static str| {
+    // Single dispatch for every lifecycle action except Reject (which needs a
+    // reason and is handled by `submit_reject`). Busy-locks, applies the move
+    // through the shared `apply_move`, and on success refreshes + closes. The
+    // drawer's buttons are explicit clicks, so — unlike a drag drop — they
+    // apply destructive moves without a second confirmation.
+    let run_move = move |mv: TaskMove| {
         if busy.get_untracked() {
             return;
         }
@@ -171,57 +129,14 @@ pub fn TaskDetailDrawer(
         busy.set(true);
         error.set(None);
         spawn_local(async move {
-            match TeamsApi::update_task(
-                &dash,
-                &id,
-                TaskPatch {
-                    status: Some(new_status.to_string()),
-                    ..Default::default()
-                },
-            )
-            .await
-            {
-                Ok(_) => {
-                    busy.set(false);
-                    on_changed.run(());
-                    open_for.set(None);
-                }
-                Err(e) => {
-                    // Keep the drawer open so the user sees what failed.
-                    busy.set(false);
-                    error.set(Some(e));
-                }
-            }
-        });
-    };
-
-    // Generic runner for the dedicated side-effecting verbs (Result<(), String>).
-    // Mirrors `patch_status`'s busy-lock + success/error handling.
-    let run_verb = move |verb: Verb| {
-        if busy.get_untracked() {
-            return;
-        }
-        let Some(task) = open_for.get_untracked() else {
-            return;
-        };
-        let id = task.id;
-        busy.set(true);
-        error.set(None);
-        spawn_local(async move {
-            let res = match verb {
-                Verb::Pause => TeamsApi::task_pause(&dash, &id).await,
-                Verb::Resume => TeamsApi::task_resume(&dash, &id).await,
-                Verb::Skip => TeamsApi::task_skip(&dash, &id).await,
-                Verb::Retry => TeamsApi::task_retry(&dash, &id).await,
-                Verb::Approve => TeamsApi::task_approve(&dash, &id).await,
-            };
-            match res {
+            match apply_move(&dash, &id, mv).await {
                 Ok(()) => {
                     busy.set(false);
                     on_changed.run(());
                     open_for.set(None);
                 }
                 Err(e) => {
+                    // Keep the drawer open so the user sees what failed.
                     busy.set(false);
                     error.set(Some(e));
                 }
@@ -368,33 +283,19 @@ pub fn TaskDetailDrawer(
                                 })}
                                 <div class="flex gap-2 flex-wrap">
                                     {actions_for_status(&status).into_iter().map(|action| {
-                                        let label = match action {
-                                            TaskAction::Start => t_string!(i18n, teams.kanban.actions.start).to_string(),
-                                            TaskAction::Complete => t_string!(i18n, teams.kanban.actions.complete).to_string(),
-                                            TaskAction::Fail => t_string!(i18n, teams.kanban.actions.fail).to_string(),
-                                            TaskAction::Cancel => t_string!(i18n, teams.kanban.actions.cancel).to_string(),
-                                            TaskAction::Pause => t_string!(i18n, teams.kanban.actions.pause).to_string(),
-                                            TaskAction::Resume => t_string!(i18n, teams.kanban.actions.resume).to_string(),
-                                            TaskAction::Skip => t_string!(i18n, teams.kanban.actions.skip).to_string(),
-                                            TaskAction::Retry => t_string!(i18n, teams.kanban.actions.retry).to_string(),
-                                            TaskAction::Approve => t_string!(i18n, teams.kanban.actions.approve).to_string(),
-                                            TaskAction::Reject => t_string!(i18n, teams.kanban.actions.reject).to_string(),
-                                        };
+                                        let label = action_label(i18n, action);
                                         view! {
                                             <ActionButton
                                                 label=label
                                                 disabled=Signal::derive(move || busy.get())
-                                                on_click=move |_| match action {
-                                                    TaskAction::Start => patch_status("in_progress"),
-                                                    TaskAction::Complete => patch_status("completed"),
-                                                    TaskAction::Fail => patch_status("failed"),
-                                                    TaskAction::Cancel => patch_status("cancelled"),
-                                                    TaskAction::Pause => run_verb(Verb::Pause),
-                                                    TaskAction::Resume => run_verb(Verb::Resume),
-                                                    TaskAction::Skip => run_verb(Verb::Skip),
-                                                    TaskAction::Retry => run_verb(Verb::Retry),
-                                                    TaskAction::Approve => run_verb(Verb::Approve),
-                                                    TaskAction::Reject => reject_open.set(true),
+                                                on_click=move |_| {
+                                                    // Reject reveals the reason input; every other
+                                                    // action routes through the shared dispatcher.
+                                                    if action == TaskAction::Reject {
+                                                        reject_open.set(true);
+                                                    } else {
+                                                        run_move(action.to_move());
+                                                    }
                                                 }
                                             />
                                         }
@@ -583,39 +484,6 @@ fn EventsSection(events: RwSignal<Vec<TaskEventDto>>) -> impl IntoView {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{actions_for_status, TaskAction};
-
-    #[test]
-    fn gating_matches_lifecycle_rules() {
-        use TaskAction::*;
-        assert_eq!(
-            actions_for_status("pending"),
-            vec![Start, Pause, Skip, Cancel]
-        );
-        assert_eq!(actions_for_status("blocked"), vec![Pause, Skip, Cancel]);
-        // "unsatisfiable" (derived blocked) mirrors blocked exactly.
-        assert_eq!(
-            actions_for_status("unsatisfiable"),
-            actions_for_status("blocked")
-        );
-        assert_eq!(
-            actions_for_status("in_progress"),
-            vec![Complete, Fail, Pause, Cancel]
-        );
-        assert_eq!(
-            actions_for_status("waiting_review"),
-            vec![Approve, Reject, Skip, Cancel]
-        );
-        assert_eq!(actions_for_status("paused"), vec![Resume, Cancel]);
-        assert_eq!(actions_for_status("failed"), vec![Retry]);
-        // Terminal + unknown statuses expose no actions.
-        for s in ["completed", "skipped", "cancelled", "garbage"] {
-            assert!(
-                actions_for_status(s).is_empty(),
-                "{s} must be terminal/inert"
-            );
-        }
-    }
-}
+// Lifecycle gating tests moved with `actions_for_status` into
+// `components/lifecycle.rs` (the single source now shared with the board DnD
+// routing and the on-card quick actions).
