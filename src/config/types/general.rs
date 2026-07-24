@@ -7,19 +7,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Queue mode for incoming messages while agent is busy
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum QueueMode {
-    /// Follow-up: queue messages and process after current run
-    #[default]
-    Followup,
-    /// Steer: inject new message into current run
-    Steer,
-    /// Collect: batch messages within a time window
-    Collect,
-}
-
 // =============================================================================
 // GeneralConfig
 // =============================================================================
@@ -33,14 +20,6 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Session queue mode: how incoming messages are handled while agent is busy.
-    /// Options: "followup" (default), "steer", "collect"
-    #[serde(default)]
-    pub queue_mode: QueueMode,
-    /// Collection window in milliseconds for Collect queue mode.
-    /// Only used when `queue_mode` = "collect". Default: 3000ms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub collect_window_ms: Option<u64>,
     /// Browser system configuration (profiles, SSRF policy, Playwright CLI).
     #[serde(default)]
     pub browser: crate::browser::profile::BrowserSystemConfig,
