@@ -461,6 +461,27 @@ impl BackgroundAgentTracker {
             .collect()
     }
 
+    /// Request-ids of still-running registrations owned by `root_session`
+    /// (`SpawnMeta.root_session`, the top-level session key in
+    /// `SessionKey::to_key_string()` form). Backs the leader-cancel walk: when a
+    /// leader session is cancelled, its in-flight delegated member runs are
+    /// enumerated here and each engine per-run token is fired. O(running) scan,
+    /// same as `session_has_running`. Ids that are not live engine runs (e.g.
+    /// in-process subagents) simply yield a harmless `cancel` miss at the seam.
+    #[must_use]
+    pub fn running_runs_of_session(&self, root_session: &str) -> Vec<String> {
+        self.running
+            .read()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .iter()
+            .filter(|(_, agent)| agent.meta.root_session == root_session)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Cancel a running background agent. Returns `true` if the `request_id`
     /// was found in the running set and the `CancellationToken` was hit;
     /// `false` if no such running agent exists (already completed / never
@@ -938,6 +959,28 @@ mod tests {
         // Once the child finishes it no longer counts as protected in-flight work.
         tracker.mark_completed("child-1", CompletedOutcome::ok_text("done"));
         assert!(!tracker.session_has_running(root));
+    }
+
+    #[test]
+    fn running_runs_of_session_returns_ids_for_matching_root_session() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let leader = "agent:leader:main";
+        let _r1 = RunningRegistration::register(
+            Arc::clone(&tracker), "run-A".to_string(), CancellationToken::new(),
+            "member A".to_string(),
+            SpawnMeta { parent_id: None, depth: 1, root_session: leader.to_string(), model: None },
+        );
+        let _r2 = RunningRegistration::register(
+            Arc::clone(&tracker), "run-B".to_string(), CancellationToken::new(),
+            "unrelated".to_string(),
+            SpawnMeta { parent_id: None, depth: 1, root_session: "agent:other:main".to_string(), model: None },
+        );
+        let mut ids = tracker.running_runs_of_session(leader);
+        ids.sort();
+        assert_eq!(ids, vec!["run-A".to_string()]);
+        // Dropping the guard delists it.
+        drop(_r1);
+        assert!(tracker.running_runs_of_session(leader).is_empty());
     }
 
     #[test]
