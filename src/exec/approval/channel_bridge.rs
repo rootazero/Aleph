@@ -30,23 +30,27 @@ impl ChannelApprovalBridge {
         }
     }
 
-    /// 请求工具调用审批并阻塞等待用户决策。
+    /// Request tool-call approval and block waiting for the user's decision.
     ///
-    /// 两阶段：(1) `manager.create` 建记录得 `record.id`，随即
-    /// `register_pending` 先注册（投递前注册，快手 resolver 不会扑空）；
-    /// (2) `deliver_routed` 用 `record.id` 投递按钮到指定通道会话；
-    /// (3) `await_registered` 阻塞在 `record.id` 的 oneshot，由通道按钮回调
-    /// 经 `manager.resolve(record.id, ...)` 唤醒。
+    /// Two stages: (1) `manager.create` builds the record to obtain `record.id`,
+    /// then `register_pending` registers first (register before delivery, so a
+    /// fast resolver cannot race ahead); (2) `deliver_routed` uses `record.id`
+    /// to send buttons to the target channel conversation;
+    /// (3) `await_registered` blocks on the `record.id` oneshot, awakened by the
+    /// channel button callback via `manager.resolve(record.id, ...)`.
     ///
-    /// `channel_id` / `conversation_id` 为结构化路由参数（来自调用方解析的
-    /// `SessionKey`），不再 parse 有损的字符串 `session_key`。
+    /// `channel_id` / `conversation_id` are structured routing parameters (from
+    /// the caller's parsed `SessionKey`) — no longer parsing a lossy string
+    /// `session_key`.
     ///
-    /// `session_key` 是发起会话的结构化 key 字符串（router 侧
-    /// `ctx.session_key.to_string()` 的同一形态）：record 必须携带它，
-    /// `/approve`/`/deny` 文本回复才能经 `resolve_for_session` 命中这条
-    /// 审批（仅此会话恰有一张活卡时直接命中；多卡并发时会拒绝裸回复、
-    /// 回编号清单，须 `/approve <n>` 指定——见 `SessionResolveOutcome`）。
-    /// 传空则回退为 `channel:conversation` 合成 key（仅按钮回调可达）。
+    /// `session_key` is the structured key string of the originating session
+    /// (the same form as router-side `ctx.session_key.to_string()`): the record
+    /// must carry it so that `/approve`/`/deny` text replies can hit this
+    /// approval via `resolve_for_session` (direct hit when exactly one live
+    /// card exists for this session; concurrent cards reject bare replies with
+    /// a numbered list, requiring `/approve <n>` — see `SessionResolveOutcome`).
+    /// An empty value falls back to a `channel:conversation` synthetic key
+    /// (reachable only via button callback).
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
@@ -162,11 +166,13 @@ impl ChannelApprovalBridge {
         }
     }
 
-    /// 该通道当前是否可投递审批（已在 `ChannelRegistry` 注册）。
+    /// Whether this channel can currently receive approval deliveries (already
+    /// registered in `ChannelRegistry`).
     ///
-    /// Panel 回合携带 `gui:chat` —— 一个从不注册为外部通道的伪 channel id，
-    /// 所以 `deliver_routed` 恒返回 `None`。调用方据此在通道不可达时改走
-    /// operator 事件总线，而不是直接拒绝。
+    /// Panel turns carry `gui:chat` — a pseudo channel id that is never
+    /// registered as an external channel, so `deliver_routed` always returns
+    /// `None`. Callers use this to route through the operator event bus when
+    /// the channel is unreachable, rather than denying outright.
     pub async fn can_deliver(&self, channel_id: &ChannelId) -> bool {
         #[cfg(test)]
         if self.test_outcome_override.is_some() {
@@ -175,18 +181,21 @@ impl ChannelApprovalBridge {
         self.registry.get(channel_id).await.is_some()
     }
 
-    /// 按结构化 `channel_id` 投递审批提示。返回 `Some(true)` 已投递、
-    /// `Some(false)` 投递失败、`None` 无通道。
+    /// Deliver an approval prompt by structured `channel_id`. Returns
+    /// `Some(true)` delivered, `Some(false)` delivery failed, `None` no channel.
     ///
-    /// 无原生审批能力的通道走纯文本回退：发一条带 `/approve` / `/deny`
-    /// 指引的消息，由 inbound router 的文本拦截按 session FIFO 解析。
-    /// 此前这些通道会被直接 `Denied`，确认门工具在非 Telegram 通道上
-    /// 等于全部静默拒绝。
+    /// Channels without native approval capability take a plain-text fallback:
+    /// send a message with `/approve` / `/deny` instructions, resolved by the
+    /// inbound router's text interception via session FIFO. Previously these
+    /// channels were outright `Denied`, so confirm-gated tools on non-capable
+    /// channels were effectively all silently rejected.
     ///
-    /// 授权语义：回退路径没有 capability 路径的 `authorize_actor` 逐人
-    /// 校验，信任边界与既有 `/approve` 文本命令一致 —— 依赖通道入站层
-    /// 的 allowlist / pairing 把关（能与 bot 对话的人即被信任）。提示只
-    /// 投递到发起会话本身，不广播。
+    /// Authorization semantics: the fallback path lacks the capability path's
+    /// per-person `authorize_actor` check; the trust boundary matches the
+    /// existing `/approve` text command — relying on the channel inbound
+    /// layer's allowlist / pairing gate (anyone who can chat with the bot is
+    /// trusted). The prompt is delivered only to the originating session
+    /// itself, never broadcast.
     async fn deliver_routed(
         &self,
         channel_id: &ChannelId,
@@ -260,7 +269,7 @@ impl ChannelApprovalBridge {
         }
     }
 
-    /// 审批超时后向通道发一条友好提示（best-effort）。
+    /// Send a friendly timeout notice to the channel (best-effort).
     async fn send_timeout_notice(&self, channel_id: &ChannelId, conversation_id: &ConversationId) {
         if let Some(channel) = self.registry.get(channel_id).await {
             let ch = channel.read().await;

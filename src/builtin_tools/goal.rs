@@ -306,11 +306,11 @@ impl GoalTool {
 }
 
 /// Hard ceiling on autonomous continuations a single goal may request,
-/// regardless of what the caller asks for (R5 不打扰 backstop).
+/// regardless of what the caller asks for (R5 menu-bar-first backstop).
 const MAX_PURSUIT_ITERATIONS: u32 = 50;
 
 /// Clamp a requested autonomous-iteration cap to the hard ceiling
-/// (`MAX_PURSUIT_ITERATIONS`, R5 不打扰 backstop). Shared by `set` and the
+/// (`MAX_PURSUIT_ITERATIONS`, R5 menu-bar-first backstop). Shared by `set` and the
 /// in-place `update` adjuster so both honour the same ceiling.
 const fn clamp_iterations(requested: u32) -> u32 {
     if requested > MAX_PURSUIT_ITERATIONS {
@@ -572,7 +572,7 @@ token_budget. \
                     .with_budget(args.token_budget)
                     .with_note(args.note.clone(), now);
                 if let Some(requested) = args.pursuit_max_iterations {
-                    // Hard cap autonomous continuations (R5 不打扰): an
+                    // Hard cap autonomous continuations (R5 menu-bar-first): an
                     // unbounded value would let a single session self-run for
                     // days. The clamped value is surfaced to the model via
                     // `render` so it sees the effective cap.
@@ -847,7 +847,7 @@ token_budget. \
                 })
             }
             GoalAction::List => {
-                // Cross-session enumeration (R6 一核多端): a goal set on one
+                // Cross-session enumeration (R6 one-core-many-shells): a goal set on one
                 // channel is invisible to `get` on another, which keys by the
                 // current session. Reuse the store's existing `list_all` (the
                 // dream lessons-promote sweep already relies on it) so the model
@@ -1942,7 +1942,7 @@ mod tests {
     }
 
     /// Two sessions sharing one store: `list` from session A must enumerate B's
-    /// goal too (cross-session R6 一核多端) and flag A's own as "(this session)".
+    /// goal too (cross-session R6 one-core-many-shells) and flag A's own as "(this session)".
     #[tokio::test]
     async fn list_enumerates_all_sessions_and_flags_current() {
         let dir = tempfile::tempdir().unwrap();

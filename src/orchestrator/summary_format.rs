@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn truncate_with_ellipsis_is_utf8_safe() {
-        // Ensure we don't byte-slice in the middle of a 3-byte char (中).
+        // Ensure we don't byte-slice in the middle of a 3-byte CJK char.
         let s = "abc中文def中文";
         let out = truncate_with_ellipsis(s, 5);
         assert!(out.ends_with('\u{2026}'));

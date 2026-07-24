@@ -544,7 +544,7 @@ impl Drop for SessionLockGuard {
 #[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
     /// Drive one flow execution. The trailing `workspace_override` is the
-    /// per-run project workspace from the desktop "进入项目工作" picker;
+    /// per-run project workspace from the desktop "Enter Project" picker;
     /// `None` keeps the legacy agent-workspace path. Implementations MUST
     /// persist it on the `RunStarted` marker so [`crate::gateway::resume_coordinator`]
     /// can land a re-trigger back in the same project folder.

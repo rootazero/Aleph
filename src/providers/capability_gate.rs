@@ -7,7 +7,7 @@
 //! These are facts about the request's SHAPE (does it contain an image block?
 //! a tools array? roughly how many input tokens?), never about its semantic
 //! intent. Choosing "which models are even *capable*" is infrastructure
-//! feasibility (R7 赋能层), not the forbidden "classify the task to pick the
+//! feasibility (R7 infrastructure layer), not the forbidden "classify the task to pick the
 //! best model" router — the LLM still owns model choice; this only removes
 //! candidates that would deterministically fail.
 //!

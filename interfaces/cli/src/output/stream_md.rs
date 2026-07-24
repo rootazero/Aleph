@@ -8,7 +8,7 @@
 //! block boundary — a blank line outside any fenced code block — and the
 //! stable prefix is rendered and flushed immediately, while only the
 //! unstable suffix stays buffered. Each completed block is rendered with the
-//! existing [`super::markdown::render`] pipeline (连线优先: zero new
+//! existing [`super::markdown::render`] pipeline (wire-first: zero new
 //! dependencies, same ANSI/`NO_COLOR` degradation).
 //!
 //! Trade-off (same as hermes): blocks separated by blank lines are rendered

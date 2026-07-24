@@ -1,11 +1,11 @@
 //! Multi-conversation live registry for the chat surface.
 //!
-//! 每个已打开会话有一个稳定的 [`ConvId`]（新建即生成；`session_key` 于首个
-//! `chat.send` 响应后回填）。**活跃**会话的数据活在单例 [`ChatState`] 里（渲染
-//! 投影）；**后台**会话各自持有一个常驻 `ChatState`（在 `live` 里），由全局
-//! dispatcher 持续喂事件，因此切走不冻结、token 无损累积。
+//! Every open conversation has a stable [`ConvId`] (generated on creation; `session_key` is backfilled on the first
+//! `chat.send` response). **Active** conversation data lives in the singleton [`ChatState`] (rendering
+//! projection); **background** conversations each hold a persistent `ChatState` (inside `live`), fed by the global
+//! dispatcher continuously, so switching away does not freeze and tokens accumulate losslessly.
 //!
-//! `agent_id` 保留在 [`ConvMeta`] 内作分组/归类键（利于记忆管理）。
+//! `agent_id` is kept in [`ConvMeta`] as a grouping/classification key (useful for memory management).
 
 use leptos::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -13,11 +13,11 @@ use std::collections::{HashMap, HashSet};
 use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::ChatState;
 
-/// 客户端稳定会话标识。u64 newtype，`Copy`/`Hash`，可作 `HashMap` 键。
+/// Stable client-side conversation identifier. u64 newtype, `Copy`/`Hash`, usable as a `HashMap` key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ConvId(pub u64);
 
-/// 会话元数据（分组/标签/回填的 session_key）。
+/// Conversation metadata (grouping / label / backfilled session_key).
 #[derive(Clone, Debug)]
 pub struct ConvMeta {
     pub agent_id: String,
@@ -26,34 +26,34 @@ pub struct ConvMeta {
     pub agent_color: &'static str,
 }
 
-/// 活跃会话注册表。全字段 `Copy`，可无 `Arc` 直接 `provide_context`。
+/// Active conversation registry. All fields `Copy`, can be `provide_context`-ed directly without `Arc`.
 #[derive(Clone, Copy)]
 pub struct SessionMap {
-    /// 每会话持久 `ChatState`（一次创建、跨切换复用）。**含**当前活跃会话的条目
-    /// ——活跃会话的渲染数据活在单例里，但其持久态仍留在这里以便下次切走时复用。
+    /// Per-conversation persistent `ChatState` (created once, reused across switches). **Includes** the active conversation's entry
+    /// — the active conversation's render data lives in the singleton, but its persistent state stays here for reuse on the next switch-away.
     live: RwSignal<HashMap<ConvId, ChatState>>,
-    /// 每会话元数据。
+    /// Per-conversation metadata.
     meta: RwSignal<HashMap<ConvId, ConvMeta>>,
-    /// 可见标签顺序，驱动标签条与 Cmd+N。
+    /// Visible tab order, drives the tab strip and Cmd+N.
     pub order: RwSignal<Vec<ConvId>>,
-    /// 当前聚焦会话。`None` = 无标签（boot）。
+    /// Currently focused conversation. `None` = no tabs (boot).
     pub active: RwSignal<Option<ConvId>>,
-    /// `run_id → ConvId` 路由表（Task 2 使用）。
+    /// `run_id -> ConvId` routing table (Task 2).
     route: RwSignal<HashMap<String, ConvId>>,
-    /// 每会话进行中 run 引用计数；红点 = >0（Task 2 使用）。
+    /// Per-conversation in-flight run refcount; red dot = >0 (Task 2).
     running: RwSignal<HashMap<ConvId, usize>>,
-    /// 服务端权威运行态：`RunningSetChanged` 事件（或冷加载 seed）维护的、当前有
-    /// 在跑 run 的 backend `session_key` 集。红点的唯一输入源——纯服务端权威，
-    /// 客户端引用计数不参与（消除假阳性/假阴性）。
+    /// Server-authoritative running state: maintained by `RunningSetChanged` events (or cold-load seed),
+    /// the set of backend `session_key`s with in-flight runs. The sole input source for the red dot — purely server-authoritative,
+    /// client refcounts are not consulted (eliminates false positives / false negatives).
     server_running: RwSignal<HashSet<String>>,
-    /// 最近一次成功应用的 `RunningSetChanged.seq`。单调递增，用于丢弃乱序/重复帧。
-    /// `0` = 尚未收到任何事件（冷加载 seed 可生效的窗口）。
+    /// The last successfully applied `RunningSetChanged.seq`. Monotonically increasing; used to drop out-of-order / duplicate frames.
+    /// `0` = no events received yet (window where cold-load seed may apply).
     server_seq: RwSignal<u64>,
-    /// 捕获 app-root Owner，用于在稳定 arena 下创建后台 `ChatState`。
+    /// Captures the app-root Owner, used to create background `ChatState` in a stable arena.
     owner: StoredValue<Owner>,
-    /// 每个后台会话的子 Owner，用于 close 时回收其 signals（防止按切换次数泄漏）。
+    /// Child Owner per background conversation, used on close to reclaim its signals (prevents per-switch leak).
     owners: RwSignal<HashMap<ConvId, Owner>>,
-    /// `ConvId` 生成器。
+    /// `ConvId` generator.
     next_id: RwSignal<u64>,
 }
 
@@ -82,7 +82,7 @@ impl SessionMap {
         }
     }
 
-    /// 创建一个新会话（不激活）。返回其 `ConvId`。
+    /// Create a new conversation (not activated). Returns its `ConvId`.
     pub fn open_conversation(&self, agent_id: &str, label: impl Into<String>) -> ConvId {
         let id = ConvId(self.next_id.get_untracked());
         self.next_id.update(|n| *n += 1);
@@ -101,8 +101,8 @@ impl SessionMap {
         id
     }
 
-    /// 取得（或首次创建）`conv` 的持久后台 `ChatState`。创建在可释放的子 Owner 下，
-    /// 一旦创建就在 `live` 中常驻复用，不再随每次切换重建（防止按切换次数泄漏）。
+    /// Get (or create on first access) the persistent background `ChatState` for `conv`. Created under a disposable child Owner;
+    /// once created it stays in `live` for reuse, never rebuilt on each switch (prevents per-switch leak).
     fn ensure_background(&self, conv: ConvId) -> ChatState {
         if let Some(chat) = self.live.with_untracked(|m| m.get(&conv).copied()) {
             return chat;
@@ -118,7 +118,7 @@ impl SessionMap {
         chat
     }
 
-    /// 活跃会话的 `ChatState` = 单例投影；后台会话 = `live[conv]`。
+    /// Active conversation `ChatState` = singleton projection; background = `live[conv]`.
     #[must_use]
     pub fn chat_for(&self, conv: ConvId, singleton: ChatState) -> Option<ChatState> {
         if self.active.get_untracked() == Some(conv) {
@@ -137,15 +137,15 @@ impl SessionMap {
         self.meta.with_untracked(|m| m.get(&conv).cloned())
     }
 
-    /// 响应式读会话标签（tab 文案）。随 backend 生成/重命名的 topic 更新而变。
+    /// Reactive read of the conversation label (tab text). Changes when the backend generates / renames the topic.
     #[must_use]
     pub fn label(&self, conv: ConvId) -> String {
         self.meta
             .with(|m| m.get(&conv).map(|v| v.label.clone()).unwrap_or_default())
     }
 
-    /// 更新会话标签（如 backend 首个回合后生成的 topic）。仅在实际变化时写，
-    /// 避免无谓的响应式刷新。
+    /// Update the conversation label (e.g. backend-generated topic after the first turn). Only writes on actual change,
+    /// avoiding unnecessary reactive refreshes.
     pub fn set_label(&self, conv: ConvId, label: impl Into<String>) {
         let label = label.into();
         let changed = self
@@ -160,22 +160,22 @@ impl SessionMap {
         }
     }
 
-    /// 打开或聚焦会话。切换时把出向会话数据落回其持久后台态，把入向会话的持久
-    /// 后台态拉进单例（两者都是同一个持久 `ChatState`，一次创建、跨切换复用）。
+    /// Open or focus a conversation. On switch, flush the outgoing conversation's data back to its persistent background state,
+    /// pull the incoming conversation's persistent background state into the singleton (both are the same persistent `ChatState`, created once, reused across switches).
     pub fn activate(&self, singleton: ChatState, conv: ConvId) {
         let current = self.active.get_untracked();
         if current == Some(conv) {
             return;
         }
-        // 1. 出向会话：把单例当前数据复制回其持久后台态。
+        // 1. Outgoing conversation: copy the singleton's current data back to its persistent background state.
         if let Some(prev) = current {
             let bg = self.ensure_background(prev);
             bg.restore_from(singleton.capture_snapshot());
         }
-        // 2. 入向会话：从其持久后台态恢复进单例（保留 live 条目，不移除）。
+        // 2. Incoming conversation: restore from its persistent background state into the singleton (keep the live entry, don't remove it).
         let incoming = self.ensure_background(conv);
         singleton.restore_from(incoming.capture_snapshot());
-        // 3. order 补齐 + 更新 active。
+        // 3. Fill in order + update active.
         self.order.update(|o| {
             if !o.contains(&conv) {
                 o.push(conv);
@@ -184,7 +184,7 @@ impl SessionMap {
         self.active.set(Some(conv));
     }
 
-    /// 关闭会话（丢弃其后台态、meta、running，回收其子 Owner）。活跃则聚焦左邻。
+    /// Close a conversation (discard its background state, meta, running, reclaim its child Owner). If active, focus the left neighbour.
     pub fn close(&self, singleton: ChatState, conv: ConvId) {
         let was_active = self.active.get_untracked() == Some(conv);
         self.live.update(|m| {
@@ -193,7 +193,7 @@ impl SessionMap {
         self.running.update(|m| {
             m.remove(&conv);
         });
-        // 释放该会话后台态的子 Owner（回收其 signals；防按切换次数泄漏）。
+        // Release the conversation's background child Owner (reclaims its signals; prevents per-switch leak).
         if let Some(child) = self.owners.try_update(|m| m.remove(&conv)).flatten() {
             child.cleanup();
         }
@@ -240,7 +240,7 @@ impl SessionMap {
         }
     }
 
-    /// 绑定 run 到会话：登记路由、running+1、回填 meta.session_key。
+    /// Bind a run to a conversation: register route, running+1, backfill meta.session_key.
     pub fn bind_run(&self, run_id: &str, conv: ConvId, session_key: Option<&str>) {
         self.route.update(|m| {
             m.insert(run_id.to_string(), conv);
@@ -257,7 +257,7 @@ impl SessionMap {
         }
     }
 
-    /// run 结束：running-1（归 0 移除）、清路由。
+    /// Run settled: running-1 (remove when zero), clear route.
     pub fn settle_run(&self, run_id: &str) {
         let conv = self.route.try_update(|m| m.remove(run_id)).flatten();
         if let Some(conv) = conv {
@@ -277,13 +277,13 @@ impl SessionMap {
         self.route.with_untracked(|m| m.get(run_id).copied())
     }
 
-    /// 响应式读：会话是否进行中（红点）。
+    /// Reactive read: whether the conversation is in-flight (red dot).
     #[must_use]
     pub fn is_running(&self, conv: ConvId) -> bool {
         self.running.with(|m| m.get(&conv).is_some_and(|n| *n > 0))
     }
 
-    /// 侧栏行按 backend session_key 反查 ConvId（用于红点）。
+    /// Sidebar row reverse-lookup of ConvId by backend session_key (for the red dot).
     #[must_use]
     pub fn conv_for_session_key(&self, sk: &str) -> Option<ConvId> {
         self.meta.with_untracked(|m| {
@@ -293,11 +293,11 @@ impl SessionMap {
         })
     }
 
-    /// 用服务端 `RunningSetChanged` 事件更新 `server_running`（seq 单调守卫）。
+    /// Update `server_running` with a `RunningSetChanged` event (seq monotonic guard).
     ///
-    /// - `seq <= server_seq`（乱序/重复帧）→ 静默丢弃，防止状态翻转。
-    /// - `seq > server_seq` → 推进 `server_seq`，仅在集合实际变化时写信号
-    ///   （避免无谓的响应式刷新）。
+    /// - `seq <= server_seq` (out-of-order / duplicate frame) -> silently discarded, preventing state flips.
+    /// - `seq > server_seq` -> advance `server_seq`, only write the signal when the set actually changes
+    ///   (avoiding unnecessary reactive refreshes).
     pub fn set_server_running(&self, seq: u64, keys: HashSet<String>) {
         if seq <= self.server_seq.get_untracked() {
             return;
@@ -308,10 +308,10 @@ impl SessionMap {
         }
     }
 
-    /// 冷加载兜底 seed（来自 `run_concurrency` RPC，无事件 seq）。
+    /// Cold-load fallback seed (from `run_concurrency` RPC, no event seq).
     ///
-    /// 仅当 `server_seq == 0`（尚未收到任何 `RunningSetChanged` 事件）时才应用，
-    /// 保证 seed 不覆盖已到达的更新事件态。不触发 seq 前进。
+    /// Only applies when `server_seq == 0` (no `RunningSetChanged` events received yet),
+    /// ensuring the seed never overwrites an already-arrived update event state. Does not advance seq.
     pub fn seed_server_running(&self, keys: HashSet<String>) {
         if self.server_seq.get_untracked() == 0
             && self.server_running.with_untracked(|cur| *cur != keys)
@@ -320,23 +320,23 @@ impl SessionMap {
         }
     }
 
-    /// 响应式读：某 backend `session_key` 是否在跑（侧栏行红点唯一入口）。
+    /// Reactive read: whether a backend `session_key` is running (sole entry point for the sidebar row red dot).
     ///
-    /// 纯服务端权威：仅读 `server_running`，客户端引用计数不参与。
-    /// - 消除假阳性（stuck dot）：run 结束后服务端广播空集，dot 立即熄灭。
-    /// - 消除假阴性：任何接口（daemon / Telegram / 另一个 Panel）的 run 均在服务端集合中。
+    /// Purely server-authoritative: only reads `server_running`; client refcounts are not consulted.
+    /// - Eliminates false positives (stuck dot): when a run ends the server broadcasts an empty set, the dot extinguishes immediately.
+    /// - Eliminates false negatives: runs from any interface (daemon / Telegram / another Panel) are all in the server set.
     ///
-    /// 用 tracked 读（`server_running`），故随 `RunningSetChanged` 事件自动重渲。
+    /// Uses a tracked read (`server_running`), so it auto-rerenders on `RunningSetChanged` events.
     #[must_use]
     pub fn is_running_session_key(&self, sk: &str) -> bool {
         self.server_running.with(|s| s.contains(sk))
     }
 
-    /// 响应式读：当前服务端权威运行中的会话数——侧栏底部"活跃"计数器的唯一入口。
+    /// Reactive read: current count of server-authoritative running sessions — sole entry point for the sidebar bottom "active" counter.
     ///
-    /// 与逐行红点 [`Self::is_running_session_key`] 同读 `server_running` 信号，故
-    /// 二者恒一致：任一 `RunningSetChanged` 事件同时刷新计数与红点，杜绝"红点亮着
-    /// 计数却为 0"之类的分叉（旧实现走 10s 轮询 `activity.stats`，与红点异源而滞后）。
+    /// Reads the same `server_running` signal as the per-row red dot [`Self::is_running_session_key`], so
+    /// the two are always consistent: any `RunningSetChanged` event refreshes the count and dots together, preventing
+    /// the "dots lit but count is 0" fork (the old implementation used a 10s polling `activity.stats`, a different source from the dots, and lagged).
     #[must_use]
     pub fn running_session_count(&self) -> usize {
         self.server_running.with(HashSet::len)
@@ -349,7 +349,7 @@ mod tests {
     use crate::views::chat::state::ChatState;
     use leptos::prelude::Owner;
 
-    // 每个用例自建 owner，保证背景 ChatState 在有效 arena 下创建。
+    // Each test case creates its own owner, ensuring the background ChatState is created in a valid arena.
     fn with_owner<T>(f: impl FnOnce() -> T) -> T {
         let owner = Owner::new();
         owner.set();
@@ -413,7 +413,7 @@ mod tests {
             assert_eq!(map.conv_for_session_key("sess-9"), Some(c));
             assert_eq!(map.meta(c).unwrap().session_key.as_deref(), Some("sess-9"));
 
-            // 同会话第二个并发 run。
+            // Second concurrent run in the same conversation.
             map.bind_run("run-2", c, Some("sess-9"));
             map.settle_run("run-1");
             assert!(map.is_running(c), "still running: run-2 in flight");
@@ -541,7 +541,7 @@ mod tests {
             let map = SessionMap::new();
             let c = map.open_conversation("agent-a", "新对话");
             assert_eq!(map.label(c), "新对话");
-            // backend 生成 topic 后同步到 tab。
+            // after the backend generates a topic, sync to the tab.
             map.set_label(c, "重构 auth 模块");
             assert_eq!(map.label(c), "重构 auth 模块");
         });
@@ -555,13 +555,13 @@ mod tests {
             let a = map.open_conversation("agent-a", "A");
             let b = map.open_conversation("agent-b", "B");
 
-            // A 活跃并起一个 run；随后切到 B —— A 变后台。
+            // A active with a run; then switch to B — A becomes background.
             map.activate(singleton, a);
             singleton.start_assistant_message("run-a");
             map.bind_run("run-a", a, Some("sess-a"));
             map.activate(singleton, b);
 
-            // 后台把 A 的 chunk 灌进 live[a]，不应污染当前单例(B)。
+            // Background feeds A's chunk into live[a], must not pollute the current singleton (B).
             let a_chat = map.chat_for(a, singleton).expect("A background chat");
             a_chat.append_chunk("run-a", "hello");
 
@@ -571,7 +571,7 @@ mod tests {
                 "singleton (B) must not receive A's chunk"
             );
 
-            // 切回 A：单例恢复到累积后的转录。
+            // Switch back to A: singleton restores to the accumulated transcript.
             map.activate(singleton, a);
             assert_eq!(singleton.assistant_text_for_run("run-a"), "hello");
         });

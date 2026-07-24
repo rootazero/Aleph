@@ -1,10 +1,11 @@
-//! 集群节点登记表（中心侧）。
+//! Cluster node registry (center side).
 //!
-//! 追踪「哪些已连 WS 连接是已登记节点」，并把它们投影成只读「环境」视图供
-//! `environments.list` 渲染。消费 Phase 0a 的 [`ReverseRpcChannel`]——每个
-//! `NodeSession` 持一份 channel clone，0c 的 `node_invoke` 经它向节点下发。
+//! Tracks "which connected WS connections are registered nodes" and projects
+//! them into a read-only "environment" view for `environments.list` rendering.
+//! Consumes Phase 0a's [`ReverseRpcChannel`] — each `NodeSession` holds a channel
+//! clone, and 0c's `node_invoke` dispatches down to the node through it.
 //!
-//! 红线：纯数据结构，无 LLM 推理（R7），不进 `src/harness/`（R10）。
+//! Redline: pure data structure, no LLM reasoning (R7), does not enter `src/harness/` (R10).
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,42 +17,45 @@ use serde_json::Value;
 
 use crate::cluster::ReverseRpcChannel;
 
-/// 节点声明的一个 command（名字 + 自描述 schema）。0b 不解析 schema，原样透传。
+/// A command declared by a node (name + self-describing schema). 0b does not
+/// parse the schema — passed through as-is.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandDescriptor {
     pub name: String,
     pub schema: Value,
 }
 
-/// 一个已连入的节点会话（中心侧视图）。
+/// A connected node session (center-side view).
 pub struct NodeSession {
-    /// = `device_id，直接当环境` id。
+    /// = `device_id`, used directly as the environment id.
     pub node_id: String,
-    /// 对应 0a `reverse_rpc` 表的键，断线清理对账用。
+    /// Matches the key in 0a's `reverse_rpc` table; used for disconnect reconciliation.
     pub conn_id: String,
-    /// 人类可读名（来自 connect 帧）。
+    /// Human-readable name (from the connect frame).
     pub device_name: String,
-    /// 0a 通道的 clone —— 0c 的 `node_invoke` 经它下发。
+    /// Clone of the 0a channel — 0c's `node_invoke` dispatches through it.
     pub channel: ReverseRpcChannel,
-    /// 节点自声明的 command 目录，0b 只存只显。
+    /// The node's self-declared command catalog; 0b only stores and displays it.
     pub declared_commands: Vec<CommandDescriptor>,
     /// Operator-assigned free-text labels (e.g. "gpu", "region=us"). Selection
     /// only — never an authorization gate (R7). Stored verbatim; not kv-parsed.
     pub tags: Vec<String>,
-    /// 登记时刻（Unix 秒）。
+    /// Registration timestamp (Unix seconds).
     pub connected_at: i64,
 }
 
-/// 节点寻址失败的结构化结果（取代旧的 `Option`，让歧义对调用方显式可见）。
-/// 映射 openclaw `node-match.ts` 的多级匹配，但用类型安全枚举表达——
-/// 让"歧义"成为不可忽略的一等状态，而非 stringly error。
+/// Structured result for node address resolution failure (replaces the old
+/// `Option`, making ambiguity explicitly visible to callers). Maps openclaw
+/// `node-match.ts` multi-level matching, but expressed as a type-safe enum —
+/// making "ambiguity" a non-ignorable first-class state rather than a stringly error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolveError {
-    /// 没有任何在线节点匹配该 name/id。
+    /// No online node matches this name/id.
     NotFound,
-    /// 多个在线节点匹配——附带可读候选标签（`name (short-id)`），供 LLM 收窄。
+    /// Multiple online nodes match — includes readable candidate labels
+    /// (`name (short-id)`) for LLM disambiguation.
     Ambiguous(Vec<String>),
-    /// 内部状态不一致：match_id 返回的 id 在 nodes_by_id 中缺失。
+    /// Internal state inconsistency: the id returned by match_id is missing from nodes_by_id.
     NodeNotFound { name_or_id: String },
 }
 
@@ -67,7 +71,8 @@ impl std::fmt::Display for ResolveError {
     }
 }
 
-/// `environments.list` 的对外序列化视图（薄渲染契约，R4）。绝不含凭证。
+/// Serialized external view for `environments.list` (thin rendering contract,
+/// R4). Never contains credentials.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Environment {
     pub id: String,
@@ -76,8 +81,9 @@ pub struct Environment {
     pub commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
     pub connected_at: i64,
-    /// 最近一次在线时刻（Unix 秒）。仅对 `status == "offline"` 的已登记节点有
-    /// 意义（在线节点恒 `None`）；`None` + offline = 登记后从未连入。
+    /// Last-seen online timestamp (Unix seconds). Only meaningful for registered
+    /// nodes with `status == "offline"` (online nodes are always `None`);
+    /// `None` + offline = never connected since registration.
     #[serde(default)]
     pub last_seen_at: Option<i64>,
 }
@@ -97,13 +103,14 @@ pub struct NodeMatch {
 
 #[derive(Default)]
 struct RegistryInner {
-    /// `node_id` → session（权威）。
+    /// `node_id` → session (authoritative).
     nodes_by_id: HashMap<String, NodeSession>,
-    /// `conn_id` → `node_id（断线反查`）。
+    /// `conn_id` → `node_id` (reverse lookup on disconnect).
     nodes_by_conn: HashMap<String, String>,
 }
 
-/// 节点注册表。线程安全；锁中毒按 P7（`unwrap_or_else(|e| e.into_inner())`）。
+/// Node registry. Thread-safe; lock poisoning handled per P7
+/// (`unwrap_or_else(|e| e.into_inner())`).
 #[derive(Default)]
 pub struct NodeRegistry {
     inner: RwLock<RegistryInner>,
@@ -115,7 +122,8 @@ impl NodeRegistry {
         Self::default()
     }
 
-    /// 登记一个节点会话。同 `node_id` 重连 → 覆盖旧会话，并清掉旧 conn 映射。
+    /// Register a node session. Reconnect with the same `node_id` → overwrites
+    /// the old session and clears the old conn mapping.
     pub fn register(&self, session: NodeSession) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let node_id = session.node_id.clone();
@@ -130,8 +138,10 @@ impl NodeRegistry {
         inner.nodes_by_id.insert(node_id, session);
     }
 
-    /// 注销一个连接的节点会话。仅当该 `node_id` 当前会话确属此 `conn_id` 时才移除
-    /// （重连安全：旧连接 cleanup 不会误删新会话）。返回是否移除了会话。
+    /// Deregister a connected node session. Only removes if the current session
+    /// for this `node_id` actually belongs to this `conn_id` (reconnect-safe:
+    /// old connection cleanup won't accidentally evict the new session). Returns
+    /// whether a session was removed.
     pub fn deregister(&self, conn_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
@@ -146,9 +156,11 @@ impl NodeRegistry {
         false
     }
 
-    /// 在线节点的只读投影快照。结果按 `(name, id)` 稳定排序——`nodes_by_id` 是
-    /// `HashMap`，迭代序不定；排序后 Panel 舰队列表与模型可见的 `node_list` 不会
-    /// 每次刷新都抖动（测试也得以断言确定序）。
+    /// Read-only projection snapshot of online nodes. Results are stably sorted
+    /// by `(name, id)` — `nodes_by_id` is a `HashMap` with non-deterministic
+    /// iteration order; sorting prevents the Panel fleet list and the
+    /// model-visible `node_list` from jittering on every refresh (tests can also
+    /// assert a deterministic order).
     pub fn list_environments(&self) -> Vec<Environment> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let mut envs: Vec<Environment> = inner
@@ -179,20 +191,26 @@ impl NodeRegistry {
         Some((s.node_id.clone(), s.device_name.clone()))
     }
 
-    /// 把 name/id 解析为唯一的 `node_id（多级匹配，registry` 只存在线会话故无需
-    /// "prefer-connected" tie-break——所有候选都在线）。匹配级别（强→弱）：
-    /// ① 精确 `node_id`（原样，id 是 UUID） ② 归一化 `device_name` 等值
-    /// ③ 模糊（id 前缀 ≥4 OR 归一化 name 子串）。名字匹配经 [`normalize_node_key`]
-    /// 大小写 + 标点/空格不敏感（映射 openclaw `node-match.ts::normalizeNodeKey`），
-    /// 故 "GPU Box" 可用 "gpu-box" 寻址。每级若多命中即 `Ambiguous`，绝不静默挑第一个。
+    /// Resolve a name/id to a unique `node_id` (multi-level match; the registry
+    /// only holds online sessions so there is no "prefer-connected" tie-break —
+    /// all candidates are online). Match levels (strong → weak):
+    /// ① exact `node_id` (as-is, ids are UUIDs) ② normalized `device_name` equality
+    /// ③ fuzzy (id prefix ≥4 OR normalized name substring). Name matching via
+    /// [`normalize_node_key`] is case- and punctuation/space-insensitive
+    /// (maps openclaw `node-match.ts::normalizeNodeKey`), so "GPU Box" can be
+    /// addressed as "gpu-box". If any level yields multiple hits, reports
+    /// `Ambiguous` — never silently picks the first.
     fn match_id(inner: &RegistryInner, q: &str) -> std::result::Result<String, ResolveError> {
-        // ① 精确 id（UUID，大小写敏感、不归一化——避免折叠掉 id 内的连字符语义）。
+        // ① Exact id (UUID, case-sensitive, no normalization — avoids collapsing
+        //    hyphen semantics within the id).
         if inner.nodes_by_id.contains_key(q) {
             return Ok(q.to_string());
         }
         let nq = normalize_node_key(q);
-        // ② 归一化精确 name（device_name 不保证唯一 → 可能歧义）。空键（全标点查询）
-        //    跳过名字匹配，否则会与同样归一化为空的脏名字误配。
+        // ② Normalized exact name (device_name is not guaranteed unique → may be
+        //    ambiguous). Skip name matching for empty keys (all-punctuation
+        //    queries), otherwise they would falsely match dirty names that also
+        //    normalize to empty.
         if !nq.is_empty() {
             let exact: Vec<&NodeSession> = inner
                 .nodes_by_id
@@ -205,7 +223,8 @@ impl NodeRegistry {
                 many => return Err(ResolveError::Ambiguous(candidate_labels(many))),
             }
         }
-        // ③ 模糊：id 前缀（≥4 字符原样小写，避免 1 字符炸开）或归一化 name 子串。
+        // ③ Fuzzy: id prefix (≥4 chars, as-is lowercased, avoids 1-char
+        //    explosion) or normalized name substring.
         let ql = q.to_ascii_lowercase();
         let fuzzy: Vec<&NodeSession> = inner
             .nodes_by_id
@@ -222,9 +241,10 @@ impl NodeRegistry {
         }
     }
 
-    /// 按 name 或 id 解析一个在线节点，返回其反向 RPC 通道 + 声明的命令目录。
-    /// `node_invoke` / `node_file` 用它寻址 + fail-fast 校验。歧义/未命中以
-    /// 结构化 [`ResolveError`] 返回，让调用方给 LLM 精确提示。
+    /// Resolve an online node by name or id, returning its reverse RPC channel
+    /// + declared command catalog. `node_invoke` / `node_file` use this to
+    /// address + fail-fast validate. Ambiguity / miss is returned as a
+    /// structured [`ResolveError`], letting callers give precise hints to the LLM.
     pub fn resolve(
         &self,
         name_or_id: &str,
@@ -240,8 +260,9 @@ impl NodeRegistry {
         Ok((s.channel.clone(), s.declared_commands.clone()))
     }
 
-    /// 同 [`resolve`] 的多级匹配，但只回 `node_id` —— `cluster.deregister` 用它把
-    /// operator 给的 name/id 落到唯一节点身份，再驱逐 + 撤 token。
+    /// Same multi-level match as [`resolve`], but returns only the `node_id` —
+    /// `cluster.deregister` uses this to map an operator-supplied name/id to a
+    /// unique node identity before evicting + revoking the token.
     pub fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         Self::match_id(&inner, name_or_id)
@@ -267,9 +288,10 @@ impl NodeRegistry {
             .collect()
     }
 
-    /// 按 `node_id` 主动驱逐一个会话（operator deregister 用）。从两张表都抹除，
-    /// 持有的 [`ReverseRpcChannel`] clone 随之 drop。返回是否确有会话被移除。
-    /// 与 [`deregister`](Self::deregister)（按 `conn_id` 的断线对账）正交。
+    /// Actively evict a session by `node_id` (used by operator deregister).
+    /// Removes from both tables; the held [`ReverseRpcChannel`] clone is dropped
+    /// along with it. Returns whether a session was actually removed. Orthogonal
+    /// to [`deregister`](Self::deregister) (disconnect reconciliation by `conn_id`).
     pub fn forget(&self, node_id: &str) -> bool {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = inner.nodes_by_id.remove(node_id) {
@@ -281,8 +303,10 @@ impl NodeRegistry {
     }
 }
 
-/// 把候选会话渲染成可读标签 `name (short-id)`，给歧义错误用。short-id 取前 8 位
-/// 足以辨识又不喧宾夺主。结果排序保证错误信息稳定（便于测试与日志比对）。
+/// Render candidate sessions as human-readable labels `name (short-id)` for
+/// ambiguity errors. The short-id is the first 8 chars — enough to
+/// disambiguate without noise. Results are sorted for stable error messages
+/// (easier test/log comparison).
 fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
     let mut labels: Vec<String> = sessions
         .iter()
@@ -295,21 +319,31 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
     labels
 }
 
-/// 把人类可读的节点名归一化成稳定查找键：转小写 + 把每段非字母数字折叠为单个
-/// `-` + 去掉首尾 `-`。**字母数字判定用 Unicode 感知的 [`char::is_alphanumeric`]**
-/// （非 ASCII-only），故 CJK / 带重音的拉丁字母被**保留**而非丢弃——`"工作站"`
-/// 归一化后仍非空、仍可按名寻址（"GPU Box" / "gpu_box" 仍折叠为 `gpu-box`）。
-/// 旧的 ASCII-only 实现会把纯非 ASCII 名整段折成空键 ⇒ 中文/日文节点名根本无法
-/// 按名寻址、且每次重连 [`crate::cluster::admit_node`] 都重铸一个新 id（幽灵行堆积）。
+/// Normalize a human-readable node name into a stable lookup key: lowercase +
+/// collapse each run of non-alphanumeric chars to a single `-` + strip leading
+/// and trailing `-`. Alphanumeric detection uses Unicode-aware
+/// [`char::is_alphanumeric`] (NOT ASCII-only), so CJK / accented Latin
+/// characters are **preserved** rather than discarded — `"工作站"` normalizes to
+/// a non-empty key and remains addressable by name ("GPU Box" / "gpu_box" still
+/// collapse to `gpu-box`). The old ASCII-only impl would fold a purely
+/// non-ASCII name to an empty key ⇒ Chinese/Japanese node names were completely
+/// unaddressable by name and every reconnect in
+/// [`crate::cluster::admit_node`] would mint a fresh id (ghost row
+/// proliferation).
 ///
-/// 映射 openclaw `node-match.ts::normalizeNodeKey` 演进后的 Unicode 版
-/// （NFC + `[^\p{L}\p{M}\p{N}]+ → -`）的**常见分支**。**有意的偏差（R3 核心轻量化——
-/// 不为单一 helper 引入 `unicode-normalization` crate）**：组合记号（`\p{M}`，如天城文
-/// 元音符号 / 分解式重音）被当作分隔符、且不做 NFC。这只影响键的**外观**、不影响可
-/// 寻址性——归一化对 query 与库存名**对称**施加，两侧折叠一致即可匹配。
+/// Maps the **common branch** of openclaw `node-match.ts::normalizeNodeKey`'s
+/// Unicode-aware version (NFC + `[^\p{L}\p{M}\p{N}]+ → -`). **Intentional
+/// deviation (R3 core minimalism — not pulling in the `unicode-normalization`
+/// crate for a single helper)**: combining marks (`\p{M}`, e.g. Devanagari
+/// vowel signs / decomposed accents) are treated as separators, and NFC is not
+/// applied. This only affects the key's **appearance**, not addressability —
+/// normalization is applied **symmetrically** to both query and stored name, so
+/// the two sides fold the same way and can match.
 ///
-/// 在线 [`NodeRegistry::match_id`] 与离线 `cluster.deregister` 回退寻址共用此单一
-/// 真源，杜绝两路语义漂移。空键（全标点/全记号查询）由各调用点的 `is_empty` 守卫跳过。
+/// Both online [`NodeRegistry::match_id`] and offline `cluster.deregister`
+/// fallback addressing share this single source of truth, preventing semantic
+/// drift between the two paths. Empty keys (all-punctuation / all-mark queries)
+/// are guarded by an `is_empty` check at each call site.
 pub(crate) fn normalize_node_key(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut pending_dash = false;
@@ -319,7 +353,8 @@ pub(crate) fn normalize_node_key(value: &str) -> String {
                 out.push('-');
             }
             pending_dash = false;
-            // `char::to_lowercase` 可能产出多个 char（如 İ → i̇），用 extend 而非 push。
+            // `char::to_lowercase` may produce multiple chars (e.g. İ → i̇);
+            // use extend rather than push.
             out.extend(ch.to_lowercase());
         } else {
             // Defer the separator so leading/trailing/repeated runs collapse and
@@ -330,9 +365,10 @@ pub(crate) fn normalize_node_key(value: &str) -> String {
     out
 }
 
-/// connect→register 接缝：仅当 `role == Some("node")` 时把这条连接登记进
-/// `NodeRegistry`。`params` 是 connect 帧的 params（取 `device_name` + commands）。
-/// 返回是否登记。抽成纯函数以便单测，且让 `handler.rs` 保持薄。
+/// connect→register seam: registers this connection into `NodeRegistry` only
+/// when `role == Some("node")`. `params` is the connect frame's params
+/// (extracts `device_name` + commands). Returns whether registration occurred.
+/// Extracted as a pure function for unit testing and to keep `handler.rs` thin.
 pub fn maybe_register_node(
     registry: &NodeRegistry,
     role: Option<&str>,

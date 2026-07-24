@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn bundled_catalog_parses_and_has_first_batch() {
         let all = catalog();
-        // 内置 7 个官方预设 id 必须都在
+        // All 7 built-in official preset ids must be present
         for id in [
             "context7",
             "zhipu-vision",
@@ -136,13 +136,13 @@ mod tests {
         ] {
             assert!(find(id).is_some(), "missing preset: {id}");
         }
-        // id 唯一
+        // ids are unique
         let mut ids: Vec<&str> = all.iter().map(|p| p.id.as_str()).collect();
         ids.sort_unstable();
         let mut dedup = ids.clone();
         dedup.dedup();
         assert_eq!(ids, dedup, "duplicate preset id in catalog.json");
-        // 每个 preset 至少一个 transport
+        // every preset has at least one transport
         assert!(all.iter().all(|p| !p.transports.is_empty()));
     }
 
@@ -153,7 +153,7 @@ mod tests {
             .required_env
             .iter()
             .any(|e| e.key == "AMAP_MAPS_API_KEY" && e.secret && e.required));
-        // 远程优先：第一个 transport 是 http 且 url 含 key 占位
+        // remote first: the first transport is http and its url contains a key placeholder
         let first = &amap.transports[0];
         assert_eq!(first.kind, McpTransportType::Http);
         assert!(first

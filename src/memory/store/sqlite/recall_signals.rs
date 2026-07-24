@@ -5,7 +5,7 @@
 //! for natural deduplication. The only live consumer of the
 //! aggregate is `recall_hit_counts` (`signal_count` per note), which feeds
 //! retrieval-time reinforcement so frequently-recalled notes float to the top
-//! (热门浮顶); the dream daemon's co-recall / hit-rate metrics read the same rows.
+//! (hot-surfacing); the dream daemon's co-recall / hit-rate metrics read the same rows.
 //! (The other `RecallAggregate` fields are currently unconsumed — see the struct.)
 
 use chrono::Utc;

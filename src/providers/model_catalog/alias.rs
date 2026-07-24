@@ -182,7 +182,7 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
     } else if p.contains("doubao") || p.contains("volcengine") || p == "ark" {
         // Volcengine Ark serves the Doubao family. Match the preset name and
         // its aliases (`volcengine`, `ark`). `ark` is compared EXACTLY, never
-        // as a substring — `spark` (讯飞星火) contains "ark" and must not be
+        // as a substring — `spark` (iFlytek Spark) contains "ark" and must not be
         // misrouted here.
         Some("doubao")
     } else if p.contains("cohere") || p.contains("command") {
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(canonical_provider_id("doubao"), Some("doubao"));
         assert_eq!(canonical_provider_id("volcengine"), Some("doubao"));
         assert_eq!(canonical_provider_id("ark"), Some("doubao"));
-        // `spark` (讯飞星火) contains the substring "ark" but must NOT be
+        // `spark` (iFlytek Spark) contains the substring "ark" but must NOT be
         // misrouted to doubao — `ark` is matched exactly.
         assert_ne!(canonical_provider_id("spark"), Some("doubao"));
         // Model-name path: doubao ids -> doubao (parity with the alias path).

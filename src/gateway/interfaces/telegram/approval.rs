@@ -230,7 +230,7 @@ mod tests {
         for decision in ["once", "session", "deny"] {
             let data = format!("approve:rec-123:{decision}");
             assert!(json.contains(&data), "missing button {data}: {json}");
-            // 与 RPC 侧 ApprovalBridge::parse_callback 必须双向一致
+            // Must be bidirectionally consistent with RPC-side ApprovalBridge::parse_callback
             let (id, _) = ApprovalBridge::parse_callback(&data).expect("parses");
             assert_eq!(id, "rec-123");
         }

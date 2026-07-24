@@ -279,7 +279,7 @@ impl Default for ChannelAccessConfig {
     }
 }
 
-// NOTE (熵减 2026-07-17): the `ChannelPolicy` trait, its sole implementor
+// NOTE (entropy reduction 2026-07-17): the `ChannelPolicy` trait, its sole implementor
 // `WhatsAppPolicy`, and their `PolicyDecision` result type were deleted here —
 // a dead abstraction island with zero consumers. WhatsApp's live policy
 // evaluation is `interfaces/whatsapp/wa_policy/{dm_policy,group_policy}.rs`,

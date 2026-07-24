@@ -67,8 +67,8 @@ impl PlanView {
             })
     }
 
-    /// Glyph + label for the sunk archive capsule: `("✓", "任务完成 · d/t")`
-    /// when complete, else `("◗", "未完成 · d/t")`.
+    /// Glyph + label for the sunk archive capsule: `("✓", "tasksDone · d/t")`
+    /// when complete, else `("◗", "未Done · d/t")`.
     #[must_use]
     pub fn archive_summary(&self) -> (&'static str, String) {
         let (glyph, word) = if self.complete {

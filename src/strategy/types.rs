@@ -2,7 +2,7 @@
 //! long task (`/goal` · `/loop` · `/workflow`) and pinned into every
 //! downstream execution prompt (the StraTA application-layer pattern).
 //!
-//! Immutable by construction (CLAUDE.md coding-style §不可变性): the planner
+//! Immutable by construction (CLAUDE.md coding-style §immutability): the planner
 //! mints a `Strategy`, the store overwrites the row; nothing mutates in place.
 
 use schemars::JsonSchema;

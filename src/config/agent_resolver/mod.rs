@@ -340,7 +340,7 @@ impl AgentDefinitionResolver {
             .cloned()
             .unwrap_or_default();
 
-        // 4. Resolve model: 选中的 Qualified 失效 → 当作 None 落到系统默认链。
+        // 4. Resolve model: an invalidated Qualified selection → treat as None, falling to the system default chain.
         let model = agent
             .model
             .as_ref()

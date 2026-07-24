@@ -1,6 +1,6 @@
 //! Per-run project-root inheritance via a `tokio::task_local`.
 //!
-//! The desktop Panel's "进入项目工作" flow sets `RunRequest.workspace_override`
+//! The desktop Panel's "Enter Project" flow sets `RunRequest.workspace_override`
 //! when the user picks a folder. Round 1 wired that into the agent loop's
 //! own tool dispatch (via `ToolContext::from_workspace`), but child runs
 //! spawned mid-loop — `session.send`, the team dispatcher's worker tasks,

@@ -2,7 +2,7 @@
 //!
 //! When privacy mode is disabled, a bot receives *every* message in a group it
 //! belongs to. Forwarding all of them into the agent loop fires a turn on
-//! ambient chatter that has nothing to do with the bot (an R5 "不打扰用户"
+//! ambient chatter that has nothing to do with the bot (an R5 "don't disturb
 //! violation). When `require_mention` is enabled for an account, only messages
 //! that actually address the bot are forwarded:
 //!

@@ -43,7 +43,7 @@ impl EmbeddingManager {
     pub async fn init(&self) -> Result<(), AlephError> {
         // Resolve via the local-first `auto` resolver. A pinned id still wins
         // exactly; an empty/`auto` id prefers an enabled local (Ollama) provider
-        // so embeddings stay on-device (数据不出本机) without manual config.
+        // so embeddings stay on-device (data stays local) without manual config.
         let (effective_id, reason, config) = {
             let settings = self.settings.read().await;
             let decision = resolve(&settings);

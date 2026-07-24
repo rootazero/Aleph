@@ -21,7 +21,7 @@ pub(crate) fn apply_delta(s: &mut CaptionState, d: Delta) {
 /// Utterance end: fold the floating interim into the locked line and mark
 /// locked (Panel fires the wave).
 ///
-/// The interim is merged, not dropped — short utterances ("对", "好的") often
+/// The interim is merged, not dropped — short utterances ("yes", "ok") often
 /// live entirely in the floating hypothesis when the VAD fires, and
 /// faster-whisper backends never flush a final for the trailing window after
 /// `END_OF_AUDIO`. Merging keeps the display identical to the text the agent
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn lock_with_interim_only_keeps_short_utterance() {
-        // A fast "对" lives entirely in the interim when the VAD fires — the
+        // A fast "yes" lives entirely in the interim when the VAD fires — the
         // old drop-the-interim lock erased it (streaming short-reply bug).
         let mut s = CaptionState::default();
         apply_delta(

@@ -249,7 +249,7 @@ impl BuiltinToolRegistry {
         // Build platform-specific DesktopPlatform.
         //
         // NOT an R1 violation, despite naming a platform crate here: this is the
-        // dependency-injection composition root (P4 — "构造时注入"). `src`
+        // dependency-injection composition root (P4 — "constructor injection"). `src`
         // depends only on the `aleph_desktop::DesktopPlatform` capability trait;
         // the actual platform-API calls (AppKit / windows-rs / …) live entirely
         // inside the `aleph_desktop_{macos,linux,windows}` crates behind that

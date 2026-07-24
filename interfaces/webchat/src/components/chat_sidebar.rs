@@ -306,7 +306,7 @@ pub fn ChatSidebar() -> impl IntoView {
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
-    // Groups (teams) the selected agent belongs to — drives the 群聊 section.
+    // Groups (teams) the selected agent belongs to — drives the group-chat section.
     let groups: RwSignal<Vec<TeamSummary>> = RwSignal::new(Vec::new());
     // Collapsible state for the group section (default: expanded).
     let groups_expanded = RwSignal::new(true);
@@ -380,7 +380,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 session_map.seed_server_running(metrics.running_sessions.into_iter().collect());
             }
 
-            // Fetch teams for the selected agent (drives the 群聊 section).
+            // Fetch teams for the selected agent (drives the group-chat section).
             // `try_get_untracked`: outer `None` = component disposed, inner
             // `None` = no agent selected — either way skip.
             if let Some(Some(agent_id)) = selected_agent.try_get_untracked() {
@@ -411,7 +411,7 @@ pub fn ChatSidebar() -> impl IntoView {
     // When the session list reloads (topic generated after the first exchange,
     // or a rename via `sessions.set_topic`), mirror each session's topic onto
     // its open tab so the strip shows the conversation subject instead of the
-    // raw session_key / "新对话". Reads only `sessions`; `conv_for_session_key`
+    // raw session_key / "New conversation". Reads only `sessions`; `conv_for_session_key`
     // and `set_label` are untracked writes, so there is no reactive loop.
     Effect::new(move || {
         for s in &sessions.get() {
@@ -696,8 +696,8 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     };
 
-    // 新建对话：在选中 agent 下开一个新 ConvId 并激活（开新标签），
-    // 不清空/顶掉当前正在跑的会话。session_key=None → 首次 send 触发新 epoch。
+    // New conversation: open a new ConvId under the selected agent and activate it (new tab),
+    // without clearing / replacing the currently running conversation. session_key=None -> first send triggers a new epoch.
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
             let conv = session_map
@@ -706,7 +706,7 @@ pub fn ChatSidebar() -> impl IntoView {
             if let Some(ws) = workspace {
                 ws.reset();
             }
-            // activate 已把单例恢复为空态；显式 clear 保证干净。
+            // activate already restored the singleton to empty state; explicit clear ensures cleanliness.
             chat.clear_session();
             chat.agent_id.set(Some(agent_id));
         }
@@ -1113,7 +1113,7 @@ pub fn ChatSidebar() -> impl IntoView {
             // Session list + group section (single scroll container)
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
 
-                // ── 群聊 (Group Chat) collapsible section ─────────────────
+                // ── Group Chat collapsible section ────────────────────
                 {move || {
                     // Only show active teams; disbanded ones disappear immediately.
                     // Newest activity first: most recent message timestamp, falling
@@ -1350,7 +1350,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     }.into_any()
                 }}
 
-                // ── 单聊 (Single-agent sessions) ──────────────────────────
+                // ── Single-agent sessions ──────────────────────────
                 {move || {
                     let session_list = sessions.get();
                     let sel_agent = selected_agent.get();

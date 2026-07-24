@@ -20,7 +20,7 @@ use tracing::debug;
 /// On a provider HTTP rejection, log the outgoing request body (truncated) so a
 /// request-shape bug can be pinned — most importantly a *cross-protocol*
 /// failover conversion that an OpenAI-compatible endpoint rejects with a vendor
-/// error like 302.ai's `-10003 "参数错误"`, which cannot be isolated from the
+/// error like 302.ai's `-10003 "bad parameter"`, which cannot be isolated from the
 /// converter source alone (black-box probing of the live endpoint accepted every
 /// isolated shape). Scoped to [`AlephError::ProviderError`] (generic 4xx/5xx);
 /// rate-limit and timeout errors carry no request-shape signal and are skipped

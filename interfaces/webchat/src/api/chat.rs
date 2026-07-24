@@ -59,7 +59,7 @@ impl ChatApi {
     /// Extracted from the current `session_key` when available.
     ///
     /// `project_root` — absolute path of the active project folder when
-    /// the user has entered project mode via "进入项目工作". Forwarded as
+    /// the user has entered project mode via "enter project workspace". Forwarded as
     /// `RunRequest.workspace_override` so the agent's tool calls run
     /// inside that folder instead of `~/.aleph/workspaces/{agent_id}`.
     ///

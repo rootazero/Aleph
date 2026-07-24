@@ -248,9 +248,10 @@ pub async fn execute_stop_hooks(
     StopHookAggregateResult { verdicts }
 }
 
-/// `execute_stop_hooks` 的 `Arc` 入参版本——用于 harness 之外、以 `Arc`
-/// 持有闸门的消费者（goal-loop 闸门、`StopHookVerifier`）。把每个 `Arc`
-/// 包成 forwarding box，复用上面的并发 runner，不克隆 hook 实现。
+/// `Arc`-parameter version of `execute_stop_hooks` — for consumers outside the
+/// harness that hold guards as `Arc` (goal-loop gate, `StopHookVerifier`). Wraps
+/// each `Arc` into a forwarding box, reuses the concurrent runner above, and
+/// never clones hook implementations.
 pub async fn execute_stop_hooks_arc(
     hooks: &[Arc<dyn StopHookHandler>],
     context: &StopHookContext,

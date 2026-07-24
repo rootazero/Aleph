@@ -1,19 +1,20 @@
-//! 纯函数:把群消息历史渲染为注入 prompt 的 transcript 文本。
+//! Pure function: render group message history as transcript text for prompt injection.
 //!
-//! 带 `[发言人]` 前缀(openteams 风格,让 agent 看见谁说了什么),超 token 预算
-//! 从尾部(最近)保留。无 IO,host 可测。
+//! Uses `[sender]` prefix (openteams style, so the agent sees who said what); when the
+//! token budget is exceeded, retains from the tail (most recent). Zero IO, host-testable.
 
-/// 把 `(from, content)` 历史渲染为 `[from]: content` 多行文本,oldest-first。
+/// Render `(from, content)` history as `[from]: content` multi-line text, oldest-first.
 ///
-/// 超 `token_budget` 时从尾部(最近)保留,粗略按 `chars/4` 估 token。
+/// When exceeding `token_budget`, retains from the tail (most recent), roughly
+/// estimating tokens as `chars/4`.
 #[must_use]
 pub fn format_transcript(history: &[(String, String)], token_budget: usize) -> String {
-    // 从最近往旧累加,直到预算用尽,再反转回 oldest-first。
+    // Accumulate from most recent backward until budget is exhausted, then reverse to oldest-first.
     let mut kept_rev: Vec<String> = Vec::new();
     let mut used = 0usize;
     for (from, content) in history.iter().rev() {
         let line = format!("[{from}]: {content}");
-        let cost = line.chars().count() / 4 + 1; // 粗略 token 估计
+        let cost = line.chars().count() / 4 + 1; // rough token estimate
         if used + cost > token_budget && !kept_rev.is_empty() {
             break;
         }
@@ -50,14 +51,14 @@ mod tests {
 
     #[test]
     fn over_budget_keeps_most_recent_from_tail() {
-        // 每行约 ~4 token(粗略 len/4),预算极小 → 只保留最后一行
+        // each line ≈ 4 tokens (rough len/4), tiny budget → only last line retained
         let msgs = vec![
             line("a", "aaaaaaaaaaaaaaaa"),
             line("b", "bbbbbbbbbbbbbbbb"),
             line("c", "cc"),
         ];
-        let out = format_transcript(&msgs, 3); // 极小预算
-        assert!(out.contains("[c]: cc"), "必须保留最近一条");
-        assert!(!out.contains("[a]:"), "最旧的被截断");
+        let out = format_transcript(&msgs, 3); // tiny budget
+        assert!(out.contains("[c]: cc"), "most recent line must be retained");
+        assert!(!out.contains("[a]:"), "oldest is truncated");
     }
 }

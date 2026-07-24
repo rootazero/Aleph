@@ -136,27 +136,30 @@ pub struct AgentIdentity {
 // AgentModelRef
 // =============================================================================
 
-/// agent 选中的 model 引用。
+/// The model reference selected for an agent.
 ///
-/// 作为 `AgentDefinition.model` 的值;字段为 `None` 时表示**继承系统默认 model**
-/// (= `defaults.model > profile.model > DEFAULT_MODEL`,即"当前默认 model")。
+/// Used as the value of `AgentDefinition.model`; a `None` field means
+/// **inherit the system default model**
+/// (= `defaults.model > profile.model > DEFAULT_MODEL`, i.e. "current default model").
 ///
-/// 用 `#[serde(untagged)]` 兼容两种 TOML 写法:
-/// - 裸字符串 `model = "claude-x"` → [`AgentModelRef::Legacy`](旧格式,不做删除检测)
-/// - 内联表 `model = { provider = "anthropic", model = "claude-x" }` → [`AgentModelRef::Qualified`]
-///   (Panel 从已配置 model 里选出,带 provider 以便检测"被删/禁用/移除"而自动回退)
+/// `#[serde(untagged)]` supports two TOML forms:
+/// - bare string `model = "claude-x"` → [`AgentModelRef::Legacy`] (old format, no drop-detection)
+/// - inline table `model = { provider = "anthropic", model = "claude-x" }` → [`AgentModelRef::Qualified`]
+///   (Panel picks from configured models, carrying the provider so "deleted/disabled/dropped"
+///   detection can auto-fallback)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum AgentModelRef {
-    /// Panel 选中的已配置 model,pin 住 provider + model。
+    /// Panel-selected configured model, pinning provider + model.
     Qualified { provider: String, model: String },
-    /// 旧 config 的自由字符串。永不参与删除回退校验。
+    /// Free-form string from old config. Never participates in drop-detection fallback.
     Legacy(String),
 }
 
 impl AgentModelRef {
-    /// 返回 model id(两种变体都带)。仅用于显示与"不校验"路径;
-    /// 删除回退的真正解析在 `agent_resolver::resolve_model_ref`。
+    /// Returns the model id (carried by both variants). Used only for display
+    /// and "no-validation" paths; the real drop-detection resolution lives in
+    /// `agent_resolver::resolve_model_ref`.
     pub fn model_str(&self) -> &str {
         match self {
             Self::Qualified { model, .. } => model,
@@ -214,7 +217,7 @@ pub struct AgentDefinition {
     pub profile: Option<String>,
 
     /// AI model override for this agent.
-    /// `None` = 继承系统默认 model(= defaults.model > profile.model > `DEFAULT_MODEL`)。
+    /// `None` = inherit system default model (= defaults.model > profile.model > `DEFAULT_MODEL`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<AgentModelRef>,
 

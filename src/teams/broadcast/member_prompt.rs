@@ -1,11 +1,14 @@
-//! 纯函数:组装一个被唤醒 agent 的 run 输入文本。
+//! Pure function: assemble the run input text for a woken agent.
 //!
-//! 身份 + 名册 + 共享 transcript + 接话协议 + team_id;leader 多一段身份
-//! (R7/R9:leader 的"领导力"在 prompt 身份,不是代码强制管控)。无 IO,host 可测。
+//! Identity + roster + shared transcript + reply protocol + team_id; leader gets an
+//! extra identity block (R7/R9: the leader's "leadership" lives in the prompt identity,
+//! not in code-enforced control). Zero IO, host-testable.
 
-/// 组装被唤醒 agent 的 run 输入。leader 用强编排契约(`leader_prompt::build`),
-/// 普通成员用服从契约(接单/完成/交回 leader,而非只闲聊)。R7/R9:领导力与
-/// 收敛压力都在 prompt 身份里,不靠代码强制。无 IO,host 可测。
+/// Build a woken agent's run input. Leader uses the strong orchestration contract
+/// (`leader_prompt::build`), regular members use the obey contract (accept tasks /
+/// complete / submit back to leader, not just chat). R7/R9: leadership and convergence
+/// pressure both live in the prompt identity, not in code enforcement. Zero IO,
+/// host-testable.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn build_member_input(

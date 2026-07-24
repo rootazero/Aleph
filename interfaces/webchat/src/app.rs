@@ -412,10 +412,10 @@ fn ChatBandChrome() -> impl IntoView {
         return ().into_any();
     };
     let i18n = use_i18n();
-    // Team mode swaps the workspace pane for a self-labelled "交付物 | 任务"
+    // Team mode swaps the workspace pane for a self-labelled "deliverables | tasks"
     // tab header parked at the same top-leading position. The generic
-    // "工作区 · …" band label would sit right on top of those tabs (and
-    // "工具详情" is a single-agent tool-activity concept that doesn't apply
+    // "Workspace · …" band label would sit right on top of those tabs (and
+    // "tool details" is a single-agent tool-activity concept that doesn't apply
     // to a team pane), so gate it off whenever a team is active. `ChatState`
     // may be absent during early boot races — treat that as "not a team".
     let chat = use_context::<ChatState>();

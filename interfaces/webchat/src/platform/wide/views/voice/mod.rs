@@ -187,7 +187,7 @@ fn VoiceSession() -> impl IntoView {
                 });
             }
             Action::ShowError => {
-                // "没听清" is honest for a transcription miss but a lie for a
+                // "Didn't catch that" is honest for a transcription miss but a lie for a
                 // failed agent run — tell the user which side actually broke.
                 let msg = if ev == VoiceEvent::RunFailed {
                     "回复出错了，稍等再说一次？"
@@ -595,9 +595,9 @@ fn VoiceSession() -> impl IntoView {
             //      round where the whole reply streams in and COMPLETES before
             //      `handle_utterance` arms the gate: the arm itself triggers a
             //      reprocess of the already-present content. Without it the run
-            //      would never be spoken and the phase would freeze at "正在思考".
+            //      would never be spoken and the phase would freeze at "thinking".
             //   2. `chat.messages` (via `.with`) — every stream delta wakes the
-            //      Effect for incremental 边流边说 while the gate is already armed.
+            //      Effect for incremental stream-while-speaking while the gate is already armed.
             // Both reads happen unconditionally on the path below, so Leptos
             // registers both subscriptions on every run.
             let run_id = speak_run.get();
@@ -615,7 +615,7 @@ fn VoiceSession() -> impl IntoView {
             // Terminal-but-empty bubble: the run errored (`fail_run` clears
             // `is_streaming` and stamps `error`) or completed with nothing to
             // say. `drive_step` deliberately never finalizes empty content, so
-            // without this arm the phase deadlocked at 正在思考 forever.
+            // without this arm the phase deadlocked at thinking forever.
             if !streaming && content.is_empty() {
                 active_run.set_value(None);
                 speak_run.update_untracked(|r| *r = None);
@@ -994,7 +994,7 @@ async fn send_utterance(
                 // second one appended an empty, trailing shadow bubble that the
                 // TTS Effect's `.rev().find` then tracked instead of the real
                 // content bubble — so the reply was never spoken and the phase
-                // froze at "正在思考" (the round-2 no-audio bug). Also do NOT call
+                // froze at "thinking" (the round-2 no-audio bug). Also do NOT call
                 // chat.mark_speak_run — the immersive session owns TTS itself;
                 // marking the run would double-speak (the composer voice-loop
                 // reader would also synthesize it).
@@ -1061,7 +1061,7 @@ mod drive_tests {
         // whole reply streams in and COMPLETES before the gate is armed, so the
         // Effect's first (reactive-arm) run sees the full, finished content in
         // one shot. That single drive must emit BOTH sentences and finalize —
-        // nothing lost, playback drains, the phase leaves "正在思考".
+        // nothing lost, playback drains, the phase leaves "thinking".
         let mut sp = SentenceSplitter::default();
         let full = "你好！我能听到你说话。有什么我可以帮你的吗？";
         let (out, fin) = drive_step(&mut sp, full, false);

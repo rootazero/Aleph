@@ -5,7 +5,7 @@
 //!
 //! This is a STATIC partition (core set is config, decided ahead of any
 //! message) applied at the tool-presentation layer — not per-message intent
-//! filtering. See CLAUDE.md R10 (第2不 例外注).
+//! filtering. See CLAUDE.md R10 (the Progressive Disclosure exception).
 
 use std::collections::BTreeSet;
 

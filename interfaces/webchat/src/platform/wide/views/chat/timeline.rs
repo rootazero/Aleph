@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn narration_then_tools_emit_in_order() {
-        // 一个 step: 叙述 + 编辑工具 → Narration 行在前，ToolLine 在后
+        // One step: narration + edit tool -> Narration row first, ToolLine after
         let msgs = vec![
             msg_user("u1", "hi"),
             msg_step_tools(
@@ -545,8 +545,8 @@ mod tests {
 
     #[test]
     fn consecutive_readonly_tools_merge_across_steps() {
-        // step1: read+search（无叙述文本，content 空非流式）；step2: 又一个 read
-        // → 三个只读工具并进一个 ExploreGroup（跨消息，中间无叙述打断）
+        // step1: read+search (no narration text, empty non-streaming content); step2: another read
+        // -> three read-only tools merged into one ExploreGroup (across messages, no narration in between)
         let msgs = vec![
             msg_step_tools(
                 "intermediate-r1-1",
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn narration_flushes_explore_group() {
-        // read → 叙述 → read ⇒ 两个 ExploreGroup，叙述行夹在中间
+        // read -> narration -> read => two ExploreGroups, narration row sandwiched in between
         let msgs = vec![
             msg_step_tools(
                 "intermediate-r1-1",
@@ -675,8 +675,8 @@ mod tests {
 
     #[test]
     fn final_answer_and_user_stay_message_rows() {
-        // 原 pure_text_final_answer_stays_standalone / final_answer_with_tool_call_escapes_the_strip
-        // 的语义在新模型下保留：final answer 是 Message 行
+        // Original pure_text_final_answer_stays_standalone / final_answer_with_tool_call_escapes_the_strip
+        // semantics preserved under the new model: final answer is a Message row
         let mut answer = msg_tool_step("r-r", 2, "最终报告……", false);
         answer.is_final = true;
         let msgs = vec![

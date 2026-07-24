@@ -1,25 +1,25 @@
-//! Section 2 — Aleph 集群:舰队列表(在线 + 离线合并)+ 预登记 + 注销。
-//! 节点命令下发是 LLM 经对话驱动的(R8),Panel 只做只读列表 + 生命周期管理。
+//! Section 2 — Aleph cluster: fleet list (online + offline merged) + enrollment + deregistration.
+//! Node command dispatch is LLM-driven through conversation (R8); the Panel only provides a read-only list + lifecycle management.
 //!
-//! LAN-trust:**没有 token**。节点是在自己的 `connect` 里登记的,所以这里交给
-//! operator 的不是一串 token,而是**在目标机器上要跑的那条命令**。「Enroll」只是
-//! 预占位:先把名字在舰队里占下(以 offline 出现),节点随后同名拨入时归并到这一行。
+//! LAN-trust: **no token**. Nodes register themselves inside `connect`, so what is given to the
+//! operator is not a token string, but **the command to run on the target machine**. "Enroll" is only
+//! a pre-reservation: occupy the name in the fleet first (appearing as offline), and when a node dials in with the same name it merges into this row.
 //!
-//! 舰队是**实时**的:`node.connected` / `node.disconnected` 早就在事件总线上发着了,
-//! 但此前没有任何订阅者——列表只在进页面时拉一次,节点上下线永远看不见。
+//! The fleet is **real-time**: `node.connected` / `node.disconnected` have been broadcasting on the event bus all along,
+//! but there were never any subscribers — the list was fetched once on page entry and node connect/disconnect was never visible.
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// 节点加入命令。纯函数——`host` 由调用方注入,便于测试(浏览器外没有 `window()`)。
+/// Node join command. Pure function — `host` is injected by the caller for testability (no `window()` outside the browser).
 fn join_command(host: &str, node_name: &str) -> String {
     format!("aleph-server node --center ws://{host} --name {node_name}")
 }
 
-/// Panel 自己所连的 host —— Panel 正是这个 core 提供的,所以它的 origin 就是
-/// 节点要拨的中心地址。
+/// The host the Panel itself connects to — the Panel is served by this core, so its origin is
+/// the center address nodes should dial.
 fn center_host() -> String {
     web_sys::window()
         .and_then(|w| w.location().host().ok())
@@ -27,7 +27,7 @@ fn center_host() -> String {
         .unwrap_or_else(|| "<center-host>:18790".to_string())
 }
 
-/// 把 Unix 秒渲染成粗粒度的「多久以前」。离线节点只需要量级,不需要精确时刻。
+/// Render Unix seconds as a coarse-grained "how long ago". Offline nodes only need magnitude, not precise timestamps.
 fn last_seen_label(last_seen_at: Option<i64>, now_unix: i64) -> String {
     let Some(ts) = last_seen_at else {
         return "从未连入".to_string();

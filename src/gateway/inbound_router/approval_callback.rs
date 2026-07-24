@@ -1,23 +1,26 @@
-//! Interface 层与 core 审批管理之间的窄接口。
+//! Narrow bridge between the Interface layer and core approval management.
 //!
-//! `InboundMessageRouter` 保持纯 I/O：把回调 `callback_data` 交给注入的
-//! `ApprovalCallbackSink`、再把返回文案渲染回通道 —— 自身不解析、不 resolve。
+//! `InboundMessageRouter` stays pure I/O: hands the `callback_data` to the
+//! injected `ApprovalCallbackSink`, then renders the returned text back to the
+//! channel — it neither parses nor resolves.
 
 use async_trait::async_trait;
 
-/// 解析一次审批按钮回调的结果。
+/// Result of parsing an approval button callback.
 pub struct ApprovalCallbackResult {
-    /// 是否真正投递了一个待决审批的决策（false = 过期 / 未知 id）。
+    /// Whether a pending approval was actually resolved (false = expired / unknown id).
     pub resolved: bool,
-    /// 渲染回通道的用户可见文案。
+    /// User-visible text rendered back to the channel.
     pub response_text: String,
 }
 
-/// router 注入的审批回调汇。具体实现包 `ExecApprovalManager`。
+/// Approval callback sink injected into the router. The concrete impl wraps
+/// `ExecApprovalManager`.
 #[async_trait]
 pub trait ApprovalCallbackSink: Send + Sync {
-    /// 返回 `Some` 当且仅当 `callback_data` 是审批按钮回调；
-    /// `None` 表示非审批回调，router 应放行进正常消息流。
+    /// Returns `Some` if and only if `callback_data` is an approval button
+    /// callback; `None` means it is not an approval callback and the router
+    /// should let the request through into the normal message flow.
     async fn handle_callback(
         &self,
         callback_data: &str,

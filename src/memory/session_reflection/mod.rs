@@ -1,4 +1,4 @@
-//! Batch 2 — session-end reflection ("经验教训" / lessons learned).
+//! Batch 2 — session-end reflection ("lessons learned").
 //!
 //! When a *substantive* session ends, [`SessionReflector::reflect`] makes a
 //! single LLM call to distill first-person LESSONS — not a digest of what was
@@ -138,7 +138,7 @@ impl SessionReflector {
         // With open-loop tracking on, the model returns two labelled sections.
         // Split them: lessons keep flowing to the feedback/lessons notes, while
         // open loops are persisted beside MEMORY.md for next-session injection
-        // (R5 — "AI 主动到达"). Off → the whole output is the lessons body
+        // (R5 — "AI proactively reaches out"). Off → the whole output is the lessons body
         // (legacy behaviour, byte-for-byte unchanged).
         let lessons = if self.config.open_loop_tracking {
             let (lessons, loops) = split_sections(&stripped);

@@ -20,7 +20,7 @@
 //!   (`VERDICT: PASS|FAIL|PARTIAL` in `src/thinker/layers/agent_role.rs`)
 //!   is the sole source of truth for completion judgment, per R7
 //!   (LLM Sovereignty: no deterministic code replacing LLM reasoning),
-//!   R8 (Everything-is-a-Tool), and R10 笨循环 5 个不 #3 (no
+//!   R8 (Everything-is-a-Tool), and R10 thin-harness rule #3 (no
 //!   completion judgment in Rust) + #4 (no content review in Rust).
 //!   Stage 6b in the 12-module roadmap is **permanently deferred**;
 //!   any future need for cognitive judgment must be expressed in the

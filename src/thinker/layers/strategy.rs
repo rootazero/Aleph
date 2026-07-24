@@ -3,8 +3,8 @@
 //!
 //! The StraTA-pattern strategic plan, minted once per long task by the
 //! planner node and pinned into the stable, prefix-cacheable head of the
-//! system prompt so its KV-cache is reused across every turn ("开始前先画
-//! 地图，过程中不忘初心"). Sits between `CuratedMemoryLayer` (60) and
+//! system prompt so its KV-cache is reused across every turn ("draw the map before
+//! you start; don't forget why you began"). Sits between `CuratedMemoryLayer` (60) and
 //! `ProfileLayer` (75) in the Stable zone.
 //!
 //! R10-safe: pure scaffolding. The body is the planner LLM's own rendered

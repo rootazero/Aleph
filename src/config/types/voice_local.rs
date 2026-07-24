@@ -103,14 +103,14 @@ impl Default for StreamingConfig {
 
 /// Post-transcription formatting pass configuration (`[voice.format]`).
 ///
-/// When enabled, a fast LLM pass ("言语精炼师") cleans up raw transcription
+/// When enabled, a fast LLM pass ("speech refiner") cleans up raw transcription
 /// output (punctuation, capitalization, filler-word removal) before the text
 /// reaches the main agent loop.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct FormatConfig {
     pub enabled: bool,
-    /// Fast model for the "言语精炼师" pass, via ModelOverride::from_voice(provider, model).
+    /// Fast model for the "speech refiner" pass, via ModelOverride::from_voice(provider, model).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]

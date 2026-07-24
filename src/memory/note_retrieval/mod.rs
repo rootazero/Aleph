@@ -238,7 +238,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
     /// Producer half of the hot-floating loop: record recall signals for the
     /// notes a retrieval actually surfaced, so frequently-recalled notes accrue
-    /// reinforcement salience ("热门记忆浮顶") that `fetch_reinforcement_counts`
+    /// reinforcement salience ("popular memories float to top") that `fetch_reinforcement_counts`
     /// later consumes. Best-effort — a write failure never breaks recall — and
     /// gated on `reinforcement_enabled` so disabling hot-floating also stops
     /// recording. The store dedups per `(note_path, query, day, channel)`, so a
@@ -564,7 +564,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// FTS-only recall tail shared by both `retrieve_inner` degradation branches
     /// (no embedder configured, and transient embed-endpoint outage). Runs the
     /// same reinforcement + recency scoring and recall recording as the hybrid
-    /// path, so 热门浮顶 (hot-surfacing) accrues signal and ranks even when the
+    /// path, so hot-surfacing accrues signal and ranks even when the
     /// vector leg is unavailable — mirrors `multi_agent_text_fallback`'s
     /// graceful-degradation contract (P7). Without this, an FTS-only deployment
     /// never writes `recall_signals`, leaving reinforcement a permanent no-op.
@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     /// All-off scoring config. The production default now enables recency +
-    /// reinforcement ("自动冒泡"), so focused unit tests that isolate one knob
+    /// reinforcement ("auto-surfacing"), so focused unit tests that isolate one knob
     /// (or assert the legacy no-op path) start from this explicit baseline.
     fn inactive_scoring() -> RetrievalScoringConfig {
         RetrievalScoringConfig {

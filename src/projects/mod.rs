@@ -1,8 +1,8 @@
 //! Project workspace registry.
 //!
 //! Maintains a small JSON-backed catalogue of user-chosen project
-//! folders so the desktop Panel can offer a "进入项目工作 → 新建空白项目 /
-//! 使用现有文件夹" picker without re-asking on every send.
+//! folders so the desktop Panel can offer an "Enter Project → New Blank Project /
+//! Use Existing Folder" picker without re-asking on every send.
 //!
 //! Each `Project` simply pairs a user-friendly `name` with the absolute
 //! filesystem path that becomes `RunRequest.workspace_override` for any

@@ -79,19 +79,19 @@ pub(crate) fn scratchpad_progress_line(event: &LoopTraceEvent) -> Option<String>
             if content.is_empty() {
                 return None;
             }
-            // 收尾: a finished goal-loop echoes a completion summary (the
+            // Wrap-up: a finished goal-loop echoes a completion summary (the
             // model checked its last box). Surface it directly as the closing
-            // push instead of the in-progress "任务进度" header.
+            // push instead of the in-progress "Task progress" header.
             if content.starts_with(crate::memory::scratchpad::COMPLETION_BANNER) {
                 return Some(content.to_string());
             }
             Some(format!("📋 任务进度\n{content}"))
         }
 
-        // Watchdog boundary — surface the熔断 so the user can intervene
-        // (Dim 3a "异常熔断 + 主动反馈"). The verifier keeps forcing continues
-        // until this cap, so reaching it means the model could not work the
-        // list down on its own.
+        // Watchdog boundary — surface the circuit-breaker so the user can intervene
+        // (Dim 3a "abnormal circuit-break + proactive feedback"). The verifier keeps
+        // forcing continues until this cap, so reaching it means the model could not
+        // work the list down on its own.
         LoopTraceEvent::SessionCompleted {
             terminate_reason: Some(reason),
             ..
@@ -193,14 +193,14 @@ mod tests {
 
     #[test]
     fn completion_banner_surfaces_as_closing_push_not_progress() {
-        // The final complete_item echoes a 收尾 summary (banner-prefixed).
+        // The final complete_item echoes a wrap-up summary (banner-prefixed).
         let content = format!(
             "{}：Ship auth\n全部 2 个步骤已完成：\n- [x] Design API\n- [x] Implement",
             crate::memory::scratchpad::COMPLETION_BANNER
         );
         let ev = scratchpad_completed("complete_item", Some(&content));
         let line = scratchpad_progress_line(&ev).expect("completion should surface");
-        // Surfaced verbatim — NOT wrapped with the in-progress "任务进度" header.
+        // Surfaced verbatim — NOT wrapped with the in-progress "Task progress" header.
         assert!(line.starts_with(crate::memory::scratchpad::COMPLETION_BANNER));
         assert!(!line.contains("任务进度"));
         assert!(line.contains("Ship auth"));

@@ -1,7 +1,7 @@
 //! `WorkflowProposalStage` — drafts `MetaSkill` (workflow) candidates from
 //! recurring skill co-occurrence.
 //!
-//! This is the dream pipeline's "回放与梦境模式" closing the loop: it reads the
+//! This is the dream pipeline's "replay and dream mode" closing the loop: it reads the
 //! [`CoOccurrenceLog`](crate::skill::cooccurrence) rings captured at skill-use
 //! time, clusters them into chains by temporal proximity, and for any chain
 //! that recurs above a frequency floor drafts a gated

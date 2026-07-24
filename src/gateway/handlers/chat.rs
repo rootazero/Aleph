@@ -51,7 +51,7 @@ pub struct SendParams {
     pub agent_id: Option<String>,
     /// Optional absolute project root. When set, the agent's tool calls
     /// run inside this directory instead of `~/.aleph/workspaces/{agent_id}`.
-    /// Used by the desktop Panel's "进入项目工作" flow to scope a chat to
+    /// Used by the desktop Panel's "Enter Project" flow to scope a chat to
     /// a user-picked folder. Must be an absolute path; relative paths and
     /// non-existent directories are rejected by the gateway handler.
     #[serde(default)]

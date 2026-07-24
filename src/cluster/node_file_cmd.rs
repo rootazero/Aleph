@@ -1,8 +1,10 @@
-//! 节点侧文件命令（执行臂）：`file.read` / `file.write`。
+//! Node-side file commands (execution arm): `file.read` / `file.write`.
 //!
-//! 字节直接走 host-fs（节点是执行臂，R1 允许），jail 在节点 session
-//! workspace 目录内：相对路径 join workspace，绝对路径必须仍落在 workspace
-//! 之下，否则拒。两端硬 8MB 上限 + sha256 完整性。无 LLM 推理（R7）。
+//! Bytes go directly to the host filesystem (nodes are execution arms, R1
+//! allows this), jailed inside the node session workspace directory: relative
+//! paths are joined to the workspace, absolute paths must still fall within the
+//! workspace, else rejected. Both sides enforce an 8 MB hard cap + sha256
+//! integrity. No LLM reasoning (R7).
 
 use std::path::{Path, PathBuf};
 
@@ -14,21 +16,23 @@ use sha2::{Digest, Sha256};
 use crate::builtin_tools::file_ops::{check_and_resolve_path, get_denied_paths};
 use crate::cluster::{CommandDescriptor, NodeCommand};
 
-/// 单文件硬上限（原始字节）。两端一致；超过即 fail-fast。
+/// Per-file hard cap (raw bytes). Both sides agree; exceeding it fails fast.
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
 const B64: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::STANDARD;
 
-/// 十六进制 sha256。两端用同一算法做完整性校验。
+/// Hex-encoded sha256. Both sides use the same algorithm for integrity checks.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// 把请求里的 `path` 解析进节点 workspace jail。相对路径 join workspace；
-/// 任何最终 canonical 路径必须仍在 workspace 之下（绝对路径越界 → 拒）。
-/// 复用 `file_ops` 的 canonicalize + deny-list，再补一道 containment 闸门
-/// （`check_and_resolve_path` 本身不强制 containment，只用 base 解析相对路径）。
+/// Resolve the request `path` into the node workspace jail. Relative paths are
+/// joined to the workspace; any final canonical path must still fall within the
+/// workspace (absolute path escape → reject). Reuses `file_ops` canonicalize +
+/// deny-list, then adds one more containment gate (`check_and_resolve_path`
+/// itself doesn't enforce containment, only resolves relative paths against a
+/// base).
 async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
     tokio::fs::create_dir_all(workspace_dir)
         .await
@@ -44,7 +48,7 @@ async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, St
     Ok(resolved)
 }
 
-/// `file.write`：中心 push 的字节落到节点 workspace。
+/// `file.write`: center pushes bytes to land in the node workspace.
 pub struct FileWriteCommand {
     workspace_dir: PathBuf,
 }
@@ -139,7 +143,7 @@ impl NodeCommand for FileWriteCommand {
     }
 }
 
-/// `file.read`：中心 pull 节点 workspace 里的字节。
+/// `file.read`: center pulls bytes from the node workspace.
 pub struct FileReadCommand {
     workspace_dir: PathBuf,
 }

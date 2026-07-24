@@ -223,7 +223,7 @@ pub fn budget_reached_note(goal: &Goal) -> String {
 /// structural stops `should_continue` enforces (token budget / wall-clock
 /// deadline / iteration cap). Single source for the continuation hook, which
 /// previously hand-rolled this three-way choice inline — the same collapse
-/// `looping::pursuit::stop_reason_note` did for the loop (loop hardening ④ 熵减).
+/// `looping::pursuit::stop_reason_note` did for the loop (loop hardening ④ entropy reduction).
 #[must_use]
 pub fn stop_reason_note(goal: &Goal, tokens_now: u64, now_ms: u64) -> String {
     if goal.over_budget(tokens_now) {
@@ -289,9 +289,10 @@ pub fn wait_resume_prompt(goal: &Goal, cause: &str) -> String {
     )
 }
 
-/// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
-/// 调用方据此在续跑钩子里跑闸门。被动/交互 goal（非 Active 续跑）永远
-/// 返回 false——它们的 complete 立即终止，不经闸门。
+/// The model self-reported `Complete` under `Active` pursuit, but the objective
+/// gate has not yet confirmed. The caller uses this to run the gate in the
+/// continuation hook. Passive/interactive goals (non-Active pursuit) always
+/// return false — their complete terminates immediately without gating.
 #[must_use]
 pub fn awaiting_gate(goal: &Goal, gate_configured: bool) -> bool {
     gate_configured
@@ -300,14 +301,16 @@ pub fn awaiting_gate(goal: &Goal, gate_configured: bool) -> bool {
         && goal.gate_outcome == GateOutcome::Unchecked
 }
 
-/// Active 续跑的 `Complete` 且**没有任何闸门可仲裁**：权威终态——续跑钩子
-/// 据此清理焊入的 strategy weld。工具侧刻意不清这个 case
-/// （`builtin_tools/goal.rs`：gate veto 要能带着计划复活 goal），而
-/// `try_claim_continuation` 对它返回 `Idle`（`awaiting_gate` 要求
-/// `gate_configured`），所以钩子的 Idle 臂是唯一能看见它的位置。
-/// 2026-07-12 重构曾把这条清理分支丢失（weld 泄漏回归，round-4 修复）；
-/// 单独成谓词让不变量可测试。gate-Passed 的 `Complete` 只在
-/// `gate_configured` 下产生并经 `commit_gate_pass` 清理，不会命中此谓词。
+/// `Complete` under Active pursuit with **no gate to arbitrate**: authoritative
+/// terminal state — the continuation hook clears the welded strategy weld from this.
+/// The tool side deliberately does not clear this case (`builtin_tools/goal.rs`:
+/// gate veto must be able to revive the goal with its plan intact), and
+/// `try_claim_continuation` returns `Idle` for it (since `awaiting_gate` requires
+/// `gate_configured`), so the hook's Idle arm is the only place that can see it.
+/// A 2026-07-12 refactor lost this cleanup branch (weld leak regression, round-4
+/// fix); isolating it as a predicate makes the invariant testable. gate-Passed
+/// `Complete` is only produced under `gate_configured` and is cleaned up via
+/// `commit_gate_pass`, so it will never hit this predicate.
 #[must_use]
 pub fn gateless_terminal_complete(goal: &Goal, gate_configured: bool) -> bool {
     !gate_configured
@@ -315,21 +318,23 @@ pub fn gateless_terminal_complete(goal: &Goal, gate_configured: bool) -> bool {
         && goal.status == GoalStatus::Complete
 }
 
-/// 闸门通过：完成被确认（`gate_outcome = Passed`），循环终止。
+/// Gate passed: completion is confirmed (`gate_outcome = Passed`), loop terminates.
 #[must_use]
 pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
     goal.clone().with_gate_outcome(GateOutcome::Passed, now_ms)
 }
 
-/// 闸门否决（Ralph Wiggum 营救）：把误报完成的 goal 退回 `Active` 并把
-/// 闸门失败原因写入 `note`，让下一次续跑能据此行动。若**任一**结构上限已耗尽
-/// （迭代 / 墙钟 deadline / token 预算），退回 Active 会立刻再次 exhaust——
-/// 直接转 `Blocked`，note 说明真正的绑定上限（`stop_reason_note`）。
-/// 无论哪条路径都把 `gate_outcome` 复位 `Unchecked`，保证下一次 complete
-/// 主张会被重新 gate。
+/// Gate veto (Ralph Wiggum rescue): reverts a falsely-completed goal to `Active`
+/// and writes the gate failure reason into `note` so the next continuation can
+/// act on it. If **any** structural cap is exhausted (iterations / wall-clock
+/// deadline / token budget), reverting to Active would immediately exhaust again —
+/// go directly to `Blocked` instead, with the note naming the binding limit
+/// (`stop_reason_note`). Either path resets `gate_outcome` to `Unchecked`,
+/// ensuring the next complete claim will be re-gated.
 ///
-/// `tokens_now` / `now_ms` 与 `should_continue` 同义（0 = 该维度不可用，不参与
-/// 判定），所以"还有跑道吗"这个问题在整个子系统里只有一个答案来源。
+/// `tokens_now` / `now_ms` have the same meaning as in `should_continue` (0 =
+/// that dimension unavailable, does not participate in judgment), so "is there
+/// runway left" has a single source of truth across the entire subsystem.
 #[must_use]
 pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now_ms: u64) -> Goal {
     let trimmed_lesson: String = format!("Objective gate vetoed: {reason}")
@@ -358,7 +363,8 @@ pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now
     }
 }
 
-/// 闸门失败后的续跑 prompt——把客观失败信号注入下一轮（R9 智慧在 prompt）。
+/// Continuation prompt after gate failure — injects the objective failure signal
+/// into the next round (R9: intelligence lives in the prompt).
 #[must_use]
 pub fn gate_failure_prompt(goal: &Goal, reason: &str) -> String {
     let trimmed: String = reason.chars().take(600).collect();
@@ -502,14 +508,14 @@ mod tests {
         g = g.with_status(GoalStatus::Complete, 1);
         // Active pursuit + Complete + Unchecked + gate → true
         assert!(awaiting_gate(&g, true));
-        // 无闸门 → false（回归保护：无 stop_hooks 用户行为不变）
+        // no gate → false (regression guard: no stop_hooks → behavior unchanged)
         assert!(!awaiting_gate(&g, false));
-        // 已 Passed → false（不重复 gate）
+        // already Passed → false (no double-gating)
         let passed = g.clone().with_gate_outcome(GateOutcome::Passed, 2);
         assert!(!awaiting_gate(&passed, true));
-        // 仍 Active 状态（未自报 complete）→ false
+        // still Active (not self-reported complete) → false
         assert!(!awaiting_gate(&active_goal(5), true));
-        // 被动 goal → false（交互 complete 不经闸门）
+        // passive goal → false (interactive complete without gating)
         let mut passive = Goal::new("s", "o", 0, 0);
         passive = passive.with_status(GoalStatus::Complete, 1);
         assert!(!awaiting_gate(&passive, true));
@@ -555,7 +561,7 @@ mod tests {
     #[test]
     fn reopen_after_gate_failure_blocks_when_cap_spent() {
         let mut g = active_goal(3).with_status(GoalStatus::Complete, 1);
-        g.continuations_used = 3; // cap 已满
+        g.continuations_used = 3; // cap exhausted
         let r = reopen_after_gate_failure(&g, "still red", 0, 9);
         assert_eq!(r.status, GoalStatus::Blocked);
         assert!(r.note.unwrap().contains("Blocked"));

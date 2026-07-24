@@ -3,7 +3,7 @@
 //! A `DeliverySurface` is NOT a `MessagingChannel`: it only delivers outbound
 //! interactions and names its identity. It never parses inbound text — that
 //! line is the whole point of Approach A (see the Phase 0/1 spec). Phase 1
-//! carries only R5 notifications; approval回投 joins in Phase 2.
+//! carries only R5 notifications; approval callback delivery joins in Phase 2.
 
 use crate::sync_primitives::Arc;
 

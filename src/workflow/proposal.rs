@@ -4,7 +4,7 @@
 //! The dream pipeline mines recurring skill co-occurrence
 //! ([`crate::skill::cooccurrence`]) and drafts candidate workflows here. A
 //! proposal is **never** an active workflow: it lives in a `proposals/`
-//! subdirectory and runs only after an explicit `accept` (the "提案门控" /
+//! subdirectory and runs only after an explicit `accept` (the "proposal gate" /
 //! proposal gate). This keeps the loop R5-quiet — capabilities grow in the
 //! background, but nothing auto-activates and nothing steals focus.
 //!

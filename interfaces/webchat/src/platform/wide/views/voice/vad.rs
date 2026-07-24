@@ -209,7 +209,7 @@ mod tests {
     fn onset_grace_blocks_early_barge() {
         // Loud qualifying energy from the very first frame (e.g. cold-AEC echo at
         // playback onset). Within the 350ms grace nothing fires — protects the
-        // reply's opening ("丢失开头文字").
+        // reply's opening ("lost opening text").
         let (_, fires) = feed_barge(BargeState::default(), 0.9, 0.0, 7); // 350ms
         assert_eq!(fires, 0);
     }

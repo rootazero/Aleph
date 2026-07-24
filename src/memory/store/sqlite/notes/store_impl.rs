@@ -799,11 +799,11 @@ impl NoteStore for SqliteMemoryBackend {
         let mut entries = run_fts("notes_fts", &match_expr)?;
 
         // CJK substring recall: `unicode61` indexes a run of CJK ideographs as a
-        // single token, so `记忆` never matches inside `记忆管理`. For CJK-bearing
+        // single token, so the CJK word `记忆` never matches inside `记忆管理`. For CJK-bearing
         // queries also consult the trigram companion. Build the MATCH from
         // per-term OR (mirroring the unicode61 leg), keeping only terms of ≥3
         // chars — the trigram tokenizer's minimum — so a multi-word CJK query
-        // (`记忆管理 系统运维`) still substring-matches each word; a single
+        // (e.g. `记忆管理 系统运维`) still substring-matches each word; a single
         // whole-phrase MATCH would fail across the interior spaces. New hits are
         // merged in, capped at `limit`. ASCII-only queries skip this entirely and
         // keep byte-identical behaviour.

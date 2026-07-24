@@ -1,4 +1,4 @@
-//! Volcengine (火山引擎 / 豆包语音) text-to-speech provider
+//! Volcengine (ByteDance / Doubao Speech) text-to-speech provider
 //! (`GenerationType::Speech`).
 //!
 //! Targets the native synchronous legacy endpoint

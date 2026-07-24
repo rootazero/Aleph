@@ -915,7 +915,7 @@ mod tests {
         );
     }
 
-    /// 否决账本 circuit breaker: after the first denial is recorded, an
+    /// Denial ledger circuit breaker: after the first denial is recorded, an
     /// identical elevated request is auto-blocked by the denial ledger
     /// *without* re-prompting, and the model-facing reason must carry the
     /// `RepeatedSameIntent` hint so the agent stops looping.

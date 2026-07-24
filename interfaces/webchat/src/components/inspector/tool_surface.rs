@@ -10,7 +10,7 @@ use crate::state::layout::WorkspaceState;
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 
-/// 详情查看器 — 右栏工具表面：当前选中工具的完整 args/result/diff（不封顶）。
+/// Detail inspector — right-pane tool surface: full args/result/diff for the currently selected tool (uncapped).
 #[component]
 pub fn ToolInspector(run_id: String, tool_id: String) -> impl IntoView {
     use crate::components::tool_card::{
@@ -22,7 +22,7 @@ pub fn ToolInspector(run_id: String, tool_id: String) -> impl IntoView {
     // Reactive: the followed tool's status/duration land after selection, and
     // its result payload arrives on `tool_call_completed`.
     move || {
-        // 名字/状态从 transcript 反查；payload 从捕获表取。
+        // Name/status reverse-looked up from transcript; payload fetched from capture table.
         let entry = chat.messages.with(|msgs| {
             msgs.iter()
                 .flat_map(|m| m.tool_calls.iter())

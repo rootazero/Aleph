@@ -12,7 +12,7 @@
 //! per-agent override chain — exactly like [`FailoverHealth`] — so one
 //! endpoint's load is visible to every chain that might dial it.
 //!
-//! R7/R10 stance: this is **infrastructure** (赋能层). It records counts and
+//! R7/R10 stance: this is **infrastructure** (infrastructure layer). It records counts and
 //! latencies; it never sees the prompt, never classifies intent. The harness
 //! loop is unaware it exists.
 

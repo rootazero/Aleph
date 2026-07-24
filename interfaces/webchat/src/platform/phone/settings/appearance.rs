@@ -1,5 +1,5 @@
-//! iPhone Appearance detail screen — Theme / Accent / Material / 字号 / 圆角 /
-//! 紧凑度. Reuses crate::appearance read_*/apply_* (local, instant; no API).
+//! iPhone Appearance detail screen — Theme / Accent / Material / Font Scale / Roundness /
+//! Density. Reuses crate::appearance read_*/apply_* (local, instant; no API).
 
 use crate::appearance::{
     apply_accent, apply_density, apply_font_scale, apply_material, apply_mode, apply_roundness,

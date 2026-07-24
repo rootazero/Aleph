@@ -105,7 +105,7 @@ pub fn MentionPaletteView(
                        rounded-xl border border-border bg-surface-overlay/85 shadow-xl
                        max-h-[200px] overflow-y-auto"
             >
-                // "@ 所有人" fixed first row
+                // "@ everyone" fixed first row
                 {move || {
                     let is_selected = selected_index.get() == 0;
                     let cls = if is_selected {

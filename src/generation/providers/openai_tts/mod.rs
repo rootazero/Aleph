@@ -143,7 +143,7 @@ impl OpenAiTtsProvider {
 
         // Shared hardened client: no keep-alive reuse + bounded fresh dial —
         // the stale-pooled-socket defense (see `providers::http` for the full
-        // production rationale: the voice-mode "stuck at 正在思考" /
+        // production rationale: the voice-mode "stuck at Thinking" /
         // leading-sentence-eaten bug).
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         let client = super::http::voice_http_client(timeout)

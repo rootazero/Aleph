@@ -336,7 +336,7 @@ fn assemble_fallbacks(
     // prefer *same-protocol* fallbacks. Cross-protocol failover (e.g. an
     // Anthropic-protocol primary like Kimi migrating to an OpenAI-compatible
     // endpoint) has to convert the request shape, and some OpenAI-compat Claude
-    // shims reject the conversion outright (the -10003 "参数错误" gap). A
+    // shims reject the conversion outright (the -10003 "bad parameter" gap). A
     // homogeneous chain sends the same format the primary already proved valid.
     let protocol_of = |name: &str| -> Option<String> {
         config

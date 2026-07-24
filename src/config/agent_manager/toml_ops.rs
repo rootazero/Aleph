@@ -208,8 +208,8 @@ impl AgentManager {
     }
 }
 
-/// 把 `AgentModelRef` 写成 `toml_edit` Item:
-/// Legacy → 裸字符串;Qualified → 内联表 `{ provider, model }`。
+/// Write `AgentModelRef` as a `toml_edit` Item:
+/// Legacy → bare string; Qualified → inline table `{ provider, model }`.
 pub(super) fn model_ref_to_item(m: &AgentModelRef) -> toml_edit::Item {
     match m {
         AgentModelRef::Legacy(s) => toml_edit::value(s.as_str()),

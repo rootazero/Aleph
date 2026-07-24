@@ -27,7 +27,7 @@ pub(crate) enum Action {
     None,
     /// Stop audio and clear the TTS queue.
     StopPlayback,
-    /// Show the "没听清/出错" caption.
+    /// Show the "Didn't catch that / error" caption.
     ShowError,
 }
 

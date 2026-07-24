@@ -42,7 +42,7 @@ pub enum RouteMode {
 /// Load-balancing strategy applied *within* the same-tier candidate group of
 /// the failover chain (the fallback pool around the live primary).
 ///
-/// Pure **infrastructure** (R7 赋能层): decides ordering from prompt-blind hard
+/// Pure **infrastructure** (R7 enabling layer): decides ordering from prompt-blind hard
 /// signals only — runtime in-flight counts, observed latency, a rotation
 /// counter — never from message content. Maps the reference routers' strategies
 /// (`LiteLLM` `least-busy` / `latency-based`, Bifrost weighted selection) onto
@@ -75,7 +75,7 @@ pub enum LoadBalanceStrategy {
     /// per-million-token price from the static [`crate::pricing`] rate card of
     /// each candidate's first model. Maps `LiteLLM` `cost-based-routing`
     /// (`lowest-cost`) and `RouteLLM`'s cheap-vs-strong cost axis onto Aleph's
-    /// already-shipped price table — pure **infrastructure** (R7 赋能层): the
+    /// already-shipped price table — pure **infrastructure** (R7 enabling layer): the
     /// price is a static `(provider, model)` fact, never inferred from the
     /// prompt. Unpriced candidates (on-machine / self-hosted models carry no
     /// rate card) read price `0` and therefore sort *first* — local inference is

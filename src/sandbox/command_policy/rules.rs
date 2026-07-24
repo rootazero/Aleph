@@ -5,7 +5,7 @@
 //! rather than HTTP payloads, and matched in a single pass via
 //! `regex::RegexSet` instead of clawshell's sequential `Vec<Regex>` scan.
 //!
-//! Philosophy (CLAUDE.md R7 "安全硬过滤" — a sanctioned hard-filter, NOT an
+//! Philosophy (CLAUDE.md R7 "safe hard-filter" — a sanctioned hard-filter, NOT an
 //! LLM-replacing rule engine): this layer is defence-in-depth *in front of*
 //! the OS sandbox. It does not decide intent; it refuses a small set of
 //! patterns that are essentially never legitimate inside an agent workspace

@@ -14,7 +14,7 @@ use serde_json::Value;
 /// other crates must therefore include a wildcard arm; this annotation
 /// makes that requirement compile-time enforced.
 ///
-/// Rust 优势 over TypeScript: claude-code's equivalent event shapes are
+/// Rust advantage over TypeScript: claude-code's equivalent event shapes are
 /// open-ended structural records that silently accept new fields. The
 /// `#[non_exhaustive]` annotation gives Aleph compile-time forward-compat
 /// on the trace ABI without paying any runtime cost.

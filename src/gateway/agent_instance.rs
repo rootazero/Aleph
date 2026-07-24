@@ -20,7 +20,7 @@ use super::session_manager::SessionState;
 pub struct AgentInstanceConfig {
     /// Unique agent identifier
     pub agent_id: String,
-    /// Human-readable display name (e.g., "交易助手", "Coding Agent")
+    /// Human-readable display name (e.g., "Trading Assistant", "Coding Agent")
     pub display_name: Option<String>,
     /// Workspace directory path
     pub workspace: PathBuf,

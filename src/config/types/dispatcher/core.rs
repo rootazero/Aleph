@@ -238,7 +238,7 @@ pub struct TeamBroadcastConfigToml {
 /// The escalation guard is advisory-only: when a reply thread exceeds
 /// `thread_message_threshold` messages the router sends the team leader ONE
 /// `SystemNotification` suggesting a collaborative session — the LLM leader
-/// decides what to do (no reasoning in the guard, 守 R7). Before this section
+/// decides what to do (no reasoning in the guard, upholds R7). Before this section
 /// the threshold and on/off switch were pinned to `EscalationRule::default()`
 /// (threshold 5, enabled) at the sole boot site, so an operator could neither
 /// silence a noisy escalation nor tune the threshold without a rebuild — the

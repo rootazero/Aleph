@@ -1,6 +1,6 @@
 //! Background sub-agent tree — shared types + reconstruction.
 //!
-//! Single source of truth for the "后台子智能体树状图": the flat node shape
+//! Single source of truth for the "Background sub-agent tree diagram": the flat node shape
 //! ([`SubagentNode`]), the live wire events ([`SubagentTreeEvent`]), and the
 //! pure reconstruction ([`build_tree`] + [`Rollup`]). Compiled into BOTH the
 //! native `aleph-server` (the `subagent.tree` RPC snapshot) AND the WASM panel

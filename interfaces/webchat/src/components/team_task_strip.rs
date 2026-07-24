@@ -1,5 +1,5 @@
 //! Bottom task strip for team chat: one tappable pill showing the most-salient
-//! team task (`● 任务 · {subject} · {状态}  +N`). Hidden when the team has no
+//! team task (`● tasks · {subject} · {status}  +N`). Hidden when the team has no
 //! tasks. Lives in the composer's floating stack so it sits just above the
 //! input box and is covered by the same `--composer-clearance` measurement.
 //! Tapping toggles `TaskDrawerOpen` (consumed by `TeamTaskDrawer`).

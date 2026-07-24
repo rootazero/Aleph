@@ -1,38 +1,48 @@
-//! 节点准入（中心侧）：把一次 `connect` 解析成「用哪个 `node_id` 登记，还是拒绝」。
+//! Node admission (center side): resolves a `connect` into "which `node_id` to
+//! register, or reject".
 //!
-//! LAN-trust 下节点不持 token，但中心仍为每个节点在 `security_store` 留一条
-//! `role=node` 设备记录——它是**离线舰队视图**（`environments.list` 的 offline 半边）
-//! 与 `cluster.deregister` 的记账基础。本模块是这条记录的**唯一写入/解析真源**，
-//! 被两个入口共用：
+//! Under LAN-trust, nodes don't hold tokens, but the center still keeps a
+//! `role=node` device record in `security_store` for each node — this is the
+//! **offline fleet view** (the offline half of `environments.list`) and the
+//! bookkeeping foundation for `cluster.deregister`. This module is the **single
+//! write/resolve source of truth** for that record, shared by two entry points:
 //!
-//! * `connect` 接缝（`gateway/server/handler.rs`）——节点自助登记（首启无 id）。
-//! * `cluster.enroll` RPC（`gateway/handlers/cluster.rs`）——operator 在 Panel 预登记。
+//! * `connect` seam (`gateway/server/handler.rs`) — node self-registration
+//!   (first boot, no id).
+//! * `cluster.enroll` RPC (`gateway/handlers/cluster.rs`) — operator
+//!   pre-enrollment from the Panel.
 //!
-//! 二者共用同一 [`mint_node_device`]，故预登记的行与节点首次拨入**按名归并**到同一
-//! `node_id`，不再各铸一个 UUID 留下永久幽灵离线条目。
+//! Both share the same [`mint_node_device`], so a pre-enrolled row and the
+//! node's first dial-in are **merged by name** into the same `node_id`, rather
+//! than each minting a separate UUID that leaves a permanent ghost offline row.
 //!
-//! 红线：确定性查表 + 写库，无 LLM 推理（R7）；不进 `src/harness/`（R10）。
+//! Redline: deterministic table lookup + database writes, no LLM reasoning (R7);
+//! does not enter `src/harness/` (R10).
 
 use tracing::warn;
 
 use crate::cluster::normalize_node_key;
 use crate::gateway::security::store::{DeviceUpsertData, SecurityStore};
 
-/// 一次节点 `connect` 的准入判定。
+/// Admission decision for a node `connect`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeAdmission {
-    /// 放行：用这个 `node_id` 登记会话。`minted` = 本次新建了设备记录
-    /// （节点应把 `node_id` 落盘）。
+    /// Admitted: register the session under this `node_id`. `minted` = a new
+    /// device record was created this time (the node should persist the
+    /// `node_id` to disk).
     Admitted { node_id: String, minted: bool },
-    /// 拒绝：该节点已被 `cluster.deregister` 注销（设备记录 `revoked_at` 非空）。
-    /// 注销必须**粘住**——否则被踢掉的节点在下一轮退避重连里就自己复活了。
+    /// Rejected: this node has been deregistered via `cluster.deregister`
+    /// (device record `revoked_at` is non-null). Deregistration must **stick** —
+    /// otherwise a kicked node would just self-revive on the next backoff
+    /// reconnect cycle.
     Deregistered { node_id: String },
 }
 
-/// 铸一条 `role=node` 设备记录并返回其 `node_id`（UUID）。
+/// Mint a `role=node` device record and return its `node_id` (UUID).
 ///
-/// `public_key` 是占位（LAN-trust 无硬件密钥，同 `connect.rs`）；`fingerprint`
-/// 取 UUID 前 16 位以满足表上的 UNIQUE 约束。
+/// `public_key` is a placeholder (LAN-trust has no hardware key, same as
+/// `connect.rs`); `fingerprint` uses the first 16 chars of the UUID to satisfy
+/// the UNIQUE constraint on the table.
 pub fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String, String> {
     let device_id = uuid::Uuid::new_v4().to_string();
     store
@@ -49,11 +59,13 @@ pub fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String
     Ok(device_id)
 }
 
-/// 在**活跃**（未吊销）的 `role=node` 设备里按归一化名唯一匹配。
-/// 命中唯一 → 复用其 id；零命中或歧义 → `None`（调用方铸新的）。
+/// Uniquely match an **active** (non-revoked) `role=node` device by normalized
+/// name. Single hit → reuse its id; zero hits or ambiguous → `None` (caller
+/// mints a new one).
 ///
-/// 名字归一化与在线寻址 [`normalize_node_key`] 同源，故 Panel 里预登记的
-/// "GPU Box" 与节点 `--name gpu-box` 拨入会归并到同一条记录。
+/// Name normalization shares the same source of truth as online addressing
+/// [`normalize_node_key`], so a pre-enrolled "GPU Box" in the Panel and a node
+/// dialing in as `--name gpu-box` merge into the same record.
 fn reuse_by_name(store: &SecurityStore, node_name: &str) -> Option<String> {
     let key = normalize_node_key(node_name);
     if key.is_empty() {
@@ -76,19 +88,22 @@ fn reuse_by_name(store: &SecurityStore, node_name: &str) -> Option<String> {
     Some(first.device_id)
 }
 
-/// 解析一次节点 `connect` 的准入。`presented_id` = connect 帧的 `device_id`
-/// （首启为 `None`）。
+/// Resolve admission for a node `connect`. `presented_id` = the `device_id` from
+/// the connect frame (`None` on first boot).
 ///
-/// 判定顺序：
-/// 1. 带 id 且该记录**已吊销** → [`NodeAdmission::Deregistered`]（注销粘住）。
-/// 2. 带 id 且记录活跃 → 原样复用（稳定身份）。
-/// 3. 带 id 但**查无此记录**（中心库重置 / 换了中心）→ 采纳该 id 并补写记录，
-///    让节点保住已落盘的身份，不必重新登记。
-/// 4. 无 id（首启）→ 先按名复用 operator 预登记的行，否则铸新的；`minted=true`
-///    提示节点把 id 落盘。
+/// Decision order:
+/// 1. Has id AND that record is **revoked** → [`NodeAdmission::Deregistered`]
+///    (deregistration sticks).
+/// 2. Has id AND record is active → reuse as-is (stable identity).
+/// 3. Has id but **no such record** (center DB reset / switched centers) →
+///    adopt the id and backfill the row so the node keeps its persisted identity
+///    without re-registering.
+/// 4. No id (first boot) → try to adopt an operator's pre-enrolled row by name
+///    first, else mint new; `minted=true` signals the node to persist the id.
 ///
-/// store 读写失败一律降级为「采纳/铸造但不落库」，节点仍能工作（P7 优雅降级）——
-/// 代价只是离线视图少一条记录。
+/// Store read/write failures always degrade to "adopt/mint without persisting";
+/// the node still works (P7 graceful degradation) — the only cost is one fewer
+/// record in the offline view.
 pub fn admit_node(
     store: &SecurityStore,
     presented_id: Option<&str>,

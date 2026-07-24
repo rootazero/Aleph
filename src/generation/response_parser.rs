@@ -52,7 +52,7 @@ fn get_pattern() -> GenerationResult<&'static Regex> {
 
 /// Parse AI response for generation requests
 ///
-/// Looks for patterns like `[GENERATE:image:midjourney:nanobanana:一只可爱的猫]`
+/// Looks for patterns like `[GENERATE:image:midjourney:nanobanana:a cute cat]`
 /// and extracts them into structured requests.
 ///
 /// # Arguments

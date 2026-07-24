@@ -266,10 +266,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // references a single instance. Boot never aborts if `enabled = false`
     // — tests / CI override via config and get a NoopSandbox that refuses
     // execution with a structured error.
-    // exec-approval 闭环共享实例：boot 构造一个 ExecApprovalManager，供
-    // (a) ChannelApprovalBridgeAdapter (ApprovalGate requester)、
-    // (b) exec.approval.* RPC 处理器、(c) router 回调汇 共用。
-    // 通道就绪后（initialize_channels 之后）再经 set_requester 注入 adapter。
+    // exec-approval closed-loop shared instance: boot constructs one
+    // ExecApprovalManager shared by (a) ChannelApprovalBridgeAdapter
+    // (ApprovalGate requester), (b) exec.approval.* RPC handlers, and
+    // (c) the router callback sink. The channel adapter is injected via
+    // set_requester after channels are ready (post initialize_channels).
     let exec_approval_manager = Arc::new(alephcore::exec::ExecApprovalManager::new());
     // Cluster ③: share the canonical approval manager with the gateway so
     // node-initiated `node.approval.request` frames drive `run_node_approval`.

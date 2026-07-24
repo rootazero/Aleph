@@ -3,8 +3,8 @@
 //! Closes the *within-turn* half of the gap against hermes-agent's
 //! `goals.py`: after the LLM decomposes a request into an execution list
 //! (via the `scratchpad` tool's `set_objective` + `set_plan`), *something*
-//! must keep the loop running until those steps are worked through — "逐个
-//! 完成、回归、直至达成用户目标". This verifier is that within-turn hook.
+//! must keep the loop running until those steps are worked through — "complete
+//! each step, converge, until the user's goal is achieved". This verifier is that within-turn hook.
 //!
 //! The *cross-turn* half — a persistent standing goal that survives across
 //! turns/sessions with lifecycle + budget, and an opt-in autonomous
@@ -94,7 +94,7 @@ impl TurnVerifier for ScratchpadGoalVerifier {
             Err(_) => return VerifierVerdict::Continue,
         };
         // Dormant unless an objective is set AND a box is still unchecked
-        // (the user-chosen "有 objective 才激活" gate).
+        // (the user-chosen "activate only when there is an objective" gate).
         if !snapshot.has_pending_work() {
             return VerifierVerdict::Continue;
         }

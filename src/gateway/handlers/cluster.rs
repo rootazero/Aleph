@@ -1,11 +1,14 @@
-//! 集群中心侧 RPC：`cluster.enroll`（**预**登记 node 设备记录）、
-//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 吊销设备记录）、
-//! `environments.list`（枚举在线 + 离线节点）。
+//! Cluster hub-side RPC: `cluster.enroll` (**pre**-register a node device record),
+//! `cluster.deregister` (operator deregisters a node: evict online session + revoke
+//! device record), `environments.list` (enumerate online + offline nodes).
 //!
-//! LAN-trust 模型下节点不持 token——连接身份由 connect 参数形状（`commands` +
-//! `tags`）声明，**登记本身也在 `connect` 里完成**（`cluster::admit_node`）。本文件
-//! 的 `cluster.enroll` 因此不是节点入网的必经之路，只是 operator 的预占位入口；
-//! 它与 connect 自助登记共用同一设备记录真源，故同名不会铸出两行。
+//! Under the LAN-trust model nodes do not hold tokens — connection identity is declared
+//! by the connect parameter shape (`commands` + `tags`), and **registration itself is
+//! also completed during `connect`** (`cluster::admit_node`). This file's
+//! `cluster.enroll` is therefore NOT the mandatory entry point for a node to join;
+//! it is just the operator's pre-reservation entry. It shares the same device-record
+//! source of truth as self-service connect registration, so a same-name enroll cannot
+//! mint a duplicate row.
 
 use crate::sync_primitives::Arc;
 
@@ -17,7 +20,7 @@ use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
-/// 没有任何匹配节点时的错误码（同 devices.* 的 -32004 not-found）。
+/// Error code when no node matches (same as devices.*'s -32004 not-found).
 const NODE_NOT_FOUND: i32 = -32004;
 
 #[derive(Deserialize)]
@@ -25,13 +28,16 @@ struct EnrollParams {
     node_name: String,
 }
 
-/// **预登记**一个 role=node 的设备记录（operator 在 Panel 点 Enroll）。
+/// **Pre-register** a role=node device record (operator clicks Enroll in the Panel).
 ///
-/// LAN-trust：不铸 token。节点**并不需要**先走这里——它 `connect` 时会自助登记
-/// （`cluster::admit_node`）。本 RPC 的价值是让 operator 先占位：节点还没拨入前
-/// 就以 `status:"offline"` 出现在舰队视图里，且节点随后按**同名**拨入时会被
-/// [`crate::cluster::admit_node`] 归并到这条记录，不会再各铸一个 UUID 留下幽灵行。
-/// 设备记录的写入与 `connect` 自助登记共用同一真源 [`mint_node_device`]。
+/// LAN-trust: no token minted. A node does **not** need to go through here first —
+/// it self-registers on `connect` (`cluster::admit_node`). The value of this RPC is
+/// letting the operator reserve a slot ahead of time: the node appears as
+/// `status:"offline"` in the fleet view before it even dials in, and when it later
+/// connects with the **same name**, [`crate::cluster::admit_node`] merges it into
+/// this record instead of minting a second UUID ghost row. The device-record write
+/// shares the same source of truth as connect's self-service registration
+/// ([`mint_node_device`]).
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -54,15 +60,18 @@ pub async fn handle_cluster_enroll(
 
 #[derive(Deserialize)]
 struct DeregisterParams {
-    /// 目标节点：name 或 id（多级匹配，同 `node_invoke` 寻址）。
+    /// Target node: name or id (multi-tier match, same addressing as `node_invoke`).
     node: String,
 }
 
-/// 离线回退寻址：在 `security_store` 的已登记节点设备（role=node、未吊销）里按
-/// ① 精确 `device_id` ② 唯一归一化 `device_name` 解析。仍刻意不做模糊前缀/子串
-/// （保守——离线注销 operator 应精确指名）；但名字等值经 [`normalize_node_key`]
-/// 与在线 `NodeRegistry::match_id` 同源，消除「在线名大小写不敏感、离线敏感」的
-/// 寻址漂移——同一个 "GPU Box" 在线/离线都能用 "gpu-box" 注销。
+/// Offline-fallback addressing: resolve from the `security_store`'s registered node
+/// devices (role=node, not revoked) by ① exact `device_id` ② unique normalized
+/// `device_name`. Still deliberately rejects fuzzy prefix/substring (conservative —
+/// the operator should address precisely for offline deregistration); but name
+/// equality uses the same [`normalize_node_key`] as the online `NodeRegistry::match_id`,
+/// eliminating the addressing drift of "online names are case-insensitive, offline
+/// names are sensitive" — the same "GPU Box" can be deregistered as "gpu-box" whether
+/// online or offline.
 fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
     let devices = ctx.security_store.list_devices().ok()?;
     let nodes: Vec<_> = devices.into_iter().filter(|d| d.role == "node").collect();
@@ -83,22 +92,26 @@ fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
     }
 }
 
-/// operator-gated：注销一个节点。两步下线——
-/// ① `forget` 即时驱逐在线会话（立刻从 `environments.list` 消失，且不再
-///    被 `node_invoke`/`node_file` 寻址到）；
-/// ② `revoke_device` 吊销设备记录（`revoked_at` 置位）。
+/// operator-gated: deregister a node. Two-phase takedown —
+/// ① `forget` instantly evicts the online session (immediately gone from
+///     `environments.list` and no longer addressable by `node_invoke`/`node_file`);
+/// ② `revoke_device` revokes the device record (`revoked_at` is set).
 ///
-/// **注销是粘的**：②不只是记账。节点下一次 `connect` 会经 `cluster::admit_node`
-/// 撞上这条 `revoked_at`，被判 `NodeAdmission::Deregistered` 而拒绝登记，节点收到
-/// `{"node":{"status":"deregistered"}}` 后自行退出。此前 connect 从不查设备表，
-/// 被注销的节点在下一轮退避重连里就自己复活了——注销形同虚设。
+/// **Deregistration is sticky**: ② is not just bookkeeping. The node's next `connect`
+/// hits this `revoked_at` via `cluster::admit_node`, receives
+/// `NodeAdmission::Deregistered`, and is rejected — the node receives
+/// `{"node":{"status":"deregistered"}}` and exits on its own. Previously `connect`
+/// never checked the device table, so a deregistered node would self-resurrect on
+/// its next backoff-reconnect cycle — deregistration was a dead letter.
 ///
-/// 本调用仍不强制 close 节点当前 socket——它会在下一次 ping/idle-watchdog 到期时
-/// 由传输层断开，或在节点自己重连时被拒。
+/// This call still does NOT forcibly close the node's current socket — the transport
+/// layer will disconnect it at its next ping/idle-watchdog expiry, or the node will
+/// be rejected on its own reconnect.
 ///
-/// 寻址先走在线 `NodeRegistry` 多级匹配；不在线则回退 `security_store` 的已登记
-/// 节点设备（精确 id / 唯一归一化 name）——environments.list 里可见的离线节点
-/// 必须同样可注销（此时 `evicted:false`）。
+/// Addressing first tries online `NodeRegistry` multi-tier matching; if not online,
+/// falls back to the `security_store`'s registered node devices (exact id / unique
+/// normalized name) — offline nodes visible in environments.list must be equally
+/// deregisterable (in which case `evicted:false`).
 pub async fn handle_cluster_deregister(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -131,9 +144,9 @@ pub async fn handle_cluster_deregister(
         }
     };
 
-    // ① 即时驱逐在线会话。
+    // ① Instantly evict online session.
     let evicted = ctx.node_registry.forget(&node_id);
-    // ② 抹除设备记录（enroll 的对称撤除）。
+    // ② Remove device record (the symmetric undo of enroll).
     let device_removed = ctx
         .security_store
         .revoke_device(&node_id)
@@ -152,11 +165,13 @@ pub async fn handle_cluster_deregister(
     )
 }
 
-/// read：枚举集群节点（薄渲染契约，不含凭证）。在线会话来自 `NodeRegistry`；
-/// 再合并 `security_store` 里已登记（role=node、未吊销）但当前不在线的设备，
-/// `status:"offline"` + `last_seen_at`（Unix 秒；`null` = 登记后从未连入）。
-/// 镜像 openclaw `nodes status` 的"配对态 + 连接态合并"视图——离线节点不再
-/// 凭空消失。store 读失败时优雅降级为在线视图（P7）。
+/// read: enumerate cluster nodes (thin rendering contract, no credentials). Online
+/// sessions come from `NodeRegistry`; then merged with `security_store` registered
+/// (role=node, not revoked) but currently-offline devices, as `status:"offline"` +
+/// `last_seen_at` (Unix seconds; `null` = enrolled but never connected). Mirrors
+/// openclaw `nodes status` "paired-state + connected-state merged" view — offline
+/// nodes no longer vanish from the UI. Gracefully degrades to online-only view on
+/// store read failure (P7).
 pub async fn handle_environments_list(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,

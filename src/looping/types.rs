@@ -1,6 +1,6 @@
 //! In-memory loop state: a per-session timer-driven repeat. Mirrors
 //! `goal::types` but is NEVER persisted — the registry lives in process
-//! memory only, so a daemon restart clears all loops ("随会话消亡").
+//! memory only, so a daemon restart clears all loops ("dies with the session").
 //!
 //! Distinct from `goal` (condition-stop) and `cron` (persistent, own session):
 //! a loop is "current session, multi-turn, clock-gated, never self-stops".
@@ -521,7 +521,7 @@ mod tests {
         let l = sample().with_baseline(12_345);
         assert_eq!(l.tokens_at_start, 12_345);
         assert!(l.baseline_captured);
-        // original unchanged (§不可变性)
+        // original unchanged (immutability)
         assert_eq!(sample().tokens_at_start, 0);
     }
 

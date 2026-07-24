@@ -5,8 +5,8 @@
 //! recall time.
 //!
 //! `recency` and `reinforcement` default **on**: they realise the advertised
-//! "热门记忆浮顶 / 冷门自然沉底 / 时间衰减" behaviour, which must work out of
-//! the box (the feature is "自动冒泡"). Both read data already present
+//! "hot memories bubble up / cold ones sink naturally / time-decay" behaviour, which must work out of
+//! the box (the feature is "automatic bubbling"). Both read data already present
 //! (`updated_at`, `recall_signals` hit counts) — no extra LLM/embedding calls —
 //! and use sub-linear, conservatively-weighted blends so they nudge ordering
 //! without ever dominating raw relevance. `mmr` (diversity de-dup) stays
@@ -43,7 +43,7 @@ const fn default_reinforcement_weight() -> f32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RetrievalScoringConfig {
     /// Re-weight relevance scores by an exponential recency multiplier so fresh
-    /// notes outrank equally-relevant stale ones. Default `true` ("时间衰减" —
+    /// notes outrank equally-relevant stale ones. Default `true` ("time-decay" —
     /// stale memories fade in ranking). Set `false` for the legacy path.
     #[serde(default = "default_scoring_enabled")]
     pub recency_enabled: bool,
@@ -69,7 +69,7 @@ pub struct RetrievalScoringConfig {
     /// Boost notes by how often they have been recalled (reinforcement salience),
     /// so a frequently-retrieved note outranks an equally-relevant never-touched
     /// one. Reads the already-recorded `recall_signals` counts — no extra LLM
-    /// calls. Default `true` ("热门记忆浮顶" — frequently-recalled notes bubble
+    /// calls. Default `true` ("hot memories bubble up" — frequently-recalled notes bubble
     /// up, cold ones sink). Set `false` for the legacy path. Inspired by memU's
     /// `sim × log(reinforcement+1)` salience.
     #[serde(default = "default_scoring_enabled")]

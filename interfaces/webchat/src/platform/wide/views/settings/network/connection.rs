@@ -1,8 +1,8 @@
-//! Section 1 — 服务连接:只读反映本 Panel 当前连接的 Aleph 核心(本地 / 远程)。
+//! Section 1 — Service connection: read-only reflection of the Aleph core this Panel is currently connected to (local / remote).
 //!
-//! 连接形态由「构建」决定,不在面板里切换:完整版 App 恒连内嵌 loopback 核心、
-//! 纯壳 Panel 恒连远程、浏览器取决于地址栏。三者一律由 `location.host`(权威、
-//! 永远新鲜)判定本地/远程 —— 无壳注入标记,无 IPC 依赖(R4:Interface 纯 I/O)。
+//! The connection form is determined at build time, not toggled in the panel: the full App always connects to the embedded loopback core;
+//! the pure-shell Panel always connects to remote; the browser depends on the address bar. All three are determined by `location.host` (authoritative,
+//! always fresh) to decide local/remote — no shell injection marker, no IPC dependency (R4: Interface is pure I/O).
 
 use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;

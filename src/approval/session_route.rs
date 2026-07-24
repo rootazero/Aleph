@@ -1,8 +1,11 @@
-//! 从结构化 `SessionKey` 解出通道投递路由 `(ChannelId, ConversationId)`。
+//! Resolve the channel delivery route `(ChannelId, ConversationId)` from a
+//! structured `SessionKey`.
 //!
-//! 唯一路由源。审批投递不得回退到对字符串 `session_key` 的扫描 —— 那种做法
-//! 对默认 `DmScope::PerPeer`（`agent:{a}:dm:{p}`，不含通道名）静默返回 `None`。
-//! 结构化 `SessionKey` 直接携带 `channel` 字段，无歧义。
+//! Single source of truth for routing. Approval delivery must never fall back to
+//! scanning string `session_key` — that approach silently returns `None` for the
+//! default `DmScope::PerPeer` (`agent:{a}:dm:{p}`, which lacks a channel name).
+//! The structured `SessionKey` directly carries the `channel` field, so there is
+//! no ambiguity.
 
 use crate::gateway::channel::{ChannelId, ConversationId};
 use crate::routing::session_key::SessionKey;
@@ -11,10 +14,12 @@ use tracing::warn;
 /// Maximum nesting depth for subagent parent-key chains.
 const MAX_SUBAGENT_DEPTH: usize = 16;
 
-/// 解出审批提示应投递到的通道与会话。
+/// Resolve the channel and conversation where an approval notice should be
+/// delivered.
 ///
-/// `Main` / `Task` / `Ephemeral` 无通道来源 → `None`（调用方据此明确 Denied）。
-/// `Subagent` 递归其 `parent_key`，深度受 [`MAX_SUBAGENT_DEPTH`] 限制以防止栈溢出。
+/// `Main` / `Task` / `Ephemeral` have no channel source → `None` (callers use
+/// this to explicitly Deny). `Subagent` recurses into its `parent_key`, bounded
+/// by [`MAX_SUBAGENT_DEPTH`] to prevent stack overflow.
 pub(crate) fn channel_route(key: &SessionKey) -> Option<(ChannelId, ConversationId)> {
     channel_route_inner(key, 0)
 }

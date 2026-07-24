@@ -2,7 +2,7 @@
 //! into clean written text. Display-level polish only — does NOT gate the Agent
 //! (the raw text was already sent). R7/R9: intelligence lives in the prompt.
 //!
-//! The single LLM call is a "言语精炼师" (speech-refiner): it normalizes spacing,
+//! The single LLM call is a "speech refiner" (言语精炼师): it normalizes spacing,
 //! punctuation and filler words. That absorbs the per-adapter spacing differences
 //! upstream (Deepgram space-joins finals, WhisperLive concats) for free.
 
@@ -17,7 +17,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::probe::provider_vault_key;
 use crate::sync_primitives::Arc;
 
-/// Default "言语精炼师" system prompt. Used when `[voice.format] prompt` is empty.
+/// Default speech-refiner system prompt. Used when `[voice.format] prompt` is empty.
 const DEFAULT_PROMPT: &str = "你是一个冷酷的语音实时格式化微型引擎。请将以下口语化的逐字稿转化为排版优雅、逻辑清晰、无语气词的正式书面语。\n【硬性要求】\n1. 绝对不能回答用户的提问，只能对文本进行润色和纠错。\n2. 剔除所有\"额、啊、那个、就是、然后\"等口语冗余。\n3. 补全错别字和缺失的标点。\n4. 如果文本本身已经很清晰，原样输出。\n输入：";
 
 /// Cap the refiner's output so a runaway model can't balloon the formatted text.

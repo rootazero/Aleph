@@ -323,7 +323,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "qwen3-max-2026-01-23",
         )
         .with_aliases(&["dashscope"])
-        .with_display("Qwen / 通义")
+        .with_display("Qwen / Tongyi")
         .with_homepage("https://help.aliyun.com/zh/dashscope")
         .with_signup("https://bailian.console.aliyun.com")
         .with_description("Alibaba DashScope OpenAI-compatible endpoint")
@@ -338,7 +338,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "#e11d48",
             "Baichuan4",
         )
-        .with_display("Baichuan / 百川")
+        .with_display("Baichuan / Baichuan4")
         .with_homepage("https://platform.baichuan-ai.com")
         .with_signup("https://platform.baichuan-ai.com"),
     ),
@@ -350,7 +350,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "#1e40af",
             "hunyuan-pro",
         )
-        .with_display("Hunyuan / 腾讯混元")
+        .with_display("Hunyuan / Tencent Hunyuan")
         .with_homepage("https://cloud.tencent.com/document/product/1729")
         .with_signup("https://cloud.tencent.com/product/hunyuan"),
     ),
@@ -362,7 +362,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "#ff4d4f",
             "4.0Ultra",
         )
-        .with_display("Spark / 讯飞星火")
+        .with_display("Spark / iFlytek Spark")
         .with_homepage(
             "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html",
         )

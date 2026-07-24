@@ -21,14 +21,15 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 use crate::tool_metadata::UnifiedTool;
 
 /// Deferred-injected deps for the post-run autonomous-continuation hook.
-/// 命名结构替代旧 2-tuple，并携带 goal-loop 的客观闸门 handler。
-/// `gate` 为 `None` 时（无 `config.toml [[stop_hooks]]`）loop 行为不变。
+/// Named struct replacing the old 2-tuple, and carries the goal-loop's objective-gate handler.
+/// When `gate` is `None` (no `config.toml [[stop_hooks]]`), loop behavior is unchanged.
 #[derive(Clone)]
 pub struct ContinuationDeps {
     pub registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
     pub adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
-    /// 客观闸门 handler（与 `StopHookVerifier` 共享同一份），守护自主
-    /// 续跑的完成决策。`None` → 无闸门，complete 主张立即终止。
+    /// Objective-gate handler (shares the same instance as `StopHookVerifier`), guards
+    /// the completion decision of autonomous continuations. `None` → no gate, a `complete`
+    /// claim terminates immediately.
     pub gate: Option<Arc<Vec<Arc<dyn crate::verification::stop_hooks::StopHookHandler>>>>,
     /// Gateway event bus for broadcasting autonomous-continuation runs so the
     /// Panel and `aleph watch` see pursuit progress live, and the final reply

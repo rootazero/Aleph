@@ -8,7 +8,7 @@
 //! Scope is deliberately limited to **Managed** profiles — headless browsers
 //! Aleph launches and fully owns. `ExistingSession` profiles attach to the
 //! user's real Chrome, so their tabs are never tracked or reaped here (R5:
-//! 不打扰用户 — closing a tab the user is looking at would be hostile).
+//! don't disturb the user — closing a tab the user is looking at would be hostile).
 //!
 //! Design notes:
 //! - **Pure bookkeeping.** This module never touches a browser. It tracks

@@ -1059,9 +1059,10 @@ fn continuation_metadata(
     m
 }
 
-/// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
-/// 被 goal 续跑（`should_continue` / gate-failure）与 loop tick 续跑共用——
-/// 消除重复的 `RunRequest` 构造与 `tokio::spawn` 样板。`kind` 路由失败处理。
+/// Enqueue one autonomous continuation run (same session, same agent, given prompt).
+/// Shared by goal continuations (`should_continue` / gate-failure) and loop-tick
+/// continuations — eliminates the duplicate `RunRequest` construction and
+/// `tokio::spawn` boilerplate. `kind` routes failure handling.
 ///
 /// `policy_meta` is [`carry_policy_metadata`] of the originating request;
 /// `workspace_override` is its project root (`None` = the agent's own

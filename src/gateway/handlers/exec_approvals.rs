@@ -37,8 +37,8 @@ pub struct PendingListResponse {
     pub pending: Vec<PendingApproval>,
 }
 
-/// 把 exec-approval 全部方法注册进 JSON-RPC 处理器注册表。
-/// 所有方法共享同一个 `Arc<ExecApprovalManager>`。
+/// Register all exec-approval methods in the JSON-RPC handler registry.
+/// All methods share a single `Arc<ExecApprovalManager>`.
 pub fn register_handlers(registry: &mut HandlerRegistry, manager: Arc<ExecApprovalManager>) {
     {
         let m = manager.clone();

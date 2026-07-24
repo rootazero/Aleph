@@ -164,7 +164,7 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// 注入集群节点登记表，启用集群节点工具。
+    /// Inject the cluster node registry, enabling cluster node tools.
     ///
     /// Takes `&self` so it works through `Arc` — the registry is wrapped in
     /// `Arc::new` in `agent_init` before the gateway's `NodeRegistry` is wired.

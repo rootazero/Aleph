@@ -1,10 +1,12 @@
-//! 节点侧反向 RPC 分发（执行臂）。
+//! Node-side reverse RPC dispatch (execution arm).
 //!
-//! 收到中心发来的 `tool.call` 请求 → 查命令表（allowlist = 表的 keys，节点侧
-//! 权威闸门）→ 命中则跑该命令 → 回 `Result<Value, String>`（节点 loop 据此
-//! 构造带 id 的 `JsonRpcResponse`）。
+//! Receives a `tool.call` request from the center → looks up the command table
+//! (allowlist = table keys, node-side authoritative gate) → on hit, runs the
+//! command → returns `Result<Value, String>` (the node loop constructs a
+//! `JsonRpcResponse` with an id from this).
 //!
-//! 红线：确定性查表，无 LLM 推理（R7）；不进 `src/harness/`（R10）。
+//! Redline: deterministic table lookup, no LLM reasoning (R7); does not enter
+//! `src/harness/` (R10).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,14 +20,14 @@ use crate::routing::session_key::SessionKey;
 use crate::sandbox::context::SESSION_ID;
 use crate::tools::AlephTool;
 
-/// 节点可执行的一个命令。`run` 返回 `Ok(payload)` 或 `Err(message)`。
+/// A command executable by a node. `run` returns `Ok(payload)` or `Err(message)`.
 #[async_trait]
 pub trait NodeCommand: Send + Sync {
     async fn run(&self, args: Value) -> Result<Value, String>;
     fn descriptor(&self) -> CommandDescriptor;
 }
 
-/// 节点命令表。keys 即 allowlist（节点侧权威）。
+/// Node command table. Keys = allowlist (node-side authoritative).
 #[derive(Default)]
 pub struct CommandTable {
     commands: HashMap<String, Arc<dyn NodeCommand>>,
@@ -41,9 +43,11 @@ impl CommandTable {
         self.commands.insert(name.into(), cmd);
     }
 
-    /// 节点 connect 时声明给中心的命令目录。**按名排序**——backing store 是
-    /// `HashMap`，迭代序每次进程启动都不同，会让节点每次 connect 上报的目录顺序
-    /// 抖动，进而抖动 `environments.list` 与模型可见的 `node_list` 输出。
+    /// Command catalog declared to the center on node connect. **Sorted by
+    /// name** — the backing store is a `HashMap` whose iteration order differs
+    /// every process start, which would cause the declared catalog to jitter on
+    /// each connect, in turn jittering `environments.list` and the
+    /// model-visible `node_list` output.
     #[must_use]
     pub fn descriptors(&self) -> Vec<CommandDescriptor> {
         let mut out: Vec<CommandDescriptor> =
@@ -52,10 +56,11 @@ impl CommandTable {
         out
     }
 
-    /// 分发一帧反向 RPC 请求体。`method` 必须是 `"tool.call"`；`params` 形如
-    /// `{"tool": "<name>", "args": {...}}`。allowlist 权威：tool 不在表中即拒，
-    /// 无论中心发什么。返回 `Ok(payload)` / `Err(message)`，由调用方包成
-    /// 带 id 的响应。
+    /// Dispatch a reverse RPC request body. `method` must be `"tool.call"`;
+    /// `params` is like `{"tool": "<name>", "args": {...}}`. The allowlist is
+    /// authoritative: a tool not in the table is rejected regardless of what the
+    /// center sends. Returns `Ok(payload)` / `Err(message)`, to be wrapped into
+    /// an id-bearing response by the caller.
     pub async fn dispatch(&self, method: &str, params: &Value) -> Result<Value, String> {
         if method != "tool.call" {
             return Err(format!("unknown method '{method}' (expected tool.call)"));
@@ -72,7 +77,7 @@ impl CommandTable {
     }
 }
 
-/// `bash` 作为节点命令：在固定 session 作用域下委托 `BashExecTool`。
+/// `bash` as a node command: delegates to `BashExecTool` under a fixed session scope.
 pub struct BashNodeCommand {
     bash: BashExecTool,
     session: SessionKey,
@@ -101,7 +106,8 @@ impl NodeCommand for BashNodeCommand {
 }
 
 impl CommandTable {
-    /// 便捷构造：注册唯一的 `bash` 命令（0c 节点的全部能力）。
+    /// Convenience constructor: registers the single `bash` command (the full
+    /// capability of a 0c node).
     #[must_use]
     pub fn with_bash(bash: BashExecTool, session: SessionKey) -> Self {
         let mut t = Self::new();
@@ -109,8 +115,9 @@ impl CommandTable {
         t
     }
 
-    /// 在已有命令之外注册 `file.read` / `file.write`，两者共享同一 jail 根
-    /// （应传入节点 bash 的同一 session workspace 目录）。
+    /// Register `file.read` / `file.write` on top of existing commands. Both
+    /// share the same jail root (should be the node's bash session workspace
+    /// directory).
     pub fn register_file_commands(&mut self, workspace_dir: std::path::PathBuf) {
         use crate::cluster::{FileReadCommand, FileWriteCommand};
         self.register(

@@ -30,7 +30,7 @@ pub enum LoopAction {
     Update,
     /// List every timer loop across ALL sessions (not just this one), so the
     /// model can answer "what loops are running?" from any channel — `status`
-    /// only sees the current session (R6 一核多端 / R8).
+    /// only sees the current session (R6 one-core-many-shells / R8).
     List,
 }
 
@@ -357,7 +357,7 @@ impl LoopTool {
         }
     }
 
-    /// Cross-session enumeration (R6 一核多端 / R8 对话即管理面板): a loop
+    /// Cross-session enumeration (R6 one-core-many-shells / R8 conversation-as-panel): a loop
     /// started on one channel is invisible to `status`, which keys by the
     /// current session. Reuse the registry's in-memory map so the model can
     /// answer "what timer loops are running?" from anywhere. Mirrors

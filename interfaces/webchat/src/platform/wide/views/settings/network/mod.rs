@@ -1,6 +1,6 @@
-//! 服务与集群 设置页 — 合并单页:
-//!  · Section 1 服务连接(壳核分离连接切换:本地服务 / 远程服务)
-//!  · Section 2 Aleph 集群(集群节点管理)
+//! Services & Cluster settings page — combined single page:
+//!  · Section 1 Service connection (shell-core separated connection toggle: local / remote)
+//!  · Section 2 Aleph cluster (cluster node management)
 
 mod cluster;
 mod connection;

@@ -7,7 +7,7 @@
 //! a dedicated surface (tool detail, run meta, reasoning, plan, …). Selection
 //! either live-follows the most recent tool call (`follow_tool`, see
 //! `events.rs`) or is pinned by a user click on any chat key point (`inspect`).
-//! In team mode the body is the 交付物/任务 tabs instead.
+//! In team mode the body is the deliverables/tasks tabs instead.
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::context::DashboardState;
@@ -19,14 +19,14 @@ use leptos::task::spawn_local;
 
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
 ///
-/// In team mode (`chat.team_id` is Some) shows 交付物/任务 tabs instead of the
+/// In team mode (`chat.team_id` is Some) shows deliverable/task tabs instead of the
 /// single-agent InspectorSurface + FilesDrawer.
 #[component]
 #[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
-    let active_tab = RwSignal::new(0u8); // 0 = 交付物, 1 = 任务
+    let active_tab = RwSignal::new(0u8); // 0 = deliverables, 1 = tasks
     let i18n = use_i18n();
 
     view! {

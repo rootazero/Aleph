@@ -2,14 +2,14 @@
 
 use leptos::prelude::*;
 
-/// 1s 粒度共享时钟（epoch ms）。仅 running 工具行订阅，避免全列表重渲染。
+/// 1s-granularity shared clock (epoch ms). Only running tool rows subscribe, avoiding full-list re-renders.
 #[derive(Clone, Copy)]
 pub struct SecondTick(pub RwSignal<i64>);
 
-/// 显示耗时的静默阈值。
+/// Silent threshold for displaying elapsed time.
 pub const LONG_RUN_THRESHOLD_MS: i64 = 8_000;
 
-/// "12s" / "1m05s" — 负值（时钟回拨）clamp 到 0。
+/// "12s" / "1m05s" — negative values (clock rollback) clamped to 0.
 #[must_use]
 pub fn fmt_elapsed(elapsed_ms: i64) -> String {
     let secs = (elapsed_ms.max(0)) / 1000;

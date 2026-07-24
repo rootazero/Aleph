@@ -1,4 +1,4 @@
-//! Strategic planner node (军师) — a one-shot, tool-FREE LLM call that produces
+//! Strategic planner node (strategist) — a one-shot, tool-FREE LLM call that produces
 //! a short `Strategy` at the top of a long task (`/goal` · `/loop` ·
 //! `/workflow`), before any tool runs. StraTA's "plan-first, then weld" move,
 //! application-layer only (no RL — R7). Fully fail-soft: ANY failure (provider

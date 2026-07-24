@@ -5,7 +5,7 @@
 //! is multiplexed over the *existing* loopback `/ws` JSON-RPC transport via the
 //! `pty.output` topic instead of a second WebSocket/ephemeral port, so the
 //! desktop shell's single fixed-port discovery + bootstrap-cookie auth model is
-//! preserved (R6 一核多端: one core, many channels).
+//! preserved (R6 one core, many channels).
 //!
 //! Layers:
 //! - [`session`]: a single PTY (`portable-pty` master/child) + reader thread.

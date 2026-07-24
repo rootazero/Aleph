@@ -62,7 +62,7 @@ pub struct AgentPatch {
     pub skills_blacklist: Option<Vec<String>>,
     pub subagents: Option<SubagentPolicy>,
     pub allowed_links: Option<Vec<String>>,
-    /// Model 更新三态:缺省(`None`)=不动;`Some(None)`=清除→继承系统默认;`Some(Some(ref))`=设为该 model。
+    /// Model update tri-state: absent (`None`) = unchanged; `Some(None)` = clear → inherit system default; `Some(Some(ref))` = set to this model.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub model: Option<Option<AgentModelRef>>,
 }

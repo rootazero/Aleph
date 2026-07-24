@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(d.committed, "你好");
         assert_eq!(d.interim, "");
         // CJK finals concatenate without the space-join that polluted the
-        // agent-visible transcript ("你好 世界" read as odd spacing).
+        // agent-visible transcript ("hello world" read as odd spacing).
         let d = dec.push(&results(true, "世界")).unwrap();
         assert_eq!(d.committed, "你好世界");
     }

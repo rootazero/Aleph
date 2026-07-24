@@ -112,7 +112,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
 
     view! {
         <PhoneShell title="Model route" back="/settings">
-            // "应用" apply button positioned in the top-right corner of the body
+            // "Apply" apply button positioned in the top-right corner of the body
             // (outside the shell's top-bar slot; sits at the scroll-body top).
             <div style="display:flex; justify-content:flex-end; padding:0 14px 8px;">
                 <button
@@ -140,7 +140,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
             </Show>
 
             <Show when=move || !loading.get()>
-                // ① 模式 — 3-row single-select list
+                // ① Mode — 3-row single-select list
                 <div>
                     <div class="list-header">"模式"</div>
                     <div class="list">
@@ -167,7 +167,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     </div>
                 </div>
 
-                // ② 负载均衡 — single-select list over LB_KEYS
+                // ② Load Balancing — single-select list over LB_KEYS
                 <div>
                     <div class="list-header">"负载均衡"</div>
                     <div class="list">
@@ -197,7 +197,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     </div>
                 </div>
 
-                // ③ 云升级 toggle — only when mode == "always_local"
+                // ③ Cloud Escalation toggle — only when mode == "always_local"
                 <Show when=move || mode.get() == "always_local">
                     <div>
                         <div class="list-header">"云升级"</div>
@@ -216,7 +216,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     </div>
                 </Show>
 
-                // ④ 偏好供应商 — local + cloud single-select lists
+                // ④ Preferred providers — local + cloud single-select lists
                 <ProviderPinGroup
                     header="本地供应商"
                     tier="local".to_string()
@@ -232,7 +232,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     on_change=move |_| saved.set(false)
                 />
 
-                // ⑤ 限流 — per-provider rpm/tpm inline number inputs
+                // ⑤ Rate Limit — per-provider rpm/tpm inline number inputs
                 <Show when=move || !providers.get().is_empty()>
                     <div>
                         <div class="list-header">"限流"</div>
@@ -302,7 +302,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
 }
 
 /// One tier's preferred-provider single-select list.
-/// Empty selection = "配置顺序" (no pin / use configured order).
+/// Empty selection = "Configured Order" (no pin / use configured order).
 #[component]
 fn ProviderPinGroup<F>(
     header: &'static str,
@@ -327,7 +327,7 @@ where
         <div>
             <div class="list-header">{header}</div>
             <div class="list">
-                // "配置顺序" = empty / no pin
+                // "Configured Order" = empty / no pin
                 <div
                     class="cell"
                     class:cell-selected=move || selected.get().is_empty()

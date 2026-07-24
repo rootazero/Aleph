@@ -6,7 +6,7 @@
 //! 2. `<cwd>/.aleph/hooks.json` — project-scoped, intended to be checked in
 //! 3. `<cwd>/.aleph/hooks.local.json` — project-scoped, gitignored
 //! 4. `<project>/.aleph/hooks.{json,local.json}` for every folder the user has
-//!    registered as an Aleph project (the desktop-App "进入项目工作" picker
+//!    registered as an Aleph project (the desktop-App "Enter Project" picker
 //!    targets). In App mode the daemon CWD is meaningless, so project hooks
 //!    are loaded from the registry rather than (only) the launch directory.
 //!

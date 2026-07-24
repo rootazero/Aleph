@@ -471,7 +471,7 @@ fn last_user_query_returns_empty_for_empty_messages() {
 // Note on build_system_prompt coverage: the prompt assembly path itself
 // requires a wired `MemoryContextProvider` (LLM-backed reranker, embedder,
 // hybrid assembler, FactSourceFilter pipeline). That is exercised in the
-// P0 联合 e2e validation step against a live aleph-server, where curated
+// P0 joint e2e validation step against a live aleph-server, where curated
 // markers and retrieval markers can be planted in a known-state fixture
 // and the resulting RequestPayload.system_prompt asserted via TraceSink.
 // Adding a unit test here would require a heavy fixture stack (provider,

@@ -69,7 +69,7 @@ const GATHER_TOOLS: &[&str] = &["search", "web_fetch"];
 ///
 /// Generous on purpose: a legitimate multi-source report needs maybe 5–8
 /// searches; 12 leaves headroom while still firing long before the 1000-turn
-/// interactive `max_iterations` cap that the runaway A股 run hit at ~156.
+/// interactive `max_iterations` cap that the runaway gather run hit at ~156.
 pub const GATHER_BUDGET_THRESHOLD: usize = 12;
 
 /// Count `ToolCallRequested` events whose tool is in [`GATHER_TOOLS`] within

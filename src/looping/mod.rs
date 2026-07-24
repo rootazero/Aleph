@@ -3,7 +3,7 @@
 //! continuation hook. The clock-gated sibling of `goal` (condition-gated).
 //!
 //! Storage is PROCESS MEMORY ONLY — never `tasks.db`. A daemon restart clears
-//! every loop, which is the physical guarantee of the "随会话消亡" semantics.
+//! every loop, which is the physical guarantee of the "dies with the session" semantics.
 
 pub mod pursuit;
 pub mod types;
@@ -101,11 +101,11 @@ impl LoopRegistry {
     /// Snapshot every loop across ALL sessions, any status. Backs
     /// `loop(action='list')`: a loop started on one channel is invisible to
     /// `status`, which keys by the current session — the same cross-session gap
-    /// `goal(action='list')` closes for goals (R6 一核多端 / R8 对话即管理面板).
+    /// `goal(action='list')` closes for goals (R6 one core, many channels / R8 chat IS the admin panel).
     /// The registry keeps at most one entry per session (`start` overwrites), so
     /// this is small — one row per session that started a loop this daemon
     /// lifetime. Process memory only, so it is exactly the loops alive now (no
-    /// orphan rows to reconcile, matching the "随会话消亡" contract). Ordering is
+    /// orphan rows to reconcile, matching the "dies with the session" contract). Ordering is
     /// the caller's to impose.
     #[must_use]
     pub fn list_all(&self) -> Vec<LoopState> {

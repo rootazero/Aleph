@@ -420,11 +420,11 @@ pub struct ChatState {
     /// Active project workspace root (absolute path). When `Some`, the
     /// chat composer attaches it to `chat.send` as `project_root`, and the
     /// daemon swaps the agent's working directory for the duration of the
-    /// run. Switching project clears the session per the "切换即开新
+    /// run. Switching project clears the session per the "switch opens new
     /// session" convention agreed for the desktop App.
     pub active_project_root: RwSignal<Option<String>>,
     /// Human-friendly display name for the active project. Surfaced in the
-    /// composer's "进入项目工作 ▾" chip so the user always sees which
+    /// composer's "enter project workspace ▾" chip so the user always sees which
     /// folder they're operating against.
     pub active_project_name: RwSignal<Option<String>>,
     /// User-selected per-turn model override (chat-window picker).
@@ -485,7 +485,7 @@ pub struct ChatState {
     /// Team chat mode marker. `Some(team_id)` → render 3-pane team view; composer
     /// routes to teams.chat.send. `None` = single-agent chat (zero regression).
     /// NOTE (MVP): not persisted in SessionSnapshot — team mode is ephemeral and
-    /// does not survive a session-tab swap; re-enter via the 团队 compose button.
+    /// does not survive a session-tab swap; re-enter via the team compose button.
     pub team_id: RwSignal<Option<String>>,
     /// Team roster + live status (left roster rail data source). Empty = non-team.
     pub team_members: RwSignal<Vec<TeamMemberView>>,
@@ -1292,7 +1292,7 @@ mod step_tests {
         // `response_chunk` (append_chunk) ride independent async pipelines. When
         // the authoritative text lands first and a preview chunk arrives after,
         // the late chunk must be dropped — not appended on top — or the text
-        // shows doubled ("好的…报告。好的…报告。").
+        // shows doubled ("ok…report. ok…report.").
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
@@ -1663,7 +1663,7 @@ mod tool_timestamp_tests {
         });
         assert!(started.is_some(), "first running must stamp started_at_ms");
 
-        // 完成时不覆盖时间戳
+        // don't overwrite timestamp on completion
         chat.update_tool("r1", "t1", "bash", "completed", Some(30));
         let after = chat.messages.with_untracked(|m| {
             m.iter()

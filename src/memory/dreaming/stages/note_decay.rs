@@ -690,7 +690,7 @@ mod tests {
         );
     }
 
-    // --- Permanent / protected-type exemption (the "永久不受影响" promise) ---
+    // --- Permanent / protected-type exemption (the "never affected" promise) ---
 
     #[test]
     fn category_protected_matches_configured_types() {

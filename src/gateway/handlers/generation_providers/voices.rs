@@ -189,7 +189,7 @@ fn detect_voices_by_model(
     }
 }
 
-/// True when the model id is a SiliconFlow (硅基流动) TTS model family.
+/// True when the model id is a SiliconFlow TTS model family.
 fn is_siliconflow_tts_model(model: &str) -> bool {
     let m = model.to_lowercase();
     m.contains("cosyvoice")
@@ -198,7 +198,7 @@ fn is_siliconflow_tts_model(model: &str) -> bool {
         || m.contains("gpt-sovits")
 }
 
-/// SiliconFlow (硅基流动) system TTS voices. The API expects `voice` in
+/// SiliconFlow system TTS voices. The API expects `voice` in
 /// `model:voice` form (e.g. `FunAudioLLM/CosyVoice2-0.5B:alex`), so every id is
 /// prefixed with the configured model.
 fn siliconflow_voice_list(model: &str) -> Vec<crate::generation::VoiceInfo> {
@@ -224,7 +224,7 @@ fn siliconflow_voice_list(model: &str) -> Vec<crate::generation::VoiceInfo> {
         .collect()
 }
 
-/// MiniMax/Hailuo (海螺) TTS voice list. Delegates to the provider so the
+/// MiniMax/Hailuo TTS voice list. Delegates to the provider so the
 /// picker and the provider share one source of truth — the modern
 /// `speech-2.x` / `speech-02` voice taxonomy (the classic `male-qn-*` ids are
 /// `speech-01`-only and are rejected by the current default model).

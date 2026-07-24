@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(r.tool_call_id.as_deref(), Some("c1"));
         assert_eq!(r.tool_name.as_deref(), Some("bash_exec"));
 
-        // 内部标记不投影
+        // internal markers not projected
         assert!(project_row(&SessionEvent::TurnStarted {
             turn_id: tid,
             trigger: TurnTrigger::UserMessage,

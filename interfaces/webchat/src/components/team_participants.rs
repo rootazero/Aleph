@@ -73,7 +73,7 @@ pub fn collapse_for_count(n: usize) -> bool {
 
 /// Responsive roster bar for team chat. At wide widths (≥560px) renders an
 /// expanded horizontal pill bar — one labeled capsule per member with status
-/// dot, Chinese label, and a 「队长」chip for the leader. At narrow widths (or
+/// dot, Chinese label, and a "leader" chip for the leader. At narrow widths (or
 /// when the team exceeds `CLUSTER_CAP`) it collapses to an avatar cluster
 /// button that opens a popover. A `ResizeObserver` publishes the bar's
 /// rendered height to `--aleph-team-roster-h` so the message list can pad its
@@ -251,7 +251,7 @@ pub fn TeamParticipants() -> impl IntoView {
                 </button>
 
                 // Expanded popover — backdrop catcher + roster card (per-member
-                // status dot + Chinese label + 队长 marker).
+                // status dot + Chinese label + leader marker).
                 <Show when=move || open.get()>
                     <div class="fixed inset-0 z-10 pointer-events-auto" on:click=move |_| open.set(false)></div>
                     <div class="absolute left-0 top-full mt-1 z-20 min-w-[180px] \

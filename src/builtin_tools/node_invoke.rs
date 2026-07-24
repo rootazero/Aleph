@@ -1,7 +1,9 @@
-//! `node_invoke`：中心侧 LLM 工具，向一个已连节点下发命令（经 0a 反向 RPC）。
+//! `node_invoke`: center-side LLM tool that dispatches commands to a connected
+//! node (via 0a reverse RPC).
 //!
-//! 寻址按 name 或 id；下发前 fail-fast 校验节点声明的命令（节点侧仍权威）。
-//! 红线：纯 I/O 翻译（R4），无推理（R7）；命令选择由 LLM 做。
+//! Addressing is by name or id; fail-fast validation of declared commands before
+//! dispatch (the node side remains authoritative).
+//! Redline: pure I/O translation (R4), no reasoning (R7); command selection by LLM.
 
 use crate::sync_primitives::Arc;
 
@@ -104,8 +106,9 @@ mod tests {
     use crate::gateway::protocol::JsonRpcResponse;
     use tokio::sync::mpsc;
 
-    /// 建一个登记好的节点会话，并返回中心可读的 channel + 后台"节点应答器"的
-    /// 出站接收端（扮演节点：收到 tool.call 帧就 resolve 回一条成功响应）。
+    /// Set up a registered node session and return the center-readable channel +
+    /// the background "node responder"'s outbound receiver (acting as the node:
+    /// on receiving a tool.call frame, resolve a success response).
     fn registry_with_node(
         node_id: &str,
         name: &str,
@@ -132,7 +135,7 @@ mod tests {
         (reg, rx, channel)
     }
 
-    /// 后台扮节点：读出一帧请求 → 回成功响应（回显 tool）。
+    /// Background node actor: read one frame request → respond success (echo the tool).
     fn spawn_node_responder(mut rx: mpsc::Receiver<String>, channel: ReverseRpcChannel) {
         let pending = channel.pending();
         tokio::spawn(async move {

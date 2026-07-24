@@ -115,7 +115,7 @@ pub struct BuiltinToolRegistry {
     /// the registry is wrapped in `Arc` before the MCP is constructed.
     pub(crate) memory_context_provider:
         Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
-    /// 集群节点登记表，启动后经 `set_node_registry` 注入；`node_invoke` 用它寻址。
+    /// Cluster node registry, injected at startup via `set_node_registry`; `node_invoke` uses it for addressing.
     pub(crate) node_registry: Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
     /// Memory browse tool instance (optional - requires `memory_db`)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,

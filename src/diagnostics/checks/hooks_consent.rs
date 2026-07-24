@@ -3,7 +3,7 @@
 //! Hoists the diagnosis that previously lived inline in
 //! `aleph hooks doctor` into a reusable check, so the unified `aleph doctor`
 //! and the `doctor` tool report consent health too. The `aleph hooks doctor`
-//! CLI now renders these same findings (single source of truth — 熵减).
+//! CLI now renders these same findings (single source of truth — entropy reduction).
 //!
 //! Read-only: approving a pending hook is a deliberate human trust decision,
 //! never an automatic repair.

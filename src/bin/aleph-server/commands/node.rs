@@ -1,17 +1,23 @@
-//! `aleph-server node` —— 集群节点（执行臂）拨出运行时。
+//! `aleph-server node` — cluster node (execution arm) outbound runtime.
 //!
-//! 拨向中心 WS、声明命令、入站循环服务 `tool.call`，在本机 sandbox 跑 bash。
-//! 断线指数退避重连。无 DB / 无 harness / 无 LLM。
+//! Dials the hub WS, declares capabilities, serves `tool.call` in an inbound
+//! loop, and runs bash in the local sandbox. Exponential-backoff reconnect on
+//! disconnect. No DB / no harness / no LLM.
 //!
-//! LAN-trust 模型：节点不持 token。**登记就发生在 `connect` 里**——首启时不带
-//! `device_id` 拨入，中心在 connect 回包的 `result.node` 里铸/归并一个 `node_id`
-//! 交回，节点落盘；之后每次 connect 都带上它，中心据此把记账稳定键入同一 UUID
-//! （touch_device / environments.list / deregister）。
+//! LAN-trust model: the node holds no token. **Registration happens inside
+//! `connect`** — on first boot, the node dials without a `device_id`; the hub
+//! mints/merges a `node_id` in connect's `result.node` response and returns it;
+//! the node persists it to disk. Every subsequent connect carries it, so the hub
+//! stably keys all accounting under the same UUID (touch_device /
+//! environments.list / deregister).
 //!
-//! 为什么登记不能是独立的 RPC：中心强制「一条连接的首帧必须是 `connect`」
-//! （`gateway/server/handler.rs`），且登录墙只在 `connect` 之前放行。旧实现另开
-//! 一条 WS、首帧直接发 `cluster.enroll`，**必被拒且连接被关**——新节点从来就没
-//! 登记成功过。`connect` 是唯一同时越过这两道闸的帧，所以登记只能长在它上面。
+//! Why registration must not be a separate RPC: the hub enforces that a
+//! connection's FIRST frame must be `connect` (`gateway/server/handler.rs`),
+//! and the login wall lets nothing through before `connect`. The old
+//! implementation opened a second WS and sent `cluster.enroll` as the first
+//! frame — it was always rejected and the connection killed — a fresh node
+//! literally never completed registration. `connect` is the sole frame that
+//! clears both gates simultaneously, so registration can only live on it.
 
 use alephcore::sync_primitives::RwLock;
 use std::path::{Path, PathBuf};
@@ -419,7 +425,8 @@ async fn run_session(
     Ok(())
 }
 
-/// 解析一帧；若是 `tool.call` 请求则 dispatch 并返回应答帧 JSON；否则 None。
+/// Parse a frame; if it is a `tool.call` request, dispatch and return the
+/// response frame JSON; otherwise `None`.
 async fn handle_frame(table: &CommandTable, text: &str) -> Option<String> {
     let v: Value = serde_json::from_str(text).ok()?;
     if v.get("method").and_then(|m| m.as_str()) != Some("tool.call") {

@@ -4,7 +4,7 @@
 //! Capture is a *continuous* PCM tap, not a per-utterance `MediaRecorder`. A
 //! `MediaRecorder` can only start capturing at the moment VAD declares speech —
 //! by then the first syllable is already gone (RMS must cross the threshold
-//! first, then the recorder spins up), which is exactly the "你好 → 好"
+//! first, then the recorder spins up), which is exactly the "hello -> lo"
 //! leading-clip bug. With a continuous tap we keep a rolling pre-roll ring and
 //! seed each segment with it, so the onset is always present. Raw PCM is
 //! sliceable (webm chunks are not), so the pre-roll is free; the segment is
@@ -197,7 +197,7 @@ impl MicError {
 }
 
 impl MicSession {
-    /// Open the mic with system AEC on (spec decision: 系统 AEC).
+    /// Open the mic with system AEC on (spec decision: system AEC).
     pub(crate) async fn open() -> Result<Rc<Self>, MicError> {
         let window = web_sys::window().ok_or(MicError::Unsupported)?;
         // `mediaDevices` is undefined outside a secure context (and in some
@@ -312,7 +312,7 @@ impl MicSession {
             return None;
         }
         // whisper.cpp asserts (hard-crashes) on buffers shorter than 1 s — the
-        // exact `[voice.local]` BYO scenario for a snappy "对/好" — so pad short
+        // exact `[voice.local]` BYO scenario for a snappy "yes/ok" — so pad short
         // segments with trailing silence to a safe 1.1 s.
         let min_len = (self.sample_rate as f32 * 1.1) as usize;
         if seg.len() < min_len {
@@ -331,7 +331,7 @@ impl MicSession {
     /// Begin emitting streaming frames from the live tap, seeded with the
     /// pre-roll ring. The seed matters most after a barge-in: the user is
     /// already mid-word when the fresh backend stream opens, and without the
-    /// ring the utterance onset is clipped — the same "你好 → 好" bug the
+    /// ring the utterance onset is clipped — the same "hello -> lo" bug the
     /// batch path solved by seeding segments. In the quiet re-entry case the
     /// ring holds ~320 ms of silence, which the backend VAD ignores.
     pub(crate) fn start_streaming(&self) {
@@ -759,7 +759,7 @@ impl TtsPlayer {
         let this = Rc::clone(self);
         spawn_local(async move {
             // Single attempt — NO same-provider retry. A serial retry only
-            // doubles the dead time on a slow chunk (the orb sits at "正在思考"
+            // doubles the dead time on a slow chunk (the orb sits at "thinking"
             // twice as long) without improving the odds against a flaky endpoint;
             // openclaw's lesson is provider *fallback*, never a blocking retry.
             // Robustness comes instead from coarser chunking upstream (the
@@ -772,10 +772,10 @@ impl TtsPlayer {
             if *this.epoch.borrow() != my_epoch {
                 return;
             }
-            // Leave "正在思考" the instant the first chunk is ready to DELIVER,
+            // Leave "thinking" the instant the first chunk is ready to DELIVER,
             // whether or not its audio synthesized. The caption shows the text
             // either way, so a TTS failure must not pin the phase at Processing
-            // while the reply is already on screen (the "状态一直显示思考中" bug).
+            // while the reply is already on screen (the "status stuck at thinking" bug).
             if !*this.started_any.borrow() {
                 *this.started_any.borrow_mut() = true;
                 (this.on_first_audio)();

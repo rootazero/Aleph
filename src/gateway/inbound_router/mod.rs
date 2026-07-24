@@ -121,7 +121,8 @@ pub struct InboundMessageRouter {
         Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
     /// Message coalescer for merging rapid-fire inbound messages
     coalescer: Option<super::coalescer::MessageCoalescer>,
-    /// 审批按钮回调汇 —— 注入则拦截 `cb_` 回调，否则按普通消息处理。
+    /// Approval-callback sink — when injected, intercepts `cb_` callbacks; otherwise
+    /// treated as normal messages.
     /// Used for in-channel button-callback approval flow.
     pub(super) approval_callback_sink: Option<Arc<dyn approval_callback::ApprovalCallbackSink>>,
     /// Exec-approval manager — resolves `/approve` and `/deny` channel replies
@@ -308,7 +309,7 @@ impl InboundMessageRouter {
         self
     }
 
-    /// 注入审批回调汇，启用通道按钮 approve/deny 分发。
+    /// Inject the approval-callback sink to enable in-channel button approve/deny dispatch.
     pub fn with_approval_callback_sink(
         mut self,
         sink: Arc<dyn approval_callback::ApprovalCallbackSink>,
@@ -541,8 +542,9 @@ impl InboundMessageRouter {
             msg.text.chars().take(50).collect::<String>()
         );
 
-        // 审批按钮回调短路：在正常路由之前拦截。
-        // callback query 入站消息 id 以 "cb_" 前缀（webhook / 轮询两路一致）。
+        // Approval-callback short-circuit: intercept before normal routing.
+        // callback query inbound message ids start with "cb_" prefix (consistent
+        // across webhook / polling paths).
         if msg.id.as_str().starts_with("cb_") {
             if let Some(ref sink) = self.approval_callback_sink {
                 if let Some(result) = sink
@@ -554,7 +556,8 @@ impl InboundMessageRouter {
                     let _ = self.channel_registry.send(&msg.channel_id, reply).await;
                     return Ok(());
                 }
-                // sink 返回 None → 非审批回调 → 落入正常消息流
+                // sink returns None → not an approval callback → fall through to
+                // normal message flow
             }
         }
 
@@ -1314,7 +1317,7 @@ mod tests {
     use crate::gateway::pairing_store::SqlitePairingStore;
     use crate::gateway::routing_config::DmScope;
 
-    /// Sink stub —— 任何回调都拦截。
+    /// Sink stub — intercepts every callback.
     struct AlwaysIntercept;
     #[async_trait::async_trait]
     impl ApprovalCallbackSink for AlwaysIntercept {
@@ -1343,8 +1346,8 @@ mod tests {
         }
     }
 
-    /// `cb_` 前缀 + 注入 sink → handle_message 拦截并早返回 Ok，
-    /// 不进入 agent 解析（空 registry，send 静默失败）。
+    /// `cb_` prefix + injected sink → handle_message intercepts and returns Ok early,
+    /// never enters agent resolution (empty registry, send silently fails).
     #[tokio::test]
     async fn cb_message_with_approval_sink_is_intercepted() {
         let router = InboundMessageRouter::new(
@@ -1647,8 +1650,9 @@ mod tests {
         );
     }
 
-    /// 单用户 owner：dm_scope=Main 时，零配置 fallback 路径的 DM 必须坍缩到
-    /// `agent:<id>:main`，使同一 agent 在不同 channel 的 DM 共享同一 Main 会话。
+    /// Single-user owner: when dm_scope=Main, the zero-config fallback path's DM
+    /// must collapse to `agent:<id>:main`, so the same agent's DMs across different
+    /// channels share a single Main session.
     #[test]
     fn dm_main_scope_collapses_to_main_session_key() {
         let router = InboundMessageRouter::new(
@@ -1670,7 +1674,7 @@ mod tests {
             raw: None,
             metadata: vec![],
         };
-        // 同一 agent、不同 channel → 同一 Main key（跨 channel 共享）。
+        // Same agent, different channels → same Main key (cross-channel shared).
         let k_tg = router.resolve_session_key_with_agent(&make("telegram"), "main");
         let k_sl = router.resolve_session_key_with_agent(&make("slack"), "main");
         assert_eq!(k_tg.to_key_string(), "agent:main:main");
@@ -1678,7 +1682,7 @@ mod tests {
         assert_eq!(k_tg.to_key_string(), k_sl.to_key_string());
     }
 
-    /// 反向保护：默认 PerPeer 下 DM 仍按 peer 隔离（零回归）。
+    /// Reverse guard: default PerPeer keeps DM isolated by peer (zero regression).
     #[test]
     fn dm_per_peer_scope_stays_isolated() {
         let router = InboundMessageRouter::new(
@@ -1706,7 +1710,7 @@ mod tests {
         assert_eq!(key.to_key_string(), "agent:main:peer:dm-owner");
     }
 
-    /// 不同 agent 各自 Main，互不串味。
+    /// Different agents get separate Main sessions, no cross-contamination.
     #[test]
     fn dm_main_scope_different_agents_isolated() {
         let router = InboundMessageRouter::new(

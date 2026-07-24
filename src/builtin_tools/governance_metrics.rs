@@ -26,7 +26,7 @@ use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
 
 /// Path prefix under which `flag_user_correction` records a real user
-/// correction in `raw_memories`. The audit's "近N天用户真实纠正数" signal.
+/// correction in `raw_memories`. The audit's "last N days real user correction count" signal.
 const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
 
 /// Default look-back window (days). Matches the audit loop's weekly cadence

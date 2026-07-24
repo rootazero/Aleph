@@ -1,7 +1,7 @@
 //! `ToolLoopVerifier` — structural watchdog that vetoes when the
 //! model has issued N consecutive identical tool calls (same `name` +
 //! `args_hash`), regardless of any narration text on the turn (closes
-//! master roadmap § 1.4 P1: "stop hook `仅在模型停手触发；tool_use` 死循环不覆盖").
+//! master roadmap § 1.4 P1: "stop hook only triggers when the model stops; tool_use infinite loop is not covered").
 //!
 //! Detection rule (deliberately conservative — false positives are
 //! costly because they inject a [verifier veto] message that disrupts

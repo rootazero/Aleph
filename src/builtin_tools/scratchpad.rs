@@ -185,7 +185,7 @@ impl ScratchpadTool {
 /// failing the op.
 ///
 /// When the action just finished the objective (every box `[x]`), the echo
-/// becomes a 收尾 completion summary instead of the in-progress checklist —
+/// becomes a wrap-up completion summary instead of the in-progress checklist —
 /// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
 /// structural (the model's own checkboxes), so the model stays sovereign over
 /// completion (R7); the progress sink mirrors it to the user channel (R5).

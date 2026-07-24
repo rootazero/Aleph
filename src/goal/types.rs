@@ -1,7 +1,7 @@
 //! Standing-goal entity — a persistent user objective with lifecycle +
 //! budget, distinct from the per-task `scratchpad` working memory.
 //!
-//! Immutable by construction (CLAUDE.md coding-style §不可变性): every
+//! Immutable by construction: every
 //! mutator returns a new `Goal`; the store overwrites the row.
 
 use schemars::JsonSchema;
@@ -40,18 +40,20 @@ pub enum PursuitMode {
     Active { max_iterations: u32 },
 }
 
-/// Maker/checker 分离的类型态：模型调用 `goal(complete)` 是一个 *claim*；
-/// 客观闸门（config.toml `[[stop_hooks]]` 退出码）通过才是 *confirmation*。
-/// 只有自主续跑（`PursuitMode::Active`）的 goal 会被闸门守护；交互/被动
-/// goal 的 complete 立即终止，不经闸门。`#[serde(default)]` → 旧持久化
-/// 反序列化为 `Unchecked`。
+/// Maker/checker separation: the model calling `goal(complete)` is a *claim*;
+/// the objective gate (config.toml `[[stop_hooks]]` exit code) passing is *confirmation*.
+/// Only autonomous pursuit (`PursuitMode::Active`) goals are guarded by the gate;
+/// interactive/passive goal completions terminate immediately without gating.
+/// `#[serde(default)]` → old persisted data deserializes as `Unchecked`.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GateOutcome {
-    /// 尚无闸门确认完成（默认；也是 Active/Paused/Blocked 的静息态）。
+    /// No gate confirmation of completion yet (default; also the rest state of
+    /// Active/Paused/Blocked).
     #[default]
     Unchecked,
-    /// 客观闸门确认了模型的 `Complete` 主张 → 循环真正终止。
+    /// The objective gate confirmed the model's `Complete` claim → the loop
+    /// truly terminates.
     Passed,
 }
 
@@ -72,8 +74,9 @@ pub struct Goal {
     /// before this field deserialize as 0.
     #[serde(default)]
     pub continuations_used: u32,
-    /// 模型自报的 `Complete` 是否已被客观闸门确认（见 [`GateOutcome`]）。
-    /// `#[serde(default)]` → 旧持久化读为 `Unchecked`。
+    /// Whether the model's self-reported `Complete` has been confirmed by the
+    /// objective gate (see [`GateOutcome`]).
+    /// `#[serde(default)]` → old persisted data reads as `Unchecked`.
     #[serde(default)]
     pub gate_outcome: GateOutcome,
     /// Optional per-goal objective gate: a shell command evaluated like a
@@ -298,8 +301,8 @@ impl Goal {
         self
     }
 
-    /// Lifecycle transition（闸门确认/复位）——bump `updated_at_ms`，
-    /// 与 `with_status`/`with_note` 同型。返回新 `Goal`（§不可变性）。
+    /// Lifecycle transition (gate confirm / reset) — bump `updated_at_ms`,
+    /// same shape as `with_status`/`with_note`. Returns a new `Goal` (immutability).
     #[must_use]
     pub const fn with_gate_outcome(mut self, outcome: GateOutcome, now_ms: u64) -> Self {
         self.gate_outcome = outcome;
@@ -317,7 +320,7 @@ impl Goal {
 
     /// Append a lesson to the state file, keeping at most `MAX_LESSONS` (newest).
     /// Appending a lesson is progress, so it bumps `updated_at_ms` (like
-    /// `with_note`). Returns a new `Goal` (§不可变性).
+    /// `with_note`). Returns a new `Goal` (immutability).
     #[must_use]
     pub fn with_lesson_appended(mut self, lesson: String, now_ms: u64) -> Self {
         self.lessons.push(lesson);
@@ -356,7 +359,7 @@ impl Goal {
     /// Seed the real token baseline (the session's cumulative total at the
     /// moment autonomous pursuit begins consuming budget) and mark it captured.
     /// Capturing the baseline is a lifecycle event, so it bumps `updated_at_ms`
-    /// (like `with_status`). Returns a new `Goal` (§不可变性).
+    /// (like `with_status`). Returns a new `Goal` (immutability).
     #[must_use]
     pub const fn with_baseline(mut self, tokens_at_start: u64, now_ms: u64) -> Self {
         self.tokens_at_start = tokens_at_start;
@@ -510,14 +513,14 @@ mod tests {
         assert_eq!(after.gate_outcome, GateOutcome::Passed);
         assert_eq!(after.updated_at_ms, 9_000);
         assert_eq!(g.gate_outcome, GateOutcome::Unchecked, "original unchanged");
-        // 其它字段不受影响
+        // other fields unaffected
         assert_eq!(after.status, g.status);
         assert_eq!(after.objective, g.objective);
     }
 
     #[test]
     fn old_payload_without_gate_outcome_deserializes_unchecked() {
-        // 模拟本字段引入前持久化的 JSON（无 gate_outcome 键）。
+        // Simulate JSON persisted before this field was introduced (no gate_outcome key).
         let json = r#"{"id":"goal-1","session_id":"s","objective":"o",
             "status":"active","token_budget":null,"tokens_at_start":0,
             "pursuit":{"mode":"passive"},"created_at_ms":1,"updated_at_ms":1,
@@ -601,7 +604,7 @@ mod tests {
         assert_eq!(after.tokens_at_start, 12_345);
         assert!(after.baseline_captured);
         assert_eq!(after.updated_at_ms, 9_000);
-        // original unchanged (§不可变性)
+        // original unchanged (immutability)
         assert_eq!(g.tokens_at_start, 1_000);
         assert!(!g.baseline_captured);
         // budget now measures from the seeded baseline, not session lifetime

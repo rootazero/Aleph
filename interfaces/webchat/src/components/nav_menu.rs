@@ -15,7 +15,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 
 /// Sections offered in the switcher, in display order. Extensions (Aleph Hub)
 /// is intentionally absent: its launcher lives in the Chat sidebar's
-/// advanced-features zone, below "项目管理". The `Extensions` arms in
+/// advanced-features zone, below "project management". The `Extensions` arms in
 /// `route_of`/`label_of`/`icon_of` are still needed for the trigger button,
 /// which mirrors the current section whenever the route is `/extensions`.
 const ALL_MODES: [PanelMode; 6] = [

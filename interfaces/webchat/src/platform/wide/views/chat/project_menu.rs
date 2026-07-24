@@ -1,7 +1,7 @@
-//! "进入项目工作 ▾" composer affordance.
+//! "enter project workspace ▾" composer affordance.
 //!
 //! Renders a small pill above the textarea. When project mode is inactive
-//! the pill says "进入项目工作 ▾" and opens a dropdown with two actions:
+//! the pill says "enter project workspace ▾" and opens a dropdown with two actions:
 //! use an existing folder, or create a blank one. Both flows funnel into
 //! the cross-platform [`DirectoryBrowser`] (which talks to the server's
 //! `fs.*` RPCs) so the directory the user picks is **the server's** —
@@ -76,7 +76,7 @@ pub fn ProjectMenu() -> impl IntoView {
     // The DirectoryBrowser fires this with the path the user confirmed.
     // Both purposes resolve to the same action — register the folder and
     // enter it. "New blank" differs only in that the browser auto-opens
-    // its inline "新建子目录" input (see `auto_create` on the component
+    // its inline "new subdirectory" input (see `auto_create` on the component
     // below), so the path we get back is the freshly created (and
     // navigated-into) folder. We deliberately avoid `window.prompt`: it is
     // silently disabled inside the Tauri webview, which previously left

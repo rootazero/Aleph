@@ -1,6 +1,6 @@
 //! `projects.*` Gateway RPC client.
 //!
-//! Backs the desktop Panel's "进入项目工作 ▾" picker — list / add an
+//! Backs the desktop Panel's "enter project workspace ▾" picker — list / add an
 //! existing folder / create a blank one / forget. The server-side store
 //! lives at `crate::projects` in `alephcore`; this module just shapes the
 //! JSON wire calls.

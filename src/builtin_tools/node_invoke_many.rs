@@ -1,9 +1,13 @@
-//! `node_invoke_many`：中心侧 LLM 工具，按标签把一条命令并发扇出到一组节点。
+//! `node_invoke_many`: center-side LLM tool that fans out one command
+//! concurrently to a set of nodes selected by tags.
 //!
-//! 与 `node_invoke`（解析→唯一节点，歧义=报错）语义显式分离：本工具按 tag 的
-//! AND 集合匹配一组在线节点，用 `tokio::task::JoinSet` 并发下发，容忍部分失败，
-//! 返回聚合结果。零命中报错并附可用标签提示。
-//! 红线：纯 I/O 翻译（R4），无推理（R7）；标签选择由 LLM 做，标签不是授权层。
+//! Semantics are explicitly separated from `node_invoke` (resolve→single node,
+//! ambiguity=error): this tool matches a set of online nodes by tag AND
+//! intersection, dispatches concurrently via `tokio::task::JoinSet`, tolerates
+//! partial failure, and returns an aggregate result. Zero matches error with an
+//! available-tags hint.
+//! Redline: pure I/O translation (R4), no reasoning (R7); tag selection by LLM,
+//! tags are not an authorization layer.
 
 use crate::sync_primitives::Arc;
 

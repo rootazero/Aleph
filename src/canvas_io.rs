@@ -1,7 +1,7 @@
 //! Server-side I/O for Obsidian JSON Canvas (`.canvas`) files.
 //!
 //! Lives under `$ALEPH_HOME/canvases/`. Pure file-system layer — no JSON-RPC,
-//! no tool registration. The future `memory_canvas` builtin tool (R8 工具即一切)
+//! no tool registration. The future `memory_canvas` builtin tool (R8 everything-is-a-tool)
 //! and `graph.import_canvas` / `graph.export_canvas` RPCs will both adopt this
 //! module rather than re-rolling I/O.
 //!

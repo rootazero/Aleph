@@ -953,7 +953,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     }
 }
 
-/// 中间轮叙述 — 无框直排的过程独白，永久留在对话流里。
+/// Mid-turn narration — borderless inline process monologue, permanently retained in the conversation stream.
 #[component]
 fn NarrationRow(message: ChatMessage) -> impl IntoView {
     let content = message.content.clone();
@@ -966,10 +966,10 @@ fn NarrationRow(message: ChatMessage) -> impl IntoView {
     }
 }
 
-/// 无 trace 历史兜底：一次无法回放 trace 的 run 会把工具调用/结果各自持久化成
-/// 独立的 `role="tool"` 行。这里把它渲染成一行紧凑的灰字（图标 + 压平的载荷），
-/// 而不是撑满整行的原始 JSON 气泡——让重新打开的老对话读起来干净。完整载荷通过
-/// `title` 悬浮查看。实时 run 永不走这里（其工具调用走 ToolCard / ToolLine）。
+/// Trace-less history fallback: a run with no replayable trace persists each tool call/result as
+/// standalone `role="tool"` rows. Rendered here as a compact grey line (icon + flattened payload),
+/// rather than a full-width raw JSON bubble — keeping old conversations clean on re-open. The full payload is
+/// visible via `title` hover. Live runs never reach here (their tool calls flow through ToolCard / ToolLine).
 #[component]
 fn ToolFallbackRow(message: ChatMessage) -> impl IntoView {
     let full = message.content.clone();
@@ -987,8 +987,8 @@ fn ToolFallbackRow(message: ChatMessage) -> impl IntoView {
     }
 }
 
-/// 探索聚合块 — 连续只读工具塌缩为一个可展开块（codex Exploring 同源）。
-/// 展开态按 group key 存 `ChatState::strip_open`（扛 per-token remount）。
+/// Explore aggregate block — consecutive read-only tools collapsed into one expandable block (codex Exploring origin).
+/// Expand state stored by group key in `ChatState::strip_open` (survives per-token remount).
 #[component]
 fn ExploreGroupRow(
     key_id: String,
@@ -1007,7 +1007,7 @@ fn ExploreGroupRow(
         Memo::new(move |_| chat.strip_is_open(&k, default_open))
     };
 
-    // 折叠头摘要：运行中 "🔍 探索中… N 项"；完成 "✓ 探索了 N 项 (读取×3 · 搜索×1)"
+    // Collapsed header summary: in-flight "Exploring… N items"; completed "Explored N items (Read×3 · Search×1)"
     let n = tools.len();
     let counts = summarize_tools(
         &tools
@@ -1045,7 +1045,7 @@ fn ExploreGroupRow(
         }
     };
 
-    // 展开体条目：headline 从 payload 现算（合并逻辑在纯函数里）。
+    // Expanded body entries: headline computed live from payload (merge logic is in pure functions).
     let entries = {
         let tools = tools.clone();
         let run = run_id.clone();

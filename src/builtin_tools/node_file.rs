@@ -1,8 +1,10 @@
-//! `node_file`：中心侧 LLM 工具，与某个已连节点双向传输文件（经 0a 反向 RPC）。
+//! `node_file`: center-side LLM tool for bidirectional file transfer with a
+//! connected node (via 0a reverse RPC).
 //!
-//! 字节在中心进程 ↔ 节点进程间流动，永不进入 LLM 上下文：LLM 只传路径，
-//! 工具读写中心盘 + base64 + 驱动反向 RPC，返回 {bytes, sha256, paths} 摘要。
-//! 红线：纯 I/O 翻译（R4），无推理（R7）；方向/路径由 LLM 决定。
+//! Bytes flow center-process ↔ node-process, never entering the LLM context:
+//! the LLM passes only paths; the tool reads/writes the center disk + base64 +
+//! drives the reverse RPC, returning a {bytes, sha256, paths} summary.
+//! Redline: pure I/O translation (R4), no reasoning (R7); direction/path by LLM.
 
 use std::path::Path;
 
@@ -259,7 +261,7 @@ mod tests {
         (reg, rx, channel)
     }
 
-    /// 后台扮节点：对 file.write 回 {written}，对 file.read 回固定内容。
+    /// Background node actor: respond {written} for file.write, fixed content for file.read.
     fn spawn_file_responder(
         mut rx: mpsc::Receiver<String>,
         channel: ReverseRpcChannel,

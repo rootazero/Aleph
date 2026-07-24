@@ -223,9 +223,10 @@ pub struct Config {
     /// Maps channel/peer patterns to specific agents using `RouteBinding`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<crate::routing::config::RouteBinding>,
-    /// 会话隔离策略（DM scope）。单用户 owner 设 `dm_scope = "main"`
-    /// 可让各 channel 的 DM 坍缩到同一 agent 的 Main 会话（一脑多端连续上下文）。
-    /// 默认 `per-peer`（多用户安全）。
+    /// DM scope. A single-user setup with `dm_scope = "main"` collapses
+    /// every channel's DM into the same agent's Main session (one brain,
+    /// many devices, continuous context). Default `per-peer` (safe for
+    /// multi-user deployments).
     #[serde(default, skip_serializing_if = "is_default_session")]
     pub session: crate::routing::config::SessionConfig,
     /// Plugin marketplace registrations

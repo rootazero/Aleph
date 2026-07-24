@@ -16,8 +16,8 @@
 //!     <DirectoryBrowser
 //!         open
 //!         on_pick
-//!         title="使用现有文件夹"
-//!         confirm_label="选择此目录"
+//!         title="Use existing folder"
+//!         confirm_label="Choose this directory"
 //!     />
 //! }
 //! ```
@@ -36,8 +36,8 @@ use leptos::task::spawn_local;
 /// - `open`        — bidirectional open/close signal; component sets it to
 ///                   false on cancel + after a successful pick.
 /// - `on_pick`     — invoked with the absolute server path the user chose.
-/// - `title`       — header text (e.g. "使用现有文件夹" / "新建空白项目 — 选择父目录").
-/// - `confirm_label` — bottom-right button label (e.g. "选择此目录").
+/// - `title`       — header text (e.g. "Use existing folder" / "New blank project — choose parent directory").
+/// - `confirm_label` — bottom-right button label (e.g. "Choose this directory").
 #[component]
 #[must_use]
 pub fn DirectoryBrowser(
@@ -52,7 +52,7 @@ pub fn DirectoryBrowser(
     #[prop(into)]
     confirm_label: Signal<String>,
     /// When true, the first time the modal settles into a directory after
-    /// opening it auto-pops the inline "新建子目录" input — the "new blank
+    /// opening it auto-pops the inline "New subdirectory" input — the "new blank
     /// project" entry point, so the user names a fresh folder immediately.
     #[prop(optional, into)]
     auto_create: Signal<bool>,
@@ -68,7 +68,7 @@ pub fn DirectoryBrowser(
     let show_hidden = RwSignal::new(false);
     let busy = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
-    // Inline "新建子目录" prompt: when Some(""), prompt is open and the
+    // Inline "New subdirectory" prompt: when Some(""), prompt is open and the
     // text field is mounted. Empty string == initial blank value.
     let create_name: RwSignal<Option<String>> = RwSignal::new(None);
     // Armed by `auto_create` on each open; fires once the modal lands in a

@@ -9,7 +9,7 @@
 //! handshake, the bridge logs a hint and the rest of the shell is entirely
 //! unaffected.
 //!
-//! R5 ("不打扰用户 / 不抢焦点") is enforced here: a notification only fires
+//! R5 ("Don't disturb user / Don't steal focus") is enforced here: a notification only fires
 //! when the Panel window is **not** focused. If the user is already looking
 //! at the Panel an OS banner is pure noise — the in-Panel UI already shows
 //! the prompt. The focus-gating and the long-turn-completion threshold live

@@ -9,7 +9,7 @@
 //! already carries every signal we need — tool args, per-call duration,
 //! success/error, the scratchpad checklist (in the scratchpad tool's result
 //! `content`), and the terminate cause. This module is the *renderable seam*;
-//! it adds no new protocol surface (连线优先).
+//! it adds no new protocol surface (wire-first).
 //!
 //! Design borrows from two reference agents:
 //! - hermes-agent `build_tool_preview`: a per-tool primary-arg preview table

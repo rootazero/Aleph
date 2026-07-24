@@ -184,7 +184,7 @@ impl TelegramConfig {
         Ok(())
     }
 
-    /// 将旧版扁平配置升级为新版层级配置
+    /// Upgrade legacy flat config to the new layered config
     #[must_use]
     pub fn upgrade_to_v2(&self) -> TelegramConfigV2 {
         TelegramConfigV2 {

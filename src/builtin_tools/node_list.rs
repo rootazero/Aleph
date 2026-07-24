@@ -1,8 +1,9 @@
-//! `node_list`：中心侧 LLM 工具，列出在线集群节点（只读投影）。
+//! `node_list`: center-side LLM tool, lists online cluster nodes (read-only projection).
 //!
-//! `node_invoke` / `node_invoke_many` / `node_file` 的 discover 半边（R8）：
-//! 模型先看有哪些节点、各自声明什么命令/带什么标签，再决定驱动谁。
-//! 红线：纯查表渲染（R7），无推理；绝不含凭证（R4）。
+//! The discovery half (R8) of `node_invoke` / `node_invoke_many` / `node_file`:
+//! the model first inspects which nodes exist, what commands each declares, and
+//! what tags they carry, then decides which to drive.
+//! Redline: pure table-scan rendering (R7), no reasoning; never contains credentials (R4).
 
 use crate::sync_primitives::Arc;
 

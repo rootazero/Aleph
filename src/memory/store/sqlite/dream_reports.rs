@@ -157,7 +157,7 @@ impl SqliteMemoryBackend {
 
     /// Dream activity grouped by `pipeline_type` for runs started after
     /// `since_started_at` (inclusive-exclusive: `started_at > since`). Powers the
-    /// governance audit's "dreaming 近N天" reality probe. `started_at` is in
+    /// governance audit's "dreaming last N days" reality probe. `started_at` is in
     /// **epoch seconds** (memory.db convention). Buckets are ordered by
     /// `pipeline_type` for deterministic output.
     pub fn dream_report_distribution_since(

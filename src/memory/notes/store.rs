@@ -621,7 +621,7 @@ pub trait NoteStore: Send + Sync {
     }
 
     /// Record recall ("retrieval") hits for the notes a search actually surfaced,
-    /// so frequently-recalled notes accrue reinforcement salience ("热门记忆浮顶")
+    /// so frequently-recalled notes accrue reinforcement salience ("popular memories float to top")
     /// and bubble up via [`recall_hit_counts`](Self::recall_hit_counts). Each hit
     /// is `(note_path, score)`. The backing store dedups per
     /// `(note_path, query, day, channel)`, so repeated recalls of the same note

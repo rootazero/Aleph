@@ -1,24 +1,28 @@
-//! 纯函数:从一条触发消息解析出本轮要唤醒的 agent 集合。
+//! Pure functions: parse the set of agents to awaken this round from a trigger message.
 //!
-//! 防风暴的"谁回复"闸 + 宽度闸 + 自环护栏全在这里,无 IO,host 可测。
+//! The storm-prevention "who-replies" gate + width gate + self-loop guard all live here,
+//! zero IO, host-testable.
 
 use super::RESERVED_USER_HANDLE;
 use crate::teams::messages::{extract_mentions, MENTION_ALL};
 
-/// 解析一条触发消息要唤醒哪些 agent。
+/// Parse which agents a trigger message should awaken.
 ///
-/// - `content`: 触发消息正文(用户消息或 agent 回复)
-/// - `sender`: 发送者 id(`"user"` 表示用户;否则是某 agent id)
-/// - `leader_id`: 团队 leader,用于"没@人时兜底"
-/// - `roster`: 团队全体成员 agent_id(含 leader)
-/// - `user_triggered`: true=用户消息(没@时 leader 兜底);false=agent 回复(没@时不兜底,链停)
-/// - `leader_first`: true=leader 优先硬门控(strategy 轮次2,激活时 leader 先分解任务再分派)
+/// - `content`: the trigger message body (user message or agent reply)
+/// - `sender`: sender id (`"user"` = user; otherwise an agent id)
+/// - `leader_id`: team leader, used for "fallback when no @"
+/// - `roster`: all team member agent_ids (including leader)
+/// - `user_triggered`: true = user message (leader fallback when no @);
+///   false = agent reply (no fallback when no @, chain stops)
+/// - `leader_first`: true = leader-priority hard gate (strategy round 2; when active, leader
+///   decomposes tasks first, then dispatches)
 ///
-/// 规则(spec §7):`@all`/`@everyone` → 全员(除 sender);具体 `@` → 取名册内的;
-/// 去掉自@和 `@user`;用户消息没@ → `[leader]`;agent 回复没@ → `[]`;宽度上限截断。
+/// Rules (spec §7): `@all`/`@everyone` → everyone (except sender); explicit `@` → keep only
+/// those in the roster; drop self-@ and `@user`; user message with no @ → `[leader]`;
+/// agent reply with no @ → `[]`; width cap truncates.
 ///
-/// `max_fanout_width` 来自 [`BroadcastConfig::max_fanout_width`](super::BroadcastConfig),
-/// 截断本轮唤醒人数(防 `@all` 在大群一次炸开)。
+/// `max_fanout_width` from [`BroadcastConfig::max_fanout_width`](super::BroadcastConfig),
+/// truncates this round's awakenings (prevents `@all` from exploding a large group).
 #[must_use]
 pub fn resolve_targets(
     content: &str,
@@ -49,21 +53,21 @@ pub fn resolve_targets(
     let mut targets: Vec<String> = if is_all {
         roster.to_vec()
     } else {
-        // 只保留名册内的具体 mention,保持出现顺序
+        // Keep only explicit mentions present in the roster, preserving appearance order
         mentions
             .into_iter()
             .filter(|m| m != MENTION_ALL && roster.iter().any(|r| r == m))
             .collect()
     };
 
-    // 护栏:去掉发送者自己 + 保留 handle "user"
+    // Guard rails: remove the sender + the reserved handle "user"
     targets.retain(|a| a != sender && a != RESERVED_USER_HANDLE);
 
-    // 去重(保持首次出现顺序)
+    // Dedup (preserve first-occurrence order)
     let mut seen = std::collections::HashSet::new();
     targets.retain(|a| seen.insert(a.clone()));
 
-    // 没@人:用户触发 → leader 兜底;agent 回复 → 链停(空)
+    // No @: user-triggered → leader fallback; agent reply → chain stops (empty)
     if targets.is_empty() && user_triggered {
         let leader = leader_id.to_string();
         if leader != sender {
@@ -71,7 +75,7 @@ pub fn resolve_targets(
         }
     }
 
-    // 宽度上限
+    // Width cap
     targets.truncate(max_fanout_width);
     targets
 }
@@ -122,7 +126,7 @@ mod tests {
 
     #[test]
     fn agent_reply_no_mention_stops_chain() {
-        // agent 回复没@人 → 不兜底,返回空(链自然停)
+        // agent reply with no @ → no fallback, returns empty (chain naturally stops)
         let t = resolve_targets(
             "好的我做完了",
             "alice",
@@ -146,22 +150,22 @@ mod tests {
             false,
             MAX_FANOUT_WIDTH,
         );
-        // roster 7 人,@all 排除 sender(user 不在 roster)→ 7 人,宽度上限 5
+        // roster of 7, @all excludes sender (user not in roster) → 7 people, width cap 5
         assert_eq!(t.len(), MAX_FANOUT_WIDTH, "@all 受宽度上限截断");
         assert!(!t.contains(&"user".to_string()));
     }
 
     #[test]
     fn fanout_width_is_configurable() {
-        // 把宽度闸调到 2 → @all 在 7 人群里只唤醒 2 人(验证闸值真正生效,
-        // 而非沿用旧的硬编码 MAX_FANOUT_WIDTH)。
+        // Set the width gate to 2 → @all in a group of 7 only awakens 2 (verifies the gate
+        // value actually applies, not reusing the old hardcoded MAX_FANOUT_WIDTH).
         let t = resolve_targets("@all 报到", "user", "leader", &roster(), true, false, 2);
         assert_eq!(t.len(), 2, "自定义宽度闸截断");
     }
 
     #[test]
     fn drops_self_mention_and_reserved_user() {
-        // alice 回复里 @ 自己 + @user + @bob → 只剩 bob
+        // alice's reply @-ing herself + @user + @bob → only bob remains
         let t = resolve_targets(
             "@alice @user @bob",
             "alice",

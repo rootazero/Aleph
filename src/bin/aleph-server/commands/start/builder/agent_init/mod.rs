@@ -1045,7 +1045,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     summarizer,
                 );
 
-                // Batch 2 — session-end reflection ("经验教训"). Opt-in: only
+                // Batch 2 — session-end reflection ("lessons learned"). Opt-in: only
                 // registered when [memory.reflection] enabled = true, so the
                 // disabled default adds zero session-end overhead. Reuses the
                 // same SummaryLlm wrapper as the Spec B summarizer. The
@@ -1372,9 +1372,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire goal-pursuit autonomous-continuation deps (opt-in, only fires
         // for sessions whose goal has PursuitMode::Active). Idempotent: a
         // second set is ignored by the OnceLock. Registry clone is cheap (Arc).
-        // Goal-loop 客观闸门：复用全局 config.toml [[stop_hooks]]（与
-        // within-turn StopHookVerifier 同源）。None → 无闸门，complete 主张
-        // 立即终止（行为与本特性引入前一致）。
+        // Goal-loop objective gate: reuses the global config.toml [[stop_hooks]]
+        // (same source as the within-turn StopHookVerifier). None → no gate,
+        // the complete claim terminates immediately (behavior identical to
+        // before this feature was introduced).
         let goal_gate =
             alephcore::verification::stop_hooks::build_from_config(&app_config.stop_hooks);
         let goal_deps = alephcore::gateway::execution_engine::ContinuationDeps {

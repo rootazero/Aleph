@@ -1,37 +1,43 @@
-//! 群聊广播编排器(telegram 式 multiagent 平等群聊)。spec 2026-06-16。
+//! Group-chat broadcast orchestrator (telegram-style multiagent equal group chat). spec 2026-06-16.
 //!
-//! 纯逻辑在 `targets` / `transcript` / `member_prompt`(host 可测,无 IO);
-//! IO 编排(fan-out 跑 run + 回流)在 `GroupChatBroadcaster`(批次 B)。
-//! 防风暴三道闸全是确定性脚手架,不参与推理、不进 `src/harness/`(守 R10)。
+//! Pure logic lives in `targets` / `transcript` / `member_prompt` (host-testable, no IO);
+//! IO orchestration (fan-out run + backflow) in `GroupChatBroadcaster` (batch B).
+//! The three storm-prevention gates are all deterministic scaffolding, never participate
+//! in reasoning, never enter `src/harness/` (keeps R10).
 
 pub mod member_prompt;
 pub mod targets;
 pub mod transcript;
 
-/// 接话链最大深度(防 A↔B 无限互@)。spec §7。
+/// Maximum reply-chain depth (prevents A↔B infinite mutual @). spec §7.
 pub const MAX_CHAIN_DEPTH: u32 = 6;
-/// 单轮最多同时唤醒的 agent 数(防 @all 在大群一次炸开)。spec §7。
+/// Max agents awakened concurrently in one round (prevents @all from exploding a large group). spec §7.
 pub const MAX_FANOUT_WIDTH: usize = 5;
-/// 单次用户触发的整棵接话树最多累计唤醒的成员次数(防风暴第三闸)。
+/// Max cumulative member activations across the entire reply tree triggered by a single
+/// user message (storm-prevention third gate).
 ///
-/// `depth × width` 是 per-branch / per-round 的局部约束:最坏情形(每个成员每轮
-/// 都 @ 满 `MAX_FANOUT_WIDTH` 个人、连续 `MAX_CHAIN_DEPTH` 层)累计可达
-/// `5^6 ≈ 1.5 万` 次成员 run。本闸为整棵 fan-out 树设一个**全局**唤醒上限,
-/// 把单条用户消息能引发的总成员执行数硬封顶,堵住"爱 @人 的模型在深树上炸开
-/// 资源"这条路。纯确定性脚手架,不参与推理(守 R10)。
+/// `depth × width` is a per-branch / per-round local constraint: worst case (every member @'s
+/// up to `MAX_FANOUT_WIDTH` people every round, for `MAX_CHAIN_DEPTH` consecutive levels)
+/// would accumulate ~`5^6 ≈ 15k` member runs. This gate imposes a **global** activation cap
+/// on the entire fan-out tree, hard-limiting the total member executions one user message can
+/// trigger, closing the "a mention-happy model explodes resources on a deep tree" path.
+/// Pure deterministic scaffolding, never participates in reasoning (keeps R10).
 pub const MAX_TOTAL_ACTIVATIONS: usize = 32;
-/// 群 transcript 注入的 token 预算(超出从尾保留最近)。
+/// Token budget for injected group transcript (truncated from tail to keep most recent when exceeded).
 pub const TRANSCRIPT_TOKEN_BUDGET: usize = 8000;
-/// 单个成员 run 的墙钟超时(秒)。镜像 `DispatcherConfig::task_timeout_secs`
-/// 的默认值(600)。此前 `run_member` 传 `timeout_secs: None`,继承
-/// `ExecutionEngine::default_timeout_secs` 的 48 小时兜底——一次卡死的
-/// provider 调用会把成员 run(连同等它的 fan-out 分支和 activation 槽位)
-/// 钉住整整两天且无停止按钮。注意:群聊 leader 的 run 同受此帽——leader
-/// 若在群聊里同步 `team_delegate`,整段委派须装进这个窗口(被帽杀时
-/// delegate 侧的 settle-on-drop 围栏会立即把 coord task 记 Failed 并释放
-/// 锁);长委派场景经 `[team_broadcast] member_run_timeout_secs` 调大。
+/// Wall-clock timeout (seconds) for a single member run. Mirrors the default value
+/// (600) of `DispatcherConfig::task_timeout_secs`. Previously `run_member` passed
+/// `timeout_secs: None`, inheriting `ExecutionEngine::default_timeout_secs`'s 48-hour
+/// fallback — one wedged provider call would pin a member run (and the fan-out branch
+/// + activation slot waiting on it) for two full days with no stop button.
+/// Note: the group-chat leader's run is subject to the same cap — if the leader
+/// synchronously calls `team_delegate` inside the group chat, the entire delegation
+/// must fit within this window (when killed by the cap, the delegate's settle-on-drop
+/// fence immediately marks the coord task Failed and releases the lock); for long
+/// delegation scenarios, tune up via `[team_broadcast] member_run_timeout_secs`.
 pub const MEMBER_RUN_TIMEOUT_SECS: u64 = 600;
-/// 保留 handle:agent 不能 @ 回用户(防自环)。openteams `RESERVED_USER_HANDLE`。
+/// Reserved handle: agents must not @-reply to the user (prevents self-loop).
+/// openteams `RESERVED_USER_HANDLE`.
 pub const RESERVED_USER_HANDLE: &str = "user";
 
 /// Operator-tunable storm-prevention guards for group-chat broadcast (§4.5),
@@ -43,18 +49,18 @@ pub const RESERVED_USER_HANDLE: &str = "user";
 /// Defaults are read from the `MAX_*` / `TRANSCRIPT_TOKEN_BUDGET` consts above,
 /// so the authoritative values live in exactly one place and an unconfigured
 /// deployment is byte-identical to prior behaviour. Pure scaffolding — these
-/// caps gate fan-out mechanically and never reason (守 R10).
+/// caps gate fan-out mechanically and never reason (keeps R10).
 #[derive(Debug, Clone)]
 pub struct BroadcastConfig {
-    /// 接话链最大深度(防 A↔B 无限互@)。
+    /// Max reply-chain depth (prevents A↔B infinite mutual @).
     pub max_chain_depth: u32,
-    /// 单轮最多同时唤醒的 agent 数(防 @all 在大群一次炸开)。
+    /// Max agents awakened concurrently in one round (prevents @all from exploding a large group).
     pub max_fanout_width: usize,
-    /// 单次用户触发的整棵接话树最多累计唤醒的成员次数(防风暴第三闸)。
+    /// Max cumulative member activations across the entire reply tree (storm-prevention third gate).
     pub max_total_activations: usize,
-    /// 群 transcript 注入的 token 预算(超出从尾保留最近)。
+    /// Token budget for injected group transcript (truncated from tail to keep most recent).
     pub transcript_token_budget: usize,
-    /// 单个成员 run 的墙钟超时(秒)。见 [`MEMBER_RUN_TIMEOUT_SECS`]。
+    /// Wall-clock timeout (seconds) for a single member run. See [`MEMBER_RUN_TIMEOUT_SECS`].
     pub member_run_timeout_secs: u64,
 }
 
@@ -87,21 +93,24 @@ use crate::teams::messages::{MessageStore, MessageType, NewMessage};
 use crate::teams::types::TeamMemberKind;
 use crate::teams::TeamStore;
 
-/// 是否已达/超过接话深度上限。`max` 由 [`BroadcastConfig::max_chain_depth`] 提供。
+/// Whether the chain depth has reached/exceeded its cap. `max` comes from
+/// [`BroadcastConfig::max_chain_depth`].
 #[must_use]
 pub fn over_depth(chain_depth: u32, max: u32) -> bool {
     chain_depth >= max
 }
 
-/// 组装被唤醒成员 run 的 metadata。
+/// Build metadata for a woken member's run.
 ///
-/// **关键**:必须带 `platform = "webchat"`。群聊是 Panel 上实时、面向用户的对话,
-/// 不是后台任务。少了 platform,harness 会回退到 `Background` paradigm
-/// (`run_loop` 用 `metadata.get("platform")` 推导 manifest,None → Background),
-/// 而 `Background` 默认带 `SilentReply` capability → `ProtocolTokensLayer` 教模型用
-/// `ALEPH_SILENT_COMPLETE` 表示"不发言"。成员于是把这个字面 token 当整条回复发出,
-/// 泄漏进 Panel 气泡和 transcript。`webchat` → `WebRich`(不含 `SilentReply`)从
-/// 源头杜绝。与所有 channel 路径 `metadata["platform"] = channel.channel_type()` 一致。
+/// **Critical**: must carry `platform = "webchat"`. Group chat is a real-time,
+/// user-facing conversation on the Panel, not a background task. Without
+/// `platform`, the harness falls back to the `Background` paradigm
+/// (`run_loop` uses `metadata.get("platform")` to derive the manifest, `None` → Background),
+/// and `Background` defaults to `SilentReply` capability → `ProtocolTokensLayer` teaches the
+/// model to use `ALEPH_SILENT_COMPLETE` to signal "I'm not speaking". The member then
+/// emits this literal token as the entire reply, leaking it into Panel bubbles and
+/// the transcript. `webchat` → `WebRich` (without `SilentReply`) nips this at the source.
+/// Consistent with all channel paths' `metadata["platform"] = channel.channel_type()`.
 ///
 /// Deliberately NOT marked `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
 /// goal continuations: a member run carries no channel, so its approvals resolve
@@ -151,7 +160,7 @@ fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
 /// `teams.chat.cancel` fires it (via `BackgroundAgentTracker::cancel` on the
 /// tree node) so no NEW members spawn while the RPC walks
 /// `running_children_of` to abort the in-flight ones through the engine's
-/// per-run CancellationToken path. Pure scaffolding — no reasoning (守 R10).
+/// per-run CancellationToken path. Pure scaffolding — no reasoning (keeps R10).
 #[derive(Clone)]
 struct FanoutTree {
     run_id: Arc<String>,
@@ -169,7 +178,8 @@ pub struct RegisteredFanout {
     _tree_reg: RunningRegistration,
 }
 
-/// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
+/// Group-chat broadcast orchestrator. Stateless: each dispatch fetches team/roster/transcript
+/// on the spot.
 #[derive(Clone)]
 pub struct GroupChatBroadcaster {
     ctx: Arc<GatewayContext>,
@@ -254,10 +264,13 @@ impl GroupChatBroadcaster {
         store.put_if_absent(&key, &strategy).unwrap_or(false)
     }
 
-    /// 入口:用户消息触发(没@时 leader 兜底)。假定 user 消息已由调用方存进 `msg_store`。
+    /// Entry point: triggered by a user message (leader fallback when no @).
+    /// Assumes the user message has already been stored in `msg_store` by the caller.
     ///
-    /// 每次用户触发新建一个 fan-out 树的全局唤醒计数器(`MAX_TOTAL_ACTIVATIONS` 闸),
-    /// 计数器随这棵树的整条递归共享、用完即弃,确保上限是"每条用户消息"而非"进程累计"。
+    /// Each user trigger creates a fresh global activation counter for the fan-out tree
+    /// (`MAX_TOTAL_ACTIVATIONS` gate), shared across the tree's entire recursion and
+    /// discarded afterward — the cap is "per user message", not "cumulative across the
+    /// process".
     ///
     /// Construct + tracker-register the fan-out tree for an RPC-minted
     /// `teams.chat.send` run_id. Synchronous — call BEFORE spawning the
@@ -310,9 +323,11 @@ impl GroupChatBroadcaster {
             .await;
     }
 
-    /// 递归核心。`user_triggered`=false 时没@不兜底(链自然停)。
-    /// `leader_first`=true 时硬路由到 leader(strategy 轮次2,TaskActivity 之后激活)。
-    /// `budget` 是整棵 fan-out 树共享的累计唤醒计数器(防风暴第三闸)。
+    /// Recursive core. `user_triggered`=false means no fallback when no @ (chain naturally stops).
+    /// `leader_first`=true means hard-route to the leader (strategy round 2, activated after
+    /// TaskActivity).
+    /// `budget` is the shared cumulative activation counter for the entire fan-out tree
+    /// (storm-prevention third gate).
     fn dispatch(
         self,
         team_id: String,
@@ -353,7 +368,7 @@ impl GroupChatBroadcaster {
             if over_depth(chain_depth, self.config.max_chain_depth) {
                 // Post the boundary notice only when the gate actually
                 // suppressed someone — a reply with no @ ends its chain
-                // naturally at any depth and a "深度上限" message for it is
+                // naturally at any depth and a "depth cap reached" message for it is
                 // false-alarm noise (the activation gate's exactly-once
                 // discipline, applied to the depth gate).
                 if !targets.is_empty() {
@@ -367,7 +382,7 @@ impl GroupChatBroadcaster {
                     .await;
             }
             if targets.is_empty() {
-                return; // 链自然停
+                return; // chain naturally stops
             }
 
             let roster_label = members
@@ -376,13 +391,14 @@ impl GroupChatBroadcaster {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            // 并发跑本轮每个目标 agent;各自完成后递归回流。
+            // Run each target agent concurrently; after each finishes, recursively backflow.
             let mut handles = Vec::new();
             for agent_id in targets {
-                // ACP 成员(外部 CLI)只在 dispatcher 的 coord-task 路径可执行
-                // (`runner.rs` 经 AcpAdapterManager),AgentRegistry 解析不到——
-                // 在领取风暴预算槽之前跳过,否则 `@all` 会为一个永远沉默的成员
-                // 白烧一个 activation 槽位且零日志。
+                // ACP members (external CLI) are only executable via the dispatcher's
+                // coord-task path (`runner.rs` via AcpAdapterManager); AgentRegistry
+                // cannot resolve them — skip before spending a storm-budget slot,
+                // otherwise `@all` would burn an activation slot on a forever-silent
+                // member with zero logging.
                 if members
                     .iter()
                     .any(|m| m.agent_id == agent_id && m.kind == TeamMemberKind::AcpSession)
@@ -391,9 +407,12 @@ impl GroupChatBroadcaster {
                         "group-chat: ACP member is dispatcher-only (not chat-capable); skipped without consuming an activation slot");
                     continue;
                 }
-                // 防风暴第三闸:整棵树累计唤醒封顶。`fetch_add` 原子领取一个槽位,
-                // 越界即跳过本成员;恰好跨越上限的那一次(且仅那一次)发一句系统提示
-                // —— `claimed == MAX` 在所有并发分支里只会被命中一次,天然去重不刷屏。
+                // Storm-prevention third gate: hard cap on cumulative activations
+                // across the whole tree. `fetch_add` atomically claims a slot;
+                // out-of-bounds members are skipped; the one that exactly crosses
+                // the line (and only that one) posts a system notice —
+                // `claimed == MAX` is hit exactly once across all concurrent
+                // branches, naturally deduplicated without spamming.
                 let claimed = budget.fetch_add(1, Ordering::Relaxed);
                 if claimed >= self.config.max_total_activations {
                     if claimed == self.config.max_total_activations {
@@ -429,9 +448,11 @@ impl GroupChatBroadcaster {
                 )));
             }
             for h in handles {
-                // JoinError 只在成员任务 panic 或被取消时出现。吞掉会让群聊里"某个
-                // agent 静默消失"无迹可循,这里降级为 warn 让 panic 可观测(不上抛,
-                // 一个成员崩溃不该拖垮整轮广播)。
+                // JoinError only surfaces when a member task panics or is cancelled.
+                // Swallowing it would leave a silently-vanished agent in the group
+                // chat with no trace; we downgrade to warn so the panic is
+                // observable (no rethrow — one member crashing must not kill the
+                // entire broadcast round).
                 if let Err(e) = h.await {
                     tracing::warn!(team_id = %team_id, error = %e, "group-chat member task panicked");
                 }
@@ -439,8 +460,10 @@ impl GroupChatBroadcaster {
         })
     }
 
-    /// 跑单个成员 agent,拿回复 → 存 transcript → 解析@递归回流。
-    /// `budget` 继续随回流递归向下传,让累计唤醒上限覆盖整棵接话树。
+    /// Run a single member agent, capture reply → persist transcript → parse @-mentions
+    /// and recursively backflow.
+    /// `budget` is passed down through the backflow recursion so the cumulative activation
+    /// cap covers the entire reply tree.
     async fn run_member(
         self,
         team_id: String,
@@ -465,7 +488,7 @@ impl GroupChatBroadcaster {
             return;
         };
 
-        // 拉最新 transcript(含刚到的消息)并格式化
+        // Pull latest transcript (including the just-arrived message) and format it
         let history = self
             .msg_store
             .list_team_messages(&team_id, 200)
@@ -490,7 +513,8 @@ impl GroupChatBroadcaster {
             &user_request,
         );
 
-        // collector 收集回复;TeamFanoutEmitter 同时广播到 team.<id>.*(Panel 气泡)
+        // collector captures the reply; TeamFanoutEmitter simultaneously broadcasts
+        // to team.<id>.* (Panel bubbles)
         let collector = Arc::new(CollectingEventEmitter::new());
         let emitter: Arc<dyn EventEmitter + Send + Sync> = match team_event_bus() {
             Some(bus) => Arc::new(TeamFanoutEmitter::new(
@@ -577,8 +601,10 @@ impl GroupChatBroadcaster {
             .await
         {
             tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
-            // 失败/超时必须在群 transcript 留痕——否则成员被 @ 后无声消失,
-            // 后续轮次和 Panel 历史出现无迹之洞(镜像深度/宽度闸的系统提示)。
+            // Failure/timeout must leave a trace in the group transcript — otherwise
+            // an @'ed member vanishes silently, leaving a traceless hole in
+            // subsequent rounds and Panel history (mirroring the depth/width gate
+            // system notices).
             self.post_system(
                 &team_id,
                 &format!("@{agent_id} 的发言执行失败或超时,本轮未能回复。"),
@@ -587,15 +613,18 @@ impl GroupChatBroadcaster {
             return;
         }
 
-        // 先提取并持久化本成员的回复——必须在 F2-retrigger 之前:leader 复审
-        // 拉的是 msg_store transcript,若 nudge 先行,leader 审的是缺了提交者
-        // 收尾陈述(自述/告警/工件指针)的记录,且 review 裁决在 transcript 里
-        // 排在触发它的提交之前(因果倒序永久入库)。
+        // Extract and persist this member's reply FIRST — must happen before the
+        // F2-retrigger: the leader's review reads the msg_store transcript; if the
+        // nudge comes first, the leader reviews a record missing the submitter's
+        // closing statement (self-report/warning/artifact pointer), and the review
+        // verdict ends up BEFORE the triggering submission in the transcript
+        // (causality reversal, permanently stored).
         let reply = extract_final_response(&collector.events().await)
             .filter(|r| !r.trim().is_empty());
         if let Some(reply) = &reply {
-            // 长 TTL:群 transcript 是持久记录,不走 inbox 的短 TTL。持久化
-            // 失败必须可见——静默丢失让后续轮次和 Panel 历史出现无迹之洞(P7)。
+            // Long TTL: group transcript is a durable record, not subject to inbox's
+            // short TTL. A persistence failure must be visible — silent loss creates
+            // a traceless hole in subsequent rounds and Panel history (P7).
             if let Err(e) = self
                 .msg_store
                 .send_message_with_ttl(
@@ -656,8 +685,10 @@ impl GroupChatBroadcaster {
             return;
         };
 
-        // 回流:解析回复里的@,递归(agent 触发→没@不兜底)。深度+1。
-        // dispatch 返回显式 boxed future(打破 async 递归的 opaque 类型循环)。
+        // Backflow: parse @-mentions in the reply, recurse (agent-triggered → no
+        // fallback when no @). Depth+1.
+        // dispatch returns an explicit boxed future (breaking async recursion's
+        // opaque type cycle).
         self.dispatch(
             team_id,
             reply,
@@ -703,10 +734,10 @@ mod tests {
     #[test]
     fn chain_depth_guard_blocks_at_max() {
         let max = MAX_CHAIN_DEPTH;
-        assert!(over_depth(max, max), "到上限应阻断");
-        assert!(over_depth(max + 1, max), "超上限应阻断");
-        assert!(!over_depth(max - 1, max), "未到上限放行");
-        assert!(!over_depth(0, max), "初始放行");
+        assert!(over_depth(max, max), "at cap = blocked");
+        assert!(over_depth(max + 1, max), "over cap = blocked");
+        assert!(!over_depth(max - 1, max), "under cap = admitted");
+        assert!(!over_depth(0, max), "zero = admitted");
     }
 
     #[test]
@@ -723,8 +754,9 @@ mod tests {
 
     #[test]
     fn activation_budget_admits_exactly_max_and_dedups_overflow_note() {
-        // 复刻 dispatch 里的领取逻辑:fetch_add 领槽,claimed < MAX 放行,
-        // claimed == MAX 恰好一次(发系统提示),claimed > MAX 静默拒。
+        // Replicate the dispatch slot-claiming logic: fetch_add claims a slot,
+        // claimed < MAX is admitted, claimed == MAX hits exactly once (posts
+        // system notice), claimed > MAX is silently rejected.
         let budget = Arc::new(AtomicUsize::new(0));
         let mut admitted = 0usize;
         let mut note_posts = 0usize;
@@ -738,14 +770,15 @@ mod tests {
             }
             admitted += 1;
         }
-        assert_eq!(admitted, MAX_TOTAL_ACTIVATIONS, "恰好放行 MAX 次成员唤醒");
-        assert_eq!(note_posts, 1, "越界提示只发一次(天然去重,不刷屏)");
+        assert_eq!(admitted, MAX_TOTAL_ACTIVATIONS, "exactly MAX member activations admitted");
+        assert_eq!(note_posts, 1, "overflow notice fired exactly once (natural dedup, no spam)");
     }
 
     #[test]
     fn member_metadata_tags_webchat_platform() {
-        // 群聊成员必须以 webchat(→ WebRich)paradigm 运行。少了 platform
-        // 会回退 Background → 教模型 ALEPH_SILENT_COMPLETE → 泄漏进气泡/transcript。
+        // Group-chat members must run with the webchat (→ WebRich) paradigm.
+        // Missing platform falls back to Background → teaches model
+        // ALEPH_SILENT_COMPLETE → leaks into bubbles/transcript.
         let m = member_run_metadata("team-x", 2);
         assert_eq!(m.get("platform").map(String::as_str), Some("webchat"));
         assert_eq!(m.get("team_id").map(String::as_str), Some("team-x"));
@@ -768,8 +801,9 @@ mod tests {
 
     #[test]
     fn webchat_paradigm_never_teaches_silent_token() {
-        // 守住修复依赖的不变量:webchat 解析出的 paradigm 不含 SilentReply,
-        // 因此 ProtocolTokensLayer 永不教 ALEPH_SILENT_COMPLETE。
+        // Guard the invariant this fix depends on: webchat-resolved paradigm
+        // must not include SilentReply, therefore ProtocolTokensLayer never
+        // teaches ALEPH_SILENT_COMPLETE.
         use crate::gateway::channel::paradigm_for_channel_type;
         use crate::thinker::interaction::Capability;
         let paradigm = paradigm_for_channel_type("webchat");
@@ -777,7 +811,7 @@ mod tests {
             !paradigm
                 .default_capabilities()
                 .contains(&Capability::SilentReply),
-            "WebRich 不得含 SilentReply,否则成员会被教 ALEPH_SILENT_COMPLETE"
+            "WebRich must not include SilentReply, otherwise members would be taught ALEPH_SILENT_COMPLETE"
         );
     }
 }

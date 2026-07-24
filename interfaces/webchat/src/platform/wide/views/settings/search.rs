@@ -1742,7 +1742,7 @@ fn FetchProvidersSection() -> impl IntoView {
                     </p>
                 </div>
 
-                // API Key (write-only via ProviderKeyField; shows 已保存 when has_api_key)
+                // API Key (write-only via ProviderKeyField; shows saved when has_api_key)
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
                         "API Key"

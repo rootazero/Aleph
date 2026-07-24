@@ -5,7 +5,7 @@
 //! [`EndpointTier`] (a `base_url`-derived connectivity fact) — into a
 //! [`CandidateAction`]. It never sees messages, tools, or the prompt; it
 //! cannot classify task intent. Choosing local vs cloud is *infrastructure*
-//! (R7 赋能层), and the resulting candidate SET is still handed to the existing
+//! (R7 infrastructure layer), and the resulting candidate SET is still handed to the existing
 //! failover engine which owns all retry / breaker / model-walk logic (R10 dumb
 //! loop preserved — the harness never learns the route mode).
 //!

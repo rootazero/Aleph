@@ -191,7 +191,7 @@ mod tests {
         // Regression: a remote unauthorized Panel is reachable-but-walled. The
         // boot gate (z-9000) must yield so the login wall (TokenWall, z-100) is
         // visible and clickable; otherwise the token box is buried and the user
-        // can never authorize. This is the "找不到服务器 covers the token box" bug.
+        // can never authorize. This is the "server not found covers the token box" bug.
         assert!(!boot_gate_visible(false, false, true));
     }
 }

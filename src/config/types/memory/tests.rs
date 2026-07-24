@@ -77,7 +77,7 @@ mod tests {
         assert!(!c.force_fallback);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
         assert!(!c.assembly_log.enabled);
-        // Hot-surfacing + time-decay ranking are active by default ("自动冒泡");
+        // Hot-surfacing + time-decay ranking are active by default ("automatic bubbling");
         // MMR and the external reranker stay opt-in.
         assert!(c.retrieval_scoring.is_active());
         assert!(c.retrieval_scoring.recency_enabled);

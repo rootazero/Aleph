@@ -64,8 +64,8 @@ const MAX_SESSIONS: usize = 1024;
 /// auto-execute tools — so the cost of tripping it is at most a re-prompt the
 /// user can resolve by acting deliberately, never silent data loss.
 ///
-/// Set to 3 to match the product spec ("连续 3 次被拒绝 → AI 自动暂停执行,
-/// 防止暴力穷举") and `OpenSquilla`'s `DEFAULT_DENIAL_THRESHOLD = 3` — the
+/// Set to 3 to match the product spec ("3 consecutive denials → AI auto-pauses
+/// execution, preventing brute-force guessing") and `OpenSquilla`'s `DEFAULT_DENIAL_THRESHOLD = 3` — the
 /// circuit breaker should trip the moment a brute-force pattern is
 /// unmistakable, not give it two more free attempts. Tightening only (a
 /// session that paused at 5 still pauses at 3); no caller hard-codes the

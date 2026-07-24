@@ -1,11 +1,11 @@
-//! 集群 API client。`environments.list`(在线 + 离线合并视图)、`cluster.enroll`
-//! (operator-only 预登记一个节点名)、`cluster.deregister`(operator-only 注销节点)。
-//! 节点命令下发由 LLM 经对话驱动(`node_invoke`/`node_file` 工具,R8),
-//! 不在 Panel 暴露手动入口。
+//! Cluster API client. `environments.list` (online + offline merged view), `cluster.enroll`
+//! (operator-only pre-register a node name), `cluster.deregister` (operator-only deregister a node).
+//! Node command dispatch is LLM-driven through conversation (`node_invoke`/`node_file` tools, R8),
+//! no manual entry point exposed in the Panel.
 //!
-//! LAN-trust:enroll **不铸 token**。节点凭 `connect` 帧的参数形状声明身份,
-//! 登记本身也在 connect 里完成——所以 `cluster.enroll` 只是 operator 的**预占位**
-//! (让节点在真正拨入前就以 offline 出现在舰队里,并让同名的节点归并到这一行)。
+//! LAN-trust: enroll does **not mint a token**. Nodes declare identity via the parameter shape of the `connect` frame;
+//! registration itself is also done inside connect — so `cluster.enroll` is merely an operator **pre-reservation**
+//! (so the node appears in the fleet as offline before it actually dials in, and identically-named nodes merge into this row).
 
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
@@ -46,10 +46,10 @@ impl Environment {
     }
 }
 
-/// `cluster.enroll` 的回包。**没有 token** —— LAN-trust 下 enroll 只返 `node_id`。
-/// 此前这里是 `token: String`(必填)+ `signature`,而服务端早已不再返回它们,
-/// 于是 `serde_json::from_value` 恒以 "missing field `token`" 失败:Panel 的
-/// 「+ Enroll」按钮**从来就没成功过**。
+/// Response payload of `cluster.enroll`. **No token** — under LAN-trust, enroll only returns `node_id`.
+/// Previously this carried `token: String` (required) + `signature`, but the server stopped returning them long ago,
+/// so `serde_json::from_value` always failed with "missing field `token`": the Panel's
+/// "+ Enroll" button **had never succeeded**.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollResult {
     pub node_id: String,
@@ -58,7 +58,7 @@ pub struct EnrollResult {
 pub struct ClusterApi;
 
 impl ClusterApi {
-    /// 列出集群节点(在线会话 + 已登记但离线的设备)。RPC `environments.list`。
+    /// List cluster nodes (online sessions + registered but offline devices). RPC `environments.list`.
     pub async fn list_environments(state: &DashboardState) -> Result<Vec<Environment>, String> {
         let result = state.rpc_call("environments.list", Value::Null).await?;
         result
@@ -70,7 +70,7 @@ impl ClusterApi {
             })
     }
 
-    /// 预登记一个节点名,拿回它的 `node_id`。RPC `cluster.enroll`(operator-only)。
+    /// Pre-register a node name, get back its `node_id`. RPC `cluster.enroll` (operator-only).
     pub async fn enroll_node(
         state: &DashboardState,
         node_name: String,
@@ -80,8 +80,8 @@ impl ClusterApi {
         serde_json::from_value(result).map_err(|e| format!("Failed to parse enroll result: {e}"))
     }
 
-    /// 注销一个节点(name 或 id):驱逐在线会话 + 吊销设备记录。注销是**粘的**——
-    /// 该节点下次 connect 会被中心拒绝,不会自己重连回来。
+    /// Deregister a node (name or id): evict online sessions + revoke device record. Deregistration is **sticky** —
+    /// the node's next connect will be rejected by the center; it cannot reconnect on its own.
     /// RPC `cluster.deregister`(operator-only)。
     pub async fn deregister_node(state: &DashboardState, node: String) -> Result<(), String> {
         let params = serde_json::json!({ "node": node });

@@ -1,15 +1,17 @@
-//! 工具卡片富渲染 —— 把一次工具调用（args/result）按工具类型渲染成
-//! diff / shell / 全文 / patch 等富视图。左侧聊天与右侧工作区面板共用。
+//! Rich tool-card rendering — renders a single tool invocation (args/result)
+//! into rich views (diff / shell / full-text / patch) keyed by tool kind. Shared
+//! by the left-side chat and the right-side workspace panel.
 //!
-//! 纯逻辑（ToolKind 分流、diff、截断、汇总）与视图组件分离：逻辑可在
-//! 宿主机 `cargo test -p aleph-panel --lib` 下测试。
+//! Pure logic (ToolKind dispatch, diff, truncation, summarisation) is separated
+//! from view components: logic is host-testable via
+//! `cargo test -p aleph-panel --lib`.
 
 use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::{ToolPayload, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 
-/// 工具大类 —— 决定卡片体如何渲染。
+/// Tool kind — determines how the card body is rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
     FileEdit,
@@ -22,7 +24,7 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    /// 由工具名（大小写不敏感）映射到大类。未知名 → `Default`。
+    /// Map a tool name (case-insensitive) to a kind. Unknown → `Default`.
     #[must_use]
     pub fn from_name(name: &str) -> Self {
         let n = name.to_lowercase();
@@ -53,24 +55,26 @@ impl ToolKind {
         }
     }
 
-    /// 卡片默认是否展开内容：文件改动类默认展开，其余默认折叠。
+    /// Whether the card is expanded by default: file-mutation kinds default-open,
+    /// the rest default-closed.
     #[must_use]
     pub const fn default_open(self) -> bool {
         matches!(self, Self::FileEdit | Self::FileWrite | Self::ApplyPatch)
     }
 }
 
-/// 卡片渲染表面：左侧聊天（封顶）vs 右侧详情栏（全量）。
+/// Card rendering surface: left chat (capped) vs right detail pane (full).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolSurface {
-    /// 左侧聊天：内联只一层扁平，封顶 `MAX_INLINE_LINES`，溢出指向详情栏。
+    /// Left chat: inline, flat single level, capped at `MAX_INLINE_LINES`; overflow
+    /// links to the detail pane.
     #[default]
     Inline,
-    /// 右侧「工具·详情栏」：全量扁平，不封顶。
+    /// Right "Tool · Detail" pane: full, flat, uncapped.
     Detail,
 }
 
-/// 左侧内联详情封顶行数；右侧详情栏不封顶。
+/// Max visible lines for inline chat cards; the right-side detail pane is uncapped.
 pub const MAX_INLINE_LINES: usize = 8;
 
 impl ToolSurface {
@@ -88,20 +92,20 @@ impl ToolSurface {
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
-/// 一行 diff：`sign` 为 `'+'`(新增)/`'-'`(删除)/`' '`(上下文)。
+/// One diff line: `sign` is `'+'`(added) / `'-'`(removed) / `' '`(context).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
     pub sign: char,
     pub text: String,
 }
 
-/// 从 `{"Success":{"output":..}}` 取出 output。
+/// Extract output from `{"Success":{"output":..}}`.
 #[must_use]
 pub fn success_output(result: &Value) -> Option<&Value> {
     result.get("Success").and_then(|s| s.get("output"))
 }
 
-/// 从 `{"Error":{"error":..}}` 取出错误文案。
+/// Extract error text from `{"Error":{"error":..}}`.
 pub fn error_message(result: &Value) -> Option<String> {
     result
         .get("Error")
@@ -110,7 +114,7 @@ pub fn error_message(result: &Value) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
-/// 行级 diff（带相等的上下文行），返回 (行, 新增数, 删除数)。
+/// Line-level diff (with equal context lines), returns (lines, added, removed).
 #[must_use]
 pub fn diff_lines(old: &str, new: &str) -> (Vec<DiffLine>, usize, usize) {
     let diff = TextDiff::from_lines(old, new);
@@ -134,7 +138,8 @@ pub fn diff_lines(old: &str, new: &str) -> (Vec<DiffLine>, usize, usize) {
     (lines, added, removed)
 }
 
-/// 取前 `max_lines` 行；返回 (展示文本, 被隐藏行数)。隐藏数为 0 表示未截断。
+/// Take first `max_lines` lines; returns (display text, hidden count). 0 hidden
+/// means not truncated.
 #[must_use]
 pub fn split_preview(text: &str, max_lines: usize) -> (String, usize) {
     let lines: Vec<&str> = text.lines().collect();
@@ -145,9 +150,9 @@ pub fn split_preview(text: &str, max_lines: usize) -> (String, usize) {
     (shown, lines.len() - max_lines)
 }
 
-/// 从搜索结果 `Success.output.results[]` 提取扁平命中列表 `(title, url)`。
-/// 字段缺失时 title/url 各自回落（title: `title`→`name`→`"(untitled)"`；
-/// url: `url`→`link`→None）。非预期形状返回空。
+/// Extract flat hit list `(title, url)` from search results `Success.output.results[]`.
+/// On missing fields, title/url each fall back (title: `title`->`name`->`"(untitled)"`;
+/// url: `url`->`link`->None). Unexpected shapes return empty.
 #[must_use]
 pub fn search_hits(result: &Value) -> Vec<(String, Option<String>)> {
     let Some(arr) = success_output(result)
@@ -174,8 +179,8 @@ pub fn search_hits(result: &Value) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// 把一个 JSON 对象压成顶层 `key: value` 行；嵌套值用紧凑单行 JSON
-/// （`serde_json::to_string`，无缩进），不展开成可折叠子树。非对象返回空。
+/// Flatten a JSON object into top-level `key: value` rows; nested values use compact single-line JSON
+/// (`serde_json::to_string`, no indentation), never expanded into collapsible subtrees. Non-objects return empty.
 #[must_use]
 pub fn flat_kv(value: &Value) -> Vec<(String, String)> {
     let Some(map) = value.as_object() else {
@@ -193,8 +198,8 @@ pub fn flat_kv(value: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 按工具大类汇总计数，用于「无叙述」时合成占位标题。
-/// 顺序固定（首次出现的大类先出），便于稳定渲染与测试。
+/// Aggregate counts by tool kind, used to synthesise placeholder titles when there is no narration.
+/// Order is stable (first occurrence first), for deterministic rendering and testing.
 #[must_use]
 pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     let mut order: Vec<ToolKind> = Vec::new();
@@ -209,26 +214,26 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     order.into_iter().map(|k| (k, counts[&k])).collect()
 }
 
-/// 探索块展开体的一行：连续 FileRead 合并成一条（文件名去重连接），
-/// Search 等其余只读工具各自一条。
+/// One row in the explore block body: consecutive FileRead merged into one (deduplicated filename join),
+/// Search and other read-only tools each get their own row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExploreEntry {
     pub kind: ToolKind,
-    /// 已合成的展示文案（如 "a.rs, b.rs" 或搜索词）。
+    /// Synthesised display label (e.g. "a.rs, b.rs" or search term).
     pub label: String,
-    /// 该条覆盖的 tool_id（合并行含多个；点击取 first 进详情栏）。
+    /// tool_ids covered by this entry (merged rows contain multiple; click uses first for detail pane).
     pub tool_ids: Vec<String>,
 }
 
-/// 连续 FileRead 合并去重：将连续的同类文件读取合并为一条，
-/// 文件名去重后以逗号连接；其他工具各占一行。
+/// Merge consecutive FileRead with dedup: merge consecutive same-kind file reads into one entry,
+/// deduplicated filenames joined by comma; other tools each get their own row.
 #[must_use]
 pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<ExploreEntry> {
     let mut out: Vec<ExploreEntry> = Vec::new();
     for (tool_id, name, headline) in items {
         let kind = ToolKind::from_name(name);
         let label = headline.clone().unwrap_or_else(|| name.clone());
-        // 连续 FileRead 合并到上一条（label 去重后逗号连接）。
+        // Consecutive FileRead merged into the previous entry (label deduped and comma-joined).
         if kind == ToolKind::FileRead {
             if let Some(last) = out.last_mut().filter(|e| e.kind == ToolKind::FileRead) {
                 last.tool_ids.push(tool_id.clone());
@@ -248,7 +253,7 @@ pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<Explor
     out
 }
 
-/// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
+/// Path for file-type tools, used in the header `📄 path`. Non-file tools return None.
 #[must_use]
 pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
     let args = payload.as_ref()?.args.as_ref()?;
@@ -260,7 +265,7 @@ pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
     None
 }
 
-/// 工具大类图标字形。
+/// Icon glyph for a tool kind.
 const fn kind_icon(kind: ToolKind) -> &'static str {
     match kind {
         ToolKind::FileEdit => "✏️",
@@ -273,9 +278,9 @@ const fn kind_icon(kind: ToolKind) -> &'static str {
     }
 }
 
-/// 行内图标 —— `先按工具名给几个常见工具更贴切的字形（web_fetch` 🌐 /
-/// skill 📖 / memory 🧠），否则回落到大类图标。图标即代表动作，让聊天里
-/// 一行 `🌐 https://…` 自解释，无需再写工具名。
+/// Inline icon — first check the tool name for more specific glyphs (web_fetch 🌐 /
+/// skill 📖 / memory 🧠), otherwise fall back to the kind icon. The icon represents the action so that
+/// so a line `🌐 https://…` is self-explanatory without repeating the tool name.
 #[must_use]
 pub fn tool_icon(tool_name: &str, kind: ToolKind) -> &'static str {
     let n = tool_name.to_lowercase();
@@ -291,13 +296,13 @@ pub fn tool_icon(tool_name: &str, kind: ToolKind) -> &'static str {
     }
 }
 
-/// 把多行/含连续空白的参数压成单行：用于在头部用一行文字描述工具调用。
-/// `split_whitespace` 是 UTF-8 安全的，CJK 文本不会被切坏。
+/// Collapse multi-line / whitespace-heavy args into one line: used for the single-line tool-call description in the header.
+/// `split_whitespace` is UTF-8 safe — CJK text is never cut mid-character.
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Default 大类工具按优先级扫描这些参数键，取首个非空字符串作为标题。
+/// Default-kind tools scan these param keys in priority order, taking the first non-empty string as the title.
 const HEADLINE_KEYS: &[&str] = &[
     "query",
     "q",
@@ -315,10 +320,10 @@ const HEADLINE_KEYS: &[&str] = &[
     "prompt",
 ];
 
-/// 工具行的自然语言标题 —— 取最能说明这次调用的参数（搜索词 / shell 命令 /
-/// 文件路径 / URL……）压成一行。没有可描述的参数时返回 `None`，由调用方
-/// 改用大类动词标签（搜索 / 读取 / 执行……）。这取代了老旧的
-/// 「工具名 + COMPLETED + 耗时」式标题。
+/// Natural-language title for a tool row — picks the most descriptive parameter (query / shell command /
+/// file path / URL…) and collapses it into one line. Returns `None` when there is no descriptive parameter,
+/// so callers fall back to a kind verb label (search / read / execute…). This replaces the old
+/// "tool name + COMPLETED + duration" style title.
 #[must_use]
 pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<String> {
     match kind {
@@ -345,10 +350,10 @@ pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<St
     }
 }
 
-/// 共享工具卡片：头部（图标 + 一行文字标题 + 运行指示 + diff统计 + 折叠箭头）
-/// + 可展开体。标题取最能说明调用的参数（搜索词/命令/路径/URL），不再渲染
-/// 工具名与「COMPLETED · 耗时」。左侧聊天与右侧工作区面板都渲染它。展开状态为
-/// 每卡本地信号：文件改动类默认展开，其余默认折叠。
+/// Shared tool card: header (icon + single-line title + run indicator + diff stats + collapse arrow)
+/// + expandable body. The title picks the most descriptive parameter (query / command / path / URL), no longer rendering
+/// the tool name and "COMPLETED · duration". Both the left chat and right workspace panel render it. Expand state is
+/// a per-card local signal: file-mutation kinds default-open, the rest default-closed.
 #[component]
 #[must_use]
 pub fn ToolCard(
@@ -423,7 +428,7 @@ pub fn ToolCard(
         }
     };
 
-    // diff 统计（仅 FileEdit 有意义）：从 args 的 old/new 计算。
+    // diff stats (meaningful only for FileEdit): computed from args old/new.
     let diff_stat = move || {
         if kind != ToolKind::FileEdit {
             return None;
@@ -444,8 +449,8 @@ pub fn ToolCard(
 
     let icon = tool_icon(&tool_name, kind);
 
-    // 标题：取最能说明这次调用的参数压成一行（搜索词 / 命令 / 路径 / URL）；
-    // 没有参数时回落到大类动词标签，Default 工具回落到工具名本身。
+    // Title: collapse the most descriptive parameter into one line (query / command / path / URL);
+    // when there is no parameter, fall back to the kind verb label; Default tools fall back to the tool name itself.
     let tn = tool_name.clone();
     let headline = move || {
         if let Some(h) = tool_headline(kind, &payload.get()) {
@@ -549,12 +554,12 @@ pub fn ToolCard(
     }
 }
 
-/// 单行等宽容器样式。
+/// Single-line monospace container style.
 const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
 
-/// 按工具大类渲染卡片体。`surface` 决定封顶：Inline 封顶 `MAX_INLINE_LINES`
-/// 并在溢出处显示「→ 详情栏」联动行；Detail 全量。`detail_label` 为已解析的
-/// 本地化「详情栏」文案。
+/// Render card body by tool kind. `surface` controls capping: Inline caps at `MAX_INLINE_LINES`
+/// and shows a "-> detail panel" overflow line; Detail is full. `detail_label` is the resolved
+/// localised "detail panel" text.
 pub(crate) fn render_body(
     kind: ToolKind,
     payload: &Option<ToolPayload>,
@@ -625,8 +630,8 @@ fn patch_body(
     capped_diff(lines, surface, detail_label, on_overflow)
 }
 
-/// 红删/绿增/中性上下文的 diff 渲染，按 surface 封顶（Inline 超 MAX_INLINE_LINES
-/// 截断 + 「→ 详情栏」），扁平无嵌套。
+/// Red-remove / green-add / neutral-context diff rendering, capped by surface (Inline over MAX_INLINE_LINES
+/// truncated + "-> detail panel"), flat, no nesting.
 fn capped_diff(
     lines: Vec<DiffLine>,
     surface: ToolSurface,
@@ -655,9 +660,9 @@ fn capped_diff(
     .into_any()
 }
 
-/// 把多行文本按 surface 封顶渲染。Inline 超过 `MAX_INLINE_LINES` 时截断并
-/// 追加一行「… +N → 详情栏」（点击触发 `on_overflow`）；Detail 全量。
-/// 无内层折叠——这是扁平化的核心。
+/// Render multi-line text capped by surface. Inline over `MAX_INLINE_LINES` is truncated with
+/// an appended "… +N -> detail panel" line (click fires `on_overflow`); Detail is full.
+/// No inner collapsible sections — this is the core of the flattening.
 fn capped_block(
     text: &str,
     extra_class: &'static str,
@@ -676,8 +681,8 @@ fn capped_block(
     .into_any()
 }
 
-/// 统一的「… +N → 详情栏」溢出联动行。`detail_label` 已是解析好的本地化
-/// 文案（如 "详情栏" / "detail panel"）。
+/// Unified "… +N -> detail panel" overflow line. `detail_label` is the resolved localised
+/// text (e.g. "detail panel").
 fn overflow_line(
     hidden: usize,
     detail_label: String,
@@ -834,14 +839,14 @@ fn default_body(
     detail_label: String,
     on_overflow: impl Fn() + Clone + 'static,
 ) -> AnyView {
-    // 优先展示 result，其次 args；都压成顶层扁平 key:value 行。
+    // Prefer result over args; both flattened to top-level key:value rows.
     let source = p.result.clone().or_else(|| p.args.clone());
     let Some(v) = source else {
         return view! { <span class="text-text-tertiary italic text-xs">"…"</span> }.into_any();
     };
     let kv = flat_kv(&v);
     if kv.is_empty() {
-        // 非对象（数组/标量）→ 紧凑 pretty JSON，按 surface 封顶。
+        // Non-object (array/scalar) -> compact pretty JSON, capped by surface.
         let compact = serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
         return capped_block(
             &compact,
@@ -894,7 +899,7 @@ mod tests {
             diff_lines("let x = 1;\nlet y = 2;\n", "let x = 2;\nlet y = 2;\n");
         assert_eq!(added, 1);
         assert_eq!(removed, 1);
-        // 至少包含一条 '-'、一条 '+'、一条 ' '(相等的 y 行)
+        // At least one '-', one '+', one ' '(equal y line)
         assert!(lines.iter().any(|l| l.sign == '-'));
         assert!(lines.iter().any(|l| l.sign == '+'));
         assert!(lines.iter().any(|l| l.sign == ' '));
@@ -1079,7 +1084,7 @@ mod tests {
             "nested": { "a": 1, "b": [2, 3] }
         });
         let kv = flat_kv(&v);
-        // 顶层三个键；nested 的值压成紧凑单行 JSON，不展开成子树
+        // Three top-level keys; the nested value flattened to compact single-line JSON, not expanded into a subtree
         let map: std::collections::HashMap<_, _> = kv.into_iter().collect();
         assert_eq!(map.get("name").map(String::as_str), Some("alpha"));
         assert_eq!(map.get("count").map(String::as_str), Some("3"));

@@ -9,7 +9,7 @@ const TERMINALS: &[char] = &['。', '！', '？', '!', '?', '.', '\n', '；', ';
 /// until it reaches `MERGE_CHARS`, so the bulk of a long reply becomes fewer,
 /// larger TTS requests. Each chunk is a separate round-trip to a sometimes-flaky
 /// backend, so fewer-but-larger chunks mean fewer dropped fragments and fewer
-/// inter-chunk gaps — robust 边流边说 (stream-while-speaking) for long replies.
+/// inter-chunk gaps — robust stream-while-speaking (stream-while-speaking) for long replies.
 const FIRST_CHUNK_CHARS: usize = 6;
 const MERGE_CHARS: usize = 30;
 

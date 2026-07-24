@@ -27,7 +27,7 @@ impl OpenAiCompatProvider {
         self.endpoint.contains("volces.com")
     }
 
-    /// True when this provider targets SiliconFlow (硅基流动).
+    /// True when this provider targets SiliconFlow.
     ///
     /// SiliconFlow's image API diverges from the OpenAI convention in three
     /// ways the base code must account for: dimensions go in `image_size`

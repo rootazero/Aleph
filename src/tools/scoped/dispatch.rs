@@ -66,7 +66,7 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
 /// model-facing hint explaining *why* the denial ledger auto-refused.
 ///
 /// The hint is the denial ledger's [`DenialReason::agent_hint`] — the signal
-/// that turns the §否决账本 circuit breaker from a silent auto-deny into an
+/// that turns the denial-ledger circuit breaker from a silent auto-deny into an
 /// actionable instruction ("this exact intent is already refused — change
 /// approach" / "escalation is paused, stop and let the user decide"). Without
 /// surfacing it the agent only sees a generic `Denied` and naturally retries,

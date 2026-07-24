@@ -219,7 +219,7 @@ impl ProfileManager {
 
     /// Record activity on a specific tab so its idle timer resets. No-op for
     /// non-`Managed` profiles — the user's `ExistingSession` tabs are never
-    /// tracked or reaped (R5: 不打扰用户).
+    /// tracked or reaped (R5: don't disturb the user).
     pub fn touch_tab(&self, profile_name: &str, tab_id: &str) {
         if let Some(BrowserDriver::Managed) = self.get_driver(profile_name) {
             self.tab_registry.touch(profile_name, tab_id);

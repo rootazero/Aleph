@@ -18,7 +18,7 @@
 //!    It cut `agent.rs` at line 215 (a `#[cfg(test)]` on a test-only accessor
 //!    sitting in the middle of a production `impl`) and threw away the 846
 //!    lines after it. That is the entire gap between the recorded status —
-//!    "2026-07-04: 5077 行, 超 177 行" — and reality: the harness was ~1100
+//!    "2026-07-04: 5077 lines, 177 over ceiling" — and reality: the harness was ~1100
 //!    lines over, not 177.
 //!
 //! A redline whose status line is computed by hand, from an ambiguous rule, is
@@ -149,7 +149,7 @@ const BUDGETED: [&str; 12] = [
 ///     moved to `src/context/compact/rescue.rs`. It is mechanism, not cognition:
 ///     the compact-or-not decision is entirely `llm_retry::classify`'s
 ///     `CompactAndRetry` verdict, produced by the providers layer. So this is not
-///     R10's fifth "不" — the harness still selects no recovery strategy — and it
+///     R10's fifth "don't" — the harness still selects no recovery strategy — and it
 ///     is not a retreat from A2: the model still sees the error and self-heals.
 ///
 /// The seam is what makes it a sink rather than a shuffle: `RescueHost` is
@@ -278,7 +278,7 @@ const BUDGETED: [&str; 12] = [
 ///   harness (R10). Down-only ratchet: paid down, no 3-question answer required.
 ///
 /// 5070 → 5008 (−62): removed the `DiminishingReturnsDetector` hard-stop (R10's
-/// "5 不" #3 — the loop must make no completion judgement of its own). Gone from
+/// "5 don'ts" #3 — the loop must make no completion judgement of its own). Gone from
 /// `think.rs`: the `after_turn` consumer, its `output_tokens` read, the
 /// `GraceReason::Diminishing` grace-turn path, and the `use LoopDirective`
 /// import. Deleted outside this budget: the detector, `after_turn`, the

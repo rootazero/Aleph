@@ -431,7 +431,7 @@ impl SqliteMemoryBackend {
     /// Count raw memories whose `path` starts with `path_prefix` and were
     /// created after `since_created_at` (`created_at > since`, epoch **seconds**).
     /// Counts across all agents — this is the audit-wide reality probe behind
-    /// the governance loop's "近N天用户真实纠正数" check
+    /// the governance loop's "real corrections in last N days" check
     /// (`path LIKE 'aleph://correction/%'`), read in-core so the audit sensor
     /// never has to reach `~/.aleph/data` through the workspace sandbox. A
     /// `SELECT count(*)` (no row materialisation), sibling to the agent-scoped

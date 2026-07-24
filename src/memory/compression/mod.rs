@@ -11,7 +11,7 @@
 //! ## Why there is no signal detector
 //!
 //! A `SignalDetector` used to scan every user message against a bilingual keyword
-//! table ("不对" / "错了" / "actually" / "wrong" / …) to classify it as a
+//! table ("that's wrong" / "correction:" / "actually" / "wrong" / …) to classify it as a
 //! Correction / Learning / Milestone and, on a "correction" hit, fire an immediate
 //! compression. That is deterministic content classification of natural language —
 //! exactly what **R7** (LLM sovereignty) and **P8** (no brittle pattern matching)

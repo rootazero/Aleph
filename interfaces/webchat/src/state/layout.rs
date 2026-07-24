@@ -108,12 +108,12 @@ pub struct WorkspaceState {
     pub files_drawer_open: RwSignal<bool>,
     /// Currently previewed file (Phase 2).
     pub selected_file: RwSignal<Option<FilePreview>>,
-    /// 详情查看器当前选中的目标。直播时由 `follow_tool` 跟随最新开始的工具
-    /// （写入 `InspectorTarget::Tool`）；用户点选任一关键点（`inspect`）后钉住。
-    /// 从裸 `(run_id, tool_id)` 泛化为 [`InspectorTarget`]，让工具之外的关键点
-    /// （运行成本、推理、计划、未来的画布/浏览器）也能驱动右栏。
+    /// The currently selected target in the detail inspector. During live streaming, `follow_tool` follows the most recently started tool
+    /// (writing `InspectorTarget::Tool`); pinned after the user selects any target (`inspect`).
+    /// Generalised from bare `(run_id, tool_id)` to [`InspectorTarget`], so targets beyond tools
+    /// (run cost, reasoning, plan, future canvas/browser) can also drive the right pane.
     pub selected: RwSignal<Option<InspectorTarget>>,
-    /// 用户是否钉住了选中（钉住时直播跟随不覆盖）。run 结束解除。
+    /// Whether the user has pinned the selection (live-follow does not overwrite while pinned). Released on run end.
     pub pinned: RwSignal<bool>,
 }
 
@@ -244,9 +244,9 @@ impl WorkspaceState {
         self.tool_payloads.with(|m| m.get(&key).cloned())
     }
 
-    /// 直播跟随：未钉住时把详情面切到最新开始的工具（R5 — 工作台感）。
-    /// 只写 `InspectorTarget::Tool`，所以点选的非工具关键点（成本/推理/计划…）
-    /// 一旦钉住就不会被后续工具偷走。
+    /// Live-follow: when not pinned, switch the detail surface to the most recently started tool (R5 — workspace feel).
+    /// Only writes `InspectorTarget::Tool`, so a user-selected non-tool target (cost/reasoning/plan…)
+    /// once pinned is never stolen by a subsequent tool.
     pub fn follow_tool(&self, run_id: &str, tool_id: &str) {
         if !self.pinned.get_untracked() {
             self.selected.set(Some(InspectorTarget::Tool {
@@ -256,9 +256,9 @@ impl WorkspaceState {
         }
     }
 
-    /// 直播跟随（work 模式变体）：未钉住时把详情面切到执行计划（Progress 视角）。
-    /// work 模式下计划/进度是右栏的主场面（Claude Cowork / Manus 同款语义）；
-    /// 与 `follow_tool` 同一规则 —— 钉住即让位，永不 force-open。
+    /// Live-follow (work-mode variant): when not pinned, switch the detail surface to the execution plan (Progress view).
+    /// In work mode, the plan/progress is the right pane's main surface (same semantics as Claude Cowork / Manus);
+    /// same rule as `follow_tool` — pinning yields, never force-opens.
     pub fn follow_plan(&self, run_id: &str) {
         if !self.pinned.get_untracked() {
             self.selected.set(Some(InspectorTarget::Plan {
@@ -267,8 +267,8 @@ impl WorkspaceState {
         }
     }
 
-    /// 用户点选任一关键点：切换详情面到该目标 + 钉住 + 确保 Split 打开。
-    /// 聊天侧所有"→ 详情"入口（工具行、成本行、推理/计划头…）都走这唯一漏斗。
+    /// User selects any target: switch the detail surface to it + pin + ensure Split is open.
+    /// All chat-side "-> detail" entry points (tool rows, cost rows, reasoning/plan headers…) funnel through this single path.
     pub fn inspect(&self, target: InspectorTarget) {
         self.selected.set(Some(target));
         self.pinned.set(true);
@@ -277,7 +277,7 @@ impl WorkspaceState {
         }
     }
 
-    /// run 完成/出错：解除钉住（选中保留，详情面继续显示最后的工具）。
+    /// Run completed / errored: release the pin (selection kept, detail surface continues showing the last tool).
     pub fn end_follow(&self) {
         self.pinned.set(false);
     }
@@ -457,17 +457,17 @@ mod tests {
         let ws = test_ws(LayoutMode::Split);
         ws.follow_tool("r1", "t1");
         assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t1")));
-        // 用户点选 → 钉住
+        // User selects -> pinned
         ws.inspect(tool("r1", "t2"));
         assert!(ws.pinned.get_untracked());
-        // 钉住后直播跟随不再覆盖
+        // After pinning, live-follow no longer overwrites
         ws.follow_tool("r1", "t3");
         assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t2")));
-        // run 结束解钉，选中保留
+        // Run ends, unpin, selection retained
         ws.end_follow();
         assert!(!ws.pinned.get_untracked());
         assert!(ws.selected.get_untracked().is_some());
-        // 解钉后恢复跟随
+        // After unpin, follow resumes
         ws.follow_tool("r2", "t9");
         assert_eq!(ws.selected.get_untracked(), Some(tool("r2", "t9")));
     }

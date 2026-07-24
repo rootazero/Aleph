@@ -45,7 +45,7 @@ pub fn render_user_block(body: &str, char_limit: usize, near_threshold: f32) -> 
 
 /// Render last session's unresolved follow-ups as an XML envelope. Injected at
 /// the start of the next session so the agent can proactively pick them back up
-/// (R5 — "AI 主动到达"). `body` is the persisted `OPEN_LOOPS.md` markdown,
+/// (R5 — "AI proactively reaches out"). `body` is the persisted `OPEN_LOOPS.md` markdown,
 /// truncated to `char_limit` (counted in chars, CJK-safe) to bound the prompt.
 /// Empty body → empty string (caller omits the block).
 #[must_use]

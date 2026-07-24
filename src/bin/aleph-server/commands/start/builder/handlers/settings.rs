@@ -91,7 +91,7 @@ pub(in crate::commands::start) fn register_workspace_handlers(
 
 /// Wire the per-user project catalogue (`~/.aleph/projects.json`).
 ///
-/// These methods drive the desktop Panel's "进入项目工作" picker: list /
+/// These methods drive the desktop Panel's "Enter Project" picker: list /
 /// add an existing folder / create a blank one / remove / touch / get.
 pub(in crate::commands::start) fn register_projects_handlers(
     server: &mut GatewayServer,

@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
 
-/// 取 catalog entry 的有效 model 列表:有 models 用 models,否则回退到 [`default_model`]。
+/// Get the effective model list for a catalog entry: use models if present, otherwise fall back to [`default_model`].
 fn effective_models(e: &CatalogEntry) -> Vec<String> {
     if e.models.is_empty() {
         vec![e.default_model.clone()]
@@ -27,7 +27,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let emoji = RwSignal::new(String::new());
     let name = RwSignal::new(String::new());
     let description = RwSignal::new(String::new());
-    // "" = 继承系统默认;否则 "provider\u{1f}model"(catalog 选中项)
+    // "" = inherit system default; otherwise "provider|model" (catalog selected item)
     let selected_model = RwSignal::new(String::new());
     let model_touched = RwSignal::new(false);
     let catalog: RwSignal<Vec<CatalogEntry>> = RwSignal::new(Vec::new());
@@ -79,7 +79,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                     );
                 }
 
-                // 读取已存 model:Qualified 对象 → "provider\u{1f}model";Legacy 字符串/缺省 → 留空=继承
+                // Read stored model: Qualified object -> "provider|model"; Legacy string / absent -> leave empty = inherit
                 if let Some(mv) = def.get("model") {
                     if let Some(obj) = mv.as_object() {
                         let p = obj.get("provider").and_then(|v| v.as_str()).unwrap_or("");
@@ -104,7 +104,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
 
         let sel = selected_model.get();
         let model_patch = if sel.is_empty() {
-            serde_json::Value::Null // 继承系统默认
+            serde_json::Value::Null // inherit system default
         } else if let Some((p, m)) = sel.split_once('\u{1f}') {
             json!({ "provider": p, "model": m })
         } else {
@@ -119,8 +119,8 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
             },
         });
 
-        // 仅当用户实际改动下拉框时才写 model 键:
-        // untouched → 键缺省 → 后端 AgentPatch.model = None → 保留原值(legacy/qualified)。
+        // Only write the model key when the user actually changes the dropdown:
+        // untouched -> key absent -> backend AgentPatch.model = None -> preserve original value (legacy/qualified).
         if model_touched.get() {
             patch["model"] = model_patch;
         }

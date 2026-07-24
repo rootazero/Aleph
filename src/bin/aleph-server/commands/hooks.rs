@@ -212,7 +212,7 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
     );
 
     // Issue detection is owned by the unified diagnostics check so that
-    // `aleph hooks doctor` and `aleph doctor` never drift apart (熵减 — the
+    // `aleph hooks doctor` and `aleph doctor` never drift apart (entropy reduction — the
     // pending/empty/fingerprint-drift logic now lives in exactly one place).
     let check = HooksConsentCheck::new(ShellHookConsent::with_path(path.to_path_buf()));
     let mut issues = 0usize;

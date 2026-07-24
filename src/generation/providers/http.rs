@@ -6,7 +6,7 @@
 //!   OpenAI-compatible endpoints we target in production (e.g. api.302.ai) sit
 //!   behind load balancers that silently drop idle sockets; reqwest's pool then
 //!   hands out a dead connection and the next request writes into the void and
-//!   hangs the full `timeout` before failing (the voice-mode "stuck at 正在思考"
+//!   hangs the full `timeout` before failing (the voice-mode "stuck at Thinking"
 //!   / leading-sentence-eaten bug). Speech traffic is low-QPS and bursty, and
 //!   TLS session resumption keeps a fresh dial cheap.
 //! - **`connect_timeout`** — bounds that fresh dial so an unreachable endpoint

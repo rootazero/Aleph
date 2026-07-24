@@ -2,7 +2,7 @@
 //!
 //! Round-2 inlining of the former `PromptBuilder` trait + `DefaultPromptBuilder`
 //! struct (deleted from `src/harness/prompt.rs`). The trait had exactly one
-//! impl with one production consumer (`subagent_spawner`); per R10 撤回模式
+//! impl with one production consumer (`subagent_spawner`); per R10 retraction mode
 //! a zero-real-consumer abstraction is deleted, not preserved.
 //!
 //! The body never returned an error (the old `Result<_, HarnessError>` was
@@ -43,7 +43,7 @@ pub(crate) fn build_prompt(
     // user → tool_result`, where the results no longer immediately follow their
     // tool_use — Anthropic rejects it (HTTP 400) and lenient OpenAI-compatible
     // proxies silently return an empty completion (which the empty-response
-    // retry then exhausts → "模型连续返回空响应"). Hold back any user message
+    // retry then exhausts → "model returned empty response consecutively"). Hold back any user message
     // that arrives while the current turn still owes tool results and re-emit it
     // once they have all landed, keeping the pairing intact. Mechanical /
     // positional (R10-safe): the prompt is rebuilt fresh each turn and never
@@ -725,7 +725,7 @@ mod tests {
     /// `assistant[tool_use] → user → tool_result`, which Anthropic rejects with
     /// HTTP 400 and lenient OpenAI-compatible proxies answer with an *empty*
     /// completion — exhausting the empty-response retry and surfacing
-    /// "模型连续返回空响应". The builder must keep every tool result contiguous
+    /// "model returned empty response consecutively". The builder must keep every tool result contiguous
     /// with its assistant turn and re-emit the injected user message AFTER them.
     #[test]
     fn steering_message_mid_tool_turn_keeps_results_contiguous() {

@@ -611,7 +611,7 @@ impl CompressionService {
     /// against a keyword table and compress immediately on a "correction" hit —
     /// deterministic content classification of natural language, which R7/P8
     /// forbid (and which mis-fired on any turn containing "actually", "wrong" or
-    /// "应该是"). Deciding *"was that a correction worth remembering?"* is the
+    /// "should be"). Deciding *"was that a correction worth remembering?"* is the
     /// model's job: it calls `flag_user_correction`, and that tool kicks the drain
     /// itself. What remains here is pure cadence — count turns, compress at the
     /// threshold, look at nothing.
@@ -1228,7 +1228,7 @@ mod tests {
     /// The turn hook is content-blind: it counts turns and nothing else. It must
     /// not compress before the threshold no matter what the user typed — the old
     /// keyword detector fired an LLM ingest cycle on any message containing
-    /// "actually" / "不对" / "应该是". Deciding that a message is a correction is
+    /// "actually" / "not right" / "should be". Deciding that a message is a correction is
     /// the model's job (`flag_user_correction`), not a substring table's.
     #[tokio::test]
     async fn turn_hook_is_content_blind_and_only_fires_at_the_threshold() {

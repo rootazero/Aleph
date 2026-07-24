@@ -28,7 +28,7 @@ pub struct ReflectionConfig {
     #[serde(default = "default_open_loop_flag")]
     pub open_loop_tracking: bool,
     /// Inject the persisted open loops into the next session's curated context
-    /// so the agent proactively picks them back up (R5 — "AI 主动到达").
+    /// so the agent proactively picks them back up (R5 — "AI comes to you").
     /// Default on; only meaningful alongside `open_loop_tracking`.
     #[serde(default = "default_open_loop_flag")]
     pub open_loop_inject_prompt: bool,
