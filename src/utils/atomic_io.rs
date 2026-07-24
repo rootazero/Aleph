@@ -40,7 +40,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// RAII guard returned by `with_file_lock`. Drops the underlying
 /// `File`, which releases the OS-level fs2 lock.
-pub(crate) struct FileLockGuard {
+pub struct FileLockGuard {
     _file: File,
 }
 

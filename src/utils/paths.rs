@@ -528,7 +528,7 @@ fn user_skills_dirs(dirs: &mut Vec<PathBuf>) -> Result<()> {
 /// Push `dir` into `dirs` if it's a directory that isn't already present.
 fn push_if_new_skills_dir(dirs: &mut Vec<PathBuf>, dir: &std::path::Path, label: &str) {
     use tracing::info;
-    if dir.is_dir() && !dirs.contains(dir) {
+    if dir.is_dir() && !dirs.iter().any(|d| d.as_path() == dir) {
         info!(path = %dir.display(), "Found {label}");
         dirs.push(dir.to_path_buf());
     }
