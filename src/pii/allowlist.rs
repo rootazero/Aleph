@@ -52,11 +52,11 @@ fn local_ips() -> HashSet<String> {
 /// Allowlist of known non-PII values
 pub struct PiiAllowlist {
     /// Known test phone numbers
-    pub test_phones: HashSet<String>,
+    pub(crate) test_phones: HashSet<String>,
     /// System/example email patterns
-    pub system_email_patterns: Vec<Regex>,
+    pub(crate) system_email_patterns: Vec<Regex>,
     /// Known local/internal IPs
-    pub local_ips: HashSet<String>,
+    pub(crate) local_ips: HashSet<String>,
 }
 
 impl Default for PiiAllowlist {

@@ -10,6 +10,7 @@ use tracing::warn;
 
 /// Severity level for PII detections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum PiiSeverity {
     Low,
     Medium,
@@ -29,7 +30,8 @@ impl std::fmt::Display for PiiSeverity {
 }
 
 /// A single PII detection result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PiiMatch {
     pub rule_name: String,
     pub start: usize,
@@ -40,7 +42,8 @@ pub struct PiiMatch {
 }
 
 /// Result of PII filtering
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct FilterResult {
     /// The filtered text (with PII replaced by placeholders if blocked)
     pub text: String,
