@@ -61,9 +61,10 @@ pub struct BashExecArgs {
     /// Working directory (optional, defaults to session workspace root)
     #[serde(default)]
     pub working_dir: Option<String>,
-    /// Timeout in seconds (optional, defaults to 60)
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    /// Timeout in seconds (optional, defaults to 60). Accepts the legacy
+    /// `timeout` spelling.
+    #[serde(default, alias = "timeout")]
+    pub timeout_seconds: Option<u64>,
     /// Request elevated network access for this call (sandbox approval-gated).
     #[serde(default)]
     pub allow_network: bool,
@@ -235,7 +236,7 @@ Examples:
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Background-process management never runs a command — handle first.
         if let Some(action) = args.process_action.as_deref() {
-            return Ok(handle_process_action(action, args.process_id, args.timeout).await);
+            return Ok(handle_process_action(action, args.process_id, args.timeout_seconds).await);
         }
 
         if args.cmd.is_empty() {
@@ -248,7 +249,7 @@ Examples:
             language: Language::Shell,
             code: args.cmd,
             working_dir: args.working_dir,
-            timeout: args.timeout,
+            timeout_seconds: args.timeout_seconds,
             allow_network: args.allow_network,
             allow_subprocess: args.allow_subprocess,
             extra_writable_paths: args.extra_writable_paths,
@@ -260,8 +261,8 @@ Examples:
             // foreground 60s default would prematurely SIGKILL long builds.
             // Substitute a generous default only when the caller left `timeout`
             // unset; an explicit value (longer or shorter) is always honoured.
-            if code_exec_args.timeout.is_none() {
-                code_exec_args.timeout = Some(BACKGROUND_DEFAULT_TIMEOUT_SECS);
+            if code_exec_args.timeout_seconds.is_none() {
+                code_exec_args.timeout_seconds = Some(BACKGROUND_DEFAULT_TIMEOUT_SECS);
             }
             return Ok(self.spawn_background(code_exec_args));
         }
@@ -485,6 +486,20 @@ fn error_output(message: impl Into<String>) -> CodeExecOutput {
 mod tests {
     use super::*;
 
+    /// TDD RED: `timeout_seconds` is the canonical spelling; the legacy bare
+    /// `timeout` must still parse via `#[serde(alias = "timeout")]` so saved
+    /// calls / prompts don't break (deserialize-only, no schema change).
+    #[test]
+    fn bash_exec_timeout_accepts_canonical_and_legacy_alias() {
+        let a: BashExecArgs =
+            serde_json::from_value(serde_json::json!({ "cmd": "true", "timeout_seconds": 30 }))
+                .unwrap();
+        assert_eq!(a.timeout_seconds, Some(30));
+        let b: BashExecArgs =
+            serde_json::from_value(serde_json::json!({ "cmd": "true", "timeout": 30 })).unwrap();
+        assert_eq!(b.timeout_seconds, Some(30));
+    }
+
     /// R9 (Intelligence Lives in the Prompt): the bash description is
     /// how the model learns the surface area. Lock the load-bearing
     /// teaching points so future edits can't accidentally drop them.
@@ -584,7 +599,7 @@ mod tests {
         BashExecArgs {
             cmd: String::new(),
             working_dir: None,
-            timeout: None,
+            timeout_seconds: None,
             allow_network: false,
             allow_subprocess: false,
             extra_writable_paths: Vec::new(),
@@ -677,7 +692,7 @@ mod tests {
                 let mk = || BashExecArgs {
                     cmd: "echo hi".to_string(),
                     working_dir: None,
-                    timeout: None,
+                    timeout_seconds: None,
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -703,7 +718,7 @@ mod tests {
         let out = bash(BashExecArgs {
             cmd: String::new(),
             working_dir: None,
-            timeout: None,
+            timeout_seconds: None,
             allow_network: false,
             allow_subprocess: false,
             extra_writable_paths: Vec::new(),
@@ -732,7 +747,7 @@ mod tests {
                     .call(BashExecArgs {
                         cmd: "echo hi".to_string(),
                         working_dir: None,
-                        timeout: None,
+                        timeout_seconds: None,
                         allow_network: false,
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
@@ -753,7 +768,7 @@ mod tests {
                         .call(BashExecArgs {
                             cmd: String::new(),
                             working_dir: None,
-                            timeout: None,
+                            timeout_seconds: None,
                             allow_network: false,
                             allow_subprocess: false,
                             extra_writable_paths: Vec::new(),
@@ -806,7 +821,7 @@ mod tests {
                     .call(BashExecArgs {
                         cmd: "echo ok".to_string(),
                         working_dir: None,
-                        timeout: explicit,
+                        timeout_seconds: explicit,
                         allow_network: false,
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),

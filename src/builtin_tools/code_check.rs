@@ -80,9 +80,10 @@ pub struct CodeCheckArgs {
     /// sandbox shell at the workspace root.
     #[serde(default)]
     pub command: Option<String>,
-    /// Timeout in seconds (default 120).
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    /// Timeout in seconds (default 120). Accepts the legacy `timeout`
+    /// spelling.
+    #[serde(default, alias = "timeout")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// A single normalised diagnostic.
@@ -173,7 +174,7 @@ impl CodeCheckTool {
             };
 
         let plan = build_plan(args.command.as_deref(), args.path.as_deref());
-        let timeout_secs = args.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = args.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         info!(
             command = %plan.display_command,
@@ -597,6 +598,19 @@ Use this AFTER editing code to confirm it still compiles before moving on. Note:
 mod tests {
     use super::*;
 
+    /// TDD RED: `timeout_seconds` is the canonical spelling; the legacy bare
+    /// `timeout` must still parse via `#[serde(alias = "timeout")]` so saved
+    /// calls / prompts don't break (deserialize-only, no schema change).
+    #[test]
+    fn code_check_timeout_accepts_canonical_and_legacy_alias() {
+        let a: CodeCheckArgs =
+            serde_json::from_value(serde_json::json!({ "timeout_seconds": 30 })).unwrap();
+        assert_eq!(a.timeout_seconds, Some(30));
+        let b: CodeCheckArgs =
+            serde_json::from_value(serde_json::json!({ "timeout": 30 })).unwrap();
+        assert_eq!(b.timeout_seconds, Some(30));
+    }
+
     #[test]
     fn cargo_json_extracts_primary_span() {
         let stdout = r#"{"reason":"compiler-message","message":{"level":"error","message":"cannot find value `foo`","code":{"code":"E0425"},"spans":[{"is_primary":true,"file_name":"src/lib.rs","line_start":12,"column_start":5}]}}
@@ -800,7 +814,7 @@ not json at all"#;
                     tool.call(CodeCheckArgs {
                         path: None,
                         command: Some("true".to_string()),
-                        timeout: Some(5),
+                        timeout_seconds: Some(5),
                     })
                     .await
                     .expect("tool call");

@@ -111,9 +111,10 @@ pub struct CodeExecArgs {
     /// Must live under the session workspace — paths outside are denied.
     #[serde(default)]
     pub working_dir: Option<String>,
-    /// Timeout in seconds (optional, defaults to 60)
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    /// Timeout in seconds (optional, defaults to 60). Accepts the legacy
+    /// `timeout` spelling.
+    #[serde(default, alias = "timeout")]
+    pub timeout_seconds: Option<u64>,
     /// Request elevated network access for this call. Triggers a single
     /// capability-approval dialog via `ApprovalGate` on first use in a session;
     /// subsequent same-or-narrower requests reuse the cached grant.
@@ -346,7 +347,7 @@ Examples:
             }
         };
 
-        let timeout_secs = args.timeout.unwrap_or(DEFAULT_CODE_EXEC_TIMEOUT);
+        let timeout_secs = args.timeout_seconds.unwrap_or(DEFAULT_CODE_EXEC_TIMEOUT);
         let language_label = language_label(&args.language);
 
         info!(
@@ -727,7 +728,7 @@ impl AlephTool for CodeExecTool {
         // The background path escapes the budget wrapper and calls
         // `call_unclamped` directly, keeping its generous ceiling.
         let mut args = args;
-        args.timeout = clamp_foreground_timeout(args.timeout);
+        args.timeout_seconds = clamp_foreground_timeout(args.timeout_seconds);
 
         // Advisory repeat-detection for shell commands (foreground only — the
         // background path uses `call_unclamped`, and a deliberate long-running
@@ -800,6 +801,27 @@ mod tests {
         assert_eq!(Language::Shell.runtime(), "bash");
     }
 
+    /// TDD RED: `timeout_seconds` is the canonical spelling; the legacy bare
+    /// `timeout` must still parse via `#[serde(alias = "timeout")]` so saved
+    /// calls / prompts don't break (deserialize-only, no schema change).
+    #[test]
+    fn code_exec_timeout_accepts_canonical_and_legacy_alias() {
+        let a: CodeExecArgs = serde_json::from_value(serde_json::json!({
+            "language": "shell",
+            "code": "true",
+            "timeout_seconds": 30
+        }))
+        .unwrap();
+        assert_eq!(a.timeout_seconds, Some(30));
+        let b: CodeExecArgs = serde_json::from_value(serde_json::json!({
+            "language": "shell",
+            "code": "true",
+            "timeout": 30
+        }))
+        .unwrap();
+        assert_eq!(b.timeout_seconds, Some(30));
+    }
+
     #[test]
     fn description_is_single_sourced() {
         // The AlephTool::DESCRIPTION should be the same string as the
@@ -826,7 +848,7 @@ mod tests {
                     language,
                     code: code.to_string(),
                     working_dir: None,
-                    timeout: None,
+                    timeout_seconds: None,
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -901,7 +923,7 @@ mod tests {
                 language: Language::Shell,
                 code: "echo hi".to_string(),
                 working_dir: None,
-                timeout: Some(5),
+                timeout_seconds: Some(5),
                 allow_network: false,
                 allow_subprocess: false,
                 extra_writable_paths: Vec::new(),
@@ -927,7 +949,7 @@ mod tests {
                 language: Language::Shell,
                 code: "echo hi".to_string(),
                 working_dir: None,
-                timeout: Some(5),
+                timeout_seconds: Some(5),
                 allow_network: false,
                 allow_subprocess: false,
                 extra_writable_paths: Vec::new(),
@@ -956,7 +978,7 @@ mod tests {
                     language: Language::Python,
                     code: "print('hello')".to_string(),
                     working_dir: None,
-                    timeout: Some(3),
+                    timeout_seconds: Some(3),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -997,7 +1019,7 @@ mod tests {
                     language: Language::Shell,
                     code: "curl https://example.com".to_string(),
                     working_dir: None,
-                    timeout: None,
+                    timeout_seconds: None,
                     allow_network: true,
                     allow_subprocess: true,
                     extra_writable_paths: vec!["/tmp/out".into()],
@@ -1033,7 +1055,7 @@ mod tests {
                     language: Language::Shell,
                     code: "bash -lc 'cargo test'".to_string(),
                     working_dir: None,
-                    timeout: Some(3),
+                    timeout_seconds: Some(3),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1066,7 +1088,7 @@ mod tests {
                     language: Language::Shell,
                     code: "bash -c \"echo $(date)\"".to_string(),
                     working_dir: None,
-                    timeout: None,
+                    timeout_seconds: None,
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1103,7 +1125,7 @@ mod tests {
                     language: Language::Shell,
                     code: big_script.clone(),
                     working_dir: None,
-                    timeout: Some(10),
+                    timeout_seconds: Some(10),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1138,7 +1160,7 @@ mod tests {
                     language: Language::Python,
                     code: "bash -lc 'print(1)'".to_string(),
                     working_dir: None,
-                    timeout: None,
+                    timeout_seconds: None,
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1187,7 +1209,7 @@ mod tests {
                     language: Language::Shell,
                     code: "echo started step 1; sleep 9999".to_string(),
                     working_dir: None,
-                    timeout: Some(5),
+                    timeout_seconds: Some(5),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1244,7 +1266,7 @@ mod tests {
                     language: Language::Shell,
                     code: "sleep 9999".to_string(),
                     working_dir: None,
-                    timeout: Some(1),
+                    timeout_seconds: Some(1),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1295,7 +1317,7 @@ mod tests {
                     language: Language::Shell,
                     code: "cargo test".to_string(),
                     working_dir: None,
-                    timeout: Some(5),
+                    timeout_seconds: Some(5),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1342,7 +1364,7 @@ mod tests {
                     language: Language::Shell,
                     code: "yes".to_string(),
                     working_dir: None,
-                    timeout: Some(1),
+                    timeout_seconds: Some(1),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1385,7 +1407,7 @@ mod tests {
                     language: Language::Shell,
                     code: "curl https://crates.io".to_string(),
                     working_dir: None,
-                    timeout: Some(5),
+                    timeout_seconds: Some(5),
                     allow_network: true,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1535,7 +1557,7 @@ mod tests {
                     language: Language::Shell,
                     code: "sleep 999".to_string(),
                     working_dir: None,
-                    timeout: Some(600),
+                    timeout_seconds: Some(600),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
@@ -1569,7 +1591,7 @@ mod tests {
                     language: Language::Shell,
                     code: "sleep 999".to_string(),
                     working_dir: None,
-                    timeout: Some(600),
+                    timeout_seconds: Some(600),
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),

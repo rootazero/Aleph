@@ -557,7 +557,7 @@ mod tests {
                         language: Language::Shell,
                         code: "pwd; echo \"CTD=$CARGO_TARGET_DIR\"".to_string(),
                         working_dir: None,
-                        timeout: Some(30),
+                        timeout_seconds: Some(30),
                         allow_network: false,
                         allow_subprocess: false,
                         extra_writable_paths: Vec::new(),
