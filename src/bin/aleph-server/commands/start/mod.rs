@@ -27,7 +27,7 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
-    register_agent_handlers, register_agents_handlers, register_arena_handlers,
+    register_agent_handlers, register_agents_handlers,
     register_config_handlers, register_core_handlers, register_cron_handlers,
     register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
     register_fs_handlers, register_graph_handlers, register_group_chat_handlers,
@@ -988,13 +988,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         mcp_handle.clone(),
     )
     .await?;
-
-    if let Some(ref arena_mgr) = agent_result.arena_manager {
-        register_arena_handlers(&mut server, arena_mgr);
-        if !args.daemon {
-            println!("  arena handlers: wired");
-        }
-    }
 
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP

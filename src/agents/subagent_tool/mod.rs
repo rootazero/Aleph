@@ -56,7 +56,8 @@ pub struct SubagentTool {
     pub(super) session: Arc<dyn SessionService>,
     /// Parent tool service; the harness decorates it with an allowlist.
     pub(super) parent_tools: Arc<dyn ToolService>,
-    /// Optional teammate manager for auto team creation/registration.
+    /// Optional teammate manager — resolves `team_name` → team id (creating
+    /// on first use) for the `send_message` / `read_inbox` faces.
     pub(super) teammate_manager: Option<Arc<TeammateManager>>,
     /// Optional message router for `send_message` actions.
     pub(super) message_router: Option<Arc<MessageRouter>>,
@@ -241,7 +242,8 @@ impl SubagentTool {
         self
     }
 
-    /// Set the teammate manager for auto team creation/registration.
+    /// Set the teammate manager (`team_name` → team id resolution for the
+    /// messaging faces).
     #[must_use]
     pub fn with_teammate_manager(mut self, mgr: Arc<TeammateManager>) -> Self {
         self.teammate_manager = Some(mgr);

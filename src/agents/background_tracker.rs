@@ -423,6 +423,44 @@ impl BackgroundAgentTracker {
         self.completion.notify_waiters();
     }
 
+    /// Remove a running entry WITHOUT recording a completed outcome. Backs the
+    /// running-only registrations ([`RunningRegistration`]): sync fan-out seams
+    /// (subagent sync batch / MoA, `team_delegate`, team-chat member runs)
+    /// deliver their results inline at the call seam, so a completed entry
+    /// would only pollute `list` / `check_status` and hand the proactive
+    /// announce an already-delivered result. Wakes `wait` parkers so a waiter
+    /// on a delisted id resolves to `NotFound` instead of blocking out its
+    /// full window.
+    pub fn remove_running(&self, request_id: &str) {
+        self.running
+            .write()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .remove(request_id);
+        self.completion.notify_waiters();
+    }
+
+    /// Request-ids of still-running agents registered under `parent_id`
+    /// (`SpawnMeta.parent_id`). Backs the `teams.chat.cancel` tree walk: the
+    /// group-chat fan-out registers every member run under the RPC-minted
+    /// parent run_id, and cancel enumerates them here to fire each engine
+    /// per-run token. O(running) scan, same as `session_has_running`.
+    #[must_use]
+    pub fn running_children_of(&self, parent_id: &str) -> Vec<String> {
+        self.running
+            .read()
+            .unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            })
+            .iter()
+            .filter(|(_, agent)| agent.meta.parent_id.as_deref() == Some(parent_id))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Cancel a running background agent. Returns `true` if the `request_id`
     /// was found in the running set and the `CancellationToken` was hit;
     /// `false` if no such running agent exists (already completed / never
@@ -813,6 +851,55 @@ impl BackgroundAgentTracker {
 impl Default for BackgroundAgentTracker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// RAII *running-only* registration.
+///
+/// Sync fan-out seams (subagent sync batch / MoA aggregator, `team_delegate`,
+/// team-chat member runs) deliver their results inline to the caller, so they
+/// must never retain a completed tracker entry (no re-delivery via `list` /
+/// `check_status`, no proactive announce). What they DO need is presence in
+/// the running set while in flight, so:
+///
+///   * the gateway Interrupt demote guard
+///     ([`session_has_running`](BackgroundAgentTracker::session_has_running))
+///     refuses to tear down a parent mid-fan-out, and
+///   * `teams.chat.cancel` can enumerate live members of a fan-out tree
+///     ([`running_children_of`](BackgroundAgentTracker::running_children_of)).
+///
+/// Registers on construction, delists on `Drop` — which runs on normal scope
+/// exit, panic unwind, AND future-drop when the owning task is cancelled, so
+/// entries cannot leak into the guard permanently.
+pub struct RunningRegistration {
+    tracker: Arc<BackgroundAgentTracker>,
+    request_id: String,
+}
+
+impl RunningRegistration {
+    /// Register `request_id` in the running set and return the guard that
+    /// delists it on drop. `cancel_token` is stored like any registration —
+    /// a `cancel` action on this id fires it (a no-op signal for seams that
+    /// have no in-flight abort channel; those pass a fresh token).
+    #[must_use]
+    pub fn register(
+        tracker: Arc<BackgroundAgentTracker>,
+        request_id: String,
+        cancel_token: CancellationToken,
+        task_description: String,
+        meta: SpawnMeta,
+    ) -> Self {
+        tracker.register_with_meta(request_id.clone(), cancel_token, task_description, meta);
+        Self {
+            tracker,
+            request_id,
+        }
+    }
+}
+
+impl Drop for RunningRegistration {
+    fn drop(&mut self) {
+        self.tracker.remove_running(&self.request_id);
     }
 }
 
@@ -1330,5 +1417,181 @@ mod tests {
             NodeLifecycle::Failed,
             "unrelated failure must remain Failed"
         );
+    }
+
+    /// W12 — a running-only registration is visible to the Interrupt demote
+    /// guard while in flight, and on drop leaves NEITHER a running NOR a
+    /// completed entry (no announce source, nothing for `list`/`check_status`
+    /// to re-deliver).
+    #[test]
+    fn running_registration_delists_on_drop_without_completed_entry() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let root = "agent:leader:peer:user";
+        {
+            let _reg = RunningRegistration::register(
+                tracker.clone(),
+                "sync-child".into(),
+                CancellationToken::new(),
+                "sync batch child".into(),
+                SpawnMeta {
+                    root_session: root.into(),
+                    depth: 1,
+                    ..SpawnMeta::default()
+                },
+            );
+            assert!(
+                tracker.session_has_running(root),
+                "in-flight sync fan-out must be visible to the demote guard"
+            );
+        }
+        assert!(!tracker.session_has_running(root));
+        assert!(tracker.running_meta("sync-child").is_none());
+        assert!(
+            tracker.result_snapshot("sync-child").is_none(),
+            "running-only registration must not retain a completed entry"
+        );
+    }
+
+    /// W12 risk — the guard must delist on panic unwind so entries never leak
+    /// into the demote guard permanently.
+    #[test]
+    fn running_registration_delists_on_panic_unwind() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let t2 = tracker.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _reg = RunningRegistration::register(
+                t2,
+                "panicky".into(),
+                CancellationToken::new(),
+                "t".into(),
+                SpawnMeta::default(),
+            );
+            panic!("simulated fan-out child panic");
+        }));
+        assert!(result.is_err(), "inner closure must have panicked");
+        assert!(
+            tracker.running_meta("panicky").is_none(),
+            "guard must delist during panic unwind"
+        );
+    }
+
+    /// A `wait` parked on a running-only id must resolve to NotFound when the
+    /// registration drops (delist wakes the completion notifier) instead of
+    /// blocking out its full window.
+    #[tokio::test]
+    async fn wait_on_delisted_running_only_id_resolves_not_found() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let reg = RunningRegistration::register(
+            tracker.clone(),
+            "sync-x".into(),
+            CancellationToken::new(),
+            "t".into(),
+            SpawnMeta::default(),
+        );
+        let t2 = tracker.clone();
+        let waiter = tokio::spawn(async move { t2.wait("sync-x", Duration::from_secs(30)).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(reg);
+        let outcome = tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("waiter must wake well before the 30s deadline")
+            .expect("waiter task panicked");
+        assert!(matches!(outcome, WaitOutcome::NotFound));
+    }
+
+    /// W13 — the teams.chat.cancel walk: members registered under a parent
+    /// run_id are enumerable, unrelated entries are not, and a finished
+    /// (dropped) member leaves the walk.
+    #[test]
+    fn running_children_of_walks_only_the_given_tree() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let tree = "tree-run-1";
+        let _parent = RunningRegistration::register(
+            tracker.clone(),
+            tree.into(),
+            CancellationToken::new(),
+            "fan-out".into(),
+            SpawnMeta {
+                root_session: tree.into(),
+                ..SpawnMeta::default()
+            },
+        );
+        let m1 = RunningRegistration::register(
+            tracker.clone(),
+            "m1".into(),
+            CancellationToken::new(),
+            "member".into(),
+            SpawnMeta {
+                parent_id: Some(tree.into()),
+                root_session: tree.into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        let _m2 = RunningRegistration::register(
+            tracker.clone(),
+            "m2".into(),
+            CancellationToken::new(),
+            "member".into(),
+            SpawnMeta {
+                parent_id: Some(tree.into()),
+                root_session: tree.into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        let _other = RunningRegistration::register(
+            tracker.clone(),
+            "other".into(),
+            CancellationToken::new(),
+            "unrelated".into(),
+            SpawnMeta::default(),
+        );
+        let mut kids = tracker.running_children_of(tree);
+        kids.sort();
+        assert_eq!(kids, vec!["m1".to_string(), "m2".to_string()]);
+        drop(m1);
+        assert_eq!(tracker.running_children_of(tree), vec!["m2".to_string()]);
+    }
+
+    /// W13 — the poison-then-walk order teams.chat.cancel relies on:
+    /// `cancel(tree_run_id)` fires the stored tree-level token (stopping new
+    /// member spawns), and the walk then lists in-flight members for the
+    /// engine-side per-run abort.
+    #[test]
+    fn tree_cancel_fires_tree_token_and_members_stay_enumerable() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let tree_token = CancellationToken::new();
+        let _tree = RunningRegistration::register(
+            tracker.clone(),
+            "tree".into(),
+            tree_token.clone(),
+            "fan-out".into(),
+            SpawnMeta {
+                root_session: "tree".into(),
+                ..SpawnMeta::default()
+            },
+        );
+        let _m = RunningRegistration::register(
+            tracker.clone(),
+            "m1".into(),
+            tree_token.child_token(),
+            "member".into(),
+            SpawnMeta {
+                parent_id: Some("tree".into()),
+                root_session: "tree".into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        assert!(
+            tracker.cancel("tree"),
+            "tree node must be found while the fan-out runs"
+        );
+        assert!(
+            tree_token.is_cancelled(),
+            "poison must fire the tree-level token"
+        );
+        assert_eq!(tracker.running_children_of("tree"), vec!["m1".to_string()]);
     }
 }

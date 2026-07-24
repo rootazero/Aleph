@@ -133,6 +133,19 @@ impl AlephTool for TeamMemberAddTool {
         // registered native agent.
         let is_acp = AcpMemberRef::parse(&args.agent_id).is_some();
         if !is_acp && self.registry.get(&args.agent_id).await.is_none() {
+            // A long-form roster id (`acp:<harness>:<cwd>[:<name>]`) is
+            // display-only — harness ids never contain ':'. Steer to the
+            // explicit-cwd tool instead of the generic not-found error.
+            if args.agent_id.starts_with("acp:") {
+                return Err(AlephError::tool(format!(
+                    "'{}' is not a valid ACP reference: harness ids never \
+                     contain ':' (long-form roster ids are display-only). Use \
+                     team_acp_member(harness_id=…, cwd=…) to add an ACP member \
+                     with an explicit cwd, or the short form \
+                     'acp:<harness>[/<session>]'",
+                    args.agent_id
+                )));
+            }
             return Err(AlephError::tool(format!(
                 "agent '{}' not found in registry and not a valid ACP reference \
                  (use 'acp:<harness>[/<session>]' for external CLI agents)",

@@ -2,7 +2,7 @@
 //!
 //! Background subagent runs (`subagent` tool, `background: true`) used to
 //! finish silently: `BackgroundAgentTracker::mark_completed` parked the result
-//! and the only reader was the LLM-initiated `list`/`result` action. If the
+//! and the only reader was the LLM-initiated `list`/`check_status` action. If the
 //! parent's run had already ended, nobody would ever look — the user never
 //! heard back (an R5 violation, and the gap openclaw closes with its
 //! `subagent.task_completed` announce flow).
@@ -138,7 +138,7 @@ async fn announce_one(
          Process this result now: report the outcome to the user in your \
          reply (or to your team leader via team messaging when you work as a \
          team member), and take any follow-up actions the original task \
-         implies. Use the subagent tool's 'result' action with \
+         implies. Use the subagent tool's 'check_status' action with \
          request_id='{request_id}' if you need the full output.",
     );
 

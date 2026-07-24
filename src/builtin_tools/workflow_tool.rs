@@ -141,6 +141,13 @@ pub enum WorkflowArgs {
         /// Name of the pending proposal (see `action='proposals'`).
         name: String,
     },
+    /// Reject (dismiss) a gated `MetaSkill` proposal: remove the draft from
+    /// the `proposals/` dir without activating it. Idempotent. The miner may
+    /// re-draft the same chain on a later dream cycle if it keeps recurring.
+    RejectProposal {
+        /// Name of the pending proposal (see `action='proposals'`).
+        name: String,
+    },
 }
 
 /// One step of a workflow run in a `status` report — a mechanical projection
@@ -589,8 +596,10 @@ impl AlephTool for WorkflowTool {
          DAG that executes concurrently where dependencies allow. \
          Actions: save / list / describe / delete / run / status / cancel / \
          pause / resume / export / import / proposals / describe_proposal / \
-         accept_proposal. \
-         `run` returns a run_id; `status` reports the per-step task states of \
+         accept_proposal / reject_proposal. \
+         `run` returns a run_id plus the backing task_ids — to block until the \
+         run settles, pass those task_ids (or the team_id) to the `task_wait` \
+         tool. `status` reports the per-step task states of \
          a run (latest by default) and `cancel` aborts its unfinished steps — \
          finished steps keep their results, and a step caught mid-execution \
          finishes its member run but stays cancelled. `pause` parks a run's \
@@ -603,7 +612,8 @@ impl AlephTool for WorkflowTool {
          `proposals` lists MetaSkill \
          drafts the dream pipeline auto-grew from recurring skill use; \
          `describe_proposal` reviews one's steps + provenance before \
-         `accept_proposal` activates it. For `run`, create a team first so \
+         `accept_proposal` activates it or `reject_proposal` dismisses the \
+         draft. For `run`, create a team first so \
          each step's agent resolves to a member. `describe` and `run` report \
          each step's pinned model override in `models`, and `status` shows the \
          model every step runs on — so you can see model assignments without \
@@ -628,6 +638,7 @@ impl AlephTool for WorkflowTool {
             "workflow(action='proposals')".into(),
             "workflow(action='describe_proposal', name='metaskill-git-pr')".into(),
             "workflow(action='accept_proposal', name='metaskill-git-pr')".into(),
+            "workflow(action='reject_proposal', name='metaskill-git-pr')".into(),
         ])
     }
 
@@ -702,6 +713,14 @@ impl AlephTool for WorkflowTool {
                     .iter()
                     .filter_map(|s| s.model.as_ref().map(|m| (s.id.clone(), m.clone())))
                     .collect();
+                // step-local id → reasoning-effort override; same contract as
+                // `models` (validated against the think-level vocabulary at the
+                // manifest boundary, stamped per agent step at materialisation).
+                let efforts: std::collections::HashMap<String, String> = manifest
+                    .steps
+                    .iter()
+                    .filter_map(|s| s.effort.as_ref().map(|e| (s.id.clone(), e.clone())))
+                    .collect();
                 // Deterministic, step-ordered projection of the same overrides to
                 // echo back in the output — so the LLM sees which model each step
                 // launched on without a follow-up `describe`/`status`.
@@ -750,6 +769,11 @@ impl AlephTool for WorkflowTool {
                 // input + WorkflowDef and produces a run-global Strategy. It does
                 // not need the run_id (minted inside materialize). Fail-soft.
                 let strategy = self.plan_workflow_strategy(&def, &input).await;
+                // Capture the launching session for the goal-tree budget anchor
+                // (`origin_session`) — the same wire `task_create` stamps, so a
+                // goal-budgeted session launching a workflow has its member-run
+                // spend accounted. None outside a turn (byte-identical rows).
+                let origin_session = crate::tools::turn_context::current_session_key();
                 let mat = workflow::materialize(
                     &def,
                     &input,
@@ -757,7 +781,9 @@ impl AlephTool for WorkflowTool {
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
                     (!models.is_empty()).then_some(&models),
+                    (!efforts.is_empty()).then_some(&efforts),
                     strategy.as_ref(),
+                    origin_session.as_deref(),
                 )
                 .await?;
                 // Strategy delivery is metadata-only: `materialize` stamps the
@@ -924,13 +950,26 @@ impl AlephTool for WorkflowTool {
                         // run's terminal accounting.) Pending/Blocked need no
                         // origin stamp: Blocked is re-derived from stored
                         // pending at read time, so the Pending restore is
-                        // lossless.
+                        // lossless. Write an explicit NULL stamp anyway
+                        // (mirror of `team_task_control` pause): a stale
+                        // `paused_from=waiting_review` left by an earlier
+                        // park→verdict-while-paused→retry chain would
+                        // otherwise mis-restore this never-run step to
+                        // WaitingReview on resume.
                         CoordTaskStatus::Pending | CoordTaskStatus::Blocked => {
+                            let cleared = crate::agents::swarm::tasks::merge_metadata_patch(
+                                &live.metadata,
+                                serde_json::json!({
+                                    crate::agents::swarm::tasks::PAUSED_FROM_KEY:
+                                        serde_json::Value::Null,
+                                }),
+                            );
                             self.coord_store
                                 .update_task(
                                     &task.id,
                                     CoordTaskUpdate {
                                         status: Some(CoordTaskStatus::Paused),
+                                        metadata: Some(cleared),
                                         ..Default::default()
                                     },
                                 )
@@ -1178,6 +1217,25 @@ impl AlephTool for WorkflowTool {
                         path.display()
                     ),
                 ))
+            }
+            WorkflowArgs::RejectProposal { name } => {
+                debug!(name = %name, "workflow: reject_proposal");
+                // Tombstone tradeoff, decided deliberately: deleting the draft
+                // also deletes the miner's name-based dedup anchor, so the same
+                // skill chain CAN be re-drafted on a later dream cycle. That is
+                // the intended reading — a rejection means "not now", and a
+                // chain that keeps recurring is worth re-surfacing, rather than
+                // being silenced forever by an invisible tombstone file.
+                let removed = workflow::proposal::delete_proposal(&name)?;
+                let message = if removed {
+                    format!(
+                        "rejected proposal '{name}' — draft removed (the dream miner may \
+                         re-draft this chain if it keeps recurring)"
+                    )
+                } else {
+                    format!("proposal '{name}' did not exist")
+                };
+                Ok(WorkflowToolOutput::msg("reject_proposal", message))
             }
         }
     }
@@ -1479,9 +1537,19 @@ mod tests {
         def: &WorkflowDef,
         team: &str,
     ) -> (String, Vec<String>) {
-        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None, None, None)
-            .await
-            .expect("materialise");
+        let mat = workflow::materialize(
+            def,
+            "x",
+            team,
+            t.coord_store.as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("materialise");
         (mat.run_id, mat.task_ids)
     }
 
@@ -1712,6 +1780,89 @@ mod tests {
             crate::agents::swarm::tasks::paused_from(&root.metadata),
             None,
             "stamp cleared on restore"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_after_stale_review_stamp_restores_pending_not_waiting_review() {
+        // Regression (W4): the full chain park → verdict-while-paused → retry →
+        // pause → resume. The review pause stamps `paused_from=waiting_review`;
+        // a verdict landing while paused moves the task out of Paused, and NO
+        // retry face nulls the stamp. The later run-level pause of the (now
+        // Pending, never-run) step must therefore write an explicit null stamp,
+        // or resume mis-restores it to WaitingReview — inviting the lead to
+        // approve a step whose result was cleared.
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        // 1. Root ran and awaits the lead's verdict.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::WaitingReview),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // 2. Run-level pause parks it WITH the waiting_review origin stamp.
+        t.call(WorkflowArgs::Pause {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id.clone()),
+        })
+        .await
+        .expect("pause review-parked step");
+        // 3. A reject verdict lands while paused (verdicts land regardless of
+        //    pause — review is not execution). The stale stamp stays behind.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // 4. Operator hard-retries through the real admin face (which re-arms
+        //    the retry budget but does NOT touch the pause stamp).
+        let control = crate::builtin_tools::team::task_control::TeamTaskControlTool::new(
+            t.coord_store.clone(),
+        );
+        control
+            .call(
+                crate::builtin_tools::team::task_control::TeamTaskControlArgs::Retry {
+                    task_id: ids[0].clone(),
+                },
+            )
+            .await
+            .expect("hard-retry the rejected step");
+        // 5. Run-level pause again — now via the Pending/Blocked arm, which
+        //    must null the stale stamp.
+        t.call(WorkflowArgs::Pause {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id.clone()),
+        })
+        .await
+        .expect("pause the retried (pending) step");
+        // 6. Resume must restore Pending — NOT the stale WaitingReview, whose
+        //    run result was cleared by the retry.
+        t.call(WorkflowArgs::Resume {
+            name: "pipeline".into(),
+            team_id: "team-9".into(),
+            run_id: Some(run_id),
+        })
+        .await
+        .expect("resume");
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            root.status,
+            CoordTaskStatus::Pending,
+            "a never-run pending step must not resume into WaitingReview"
         );
     }
 
@@ -2502,6 +2653,130 @@ mod tests {
         assert!(missing.is_err(), "accepting an unknown proposal errors");
     }
 
+    #[tokio::test]
+    async fn reject_proposal_removes_draft_without_activating() {
+        // The R8 counterpart to accept: dismissing a bad auto-drafted MetaSkill
+        // deletes the gated draft (idempotently) and never touches the active
+        // store. Note the tombstone tradeoff documented at the handler: once
+        // the file is gone, name-based dedup allows the miner to re-draft the
+        // same chain on a later dream cycle.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let (rejected, after, active, again) = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            let draft =
+                workflow::proposal::skeleton_from_chain(&["research".into(), "write".into()], 2)
+                    .expect("two-skill chain drafts a skeleton");
+            let name = draft.name.clone();
+            workflow::proposal::save_proposal(&draft).expect("persist gated draft");
+
+            let rejected = t
+                .call(WorkflowArgs::RejectProposal { name: name.clone() })
+                .await
+                .expect("reject the gated draft");
+            let after = t
+                .call(WorkflowArgs::Proposals {})
+                .await
+                .expect("proposals after reject");
+            let active = t.call(WorkflowArgs::List {}).await.expect("list");
+            // Idempotent: rejecting again reports the draft is gone, no error.
+            let again = t
+                .call(WorkflowArgs::RejectProposal { name })
+                .await
+                .expect("second reject is idempotent");
+
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            (rejected, after, active, again)
+        };
+
+        assert_eq!(rejected.action, "reject_proposal");
+        assert!(
+            rejected.message.contains("rejected proposal"),
+            "{}",
+            rejected.message
+        );
+        assert_eq!(
+            after.names.as_deref(),
+            Some(&[][..]),
+            "rejected draft is removed from the gated dir"
+        );
+        assert_eq!(
+            active.names.as_deref(),
+            Some(&[][..]),
+            "rejection never touches the active store"
+        );
+        assert!(
+            again.message.contains("did not exist"),
+            "idempotent branch: {}",
+            again.message
+        );
+    }
+
+    #[tokio::test]
+    async fn run_stamps_per_step_effort_onto_task_metadata() {
+        // The executable effort wire end-to-end through the tool: a manifest
+        // pinning `effort` on one step materialises that step with
+        // WORKFLOW_EFFORT_KEY (readable by the dispatcher's think-level
+        // resolver); the unpinned step stays byte-identical.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let run_out = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            let mut m = WorkflowManifest::from_def(&linear_def());
+            m.steps[0].effort = Some("max".into());
+            workflow::store::save(&m).expect("save effort-pinned template");
+            let r = t
+                .call(WorkflowArgs::Run {
+                    name: "pipeline".into(),
+                    team_id: "team-7".into(),
+                    input: "x".into(),
+                })
+                .await;
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            r
+        }
+        .expect("run");
+
+        let ids = run_out.task_ids.as_ref().expect("run populates task_ids");
+        let gather = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            crate::workflow::workflow_effort_think_level(&gather.metadata),
+            Some(crate::agents::thinking::ThinkLevel::High),
+            "pinned step carries the effort override ('max' → High)"
+        );
+        let write = t.coord_store.get_task(&ids[1]).await.unwrap().unwrap();
+        assert!(
+            crate::workflow::workflow_effort_think_level(&write.metadata).is_none(),
+            "unpinned step has no effort key"
+        );
+    }
+
     #[test]
     fn with_planner_provider_builds() {
         // SqliteCoordTaskStore has no open(path) — use the same in-memory
@@ -2635,6 +2910,8 @@ mod tests {
             t.coord_store.as_ref(),
             None,
             Some(&models),
+            None,
+            None,
             None,
         )
         .await

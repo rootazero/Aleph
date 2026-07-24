@@ -500,17 +500,14 @@ pub async fn handle_task_pause(
             )
         }
     }
-    // Stamp WaitingReview origin; every OTHER origin writes an explicit null
-    // so a stale stamp from an earlier pause→retry cycle can never mis-restore
-    // this pause to WaitingReview (mirror of `team_task_control`).
-    let stamp_value = if current.status == CoordTaskStatus::WaitingReview {
-        json!("waiting_review")
-    } else {
-        serde_json::Value::Null
-    };
+    // WaitingReview is structurally unpausable on this face (the match above
+    // rejects it), so the pause origin is always Pending/Blocked/Unsatisfiable
+    // — no origin stamp needed. Write an explicit null so a stale stamp from
+    // an earlier pause→retry cycle can never mis-restore this pause to
+    // WaitingReview (mirror of `team_task_control`).
     let metadata = Some(crate::agents::swarm::tasks::merge_metadata_patch(
         &current.metadata,
-        json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: stamp_value }),
+        json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null }),
     ));
     if let Err(e) = coord_store
         .update_task(

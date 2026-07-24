@@ -290,8 +290,11 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // (spec 2026-07-19-graph-multiagent-fusion). Fresh context by design:
         // an auditor that shares the auditee's memory/context can only confirm
         // the auditee's own story ("agents reading the same data prove each
-        // other right"). Can measure (bash → real exit codes / counts) and
-        // read; cannot rewrite; network search denied per audit doctrine.
+        // other right"). Can measure (bash → real exit codes / counts,
+        // governance_metrics → the standing corrections/dreaming probes the
+        // audit template orders — bash cannot reach the sandbox-walled
+        // ~/.aleph/data, which is why the tool exists) and read; cannot
+        // rewrite; network search denied per audit doctrine.
         AgentDef::new("loop-auditor", AgentMode::SubAgent)
             .with_description("Independent-context evidence collector for governance loops")
             .with_when_to_use(
@@ -301,7 +304,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             )
             .with_context_mode(ContextMode::Fresh)
             .with_allowed_tool_sets(vec!["READ_ONLY".into()])
-            .with_allowed_tools(vec!["bash".into()])
+            .with_allowed_tools(vec!["bash".into(), "governance_metrics".into()])
             .with_denied_tools(vec![
                 "file_write".into(),
                 "file_edit".into(),
@@ -782,6 +785,10 @@ mod tests {
         // Can measure (bash for real exit codes) and read, cannot rewrite.
         assert!(auditor.is_tool_allowed("bash"));
         assert!(auditor.is_tool_allowed("file_read"));
+        // The audit/watch templates order governance_metrics probes; bash
+        // cannot reach ~/.aleph/data (sandbox), so the read-only tool must be
+        // reachable or the auditor fails its own standing probes.
+        assert!(auditor.is_tool_allowed("governance_metrics"));
         assert!(!auditor.is_tool_allowed("file_write"));
         assert!(!auditor.is_tool_allowed("file_edit"));
         // Audit doctrine forbids network search — deny at the definition level.

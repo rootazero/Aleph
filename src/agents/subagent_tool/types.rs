@@ -66,10 +66,6 @@ pub(super) struct RunArgs {
     pub(super) timeout_secs: u64,
     pub(super) run_in_background: bool,
     pub(super) context_summary: Option<String>,
-    /// Optional name — makes the agent addressable.
-    pub(super) name: Option<String>,
-    /// Optional team name — enables shared tasks and messages.
-    pub(super) team_name: Option<String>,
     /// Batch tasks for parallel execution. When provided, all tasks run in
     /// background automatically and a list of `request_ids` is returned.
     pub(super) batch_tasks: Option<Vec<BatchTask>>,

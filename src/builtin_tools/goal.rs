@@ -788,6 +788,22 @@ token_budget. \
                         && matches!(goal.pursuit, PursuitMode::Passive));
                 if tool_owned_terminal {
                     self.clear_welded_strategy(&session);
+                    // A Passive complete is a victory claim too — poke any
+                    // paired loop_graph watchers, once per completion write
+                    // (the same store CAS the gateway hook uses for the
+                    // gate-less Active complete, so neither path can re-fire
+                    // on later re-observations). Blocked is a halt, not a
+                    // victory — no poke.
+                    if matches!(goal.status, GoalStatus::Complete) {
+                        match self.store.try_claim_settle_notify(&goal) {
+                            Ok(true) => {
+                                crate::loop_graph::service::notify_goal_settled(&session).await;
+                            }
+                            Ok(false) => {}
+                            Err(e) => info!(session = %session, error = %e,
+                                "goal: settle-notify claim failed; watcher poke skipped (ignored)"),
+                        }
+                    }
                 }
                 Ok(GoalOutput {
                     success: true,
@@ -970,6 +986,35 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(out.message.to_lowercase().contains("complete"));
+    }
+
+    /// Regression (W14): a Passive complete is a victory claim — the tool must
+    /// consume the one-shot settle-notify claim for the completion write (it is
+    /// the only site that can poke watchers for Passive goals; the gateway
+    /// hook's gate-less arm requires Active pursuit). If the tool skipped the
+    /// claim, this later claim on the live row would still return `true`.
+    #[tokio::test]
+    async fn passive_complete_consumes_the_settle_notify_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let handle = Arc::new(RwLock::new("sess-notify".to_string()));
+        let tool = GoalTool::new(store.clone()).with_session_key_handle(Some(handle));
+
+        let mut set = args(GoalAction::Set);
+        set.objective = Some("x".into()); // no pursuit iterations → Passive
+        tool.call(set).await.unwrap();
+
+        let mut update = args(GoalAction::Update);
+        update.status = Some(GoalStatus::Complete);
+        tool.call(update).await.unwrap();
+
+        let live = store.get("sess-notify").unwrap().unwrap();
+        assert!(matches!(live.pursuit, PursuitMode::Passive));
+        assert_eq!(live.status, GoalStatus::Complete);
+        assert!(
+            !store.try_claim_settle_notify(&live).unwrap(),
+            "the Passive-complete update must have claimed the watcher poke"
+        );
     }
 
     #[tokio::test]

@@ -29,21 +29,21 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
 // ---------------------------------------------------------------------------
 
 /// Categorizes the kind of activity that occurred within a team.
+///
+/// Variants with zero producers (`TaskCreated` / `ArtifactSubmitted` /
+/// `DigestGenerated` / `ShutdownRequested` / `ShutdownResolved`) were removed;
+/// any legacy rows storing those strings are silently skipped by
+/// `read_event_row` (lenient reader), so the removal needs no migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TeamEventType {
     MessageSent,
     MessageRead,
-    TaskCreated,
     TaskCompleted,
     TaskFailed,
-    ArtifactSubmitted,
     SessionStarted,
     SessionConcluded,
     SessionDeadlocked,
-    DigestGenerated,
-    ShutdownRequested,
-    ShutdownResolved,
     PlanSubmitted,
     PlanResolved,
 
@@ -62,16 +62,11 @@ impl TeamEventType {
         match self {
             Self::MessageSent => "message_sent",
             Self::MessageRead => "message_read",
-            Self::TaskCreated => "task_created",
             Self::TaskCompleted => "task_completed",
             Self::TaskFailed => "task_failed",
-            Self::ArtifactSubmitted => "artifact_submitted",
             Self::SessionStarted => "session_started",
             Self::SessionConcluded => "session_concluded",
             Self::SessionDeadlocked => "session_deadlocked",
-            Self::DigestGenerated => "digest_generated",
-            Self::ShutdownRequested => "shutdown_requested",
-            Self::ShutdownResolved => "shutdown_resolved",
             Self::PlanSubmitted => "plan_submitted",
             Self::PlanResolved => "plan_resolved",
             Self::TeamCreated => "team_created",
@@ -88,16 +83,11 @@ impl TeamEventType {
         match s {
             "message_sent" => Some(Self::MessageSent),
             "message_read" => Some(Self::MessageRead),
-            "task_created" => Some(Self::TaskCreated),
             "task_completed" => Some(Self::TaskCompleted),
             "task_failed" => Some(Self::TaskFailed),
-            "artifact_submitted" => Some(Self::ArtifactSubmitted),
             "session_started" => Some(Self::SessionStarted),
             "session_concluded" => Some(Self::SessionConcluded),
             "session_deadlocked" => Some(Self::SessionDeadlocked),
-            "digest_generated" => Some(Self::DigestGenerated),
-            "shutdown_requested" => Some(Self::ShutdownRequested),
-            "shutdown_resolved" => Some(Self::ShutdownResolved),
             "plan_submitted" => Some(Self::PlanSubmitted),
             "plan_resolved" => Some(Self::PlanResolved),
             "team_created" => Some(Self::TeamCreated),
@@ -579,7 +569,7 @@ mod tests {
             let conn = store.conn.lock().await;
             conn.execute(
                 "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
-                params!["prune-evt", "team-2", "task_created", "agent-b", "{}", past],
+                params!["prune-evt", "team-2", "task_completed", "agent-b", "{}", past],
             ).unwrap();
         }
 
@@ -608,7 +598,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
-            params!["e1", "team-3", "task_created", "a1", "{}", ts1],
+            params!["e1", "team-3", "message_sent", "a1", "{}", ts1],
         ).unwrap();
         conn.execute(
             "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
@@ -616,7 +606,7 @@ mod tests {
         ).unwrap();
         conn.execute(
             "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
-            params!["e3", "team-3", "digest_generated", "a1", "{}", ts3],
+            params!["e3", "team-3", "plan_submitted", "a1", "{}", ts3],
         ).unwrap();
         drop(conn);
 
@@ -645,6 +635,30 @@ mod tests {
         // since = base-2h, until = base-1h — should get e2
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, "e2");
+    }
+
+    #[tokio::test]
+    async fn legacy_event_type_strings_are_skipped_not_errors() {
+        // Rows stored by removed variants (e.g. "digest_generated") must be
+        // silently dropped by the lenient reader — this is what makes variant
+        // removal migration-free. A live row alongside proves the query itself
+        // still succeeds.
+        let store = SqliteEventLogStore::new_in_memory().await;
+        {
+            let conn = store.conn.lock().await;
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
+                params!["legacy", "team-L", "digest_generated", "a1", "{}", now],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
+                params!["live", "team-L", "message_sent", "a1", "{}", now],
+            ).unwrap();
+        }
+        let events = store.get_events("team-L", None, None).await.unwrap();
+        assert_eq!(events.len(), 1, "legacy row skipped, live row kept");
+        assert_eq!(events[0].id, "live");
     }
 
     #[tokio::test]

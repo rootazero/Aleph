@@ -594,7 +594,7 @@ pub struct TaskCommentDto {
 pub struct TaskEventDto {
     pub id: String,
     pub team_id: String,
-    /// Snake-case (e.g. "`task_created`", "`task_completed`").
+    /// Snake-case (e.g. "`task_assigned`", "`task_completed`").
     pub event_type: String,
     pub agent_id: String,
     #[serde(default)]

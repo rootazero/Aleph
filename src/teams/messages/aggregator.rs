@@ -19,8 +19,9 @@
 //! 2. Hard cap — when `max_batch` is reached, flush immediately so a
 //!    runaway loop can't pin unbounded memory.
 //!
-//! External callers can also force a flush (e.g. on team disband) via
-//! [`Aggregator::flush_team`].
+//! There is deliberately no external force-flush surface: a disband only
+//! races the 500 ms window, and anything still pending is a best-effort
+//! progress ping for a team that no longer exists.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -197,24 +198,6 @@ impl Aggregator {
             // Drain right now; the timer task (if any) will find an empty
             // bucket and noop.
             self.flush_one(&key).await;
-        }
-    }
-
-    /// Flush all pending buckets for a team (e.g. on disband). Safe to call
-    /// even when no buckets exist.
-    pub async fn flush_team(self: &Arc<Self>, team_id: &str) {
-        // Collect keys first so we don't hold the bucket lock across the
-        // (async) flush_one calls.
-        let keys: Vec<BatchKey> = {
-            let buckets = self.buckets.lock().await;
-            buckets
-                .keys()
-                .filter(|k| k.team_id == team_id)
-                .cloned()
-                .collect()
-        };
-        for k in keys {
-            self.flush_one(&k).await;
         }
     }
 
@@ -449,23 +432,6 @@ mod tests {
         // Cap reached on the 3rd — flushes synchronously before this await
         // returns. Don't depend on the still-pending timer.
         tokio::time::sleep(Duration::from_millis(20)).await;
-        assert_eq!(inbox_count(&store, "b", "t1").await, 1);
-    }
-
-    #[tokio::test]
-    async fn flush_team_drains_pending_immediately() {
-        let (router, store) = setup().await;
-        let agg = Aggregator::new(
-            router,
-            AggregatorConfig {
-                window: Duration::from_secs(60), // long window — would never fire on its own
-                ..Default::default()
-            },
-        );
-        agg.send_batched(req("t1", "a", "b", "queued")).await;
-        agg.send_batched(req("t1", "a", "b", "queued2")).await;
-        assert_eq!(inbox_count(&store, "b", "t1").await, 0);
-        agg.flush_team("t1").await;
         assert_eq!(inbox_count(&store, "b", "t1").await, 1);
     }
 

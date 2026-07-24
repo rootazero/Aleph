@@ -1,12 +1,13 @@
-//! Teammate lifecycle management for named sub-agents.
-//!
-//! Handles auto-creation of lightweight teams, member registration,
-//! and cleanup when teammates complete their work.
+//! Lightweight team resolution for the subagent tool's `send_message` /
+//! `read_inbox` faces: `ensure_team` maps a `team_name` to a team id,
+//! creating the team on first use. (The former `register_teammate`
+//! auto-registration was removed with the honest-trim of named spawns —
+//! spawned sub-agents are not addressable teammates.)
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::teams::store::TeamStore;
-use crate::teams::types::{NewTeam, NewTeamMember};
+use crate::teams::types::NewTeam;
 
 /// Manages teammate registration and lifecycle.
 pub struct TeammateManager {
@@ -48,24 +49,6 @@ impl TeammateManager {
         }
     }
 
-    /// Register a named agent as a member of a team.
-    pub async fn register_teammate(
-        &self,
-        team_id: &str,
-        agent_name: &str,
-        role: &str,
-    ) -> Result<()> {
-        self.team_store
-            .add_member(NewTeamMember {
-                team_id: team_id.to_string(),
-                agent_id: agent_name.to_string(),
-                role: role.to_string(),
-                ..Default::default()
-            })
-            .await?;
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -96,12 +79,4 @@ mod tests {
         assert_eq!(id1, id2);
     }
 
-    #[tokio::test]
-    async fn register_teammate_succeeds() {
-        let mgr = setup().await;
-        let team_id = mgr.ensure_team("analysis", "parent-agent").await.unwrap();
-        mgr.register_teammate(&team_id, "researcher", "worker")
-            .await
-            .unwrap();
-    }
 }

@@ -87,7 +87,6 @@ macro_rules! register_handler {
 }
 
 mod agents;
-mod arena;
 mod config;
 mod core;
 mod extensions;
@@ -98,7 +97,6 @@ mod settings;
 mod system;
 
 pub(in crate::commands::start) use agents::*;
-pub(in crate::commands::start) use arena::*;
 pub(in crate::commands::start) use config::*;
 pub(in crate::commands::start) use core::*;
 pub(in crate::commands::start) use extensions::*;

@@ -40,31 +40,12 @@ pub const WATCH_TEMPLATE_FOOTER: &str = r#"
 
 纪律：发现便宜赢法/指标偏航 → 裁决写 note（note_manage，category=lesson，tags 含 graph-audit，YAML 证据块含 evidence_cmd/evidence_result/evidence_ts/verdict）并简短通知用户；一切正常 → 静默结束。只读取证；不修改被看守环的目标/计划（认为参照本身错了→写提案 note，tag: reference-proposal）；bash 调用 ≤ 6 次。"#;
 
-/// Reference-steward loop prompt (monthly by default; created by hand via
-/// cron_manage + `owns_reference` edges — see the loop-governance skill).
-/// The steward owns child references: proposals are decided HERE, and any
-/// actual change routes through the user (approval) + the unlink→edit→relink
-/// flow, leaving provenance in the graph.
-pub const STEWARD_TEMPLATE: &str = r#"你是「参照治理环」——更慢的环，拥有子环的 objective（owns_reference）。每 tick：
-1) loop_graph(action="status") 取你治理的子环清单与根参照原文；
-2) 检索 tag 为 reference-proposal 的提案 notes 与各子环的 lessons、近期表现；
-3) 逐提案裁决（以根参照为准绳）：驳回→回一条说明 note；采纳→通知用户确认，获确认后执行变更流：loop_graph(action="unlink", edge="owns_reference") 解除托管 → 修改目标 → 重新 link（全程留痕于图的 provenance 与 note）；
-4) 无提案且子环表现正常 → 静默结束。
-铁律：参照的每次变更都必须发生在本环的 tick 里、有提案 note、有裁决记录；root/frozen 相关变更只能出提案，人拍板。"#;
-
-/// Arbitration prompt — used when two loops fight (a `conflicts_with`
-/// situation named by the user, a loop's own self-awareness, or the audit
-/// loop). Arbitration is an EVENT, not a resident service: one cron tick (or
-/// one interactive turn) with both sides' state juxtaposed, judged against
-/// the human root reference. Detection stays with the LLM (R7 — no
-/// deterministic conflict detector, ever).
-pub const ARBITRATION_TEMPLATE: &str = r#"你是「仲裁环」——两个（或多个）循环互相对抗时的权衡者。每 tick：
-1) loop_graph(action="status") 取拓扑；找到你 arbitrates 指向的冲突环，并置双方的目标、近期表现（live 状态 + cron history / goal lessons）；
-2) 检索历史裁决先例（tags: graph-audit 的记忆 notes）；
-3) 以 root 节点的根参照原文为准绳做一次权衡裁决：谁让步、如何让（pause 一方 / 调预算 / 建议参照修订）；涉及 root/frozen 的冲突只能出提案（tag: reference-proposal），人拍板；
-4) 裁决写 note（category=lesson，tags 含 graph-audit，YAML 证据块 + verdict）并通知用户一句话结论；
-5) 冲突消解后：可 loop_graph(action="unlink") 移除 arbitrates 边并说明。
-铁律：权衡的准绳永远向上锚到根参照，不由你自生；参照修改走治理环通道，你不直接改任何环的目标。"#;
+// Steward / arbitration prompts deliberately live in the `loop-governance`
+// skill, not here: no tool action installs them (steward loops are created by
+// hand via cron_manage + `owns_reference` edges, and arbitration is an EVENT,
+// not a resident service — spec §4.3). The former STEWARD_TEMPLATE /
+// ARBITRATION_TEMPLATE consts had zero consumers and were cut (R10 YAGNI);
+// re-add one only together with the tool action that installs it.
 
 #[cfg(test)]
 mod tests {
@@ -74,9 +55,6 @@ mod tests {
     fn governance_templates_carry_their_disciplines() {
         assert!(WATCH_TEMPLATE_HEADER.contains("反指标"));
         assert!(WATCH_TEMPLATE_FOOTER.contains("reference-proposal"));
-        assert!(STEWARD_TEMPLATE.contains("owns_reference"));
-        assert!(ARBITRATION_TEMPLATE.contains("根参照"));
-        assert!(ARBITRATION_TEMPLATE.contains("arbitrates"));
         assert!(WATCH_TEMPLATE_HEADER.contains("loop-auditor"));
     }
 

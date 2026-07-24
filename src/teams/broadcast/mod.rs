@@ -22,6 +22,15 @@ pub const MAX_FANOUT_WIDTH: usize = 5;
 pub const MAX_TOTAL_ACTIVATIONS: usize = 32;
 /// 群 transcript 注入的 token 预算(超出从尾保留最近)。
 pub const TRANSCRIPT_TOKEN_BUDGET: usize = 8000;
+/// 单个成员 run 的墙钟超时(秒)。镜像 `DispatcherConfig::task_timeout_secs`
+/// 的默认值(600)。此前 `run_member` 传 `timeout_secs: None`,继承
+/// `ExecutionEngine::default_timeout_secs` 的 48 小时兜底——一次卡死的
+/// provider 调用会把成员 run(连同等它的 fan-out 分支和 activation 槽位)
+/// 钉住整整两天且无停止按钮。注意:群聊 leader 的 run 同受此帽——leader
+/// 若在群聊里同步 `team_delegate`,整段委派须装进这个窗口(被帽杀时
+/// delegate 侧的 settle-on-drop 围栏会立即把 coord task 记 Failed 并释放
+/// 锁);长委派场景经 `[team_broadcast] member_run_timeout_secs` 调大。
+pub const MEMBER_RUN_TIMEOUT_SECS: u64 = 600;
 /// 保留 handle:agent 不能 @ 回用户(防自环)。openteams `RESERVED_USER_HANDLE`。
 pub const RESERVED_USER_HANDLE: &str = "user";
 
@@ -45,6 +54,8 @@ pub struct BroadcastConfig {
     pub max_total_activations: usize,
     /// 群 transcript 注入的 token 预算(超出从尾保留最近)。
     pub transcript_token_budget: usize,
+    /// 单个成员 run 的墙钟超时(秒)。见 [`MEMBER_RUN_TIMEOUT_SECS`]。
+    pub member_run_timeout_secs: u64,
 }
 
 impl Default for BroadcastConfig {
@@ -54,12 +65,16 @@ impl Default for BroadcastConfig {
             max_fanout_width: MAX_FANOUT_WIDTH,
             max_total_activations: MAX_TOTAL_ACTIVATIONS,
             transcript_token_budget: TRANSCRIPT_TOKEN_BUDGET,
+            member_run_timeout_secs: MEMBER_RUN_TIMEOUT_SECS,
         }
     }
 }
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tokio_util::sync::CancellationToken;
+
+use crate::agents::background_tracker::{BackgroundAgentTracker, RunningRegistration, SpawnMeta};
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::team_fanout::{team_event_bus, TeamFanoutEmitter};
@@ -127,6 +142,31 @@ fn newly_waiting_review(pre: &[String], post: &[String]) -> Vec<String> {
         .filter(|id| !pre.contains(id))
         .cloned()
         .collect()
+}
+
+/// Identity + kill switch for ONE user-triggered fan-out tree, cloned down the
+/// recursion. `run_id` is the `teams.chat.send`-minted run_id (returned to the
+/// Panel) — it names the tree's tracker node, and every member run registers
+/// under it as `SpawnMeta.parent_id`. `cancel` is the tree-level poison:
+/// `teams.chat.cancel` fires it (via `BackgroundAgentTracker::cancel` on the
+/// tree node) so no NEW members spawn while the RPC walks
+/// `running_children_of` to abort the in-flight ones through the engine's
+/// per-run CancellationToken path. Pure scaffolding — no reasoning (守 R10).
+#[derive(Clone)]
+struct FanoutTree {
+    run_id: Arc<String>,
+    cancel: CancellationToken,
+}
+
+/// Pre-registered fan-out tree handle. Constructed (and tracker-registered)
+/// by [`GroupChatBroadcaster::register_fanout`] BEFORE the dispatch task is
+/// spawned and before the RPC returns the `run_id` — otherwise
+/// `teams.chat.cancel` can race the spawned registration and NOT_FOUND while
+/// the fan-out proceeds uncancelled. Dropping this without dispatching
+/// delists the tree node (harmless).
+pub struct RegisteredFanout {
+    tree: FanoutTree,
+    _tree_reg: RunningRegistration,
 }
 
 /// 群聊广播编排器。无状态:每次 dispatch 现场拉 team/roster/transcript。
@@ -218,7 +258,42 @@ impl GroupChatBroadcaster {
     ///
     /// 每次用户触发新建一个 fan-out 树的全局唤醒计数器(`MAX_TOTAL_ACTIVATIONS` 闸),
     /// 计数器随这棵树的整条递归共享、用完即弃,确保上限是"每条用户消息"而非"进程累计"。
-    pub async fn dispatch_user(&self, team_id: String, content: String) {
+    ///
+    /// Construct + tracker-register the fan-out tree for an RPC-minted
+    /// `teams.chat.send` run_id. Synchronous — call BEFORE spawning the
+    /// dispatch task and before returning the run_id, so the id the Panel
+    /// receives is cancellable the instant it is visible.
+    /// `teams.chat.cancel` fires the stored token via `tracker.cancel(run_id)`
+    /// (poisoning new member spawns), then walks `running_children_of(run_id)`
+    /// to abort in-flight member runs.
+    pub fn register_fanout(tree_run_id: String, team_id: &str) -> RegisteredFanout {
+        let tree = FanoutTree {
+            run_id: Arc::new(tree_run_id.clone()),
+            cancel: CancellationToken::new(),
+        };
+        let _tree_reg = RunningRegistration::register(
+            BackgroundAgentTracker::global(),
+            tree_run_id,
+            tree.cancel.clone(),
+            format!("team chat fan-out (team {team_id})"),
+            SpawnMeta {
+                parent_id: None,
+                depth: 0,
+                root_session: tree.run_id.as_ref().clone(),
+                model: None,
+            },
+        );
+        RegisteredFanout { tree, _tree_reg }
+    }
+
+    /// The `fanout` handle carries the fan-out tree's identity (the RPC-minted
+    /// `teams.chat.send` run_id) plus its running-only tracker node holding
+    /// the tree kill switch — pre-registered by [`Self::register_fanout`], so
+    /// the run_id the Panel receives is honest and immediately cancellable.
+    pub async fn dispatch_user(&self, team_id: String, content: String, fanout: RegisteredFanout) {
+        // Destructure keeps the RAII registration alive until the whole tree
+        // settles — no completed entry, no announce.
+        let RegisteredFanout { tree, _tree_reg } = fanout;
         let leader_first = self.maybe_plan_team_strategy(&team_id, &content).await;
         let budget = Arc::new(AtomicUsize::new(0));
         self.clone()
@@ -230,6 +305,7 @@ impl GroupChatBroadcaster {
                 true,
                 leader_first,
                 budget,
+                tree,
             )
             .await;
     }
@@ -246,8 +322,15 @@ impl GroupChatBroadcaster {
         user_triggered: bool,
         leader_first: bool,
         budget: Arc<AtomicUsize>,
+        tree: FanoutTree,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
+            // Tree poisoned by teams.chat.cancel: spawn no further members at
+            // any recursion level. In-flight member runs are aborted
+            // separately by the RPC through the engine's per-run token.
+            if tree.cancel.is_cancelled() {
+                return;
+            }
             let Some(team) = self.team_store.get_team(&team_id).await.ok().flatten() else {
                 return;
             };
@@ -342,6 +425,7 @@ impl GroupChatBroadcaster {
                     user_request,
                     chain_depth,
                     budget.clone(),
+                    tree.clone(),
                 )));
             }
             for h in handles {
@@ -369,6 +453,7 @@ impl GroupChatBroadcaster {
         user_request: String,
         chain_depth: u32,
         budget: Arc<AtomicUsize>,
+        tree: FanoutTree,
     ) {
         let Some(agent) = self.ctx.agent_registry().get(&agent_id).await else {
             // The dispatch loop already filters ACP-kind members, so reaching
@@ -437,12 +522,35 @@ impl GroupChatBroadcaster {
         };
 
         let run_id = uuid::Uuid::new_v4().to_string();
+        // Record this member run under the fan-out tree so teams.chat.cancel
+        // can enumerate it (`running_children_of(tree.run_id)`) and abort it
+        // via the engine's per-run token (keyed by this run_id). Running-only
+        // RAII: delists on drop (normal exit, panic, task cancel) — no
+        // completed entry, no announce. The stored token is a child of the
+        // tree token, so a tracker-level cancel of this entry never poisons
+        // the whole tree.
+        let _member_reg = RunningRegistration::register(
+            BackgroundAgentTracker::global(),
+            run_id.clone(),
+            tree.cancel.child_token(),
+            format!("team-chat member {agent_id} (team {team_id})"),
+            SpawnMeta {
+                parent_id: Some(tree.run_id.as_ref().clone()),
+                depth: chain_depth.saturating_add(1),
+                root_session: tree.run_id.as_ref().clone(),
+                model: None,
+            },
+        );
         let metadata = member_run_metadata(&team_id, chain_depth);
         let req = RunRequest {
             run_id,
             input,
             session_key: SessionKey::task(&agent_id, "team_chat", &team_id),
-            timeout_secs: None,
+            // Bounded wall-clock timeout. `None` would inherit the engine's
+            // 48h `default_timeout_secs` — one wedged provider call pinning a
+            // member run (and its awaiting fan-out branch + activation slot)
+            // for two days with no stop button.
+            timeout_secs: Some(self.config.member_run_timeout_secs),
             metadata,
             attachments: Vec::new(),
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -452,6 +560,16 @@ impl GroupChatBroadcaster {
             model_override: None,
         };
 
+        // Last-instant tree poison check: a member spawned concurrently with
+        // teams.chat.cancel may have registered after the RPC walked the
+        // children; the poison flag (fired BEFORE the walk) still stops it
+        // here. A residual race — poison landing between this check and the
+        // engine registering the run — leaves a bounded set of stragglers
+        // (up to the members concurrently inside this window, ≤ the fan-out
+        // width of one level), each capped by `member_run_timeout_secs`.
+        if tree.cancel.is_cancelled() {
+            return;
+        }
         if let Err(e) = self
             .ctx
             .execution_adapter()
@@ -459,6 +577,13 @@ impl GroupChatBroadcaster {
             .await
         {
             tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
+            // 失败/超时必须在群 transcript 留痕——否则成员被 @ 后无声消失,
+            // 后续轮次和 Panel 历史出现无迹之洞(镜像深度/宽度闸的系统提示)。
+            self.post_system(
+                &team_id,
+                &format!("@{agent_id} 的发言执行失败或超时,本轮未能回复。"),
+            )
+            .await;
             return;
         }
 
@@ -521,6 +646,7 @@ impl GroupChatBroadcaster {
                         false,
                         false,
                         budget.clone(),
+                        tree.clone(),
                     )
                     .await;
             }
@@ -540,6 +666,7 @@ impl GroupChatBroadcaster {
             false,
             false,
             budget,
+            tree,
         )
         .await;
     }
@@ -591,6 +718,7 @@ mod tests {
         assert_eq!(c.max_fanout_width, MAX_FANOUT_WIDTH);
         assert_eq!(c.max_total_activations, MAX_TOTAL_ACTIVATIONS);
         assert_eq!(c.transcript_token_budget, TRANSCRIPT_TOKEN_BUDGET);
+        assert_eq!(c.member_run_timeout_secs, MEMBER_RUN_TIMEOUT_SECS);
     }
 
     #[test]

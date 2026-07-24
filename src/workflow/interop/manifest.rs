@@ -5,12 +5,13 @@
 //! full `.workflow.js`-compatible metadata (`whenToUse`, `phases` with optional
 //! per-phase `model`, per-step `label`/`model`/`phase`/`schema`/`isolation`/
 //! `agentType`); only the executable core round-trips into `WorkflowDef`, the
-//! rest is preserved for lossless export. Per-step `model` is the one extra that
-//! is *also executable*: the `workflow` tool's `run` threads it past `to_def`
-//! into the materialised task metadata, where the dispatcher turns it into a
-//! per-member model override. The remaining agent-opt fields (`isolation`,
-//! `agentType`) and `phase.model` stay interchange-only — the Aleph executor
-//! never consumes them (R10), exactly like the opaque `schema` pass-through.
+//! rest is preserved for lossless export. Per-step `model` and `effort` are the
+//! two extras that are *also executable*: the `workflow` tool's `run` threads
+//! them past `to_def` into the materialised task metadata, where the dispatcher
+//! turns them into a per-member model override / think-level. The remaining
+//! agent-opt fields (`isolation`, `agentType`) and `phase.model` stay
+//! interchange-only — the Aleph executor never consumes them (R10), exactly
+//! like the opaque `schema` pass-through.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,12 +79,12 @@ pub struct WorkflowManifestStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
     /// `.workflow.js` `agent(..., { effort })` — the subagent's reasoning-effort
-    /// tier (`low`/`medium`/`high`/`xhigh`/`max`). Interchange-only, exactly like
-    /// [`isolation`](Self::isolation)/[`agent_type`](Self::agent_type): preserved
-    /// verbatim for a faithful `.workflow.js` round-trip, never consumed by the
-    /// Aleph executor (R10). Promoting it to an executable per-member override
-    /// (mirroring how per-step `model` threads into task metadata) is a clean
-    /// follow-up once the task layer grows an effort channel.
+    /// tier (`low`/`medium`/`high`/`xhigh`/`max`). Like per-step
+    /// [`model`](Self::model) this is *also executable*: the `workflow` tool's
+    /// `run` threads it past `to_def` into the materialised task metadata
+    /// (`WORKFLOW_EFFORT_KEY`), where the dispatcher turns it into the member
+    /// run's `think_level`. Validated against the live think-level vocabulary
+    /// in [`validate`](WorkflowManifest::validate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// Step kind — `agent` (default) or `clarify`. Part of the executable core,
@@ -150,13 +151,32 @@ impl WorkflowManifest {
         }
     }
 
-    /// Validate the manifest by validating its executable projection — the
-    /// extra metadata (`label`/`model`/`phase`/`schema`/`isolation`/`agentType`/
-    /// `phases`/`whenToUse`) is pure interchange data and carries no invariants
-    /// of its own, so the
-    /// `WorkflowDef` checks (unique ids, resolvable deps, acyclic) are the whole
-    /// contract. Pure — touches no store.
+    /// Validate the manifest: the executable projection (`WorkflowDef` checks —
+    /// unique ids, resolvable deps, acyclic) plus the one executable extra with
+    /// a vocabulary of its own — per-step `effort`, which must normalise
+    /// through the live think-level table (`low`..`max` and its aliases) so an
+    /// unknown tier fails at the save/import boundary instead of being
+    /// silently ignored at run time. The remaining metadata
+    /// (`label`/`model`/`phase`/`schema`/`isolation`/`agentType`/`phases`/
+    /// `whenToUse`) is pure interchange data with no invariants. Pure —
+    /// touches no store.
     pub fn validate(&self) -> Result<()> {
+        for step in &self.steps {
+            if let Some(effort) = step
+                .effort
+                .as_deref()
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+            {
+                if crate::agents::thinking::normalize_think_level(effort).is_none() {
+                    return Err(crate::error::AlephError::invalid_input(format!(
+                        "step '{}': unknown effort '{effort}' — use one of \
+                         low/medium/high/xhigh/max",
+                        step.id
+                    )));
+                }
+            }
+        }
         self.to_def().validate()
     }
 
@@ -322,6 +342,28 @@ mod tests {
         assert_eq!(v["steps"][0]["effort"], "max");
         // Empty extras are skipped on the wire.
         assert!(v.get("phases").is_none(), "empty phases skipped");
+    }
+
+    #[test]
+    fn validate_checks_effort_against_think_level_vocabulary() {
+        let mut manifest = WorkflowManifest::from_def(&core_def());
+        // Every .workflow.js effort tier normalises through the live table.
+        for tier in ["low", "medium", "high", "xhigh", "max"] {
+            manifest.steps[0].effort = Some(tier.into());
+            manifest
+                .validate()
+                .unwrap_or_else(|e| panic!("'{tier}' must validate: {e}"));
+        }
+        // An unknown tier fails at the boundary, naming the step.
+        manifest.steps[0].effort = Some("turbo".into());
+        let err = manifest.validate().expect_err("unknown effort rejected");
+        assert!(err.to_string().contains("unknown effort 'turbo'"), "{err}");
+        assert!(err.to_string().contains("step 'a'"), "{err}");
+        // Absent / blank effort stays valid (interchange rows unchanged).
+        manifest.steps[0].effort = Some("  ".into());
+        manifest.validate().expect("blank effort is no effort");
+        manifest.steps[0].effort = None;
+        manifest.validate().expect("absent effort validates");
     }
 
     #[test]

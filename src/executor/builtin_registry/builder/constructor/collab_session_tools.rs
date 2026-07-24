@@ -1,9 +1,9 @@
-//! Messaging, plan-approval, lifecycle, artifact, collaborative-session, arena,
+//! Messaging, plan-approval, lifecycle, artifact, collaborative-session,
 //! skill, and note tool construction for `BuiltinToolRegistry`.
 //!
 //! Extracted from `constructor.rs` to keep file sizes manageable. Builds the
 //! messaging (send/inbox), plan-approval, worker-lifecycle, task-artifact,
-//! collaborative-session, arena, Google Meet, skill-management, note-management,
+//! collaborative-session, Google Meet, skill-management, note-management,
 //! session-complete, and memory-reflect tools, registering their parameter
 //! schemas (and the `recall_context` schema) into the shared `tools` map.
 
@@ -36,9 +36,6 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::team::SessionCollaborateTool>,
         Option<crate::builtin_tools::team::SessionTurnTool>,
         Option<crate::builtin_tools::team::SessionReadTool>,
-        Option<crate::builtin_tools::arena::ArenaCreateTool>,
-        Option<crate::builtin_tools::arena::ArenaQueryTool>,
-        Option<crate::builtin_tools::arena::ArenaSettleTool>,
         crate::builtin_tools::google_meet::GoogleMeetTool,
         crate::builtin_tools::skill_status::SkillStatusTool,
         crate::builtin_tools::skill_install::SkillInstallTool,
@@ -337,38 +334,6 @@ impl BuiltinToolRegistry {
             (collaborate, turn, read)
         };
 
-        // Arena collaboration tools (optional — requires ArenaManager)
-        let (arena_create_tool, arena_query_tool, arena_settle_tool) =
-            if let Some(ref arena_manager) = config.arena_manager {
-                use crate::builtin_tools::arena::{
-                    ArenaCreateTool, ArenaQueryTool, ArenaSettleTool,
-                };
-                let create =
-                    ArenaCreateTool::new(crate::sync_primitives::Arc::clone(arena_manager));
-                let query = ArenaQueryTool::new(crate::sync_primitives::Arc::clone(arena_manager));
-                let settle =
-                    ArenaSettleTool::new(crate::sync_primitives::Arc::clone(arena_manager));
-
-                {
-                    use crate::tools::AlephTool;
-                    let tool_defs = [create.definition(), query.definition(), settle.definition()];
-                    for td in &tool_defs {
-                        let mut ut = UnifiedTool::new(
-                            format!("builtin:{}", td.name),
-                            &td.name,
-                            &td.description,
-                            ToolSource::Builtin,
-                        );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
-                        tools.insert(td.name.clone(), ut);
-                    }
-                }
-                info!("Registered arena tools (arena_create, arena_query, arena_settle)");
-                (Some(create), Some(query), Some(settle))
-            } else {
-                (None, None, None)
-            };
-
         // Skill management tools — always available
         // Phase 2: use the process-wide shared SkillSystem instead of a
         // throwaway empty instance; skill_status previously always reported 0.
@@ -607,9 +572,6 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
-            arena_create_tool,
-            arena_query_tool,
-            arena_settle_tool,
             google_meet_tool,
             skill_status_tool,
             skill_install_tool,

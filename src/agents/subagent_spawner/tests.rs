@@ -329,7 +329,6 @@ mod tests {
         assert_eq!(result.final_text.as_deref(), Some("hi from child"));
         assert_eq!(result.iterations, 1);
         assert_eq!(result.tool_calls_made, 0);
-        assert_eq!(result.depth, 1); // child of root (depth=0) → depth=1
         assert!(!result.hit_limit);
     }
 
@@ -755,8 +754,9 @@ mod tests {
     }
 
     /// When the final AssistantMessage has empty text but earlier turns had
-    /// text, `final_text` must be cleared so the gateway surfaces
-    /// `ErrLoopExhausted` instead of echoing the stale earlier message.
+    /// text, `final_text` must be cleared so stale mid-run narration is never
+    /// presented as the final answer (the subagent tool reports the cap via
+    /// `hit_iteration_limit` alongside).
     #[tokio::test]
     async fn final_text_cleared_when_last_assistant_is_empty() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -768,8 +768,7 @@ mod tests {
         // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
         seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
 
-        let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, true, 777)
+        let result = extract_run_result(session.as_ref(), &child_id, true, 777)
             .await
             .expect("extract ok");
 
@@ -800,8 +799,7 @@ mod tests {
         // Turn 1: pure tool_use (empty). Turn 2: terminal text.
         seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
 
-        let chain = ChainContext::new();
-        let result = extract_run_result(session.as_ref(), &child_id, &chain, false, 0)
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0)
             .await
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
@@ -1088,7 +1086,6 @@ mod tests {
             context_summary: None,
             model: None,
             timeout_secs: 5,
-            strategy: None,
         };
 
         runtime.run(config).await.expect("spawn ok");

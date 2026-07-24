@@ -125,9 +125,17 @@ impl AlephTool for A2ADelegateTool {
         notify_tool_start(Self::NAME, &truncate(&args.prompt, 80));
         let deps = load_deps(&self.handle)?;
 
+        // W16 — thread the delegating turn's real identity into the delegation
+        // memory row (task-local turn context; `None` outside a scoped turn
+        // falls back to the legacy "default" attribution).
         let outcome = deps
             .sub_agent
-            .execute_delegation(&args.prompt, args.agent.as_deref())
+            .execute_delegation(
+                &args.prompt,
+                args.agent.as_deref(),
+                crate::tools::turn_context::current_agent_id(),
+                crate::tools::turn_context::current_session_key(),
+            )
             .await?;
 
         let success = outcome.result.success;

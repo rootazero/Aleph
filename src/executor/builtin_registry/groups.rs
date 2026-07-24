@@ -208,9 +208,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "session_collaborate",
             "session_turn",
             "session_read",
-            "arena_create",
-            "arena_query",
-            "arena_settle",
         ],
     },
     // -- Infrastructure --

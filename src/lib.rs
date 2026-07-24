@@ -56,7 +56,6 @@
 
 pub mod agents;
 pub mod approval;
-pub mod arena;
 pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;

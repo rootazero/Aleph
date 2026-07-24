@@ -163,18 +163,31 @@ impl SubagentTool {
                 context_summary,
                 model,
                 timeout_secs,
-                strategy: None,
             };
             let result = AssertUnwindSafe(runtime.run(runtime_config))
                 .catch_unwind()
                 .await;
             let outcome = match result {
-                Ok(Ok(r)) => CompletedOutcome::Ok {
-                    final_text: r.final_text.unwrap_or_else(|| "(no output)".to_string()),
-                    iterations: r.iterations,
-                    tool_calls_made: r.tool_calls_made,
-                    total_tokens: r.total_tokens,
-                },
+                Ok(Ok(r)) => {
+                    let mut final_text =
+                        r.final_text.unwrap_or_else(|| "(no output)".to_string());
+                    // R8 honesty: `CompletedOutcome` (background_tracker) has no
+                    // structured hit_limit slot, so a capped run annotates its
+                    // text — check_status / wait / list and the proactive
+                    // announce all surface this field.
+                    if r.hit_limit {
+                        final_text.push_str(
+                            "\n\n[note] Sub-agent hit its iteration limit before finishing; \
+                             treat this as a partial result.",
+                        );
+                    }
+                    CompletedOutcome::Ok {
+                        final_text,
+                        iterations: r.iterations,
+                        tool_calls_made: r.tool_calls_made,
+                        total_tokens: r.total_tokens,
+                    }
+                }
                 Ok(Err(e)) => CompletedOutcome::Err(e),
                 Err(_panic) => CompletedOutcome::Err("Sub-agent panicked".to_string()),
             };
@@ -208,15 +221,13 @@ impl SubagentTool {
                     CompletedOutcome::Ok { final_text, .. } => (true, final_text.clone(), None),
                     CompletedOutcome::Err(e) => (false, String::new(), Some(e.clone())),
                 };
-                let result = crate::event::SubAgentResult {
+                let result = crate::event::SubAgentCompletionEvent {
                     agent_id: announce_agent_id.clone(),
                     child_session_id: rid.clone(),
                     summary,
                     success,
                     error,
                     request_id: Some(rid.clone()),
-                    tools_called: Vec::new(),
-                    execution_duration_ms: None,
                 };
                 (sid, result)
             });

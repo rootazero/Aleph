@@ -106,12 +106,6 @@ impl ClarifyTaskMeta {
         serde_json::from_value(raw.clone()).ok()
     }
 
-    /// Whether this is a pick-one (menu) clarification.
-    #[must_use]
-    pub const fn is_select(&self) -> bool {
-        !self.choices.is_empty()
-    }
-
     /// Build the [`ClarificationRequest`] used to interpret the user's reply —
     /// mirrors `AskUserTool::build_request` so number/label/free-text matching
     /// behaves identically for workflow clarifications and `ask_user`.
@@ -215,11 +209,5 @@ mod tests {
         assert!(text_meta()
             .rendered_prompt()
             .contains("Reply with your answer"));
-    }
-
-    #[test]
-    fn is_select_reflects_choices() {
-        assert!(select_meta().is_select());
-        assert!(!text_meta().is_select());
     }
 }

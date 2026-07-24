@@ -34,10 +34,6 @@ pub struct LoopRunResult {
     pub tool_calls_made: usize,
     pub total_tokens: usize,
     pub hit_limit: bool,
-    /// Chain ID shared across all depths in a subagent call chain.
-    pub chain_id: String,
-    /// Nesting depth (0 = root agent).
-    pub depth: u32,
 }
 
 // =============================================================================
@@ -56,10 +52,6 @@ pub struct AgentRuntimeConfig {
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
     pub timeout_secs: u64,
-    /// Welded strategy `<strategy>` body inherited from the parent run.
-    /// Threaded into `SpawnRequest.strategy` → the child's inline prompt.
-    /// `None` leaves the child prompt byte-identical to the pre-strategy build.
-    pub strategy: Option<String>,
 }
 
 // =============================================================================
@@ -524,7 +516,7 @@ impl AgentRuntime {
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
             isolation: config.agent_def.isolation.clone(),
-            strategy: self.strategy.as_deref().or(config.strategy.as_deref()),
+            strategy: self.strategy.as_deref(),
             session_mode: self.session_mode,
         };
         spawn(&base, req).await
@@ -646,7 +638,6 @@ mod tests {
             context_summary: Some("Parent context".to_string()),
             model: Some("claude-sonnet".to_string()),
             timeout_secs: 60,
-            strategy: None,
         };
 
         assert_eq!(config.task, "Do something");

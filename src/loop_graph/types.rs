@@ -76,8 +76,9 @@ impl NodeKind {
 }
 
 /// The six-verb closed edge vocabulary. Deliberately NOT free text (unlike
-/// memory-note relations): every verb here has a structural code consumer,
-/// and the set only grows when a new verb brings its consumer with it.
+/// memory-note relations): every verb here has a structural code consumer —
+/// `Feeds` being the one acknowledged documentation-only exception — and the
+/// set only grows when a new verb brings its consumer with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {

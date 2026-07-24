@@ -173,6 +173,17 @@ impl TeamCreateTool {
             if crate::teams::dispatcher::AcpMemberRef::parse(agent_id).is_some() {
                 return Ok(agent_id.clone());
             }
+            // `acp:`-prefixed but unparseable = a long-form roster/display id
+            // (harness ids never contain ':') — steer to the explicit-cwd
+            // tool rather than falling through to the registry not-found.
+            if agent_id.starts_with("acp:") {
+                return Err(AlephError::other(format!(
+                    "'{agent_id}' is not a valid ACP reference: harness ids \
+                     never contain ':' (long-form roster ids are display-only). \
+                     Use the short form 'acp:<harness>[/<session>]', or add the \
+                     member after create via team_acp_member(harness_id=…, cwd=…)"
+                )));
+            }
 
             let instance = self.registry.get(agent_id).await.ok_or_else(|| {
                 AlephError::other(format!("Agent '{agent_id}' not found in registry"))

@@ -128,23 +128,17 @@ impl AlephTool for TeamTaskControlTool {
                         )));
                     }
                 }
-                // WaitingReview is the one pause origin a Pending restore
-                // corrupts (the task already RAN; re-dispatch re-executes it)
-                // — stamp it so resume can put it back. Pending/Blocked/
-                // Unsatisfiable are re-derived from stored pending and need
-                // no stamp.
-                // Stamp WaitingReview origin; for every OTHER origin write an
-                // explicit null so a stale stamp left by an earlier
-                // pause→retry cycle can never mis-restore this pause to
-                // WaitingReview.
-                let stamp_value = if task.status == CoordTaskStatus::WaitingReview {
-                    serde_json::json!("waiting_review")
-                } else {
-                    serde_json::Value::Null
-                };
+                // WaitingReview is structurally unpausable on this face (the
+                // match above rejects it), so the pause origin here is always
+                // Pending/Blocked/Unsatisfiable — re-derived from stored
+                // pending, needing no origin stamp. Write an explicit null so
+                // a stale `paused_from` stamp left by an earlier pause→retry
+                // cycle can never mis-restore this pause to WaitingReview.
                 let metadata = Some(crate::agents::swarm::tasks::merge_metadata_patch(
                     &task.metadata,
-                    serde_json::json!({ crate::agents::swarm::tasks::PAUSED_FROM_KEY: stamp_value }),
+                    serde_json::json!({
+                        crate::agents::swarm::tasks::PAUSED_FROM_KEY: serde_json::Value::Null,
+                    }),
                 ));
                 self.coord_store
                     .update_task(

@@ -24,7 +24,6 @@ use tracing::debug;
 pub mod a2a_tools;
 pub mod acp_tools;
 pub mod agent_manage;
-pub mod arena;
 pub mod ask_user;
 pub mod automation_tool;
 pub mod bash_exec;
@@ -122,10 +121,6 @@ pub use agent_manage::{
     AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs,
     AgentListInfo, AgentListOutput, AgentListTool, AgentSwitchArgs, AgentSwitchOutput,
     AgentSwitchTool, SessionContext, SessionContextHandle,
-};
-pub use arena::{
-    ArenaCreateArgs, ArenaCreateOutput, ArenaCreateTool, ArenaQueryArgs, ArenaQueryOutput,
-    ArenaQueryTool, ArenaSettleArgs, ArenaSettleOutput, ArenaSettleTool, SlotSummary,
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};

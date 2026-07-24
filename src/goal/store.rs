@@ -90,6 +90,18 @@ impl GoalStore {
             [],
         )
         .map_err(|e| AlephError::other(format!("goal store init: {e}")))?;
+        // One-shot "goal settled" watcher-notification markers (see
+        // `try_claim_settle_notify`). One row per session; a replaced or
+        // re-completed goal overwrites its session's row, so the table stays
+        // bounded by the number of sessions with goals.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settle_notified (
+                 session_id TEXT PRIMARY KEY,
+                 stamp      TEXT NOT NULL
+             )",
+            [],
+        )
+        .map_err(|e| AlephError::other(format!("goal store init: {e}")))?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
         })
@@ -388,6 +400,41 @@ impl GoalStore {
             }
             _ => Ok(false),
         }
+    }
+
+    /// One-shot claim of the "goal settled" watcher notification for this
+    /// goal's completion write — the caller pokes `loop_graph` watchers only on
+    /// `true`. Mirrors the [`Self::commit_gate_pass`] CAS discipline: the
+    /// gate-less Idle arm of the continuation hook re-observes the same
+    /// terminal `Complete` row on EVERY later turn of the session, and without
+    /// this transition guard each of those turns re-fires a full watcher cron
+    /// run (the 60s debounce is the only damper). Keyed on the goal's
+    /// `(id, completed_at_ms)` — the instant of the transition INTO
+    /// `Complete`, NOT the any-write `updated_at_ms`, so post-completion
+    /// field edits (lesson/note appends on a still-Complete goal) cannot
+    /// mint a fresh claim. A resumed-then-re-completed goal gets a new
+    /// completion instant and fires again. The goal `id` is deterministic
+    /// per `(session, objective)` (a same-objective re-set keeps the id), so
+    /// the timestamp half of the stamp carries the uniqueness. Legacy rows
+    /// persisted before `completed_at_ms` fall back to `updated_at_ms`.
+    /// Stale rows for cleared goals are harmless: the next completion's
+    /// stamp always differs.
+    pub fn try_claim_settle_notify(&self, goal: &Goal) -> Result<bool> {
+        let stamp = format!(
+            "{}@{}",
+            goal.id,
+            goal.completed_at_ms.unwrap_or(goal.updated_at_ms)
+        );
+        let changed = self
+            .lock()
+            .execute(
+                "INSERT INTO settle_notified (session_id, stamp) VALUES (?1, ?2)
+                 ON CONFLICT(session_id) DO UPDATE SET stamp = excluded.stamp
+                 WHERE stamp != excluded.stamp",
+                rusqlite::params![goal.session_id, stamp],
+            )
+            .map_err(|e| AlephError::other(format!("goal settle-notify claim: {e}")))?;
+        Ok(changed > 0)
     }
 
     /// Claim a continuation for a goal an objective gate just reopened (the caller
@@ -1216,5 +1263,62 @@ mod tests {
         let g = store.get("s").unwrap().unwrap();
         assert_eq!(g.status, GoalStatus::Blocked);
         assert_eq!(g.note.as_deref(), Some("boom"));
+    }
+
+    /// Regression (W1): the gate-less Idle arm re-observes the same terminal
+    /// `Complete` row on every later turn — the settle-notify claim must fire
+    /// exactly once per completion WRITE, not once per observation, and must
+    /// fire again for a genuinely new completion (re-set or re-completed goal).
+    #[test]
+    fn settle_notify_fires_once_per_completion_write() {
+        let (store, _d) = temp_store();
+        let done = pursuing("s", 5).with_status(GoalStatus::Complete, 1_000);
+
+        assert!(store.try_claim_settle_notify(&done).unwrap());
+        assert!(
+            !store.try_claim_settle_notify(&done).unwrap(),
+            "re-observing the same completion write must stay silent"
+        );
+
+        // Resume → re-complete: a new completion write (new updated_at_ms)
+        // is a genuinely new victory claim.
+        let redone = done
+            .clone()
+            .with_status(GoalStatus::Active, 2_000)
+            .with_status(GoalStatus::Complete, 3_000);
+        assert!(store.try_claim_settle_notify(&redone).unwrap());
+        assert!(!store.try_claim_settle_notify(&redone).unwrap());
+
+        // A different session's goal is independent.
+        let other = pursuing("s2", 5).with_status(GoalStatus::Complete, 1_000);
+        assert!(store.try_claim_settle_notify(&other).unwrap());
+    }
+
+    /// Regression (W1 review): a post-completion field edit (lesson/note
+    /// append) bumps `updated_at_ms` but is NOT a new victory claim — the
+    /// stamp keys on `completed_at_ms`, so the edited row must stay silent.
+    #[test]
+    fn settle_notify_ignores_post_completion_field_edits() {
+        let (store, _d) = temp_store();
+        let done = pursuing("s", 5).with_status(GoalStatus::Complete, 1_000);
+        assert!(store.try_claim_settle_notify(&done).unwrap());
+
+        let annotated = done
+            .clone()
+            .with_lesson_appended("lesson X".into(), 2_000)
+            .with_note(Some("post-mortem".into()), 3_000);
+        assert_eq!(annotated.completed_at_ms, Some(1_000));
+        assert!(
+            !store.try_claim_settle_notify(&annotated).unwrap(),
+            "lesson/note edits on a still-Complete goal must not re-fire"
+        );
+
+        // Leaving Complete clears the stamp; a genuine re-completion mints a
+        // fresh one and fires again.
+        let reopened = annotated.with_status(GoalStatus::Active, 4_000);
+        assert_eq!(reopened.completed_at_ms, None);
+        let redone = reopened.with_status(GoalStatus::Complete, 5_000);
+        assert_eq!(redone.completed_at_ms, Some(5_000));
+        assert!(store.try_claim_settle_notify(&redone).unwrap());
     }
 }

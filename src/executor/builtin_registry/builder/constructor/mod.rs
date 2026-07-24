@@ -917,7 +917,7 @@ impl BuiltinToolRegistry {
         ) = Self::build_coord_team_tools(&config, &mut tools, &current_agent_id);
 
         // Messaging, plan-approval, lifecycle, artifact, collaborative-session,
-        // arena, skill, and note tools (extracted to collab_session_tools.rs).
+        // skill, and note tools (extracted to collab_session_tools.rs).
         let (
             message_send_tool,
             inbox_read_tool,
@@ -932,9 +932,6 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
-            arena_create_tool,
-            arena_query_tool,
-            arena_settle_tool,
             google_meet_tool,
             skill_status_tool,
             skill_install_tool,
@@ -1187,9 +1184,6 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
-            arena_create_tool,
-            arena_query_tool,
-            arena_settle_tool,
             google_meet_tool,
             skill_status_tool,
             skill_install_tool,

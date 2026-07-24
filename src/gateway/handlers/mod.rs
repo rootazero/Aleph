@@ -34,14 +34,12 @@
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
-//! | arena | Multi-agent arena lifecycle |
 //! | teams | Team management (list, get, disband, delete) |
 
 pub mod acp_config;
 pub mod activity;
 pub mod agent;
 pub mod agents;
-pub mod arena;
 pub mod auth;
 pub mod behavior_config;
 pub mod browser_config;
@@ -603,29 +601,6 @@ impl HandlerRegistry {
             )
         });
 
-        // Arena handlers (placeholders - actual handlers wired with ArenaManager)
-        registry.register("arena.create", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "arena.create requires ArenaManager - wire SharedArenaManager first".to_string(),
-            )
-        });
-        registry.register("arena.query", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "arena.query requires ArenaManager - wire SharedArenaManager first".to_string(),
-            )
-        });
-        registry.register("arena.settle", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "arena.settle requires ArenaManager - wire SharedArenaManager first".to_string(),
-            )
-        });
-
         // Team management handlers (placeholders — actual handlers wired with TeamStore in Gateway startup)
         registry.register("teams.list", |req| async move {
             JsonRpcResponse::error(
@@ -1120,14 +1095,6 @@ mod tests {
         assert!(!registry.has_method("identity.set"));
         assert!(!registry.has_method("identity.clear"));
         assert!(!registry.has_method("identity.list"));
-    }
-
-    #[test]
-    fn test_arena_handlers_registered() {
-        let registry = HandlerRegistry::new();
-        assert!(registry.has_method("arena.create"));
-        assert!(registry.has_method("arena.query"));
-        assert!(registry.has_method("arena.settle"));
     }
 
     #[test]

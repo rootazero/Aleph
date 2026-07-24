@@ -44,10 +44,25 @@ pub struct AcpMemberRef {
 impl AcpMemberRef {
     /// Parse `acp:<harness>[/<session>]`. Returns `None` if the input does not
     /// start with [`ACP_MEMBER_PREFIX`] or is otherwise malformed.
+    ///
+    /// Long-form roster ids (`acp:<harness>:<cwd>[:<name>]`, minted by
+    /// [`crate::teams::types::acp_member_id`] and shown in rosters/status)
+    /// are deliberately rejected: harness ids are `AcpAdapterManager` registry
+    /// keys and never contain `':'`, so a colon in the harness segment means
+    /// the caller pasted a displayed long-form id. Accepting it would persist
+    /// a garbage `harness_id` (e.g. `claude_code:`) that only fails later at
+    /// dispatch — fail fast at add time instead (use `team_acp_member` for
+    /// members that need an explicit cwd/session).
     #[must_use]
     pub fn parse(agent_id: &str) -> Option<Self> {
         let rest = agent_id.strip_prefix(ACP_MEMBER_PREFIX)?;
         if rest.is_empty() {
+            return None;
+        }
+        // Reject ':' anywhere in the harness segment (everything before the
+        // first '/', or the whole rest when there is no session part).
+        let harness_end = rest.find('/').unwrap_or(rest.len());
+        if rest[..harness_end].contains(':') {
             return None;
         }
         match rest.split_once('/') {
@@ -122,6 +137,27 @@ mod tests {
     fn parse_rejects_empty_harness() {
         assert_eq!(AcpMemberRef::parse("acp:"), None);
         assert_eq!(AcpMemberRef::parse("acp:/named"), None);
+    }
+
+    #[test]
+    fn parse_rejects_long_form_roster_ids() {
+        // `acp_member_id` mints the long form `acp:<harness>:<cwd>[:<name>]`
+        // (displayed in rosters/status). Accepting it here used to decompose
+        // `acp:claude_code:/work/proj` into harness_id "claude_code:" (trailing
+        // colon) — persisted as routing truth and only failing later at
+        // dispatch. Harness ids are registry keys and never contain ':', so
+        // any ':' in the harness segment must fail-fast at parse time.
+        assert_eq!(AcpMemberRef::parse("acp:claude_code:/work/proj"), None);
+        assert_eq!(
+            AcpMemberRef::parse("acp:claude_code:/work/proj:backend"),
+            None
+        );
+        // Colon before the first '/' is still a harness-segment colon.
+        assert_eq!(AcpMemberRef::parse("acp:codex:extra/backend"), None);
+        // A colon in the SESSION name is not the harness segment — unchanged.
+        let r = AcpMemberRef::parse("acp:codex/name:v2").unwrap();
+        assert_eq!(r.harness_id, "codex");
+        assert_eq!(r.session_name.as_deref(), Some("name:v2"));
     }
 
     #[test]

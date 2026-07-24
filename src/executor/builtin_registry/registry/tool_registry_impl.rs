@@ -1012,25 +1012,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "arena_create" => Box::pin(async move {
-                let tool = self.arena_create_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("arena_create not available: no ArenaManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "arena_query" => Box::pin(async move {
-                let tool = self.arena_query_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("arena_query not available: no ArenaManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "arena_settle" => Box::pin(async move {
-                let tool = self.arena_settle_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("arena_settle not available: no ArenaManager configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-
             // Task artifact tools
             "task_submit" => Box::pin(async move {
                 let tool = self.task_submit_tool.as_ref().ok_or_else(|| {

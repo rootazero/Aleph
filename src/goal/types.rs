@@ -147,6 +147,14 @@ pub struct Goal {
     /// [`MAX_BUDGET_MEMBERS`]. `#[serde(default)]` → old payloads read empty.
     #[serde(default)]
     pub budget_members: Vec<BudgetMember>,
+    /// The instant this goal last transitioned INTO `Complete` (Unix epoch
+    /// ms); cleared on any transition out. The settle-notify CAS keys on this
+    /// instant so post-completion field edits (lesson/note appends bump
+    /// `updated_at_ms`) cannot mint a fresh watcher claim — only a genuine
+    /// re-completion can. `#[serde(default)]` → old payloads read `None`
+    /// (the stamp falls back to `updated_at_ms`).
+    #[serde(default)]
+    pub completed_at_ms: Option<u64>,
 }
 
 /// One delegation session enrolled in a goal's shared token budget.
@@ -199,6 +207,7 @@ impl Goal {
             waiting_on_task: None,
             waiting_reason: None,
             budget_members: Vec::new(),
+            completed_at_ms: None,
         }
     }
 
@@ -266,6 +275,17 @@ impl Goal {
 
     #[must_use]
     pub const fn with_status(mut self, status: GoalStatus, now_ms: u64) -> Self {
+        // Stamp the completion instant only on the transition INTO `Complete`;
+        // clear it when leaving so a reopened-then-re-completed goal mints a
+        // fresh settle-notify stamp (fires watchers again, by design).
+        match (
+            matches!(self.status, GoalStatus::Complete),
+            matches!(status, GoalStatus::Complete),
+        ) {
+            (false, true) => self.completed_at_ms = Some(now_ms),
+            (true, false) => self.completed_at_ms = None,
+            _ => {}
+        }
         self.status = status;
         self.updated_at_ms = now_ms;
         self

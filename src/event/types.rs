@@ -56,7 +56,6 @@ pub enum EventType {
     SessionCompacted,
 
     // Sub-agent
-    SubAgentStarted,
     SubAgentCompleted,
     SubAgentTreeUpdate,
 
@@ -111,8 +110,7 @@ pub enum AlephEvent {
     SessionCompacted(CompactionInfo),
 
     // Sub-agent events
-    SubAgentStarted(SubAgentRequest),
-    SubAgentCompleted(SubAgentResult),
+    SubAgentCompleted(SubAgentCompletionEvent),
     /// Live sub-agent tree update (spawned / progress / settled) — fed to the
     /// panel's background sub-agent tree view via the gateway relay. Pure
     /// observability; carries no reasoning (R4/R10).
@@ -190,7 +188,6 @@ impl AlephEvent {
             Self::SessionUpdated(_) => EventType::SessionUpdated,
             Self::SessionResumed(_) => EventType::SessionResumed,
             Self::SessionCompacted(_) => EventType::SessionCompacted,
-            Self::SubAgentStarted(_) => EventType::SubAgentStarted,
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
             Self::SubAgentTreeUpdate(_) => EventType::SubAgentTreeUpdate,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
@@ -226,7 +223,6 @@ impl AlephEvent {
             Self::SessionUpdated(_) => "SessionUpdated",
             Self::SessionResumed(_) => "SessionResumed",
             Self::SessionCompacted(_) => "SessionCompacted",
-            Self::SubAgentStarted(_) => "SubAgentStarted",
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
             Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
@@ -465,18 +461,13 @@ pub struct CompactionInfo {
 // Sub-agent Event Types
 // ============================================================================
 
-/// Request to start a sub-agent
+/// Sub-agent completed its task. Payload of [`AlephEvent::SubAgentCompleted`].
+///
+/// Named distinctly from `agents::sub_agents::SubAgentResult` (the A2A
+/// delegation result type) — the old shared `SubAgentResult` name was a
+/// permanent grep collision between two unrelated types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubAgentRequest {
-    pub agent_id: String,
-    pub prompt: String,
-    pub parent_session_id: String,
-    pub child_session_id: String,
-}
-
-/// Sub-agent completed its task
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubAgentResult {
+pub struct SubAgentCompletionEvent {
     pub agent_id: String,
     pub child_session_id: String,
     pub summary: String,
@@ -485,22 +476,6 @@ pub struct SubAgentResult {
     /// Request ID for result correlation (optional for backwards compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// Tool call summaries from sub-agent execution
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools_called: Vec<ToolCallSummaryEvent>,
-    /// Execution duration in milliseconds
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_duration_ms: Option<u64>,
-}
-
-/// Tool call summary for event broadcasting
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallSummaryEvent {
-    pub id: String,
-    pub tool: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
 }
 
 // ============================================================================

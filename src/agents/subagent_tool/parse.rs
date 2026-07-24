@@ -50,7 +50,10 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 team_name: team_name.to_string(),
             });
         }
-        "check_status" => {
+        // "result" is a defensive alias: older announce prompts coached the
+        // model into a non-existent 'result' action; it reads the same way as
+        // check_status. Deliberately not advertised in the schema/error text.
+        "check_status" | "result" => {
             let rid = input
                 .get("request_id")
                 .and_then(|v| v.as_str())
@@ -200,43 +203,24 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let name = input
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let team_name = input
-        .get("team_name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    // Validate: team_name without name is an error
-    if team_name.is_some() && name.is_none() {
-        return Err("team_name requires 'name' to be set (agent must be addressable)".to_string());
-    }
-
-    // Validate: a single `name`/`team_name` cannot address a batch of N agents.
-    // The batch dispatch path skips teammate registration entirely, so allowing
-    // this combination silently produces an unaddressable "teammate".
-    if has_batch && (name.is_some() || team_name.is_some()) {
+    // Honest-trim: spawned sub-agents are NOT addressable teammates. The old
+    // `name`/`team_name` run options registered a roster row the child could
+    // never read (the SubAgent-mode recursion guard denies it the tool hosting
+    // `read_inbox`, and the name never reached the child) — a silent
+    // dead-letter trap. Reject loudly instead of silently ignoring. An
+    // explicit JSON `null` counts as absent — schema-completing providers
+    // emit `"team_name": null` on every call.
+    if input.get("name").is_some_and(|v| !v.is_null())
+        || input.get("team_name").is_some_and(|v| !v.is_null())
+    {
         return Err(
-            "'name'/'team_name' cannot be combined with 'batch_tasks' (a single name \
-             cannot address multiple agents); spawn named teammates individually"
+            "'name'/'team_name' are not supported when spawning: sub-agents are not \
+             addressable teammates (their results return to you, and background \
+             completions are announced to you). For durable, addressable members use \
+             the teams tools instead."
                 .to_string(),
         );
     }
-
-    // Named teammates always run in background — override explicitly at parse time
-    let run_in_background = if name.is_some() {
-        if !run_in_background {
-            tracing::info!(
-                "Named teammates always run in background — overriding run_in_background to true"
-            );
-        }
-        true
-    } else {
-        run_in_background
-    };
 
     // batch_tasks honors `run_in_background` exactly as the user provides it:
     // - false (default / explicit): run all sub-tasks in parallel, await all,
@@ -302,8 +286,6 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         timeout_secs,
         run_in_background,
         context_summary,
-        name,
-        team_name,
         batch_tasks,
         proposer_models,
         synthesize,

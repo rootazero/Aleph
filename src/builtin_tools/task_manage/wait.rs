@@ -163,7 +163,9 @@ impl AlephTool for TaskWaitTool {
     const DESCRIPTION: &'static str =
         "Wait for specific coordination tasks or all tasks in a team to complete. \
          Returns when all target tasks reach a terminal state (completed, failed, \
-         cancelled) or when the timeout expires.";
+         cancelled) or when the timeout expires. Works for workflow runs too: \
+         pass the task_ids returned by workflow(action='run') (or its team_id) \
+         to block until the run settles.";
 
     type Args = TaskWaitArgs;
     type Output = TaskWaitOutput;

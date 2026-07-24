@@ -125,7 +125,17 @@ pub(super) async fn post_run(
                 clear_goal_welded_strategy(&session);
                 // Victory claimed with no gate to verify it — exactly the
                 // moment a paired watcher should look for the cheap win.
-                crate::loop_graph::service::notify_goal_settled(&session).await;
+                // This Idle arm re-runs on EVERY later turn while the stale
+                // `Complete` row sits there, so the poke is claimed once per
+                // completion write (store CAS) instead of per run — otherwise
+                // each turn re-fires a full watcher cron LLM run, with only
+                // the 60s debounce as damper.
+                match store.try_claim_settle_notify(&peek) {
+                    Ok(true) => crate::loop_graph::service::notify_goal_settled(&session).await,
+                    Ok(false) => {}
+                    Err(e) => warn!(error = %e, session = %session,
+                        "goal pursuit: settle-notify claim failed; watcher poke skipped"),
+                }
             }
         }
         ContinuationDecision::Fire {
@@ -272,6 +282,12 @@ async fn arbitrate_gate(
                 info!(session = %session,
                     "goal pursuit: objective gate passed, goal verified complete");
                 clear_goal_welded_strategy(session);
+                // The CAS above already makes this once-only; stamp the
+                // settle-notify marker as well so the Idle arm cannot re-poke
+                // this same completion if the global gate is later removed
+                // from config (gateless_terminal_complete then holds for the
+                // stale row). Best-effort: the commit is the authority here.
+                let _ = store.try_claim_settle_notify(&confirmed);
                 crate::loop_graph::service::notify_goal_settled(session).await;
             }
             Ok(false) => info!(session = %session,

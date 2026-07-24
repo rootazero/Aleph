@@ -214,10 +214,17 @@ impl A2ASubAgent {
     /// the best match from the prompt. A missing target is reported as a failed
     /// [`DelegationOutcome`] (not an `Err`) so the caller can surface a clean
     /// message to the model.
+    ///
+    /// `parent_agent_id` / `parent_session_id` identify the delegating local
+    /// agent turn; they are stamped onto the emitted `RawMemory(Delegation)`
+    /// row so per-agent memory attribution matches the intra-process spawner
+    /// (`None` falls back to `"default"`, the legacy behaviour).
     pub async fn execute_delegation(
         &self,
         prompt: &str,
         agent: Option<&str>,
+        parent_agent_id: Option<String>,
+        parent_session_id: Option<String>,
     ) -> crate::error::Result<DelegationOutcome> {
         let target = match agent {
             Some(name) => {
@@ -259,7 +266,13 @@ impl A2ASubAgent {
             }
         };
 
-        let request = SubAgentRequest::new(prompt);
+        let mut request = SubAgentRequest::new(prompt);
+        if let Some(aid) = parent_agent_id {
+            request = request.with_parent_agent(aid);
+        }
+        if let Some(sid) = parent_session_id {
+            request = request.with_parent_session(sid);
+        }
         let result = self.dispatch(&target, &request).await?;
         Ok(DelegationOutcome {
             agent: Some(target.card.name.clone()),
@@ -272,8 +285,8 @@ impl A2ASubAgent {
 ///
 /// Carries the delegation prompt and sub-agent summary so `CompressionService`
 /// can distil durable lessons for the parent agent's long-term memory.
-/// The parent `agent_id` is taken from `execution_context.metadata["parent_agent_id"]`
-/// (falls back to `"default"` when absent — Task 10 will wire the real value at startup).
+/// The parent `agent_id` is taken from `request.parent_agent_id`
+/// (falls back to `"default"` when absent — direct callers with no turn context).
 #[allow(dead_code)] // test-only helper
 pub(crate) fn emit_delegation_raw(
     writer: Arc<dyn RawMemoryStore>,
@@ -296,9 +309,8 @@ pub(crate) fn emit_delegation_raw_with_registry(
     registry: Option<Arc<MemoryExtensionRegistry>>,
 ) {
     let parent_agent_id = request
-        .execution_context
-        .as_ref()
-        .and_then(|ctx| ctx.metadata.get("parent_agent_id").cloned())
+        .parent_agent_id
+        .clone()
         .unwrap_or_else(|| "default".to_string());
     let parent_session_id = request.parent_session_id.clone();
     emit_delegation_primitives(
@@ -416,7 +428,7 @@ mod tests {
     async fn execute_delegation_no_agents_returns_outcome_without_agent() {
         let agent = build_sub_agent(vec![]);
         let outcome = agent
-            .execute_delegation("do something", None)
+            .execute_delegation("do something", None, None, None)
             .await
             .unwrap();
         assert!(outcome.agent.is_none());
@@ -433,7 +445,7 @@ mod tests {
     async fn execute_delegation_explicit_unknown_agent_reports_name() {
         let agent = build_sub_agent(vec![]);
         let outcome = agent
-            .execute_delegation("do something", Some("ghost-agent"))
+            .execute_delegation("do something", Some("ghost-agent"), None, None)
             .await
             .unwrap();
         assert!(outcome.agent.is_none());
@@ -503,7 +515,7 @@ mod tests {
 
         let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
         let outcome = sub
-            .execute_delegation("do the thing", Some("Streamer"))
+            .execute_delegation("do the thing", Some("Streamer"), None, None)
             .await
             .unwrap();
         assert!(outcome.result.success, "got: {:?}", outcome.result);
@@ -534,7 +546,7 @@ mod tests {
 
         let sub = build_sub_agent(vec![streaming_registered("Streamer", &server.uri())]);
         let outcome = sub
-            .execute_delegation("do it", Some("Streamer"))
+            .execute_delegation("do it", Some("Streamer"), None, None)
             .await
             .unwrap();
         assert!(outcome.result.success, "got: {:?}", outcome.result);
@@ -634,15 +646,13 @@ mod spec1_tests {
     }
 
     #[tokio::test]
-    async fn emit_delegation_raw_uses_metadata_parent_agent_id() {
+    async fn emit_delegation_raw_uses_request_parent_agent_id() {
         let fake = Arc::new(FakeWriter::default());
         let writer: Arc<dyn RawMemoryStore> = fake.clone();
 
-        use crate::agents::sub_agents::ExecutionContextInfo;
-        let ctx = ExecutionContextInfo::new().with_metadata("parent_agent_id", "parent-agent-007");
         let request = SubAgentRequest::new("Do the thing")
             .with_parent_session("sess-99")
-            .with_execution_context(ctx);
+            .with_parent_agent("parent-agent-007");
         let result = crate::agents::sub_agents::SubAgentResult::success(request.id.clone(), "Done");
 
         emit_delegation_raw(writer, &request, &result, "child-007");
@@ -652,5 +662,97 @@ mod spec1_tests {
         let captured = fake.0.lock().await;
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].agent_id, "parent-agent-007");
+    }
+
+    /// W16 regression — `execute_delegation` must thread the caller's parent
+    /// identity into the emitted `RawMemory(Delegation)` row. Before the fix
+    /// the request carried no parent identity, so every outbound A2A
+    /// delegation row landed under agent `"default"`.
+    #[tokio::test]
+    async fn execute_delegation_stamps_parent_identity_on_delegation_row() {
+        use crate::a2a::adapter::client::A2AClientPool;
+        use crate::a2a::domain::{
+            A2AMessage, A2ARole, AgentCard, TaskState, TaskStatus, TaskStatusUpdateEvent,
+            TrustLevel, UpdateEvent,
+        };
+        use crate::a2a::port::{AgentHealth, RegisteredAgent};
+        use crate::a2a::service::{CardRegistry, SmartRouter};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let completed = UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "c".to_string(),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: Some(A2AMessage::text(A2ARole::Agent, "remote done")),
+                timestamp: chrono::Utc::now(),
+            },
+            is_final: true,
+            metadata: None,
+        });
+        let env = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": completed}).to_string();
+        Mock::given(method("POST"))
+            .and(path("/a2a/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(format!("event: status-update\ndata: {env}\n\n"), "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let registry = Arc::new(CardRegistry::new());
+        registry
+            .upsert(RegisteredAgent {
+                card: AgentCard {
+                    id: "remote".to_string(),
+                    name: "Remote".to_string(),
+                    version: "1.0".to_string(),
+                    description: None,
+                    provider: None,
+                    documentation_url: None,
+                    interfaces: vec![],
+                    skills: vec![],
+                    security: vec![],
+                    extensions: vec![],
+                    default_input_modes: vec![],
+                    default_output_modes: vec![],
+                },
+                trust_level: TrustLevel::Trusted,
+                base_url: server.uri(),
+                last_seen: chrono::Utc::now(),
+                health: AgentHealth::Healthy,
+                auth_token: None,
+            })
+            .await;
+
+        let fake = Arc::new(FakeWriter::default());
+        let writer: Arc<dyn RawMemoryStore> = fake.clone();
+        let router = Arc::new(SmartRouter::new(registry));
+        let pool = Arc::new(A2AClientPool::new());
+        let sub = A2ASubAgent::new(router, pool).with_raw_memory_writer(writer);
+
+        let outcome = sub
+            .execute_delegation(
+                "do it",
+                Some("Remote"),
+                Some("main".to_string()),
+                Some("sess-main-1".to_string()),
+            )
+            .await
+            .unwrap();
+        assert!(outcome.result.success, "got: {:?}", outcome.result);
+
+        // Fire-and-forget emit: let the spawned task complete.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let captured = fake.0.lock().await;
+        assert_eq!(captured.len(), 1, "expected exactly one RawMemory row");
+        assert_eq!(
+            captured[0].agent_id, "main",
+            "delegation row must carry the real parent agent id, not 'default'"
+        );
+        assert_eq!(captured[0].session_id, Some("sess-main-1".to_string()));
     }
 }

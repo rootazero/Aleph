@@ -23,17 +23,15 @@ pub mod interop;
 pub mod proposal;
 pub mod store;
 
-pub use clarify::{
-    clarify_delivered, clarify_delivery_pending_at, is_clarify_task, ClarifyContext,
-    ClarifyTaskMeta, CLARIFY_DELIVERED_AT_KEY, CLARIFY_DELIVERY_PENDING_KEY, CLARIFY_META_KEY,
-    CLARIFY_OWNER,
-};
+// Re-exports carry only names with live `crate::workflow::X` consumers;
+// everything else is reached fully-qualified (`workflow::store::…`,
+// `workflow::proposal::…`, `workflow::clarify::…`) at its call sites.
+pub use clarify::{ClarifyContext, CLARIFY_DELIVERY_PENDING_KEY};
 pub use compile::{
-    materialize, workflow_model_override, workflow_origin, MaterializedWorkflow,
-    WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_KEY, WORKFLOW_ORIGIN_KEY,
-    WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
+    materialize, workflow_effort_think_level, workflow_model_override, workflow_origin,
+    MaterializedWorkflow, WORKFLOW_EFFORT_KEY, WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY,
+    WORKFLOW_NOTIFIED_KEY, WORKFLOW_ORIGIN_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY,
+    WORKFLOW_STRATEGY_KEY,
 };
 pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
-pub use proposal::{accept as accept_proposal, list_proposals, proposals_dir};
-pub use store::{WorkflowMeta, WORKFLOW_EXT};

@@ -70,7 +70,6 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     // resolves per-argument in `a2a_agents_claim`.)
     "agent_info",
     "agent_list",
-    "arena_query",
     "config_audit",
     "get_tool_schema",
     "list_models",

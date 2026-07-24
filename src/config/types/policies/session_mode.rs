@@ -72,7 +72,6 @@ const CHAT_DEFER_FAMILIES: &[&str] = &[
     "team",
     "task",
     "node",
-    "arena",
     "image_generate",
     "video_generate",
     "audio_generate",

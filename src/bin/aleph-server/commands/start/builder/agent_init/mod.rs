@@ -109,8 +109,6 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// `ContextCompactor` can reuse hierarchical session summaries for
     /// zero-API-cost compaction.
     pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
-    /// Arena manager for collaborative multi-agent arenas (R3).
-    pub arena_manager: Option<Arc<RwLock<alephcore::arena::ArenaManager>>>,
     /// Memory-extension registry (capture-filter + `on_delegation` hooks).
     /// Exposed so the A2A outbound `A2ASubAgent` can route its delegation
     /// writes through the same capture filter the engine/compactor use;
@@ -218,8 +216,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     };
     let note_dir = resolve_note_memory_dir();
-
-    let arena_manager = Arc::new(RwLock::new(alephcore::arena::ArenaManager::new()));
 
     // Coord + snapshot stores (single shared connection to coord.db).
     let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
@@ -510,7 +506,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             profile_synthesizer: profile_synth.clone(),
             // Phase 3 Task 8: sandbox for exec-class tools.
             sandbox: sandbox.clone(),
-            arena_manager: Some(arena_manager.clone()),
             // Without the live Config arc, BuiltinToolRegistry constructor at
             // executor/builtin_registry/builder/constructor.rs:50 falls back to
             // SsrfPolicy::default() (enabled=true) for WebFetchTool — making
@@ -1662,6 +1657,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 .transcript_token_budget
                                 .filter(|&v| v > 0)
                                 .unwrap_or(d.transcript_token_budget),
+                            member_run_timeout_secs: t
+                                .member_run_timeout_secs
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.member_run_timeout_secs),
                         },
                     }
                 };
@@ -1689,6 +1688,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 bcast,
                             )
                             .await
+                        }
+                    });
+
+                // teams.chat.cancel — stop an in-flight group-chat fan-out tree
+                // by the run_id teams.chat.send returned. Needs the execution
+                // context (engine per-run cancel), so it lives here beside
+                // teams.chat.send rather than with the store-only handlers.
+                let chat_cancel_ctx = gateway_ctx.clone();
+                server
+                    .handlers_mut()
+                    .register("teams.chat.cancel", move |req| {
+                        let ctx = chat_cancel_ctx.clone();
+                        async move {
+                            alephcore::gateway::handlers::teams::handle_chat_cancel(req, ctx).await
                         }
                     });
             }
@@ -1834,7 +1847,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),
-        arena_manager: Some(arena_manager),
         memory_ext_registry: memory_ext_registry.clone(),
     })
 }

@@ -163,9 +163,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
-    pub(crate) arena_create_tool: Option<crate::builtin_tools::arena::ArenaCreateTool>,
-    pub(crate) arena_query_tool: Option<crate::builtin_tools::arena::ArenaQueryTool>,
-    pub(crate) arena_settle_tool: Option<crate::builtin_tools::arena::ArenaSettleTool>,
     /// `agent_info` — always available (read-only, depends only on the agent
     /// definition catalog, which is built unconditionally).
     pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,

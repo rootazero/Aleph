@@ -7,11 +7,8 @@
 //! - `AgentMode`: Primary vs `SubAgent` distinction
 //! - `AgentRegistry`: Registry for managing agents
 //!
-//! ## Agent Configuration (`agents::rig::`)
-//! - `ChatMessage`, `ConversationHistory`: Message history management
-//!
 //! ## Sub-agent infrastructure (`agents::sub_agents::`)
-//! - `SubAgent`: Trait for specialized sub-agents (used by A2A)
+//! - `SubAgentRequest` / `SubAgentResult`: delegation request/result types (used by A2A)
 
 mod registry;
 mod run_context;
@@ -33,9 +30,6 @@ pub mod teammates;
 /// Thinking levels system for LLM reasoning depth control.
 pub mod thinking;
 
-/// Rig-core based AI agent implementation.
-pub mod rig;
-
 /// Specialized sub-agents for task delegation.
 pub mod sub_agents;
 
@@ -49,9 +43,6 @@ pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, Transcri
 pub use types::{
     AgentDef, AgentMode, AgentSource, ContextMode, IsolationMode, McpInlineConfig, McpServerSpec,
 };
-
-// Re-export rig module types for convenience
-pub use rig::{ChatMessage, ConversationHistory, MessageRole, ToolCallInfo, ToolCallResult};
 
 // Re-export sub_agents module types for convenience
 pub use sub_agents::{SubAgentRequest, SubAgentResult};

@@ -181,6 +181,72 @@ impl TeamDelegateTool {
     }
 }
 
+/// Force-settles a delegation's coord task if the awaiting future is dropped
+/// mid-flight (the leader run's timeout or cancel fired while it awaited the
+/// member). `Drop` cannot await — the best-effort cleanup is spawned onto the
+/// runtime when one is still available; during process teardown the zombie
+/// reclaimer's TTL sweep remains the backstop.
+struct SettleOnDrop {
+    coord_store: Arc<dyn CoordTaskStore>,
+    task_id: String,
+    agent_id: String,
+    armed: bool,
+}
+
+impl SettleOnDrop {
+    fn new(coord_store: Arc<dyn CoordTaskStore>, task_id: String, agent_id: String) -> Self {
+        Self {
+            coord_store,
+            task_id,
+            agent_id,
+            armed: true,
+        }
+    }
+
+    /// The normal settle path owns the terminal write from here on.
+    fn defuse(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SettleOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let store = Arc::clone(&self.coord_store);
+        let task_id = std::mem::take(&mut self.task_id);
+        let agent_id = std::mem::take(&mut self.agent_id);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tracing::warn!(
+                    task_id = %task_id,
+                    "team_delegate: awaiting leader dropped mid-delegation; force-settling task as Failed"
+                );
+                if let Err(e) = store
+                    .update_task(
+                        &task_id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Failed),
+                            result: Some(
+                                "delegation dropped mid-flight: the awaiting leader run \
+                                 timed out or was cancelled"
+                                    .to_string(),
+                            ),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!(task_id = %task_id, error = %e,
+                        "team_delegate: drop-fence terminal write failed (zombie reclaimer is the backstop)");
+                }
+                let _ = store.release_lock(&task_id, &agent_id).await;
+            });
+        }
+    }
+}
+
 #[async_trait]
 impl AlephTool for TeamDelegateTool {
     const NAME: &'static str = "team_delegate";
@@ -236,9 +302,11 @@ impl AlephTool for TeamDelegateTool {
         let is_acp = matches!(target, MemberDispatchTarget::AcpSession { .. });
         if !is_acp {
             if let Some(caller) = caller_session.as_deref() {
-                if let Some(reason) =
-                    crate::gateway::goal_budget::tree_budget_refusal(context.session_store(), caller)
-                        .await
+                if let Some(reason) = crate::gateway::goal_budget::tree_budget_refusal(
+                    context.session_store(),
+                    caller,
+                )
+                .await
                 {
                     return Ok(TeamDelegateOutput {
                         task_id: String::new(),
@@ -288,6 +356,19 @@ impl AlephTool for TeamDelegateTool {
             .acquire_lock(&task.id, &args.agent_id)
             .await;
 
+        // Settle-on-drop fence: the leader awaiting this delegation can
+        // itself be killed mid-await (its own run timeout — e.g. the
+        // group-chat `member_run_timeout_secs` cap — or a cancel), dropping
+        // this future between the InProgress write above and the normal
+        // settle below. Without a fence the task row stays InProgress with
+        // its lock held until the zombie reclaimer's TTL sweep. Defused once
+        // the member run returns.
+        let mut settle_fence = SettleOnDrop::new(
+            Arc::clone(&self.coord_store),
+            task.id.clone(),
+            args.agent_id.clone(),
+        );
+
         // Enroll the child (agent:<owner>:team:<task>) — the exact key the run
         // executes under (runner.rs) — into the caller's goal tree budget so its
         // spend counts. Account-only (`false`): the budget was already checked
@@ -306,6 +387,31 @@ impl AlephTool for TeamDelegateTool {
             }
         }
 
+        // W12 — running-only registration so the leader session's Interrupt
+        // demote guard (`steering::session_is_interruptible` →
+        // `session_has_running`) sees this in-flight delegation and queues a
+        // mid-task correction instead of tearing the leader (and this member
+        // run) down. RAII: delists when the run settles — no completed entry,
+        // so nothing feeds the proactive announce (the reply is returned
+        // inline below). The token is a placeholder: `execute_member_task`
+        // has no in-flight abort channel (documented stack-B behaviour), so
+        // cancelling this entry only signals a token nothing observes.
+        // Skipped when no caller session is wired (nothing to guard).
+        let running_reg = caller_session.as_deref().map(|caller| {
+            crate::agents::background_tracker::RunningRegistration::register(
+                crate::agents::background_tracker::BackgroundAgentTracker::global(),
+                uuid::Uuid::new_v4().to_string(),
+                tokio_util::sync::CancellationToken::new(),
+                format!("team_delegate → {}: {}", args.agent_id, args.task),
+                crate::agents::background_tracker::SpawnMeta {
+                    parent_id: None,
+                    depth: 1,
+                    root_session: caller.to_string(),
+                    model: None,
+                },
+            )
+        });
+
         // 3. Run the member agent via the shared execution path. G2 —
         // `team_delegate` is the synchronous leader-driven path (one task
         // at a time, leader awaits), so worktree isolation is unnecessary:
@@ -319,10 +425,17 @@ impl AlephTool for TeamDelegateTool {
             args.timeout_secs,
             false,
             // team_delegate is the synchronous leader path with no per-step
-            // model override — keep the member on its default model.
+            // model or effort override — keep the member on its default
+            // model and thinking depth.
+            None,
             None,
         )
         .await;
+        // The member run has settled — the fence's job is done (the normal
+        // bookkeeping below owns the terminal write), and the running-only
+        // entry delists so the demote guard stops reading the leader as busy.
+        settle_fence.defuse();
+        drop(running_reg);
         let _ = self
             .coord_store
             .release_lock(&task.id, &args.agent_id)

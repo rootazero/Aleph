@@ -275,6 +275,11 @@ impl TeamDispatcher {
         // tasks carry no such key, so this is `None` and the run keeps its
         // default model.
         let model_override = crate::workflow::workflow_model_override(&task.metadata);
+        // Same contract for the per-step reasoning-effort override: stamped by
+        // `workflow::materialize`, normalised here, delivered to the member run
+        // as its `think_level` metadata. Absent → session default depth.
+        let think_level = crate::workflow::workflow_effort_think_level(&task.metadata)
+            .map(|l| l.id().to_string());
         // A task may override the global single-attempt timeout via its metadata
         // (`timeout_secs`), so a deep research subtask and a quick formatting step
         // no longer share one budget. Absent → the configured global default.
@@ -313,6 +318,7 @@ impl TeamDispatcher {
             timeout_secs,
             isolate,
             model_override,
+            think_level,
         )
         .await;
 

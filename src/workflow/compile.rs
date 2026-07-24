@@ -40,6 +40,13 @@ pub const WORKFLOW_RUN_ID_KEY: &str = "workflow_run_id";
 /// the requested model — the executable wiring of the manifest's `model` field.
 /// Absent on steps with no override (byte-identical legacy rows).
 pub const WORKFLOW_MODEL_KEY: &str = "workflow_model";
+/// Metadata key carrying a step's per-step reasoning-effort override (when the
+/// template's AWI manifest set one, e.g. `"low"`/`"max"`). The dispatcher reads
+/// it via [`workflow_effort_think_level`] and threads it into the member run's
+/// `RunRequest.metadata["think_level"]` — the executable wiring of the
+/// manifest's `effort` field, exactly mirroring [`WORKFLOW_MODEL_KEY`].
+/// Absent on steps with no override (byte-identical legacy rows).
+pub const WORKFLOW_EFFORT_KEY: &str = "workflow_effort";
 /// Metadata key carrying the run-global welded strategy frame on every
 /// materialised **agent** step. Stamped once per run (beside [`WORKFLOW_RUN_ID_KEY`])
 /// from the planned [`Strategy`](crate::strategy::Strategy) via
@@ -108,6 +115,20 @@ pub fn workflow_model_override(
     }
 }
 
+/// Read a step's per-step reasoning-effort override off its materialised
+/// `coord_task` metadata and normalise it against the live think-level
+/// vocabulary (`normalize_think_level` — the same table the run-time channel
+/// consumes, so `"max"` maps to `High` here exactly as it would in a turn).
+/// Missing / unknown → `None` (the run keeps the session's default depth).
+/// Pure — the dispatcher calls it at launch time.
+#[must_use]
+pub fn workflow_effort_think_level(
+    metadata: &serde_json::Value,
+) -> Option<crate::agents::thinking::ThinkLevel> {
+    let raw = metadata.get(WORKFLOW_EFFORT_KEY).and_then(|v| v.as_str())?;
+    crate::agents::thinking::normalize_think_level(raw)
+}
+
 /// The set of `coord_task` ids minted for one workflow run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedWorkflow {
@@ -138,6 +159,17 @@ pub struct MaterializedWorkflow {
 /// that agent step so its member run executes on the requested model. `None` (or
 /// a step with no entry) leaves the run on the agent's default model — the
 /// pre-existing behaviour. Clarify steps run no agent, so they are never stamped.
+///
+/// `efforts` maps step-local id → reasoning-effort override (`low`..`max`),
+/// stamped under [`WORKFLOW_EFFORT_KEY`] with the exact same contract as
+/// `models` (agent steps only, absent entries byte-identical).
+///
+/// `origin_session` is the launching session's key captured at run start (the
+/// tool's turn context); it is stamped on every task as the `origin_session`
+/// goal-budget anchor so autonomously-dispatched member runs enroll into the
+/// creating session's goal tree budget — the same anchor `task_create` and the
+/// workflow canvas stamp. `None` (non-interactive run) leaves rows
+/// byte-identical and the children run unaccounted, exactly as before.
 pub async fn materialize(
     def: &WorkflowDef,
     input: &str,
@@ -145,7 +177,9 @@ pub async fn materialize(
     store: &dyn CoordTaskStore,
     clarify_ctx: Option<&ClarifyContext>,
     models: Option<&std::collections::HashMap<String, String>>,
+    efforts: Option<&std::collections::HashMap<String, String>>,
     strategy: Option<&Strategy>,
+    origin_session: Option<&str>,
 ) -> Result<MaterializedWorkflow> {
     def.validate()?;
     let order = def.topo_order()?;
@@ -239,6 +273,19 @@ pub async fn materialize(
                     obj.insert(WORKFLOW_MODEL_KEY.to_string(), json!(model));
                 }
             }
+            // Per-step reasoning-effort override (from the AWI manifest): same
+            // contract as the model stamp above — the dispatcher reads it via
+            // `workflow_effort_think_level` and threads it into the member
+            // run's think-level channel. Absent → byte-identical rows.
+            if let Some(effort) = efforts
+                .and_then(|m| m.get(step.id.as_str()))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(WORKFLOW_EFFORT_KEY.to_string(), json!(effort));
+                }
+            }
             // Run-global strategy frame: the same welded objective + cross-cutting
             // guardrails on every agent step (the DAG itself is the phase
             // structure, so no phase list). Absent when no strategy was planned.
@@ -277,6 +324,20 @@ pub async fn materialize(
                             }),
                         );
                     }
+                }
+            }
+            // Goal-tree budget anchor: the launching session captured at run
+            // start rides on every task so the dispatcher's member runs enroll
+            // into the creating session's goal tree budget (same key as
+            // `task_create` / the workflow canvas). Absent when the run has no
+            // session context (byte-identical legacy rows) — the children then
+            // run unaccounted, exactly as before this anchor existed.
+            if let Some(session) = origin_session.map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(obj) = metadata.as_object_mut() {
+                    obj.insert(
+                        crate::gateway::goal_budget::ORIGIN_SESSION_METADATA_KEY.to_string(),
+                        json!(session),
+                    );
                 }
             }
             metadata
@@ -393,6 +454,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .await
         .expect("materialise");
@@ -407,6 +470,8 @@ mod tests {
             "quantum computing",
             "team-1",
             &store,
+            None,
+            None,
             None,
             None,
             None,
@@ -431,9 +496,19 @@ mod tests {
     #[tokio::test]
     async fn materialize_stamps_one_run_id_on_every_task() {
         let store = setup_store().await;
-        let first = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
-            .await
-            .unwrap();
+        let first = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(!first.run_id.is_empty(), "run id is minted");
         for id in &first.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
@@ -446,18 +521,38 @@ mod tests {
             );
         }
         // A second run of the same template mints a distinct identity.
-        let second = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
-            .await
-            .unwrap();
+        let second = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
     }
 
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         // task_ids[0] is "gather" (root), [1] is "write" (depends on gather).
         let root = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -496,7 +591,7 @@ mod tests {
             description: String::new(),
             steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
             .await
             .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
@@ -510,9 +605,11 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(materialize(&def, "x", "team-1", &store, None, None, None)
-            .await
-            .is_err());
+        assert!(
+            materialize(&def, "x", "team-1", &store, None, None, None, None, None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -528,7 +625,7 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(mat.task_ids.len(), 4);
@@ -559,9 +656,19 @@ mod tests {
             conversation_id: "user-1".into(),
             session_key: "telegram:bot:1:user-1".into(),
         };
-        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx), None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            "us-east",
+            "team-1",
+            &store,
+            Some(&ctx),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
         // Owned by the sentinel — never routed to a team member.
@@ -585,7 +692,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -612,7 +719,7 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
             .await
             .unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -636,6 +743,8 @@ mod tests {
             &store,
             None,
             Some(&models),
+            None,
+            None,
             None,
         )
         .await
@@ -683,6 +792,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialize_stamps_per_step_effort_override() {
+        // An effort map keyed by step id stamps WORKFLOW_EFFORT_KEY onto exactly
+        // the matching agent step; an unlisted step stays byte-identical (no
+        // key) — the exact WORKFLOW_MODEL_KEY contract.
+        let store = setup_store().await;
+        let mut efforts = std::collections::HashMap::new();
+        efforts.insert("gather".to_string(), "max".to_string());
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            Some(&efforts),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            gather
+                .metadata
+                .get(WORKFLOW_EFFORT_KEY)
+                .and_then(|v| v.as_str()),
+            Some("max"),
+            "listed step carries its effort override"
+        );
+        // The dispatcher-side reader normalises the .workflow.js vocabulary
+        // through the live think-level table ("max" → High).
+        assert_eq!(
+            workflow_effort_think_level(&gather.metadata),
+            Some(crate::agents::thinking::ThinkLevel::High)
+        );
+        let write = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(
+            write.metadata.get(WORKFLOW_EFFORT_KEY).is_none(),
+            "unlisted step has no override key (legacy byte-identical row)"
+        );
+        assert!(workflow_effort_think_level(&write.metadata).is_none());
+    }
+
+    #[test]
+    fn workflow_effort_think_level_normalizes_and_rejects() {
+        use crate::agents::thinking::ThinkLevel;
+        assert_eq!(
+            workflow_effort_think_level(&json!({ WORKFLOW_EFFORT_KEY: "low" })),
+            Some(ThinkLevel::Low)
+        );
+        assert_eq!(
+            workflow_effort_think_level(&json!({ WORKFLOW_EFFORT_KEY: "xhigh" })),
+            Some(ThinkLevel::XHigh)
+        );
+        // Missing / unknown → None (run keeps the default depth).
+        assert!(workflow_effort_think_level(&json!({})).is_none());
+        assert!(workflow_effort_think_level(&json!({ WORKFLOW_EFFORT_KEY: "turbo" })).is_none());
+    }
+
+    #[tokio::test]
     async fn materialize_stamps_strategy_frame_on_agent_steps_only() {
         let store = setup_store().await;
         let strategy = crate::strategy::Strategy {
@@ -697,9 +867,19 @@ mod tests {
         def.steps
             .push(clarify_step("ask", "which mode?", &["A", "B"], &["gather"]));
 
-        let mat = materialize(&def, "x", "team-1", &store, None, None, Some(&strategy))
-            .await
-            .unwrap();
+        let mat = materialize(
+            &def,
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            Some(&strategy),
+            None,
+        )
+        .await
+        .unwrap();
 
         let mut saw_agent_stamp = false;
         let mut saw_clarify_stamp = false;
@@ -730,7 +910,7 @@ mod tests {
         let mut def = linear_def();
         def.steps[0].timeout_secs = Some(1800);
         def.steps[0].max_retries = Some(0);
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -756,9 +936,19 @@ mod tests {
             conversation_id: "user-1".into(),
             session_key: "telegram:bot:1:user-1".into(),
         };
-        let mat = materialize(&linear_def(), "x", "team-1", &store, Some(&ctx), None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            Some(&ctx),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &mat.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert_eq!(
@@ -768,9 +958,19 @@ mod tests {
             );
         }
         // Non-interactive runs stay byte-identical (no origin key).
-        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
-            .await
-            .unwrap();
+        let silent = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &silent.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(task.metadata.get(WORKFLOW_ORIGIN_KEY).is_none());
@@ -779,11 +979,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialize_stamps_origin_session_on_every_task() {
+        use crate::gateway::goal_budget::origin_session_from_metadata;
+        let store = setup_store().await;
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            Some("channel:telegram:user-1"),
+        )
+        .await
+        .unwrap();
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert_eq!(
+                origin_session_from_metadata(&task.metadata).as_deref(),
+                Some("channel:telegram:user-1"),
+                "every task carries the goal-budget anchor"
+            );
+        }
+        // No session context → byte-identical rows (no key at all).
+        let silent = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        for id in &silent.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert!(origin_session_from_metadata(&task.metadata).is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn materialize_without_strategy_is_byte_identical() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None)
-            .await
-            .unwrap();
+        let mat = materialize(
+            &linear_def(),
+            "x",
+            "team-1",
+            &store,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         for id in &mat.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(task.metadata.get(WORKFLOW_STRATEGY_KEY).is_none());

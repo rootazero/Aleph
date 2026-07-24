@@ -260,14 +260,15 @@ pub fn effective_permission(
 /// curated set of builtin families whose name *is* their contract, because
 /// Aleph itself defines them.
 /// A `loop_graph` call that writes to (or unlinks from) a `root:` or
-/// `frozen:` node. Read actions (`list`/`status`/`gc`…) and writes to
-/// ordinary loop/anchor nodes never match — the gate is exactly the graph's
-/// ground layer, nothing wider.
+/// `frozen:` node — including `pair`, which writes the same `watches` edge
+/// onto its `to_id` that `link` would. Read actions (`list`/`status`/`gc`…)
+/// and writes to ordinary loop/anchor nodes never match — the gate is exactly
+/// the graph's ground layer, nothing wider.
 fn loop_graph_touches_protected(input: &Value) -> bool {
     let is_write = input
         .get("action")
         .and_then(Value::as_str)
-        .is_some_and(|a| matches!(a, "node" | "drop_node" | "link" | "unlink"));
+        .is_some_and(|a| matches!(a, "node" | "drop_node" | "link" | "unlink" | "pair"));
     if !is_write {
         return false;
     }
@@ -523,6 +524,10 @@ mod tests {
             ("link", "from_id"),
             ("link", "to_id"),
             ("unlink", "from_id"),
+            // `pair` writes a `watches` edge onto its `to_id` — the identical
+            // edge write `link` gates. (Deliberately flipped from the earlier
+            // pin that exempted `pair`.)
+            ("pair", "to_id"),
         ] {
             for prefix in ["root:aleph", "frozen:budget-ratchet"] {
                 assert!(
@@ -540,7 +545,12 @@ mod tests {
             "loop_graph",
             &json!({"action": "link", "from_id": "cron:w", "to_id": "goal:s"})
         ));
-        for action in ["status", "list", "gc", "enable_audit", "pair"] {
+        // Pairing a watcher onto an ordinary node runs freely too.
+        assert!(!auto.asks_for_arguments(
+            "loop_graph",
+            &json!({"action": "pair", "to_id": "goal:s", "label": "w", "prompt": "p"})
+        ));
+        for action in ["status", "list", "gc", "enable_audit"] {
             assert!(!auto.asks_for_arguments("loop_graph", &json!({"action": action})));
         }
         // Ask gates the tool wholesale by the name-keyed rule; Full never asks

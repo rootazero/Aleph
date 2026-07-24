@@ -1,7 +1,6 @@
 //! Shared types for component implementations.
 
 // Submodules
-mod context;
 mod part_id;
 pub mod parts;
 mod session;
@@ -15,12 +14,6 @@ pub use status::{ReminderType, SessionStatus, SystemReminderPart};
 
 // Re-export session types
 pub use session::{ExecutionSession, ToolCallRecord};
-
-// Re-export context types
-pub use context::{
-    ContextVerbosity, DecisionRecord, Entity, ExecutionContext, ExecutionPhase, Goal, GoalStatus,
-    Knowledge, UserIntent,
-};
 
 // Re-export all part types
 pub use parts::{

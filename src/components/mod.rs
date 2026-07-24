@@ -4,7 +4,7 @@
 //! `TaskPlanner`, `ToolExecutor`, `LoopController`, `SessionRecorder`, `SessionCompactor`)
 //! has been removed — it was superseded by the `src/harness/` Think→Act loop and
 //! had no production consumers. Only the shared domain types remain; they are
-//! consumed by `agents/rig` (`Knowledge`) and the `event` system (part types).
+//! consumed by the `event` system (session/part types).
 
 mod types;
 

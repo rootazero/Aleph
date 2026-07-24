@@ -40,8 +40,7 @@ pub use types::{
     StepStatus,
     StopReason,
     // Sub-agent events
-    SubAgentRequest,
-    SubAgentResult,
+    SubAgentCompletionEvent,
     TaskPlan,
     TimestampedEvent,
     // Token usage

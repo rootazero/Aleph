@@ -181,43 +181,55 @@ fn test_schema_includes_new_fields() {
     assert!(props["context_summary"].is_object());
     assert!(props["request_id"].is_object());
     assert!(props["action"].is_object());
-    assert!(props["name"].is_object());
+    // W10 honest-trim: `name` is gone from the run surface — ephemeral spawns
+    // are not addressable teammates. `team_name` survives for the messaging
+    // actions only.
+    assert!(props["name"].is_null());
     assert!(props["team_name"].is_object());
     assert!(props["to"].is_object());
     assert!(props["text"].is_object());
 }
 
+/// W10 honest-trim regression — `name`/`team_name` on a run are rejected
+/// loudly (the old registration produced an unreadable dead-letter roster
+/// row), never silently accepted or ignored.
 #[test]
-fn test_parse_args_with_name_and_team() {
-    let action = parse_args(&json!({
-        "task": "build feature",
-        "name": "builder-1",
-        "team_name": "alpha"
-    }))
-    .unwrap();
-
-    match action {
-        SubagentAction::Run(args) => {
-            assert_eq!(args.task, "build feature");
-            assert_eq!(args.name.as_deref(), Some("builder-1"));
-            assert_eq!(args.team_name.as_deref(), Some("alpha"));
-        }
-        _ => unreachable!("expected SubagentAction::Run"),
+fn test_parse_args_name_on_run_is_rejected() {
+    for input in [
+        json!({ "task": "build feature", "name": "builder-1", "team_name": "alpha" }),
+        json!({ "task": "build feature", "name": "builder-1" }),
+        json!({ "task": "build feature", "team_name": "alpha" }),
+    ] {
+        let result = parse_args(&input);
+        assert!(result.is_err(), "expected rejection for {input}");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("not addressable teammates"),
+            "unexpected error: {err}"
+        );
     }
 }
 
+/// Review C3 — schema-completing providers emit explicit `null` for every
+/// advertised property; null `name`/`team_name` must read as absent, not
+/// trip the addressable-teammates rejection.
 #[test]
-fn test_parse_args_team_without_name_is_error() {
-    let result = parse_args(&json!({
-        "task": "build feature",
-        "team_name": "alpha"
-    }));
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(
-        err.contains("team_name requires 'name'"),
-        "unexpected error: {err}"
-    );
+fn test_parse_args_null_name_team_name_read_as_absent() {
+    let action =
+        parse_args(&json!({ "task": "build feature", "name": null, "team_name": null }))
+            .expect("null name/team_name must parse as absent");
+    assert!(matches!(action, SubagentAction::Run(_)));
+}
+
+/// W2 defense-in-depth — the ghost 'result' action (coached by old announce
+/// prompts) parses as check_status instead of erroring.
+#[test]
+fn test_parse_args_result_alias_reads_as_check_status() {
+    let action = parse_args(&json!({ "action": "result", "request_id": "abc-123" })).unwrap();
+    match action {
+        SubagentAction::CheckStatus(rid) => assert_eq!(rid, "abc-123"),
+        _ => unreachable!("expected SubagentAction::CheckStatus for 'result' alias"),
+    }
 }
 
 #[test]
@@ -484,6 +496,8 @@ async fn test_execute_success() {
             assert!(output["result"].is_string());
             assert!(output["iterations"].is_number());
             assert!(output["tool_calls_made"].is_number());
+            // W6 — the cap signal is always present (false on a clean run).
+            assert_eq!(output["hit_iteration_limit"], json!(false));
         }
         ToolResult::Error { error, .. } => unreachable!("expected success, got error: {}", error),
     }
@@ -674,6 +688,95 @@ async fn execute_batch_sync_returns_aggregated_results() {
         }
         ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
     }
+}
+
+/// W12 — sync batch children must hold running-only tracker entries: visible
+/// to the gateway Interrupt demote guard (`session_has_running`) while in
+/// flight, and fully delisted afterwards with NO completed retention (the
+/// results are returned inline, so a completed entry would only feed the
+/// proactive announce / `list` with duplicates).
+#[tokio::test]
+async fn sync_batch_registers_running_only_entries() {
+    /// Provider that parks until the test releases it, so the test can
+    /// observe tracker state while the sync batch is in flight.
+    struct GatedProvider {
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+    impl AiProvider for GatedProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let gate = self.gate.clone();
+            Box::pin(async move {
+                let _permit = gate.acquire().await.expect("gate is never closed");
+                Ok(ProviderResponse::text_only("gated response".to_string()))
+            })
+        }
+        fn name(&self) -> &str {
+            "gated"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let provider: Arc<dyn AiProvider> = Arc::new(GatedProvider { gate: gate.clone() });
+    let tracker = make_tracker();
+    let root = "agent:w12-batch:peer:user";
+    let tool = SubagentTool::new(
+        provider,
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        tracker.clone(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    .with_parent_session_id(root);
+
+    let exec = tokio::spawn(async move {
+        tool.execute(
+            json!({ "batch_tasks": [{"task": "a"}, {"task": "b"}] }),
+            CancellationToken::new(),
+        )
+        .await
+    });
+
+    // While the children are parked on the gate the demote guard must read
+    // the parent session as busy (this is the whole point of W12).
+    let mut saw_running = false;
+    for _ in 0..400 {
+        if tracker.session_has_running(root) {
+            saw_running = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        saw_running,
+        "sync batch children must register in the running set"
+    );
+
+    // Release the children and let the batch finish.
+    gate.add_permits(64);
+    let result = exec.await.expect("execute task must not panic");
+    match result {
+        ToolResult::Success { output } => assert_eq!(output["status"], "batch_completed"),
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
+    }
+
+    // RAII delist: nothing left running, and — running-only — nothing
+    // retained as completed.
+    assert!(
+        tracker.list_running().is_empty(),
+        "sync batch entries must delist when the fan-out settles"
+    );
+    assert!(
+        tracker.all_completed().is_empty(),
+        "sync path must not retain completed entries (no announce source)"
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -1214,6 +1317,34 @@ async fn wait_action_returns_completed_and_consumes() {
     }
     // wait consumed the result → the announce would now skip re-delivering it.
     assert!(tracker.is_consumed("rid"));
+}
+
+/// W9 regression — cancelling an already-finished child delivers its result,
+/// so it must mark the result consumed (like check_status / wait) or the
+/// proactive announce burns a fresh parent turn re-delivering it.
+#[tokio::test]
+async fn cancel_on_already_completed_marks_consumed() {
+    let tracker = make_tracker();
+    tracker.mark_completed("rid", CompletedOutcome::ok_text("done early"));
+    let tool = tool_with_tracker(tracker.clone());
+
+    let result = tool
+        .execute(
+            json!({ "action": "cancel", "request_id": "rid" }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "already_completed");
+            assert_eq!(output["result"], "done early");
+        }
+        other => unreachable!("expected already_completed Success, got {other:?}"),
+    }
+    assert!(
+        tracker.is_consumed("rid"),
+        "cancel's already-completed branch must dedup with the announce"
+    );
 }
 
 #[tokio::test]

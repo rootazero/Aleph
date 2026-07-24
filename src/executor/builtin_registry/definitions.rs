@@ -10,7 +10,7 @@
 //!
 //! It is deliberately NOT the complete tool surface. Conditionally-registered
 //! tools (generation tools gated on a provider, team tools gated on a coord
-//! store, ACP/arena tools, meta discovery tools, LLM-only tools like
+//! store, ACP tools, meta discovery tools, LLM-only tools like
 //! `scratchpad`/`goal`) live only in `BuiltinToolRegistry`'s runtime metadata
 //! map, populated by the builder. The LLM tool list is therefore completed
 //! from `BuiltinToolRegistry::unified_tools()` at agent init — adding a tool

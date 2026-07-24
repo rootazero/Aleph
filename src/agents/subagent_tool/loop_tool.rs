@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
 
 use crate::agents::background_tracker::{
-    CompletedOutcome, CompletedSnapshot, WaitAnyOutcome, WaitOutcome,
+    CompletedOutcome, CompletedSnapshot, RunningRegistration, SpawnMeta, WaitAnyOutcome,
+    WaitOutcome,
 };
 use crate::agents::progress::SubagentProgress;
 use crate::agents::runtime::AgentRuntimeConfig;
@@ -132,13 +133,9 @@ impl LoopTool for SubagentTool {
                     "items": { "type": "string" },
                     "description": "For 'wait' only: a set of background request_ids to wait on. 'wait' returns as soon as the FIRST of them finishes (reporting which), so you can react to a fan-out in completion order. Use 'request_id' instead to wait on a single sub-agent."
                 },
-                "name": {
-                    "type": "string",
-                    "description": "Optional name for the sub-agent, making it addressable by teammates."
-                },
                 "team_name": {
                     "type": "string",
-                    "description": "Optional team name. Enables shared tasks and inter-agent messaging. Requires 'name' to be set."
+                    "description": "Team name for the send_message / read_inbox actions (identifies which team's inbox/router to use)."
                 },
                 "to": {
                     "type": "string",
@@ -418,7 +415,17 @@ impl LoopTool for SubagentTool {
                         output: json!({
                             "status": "cancelling",
                             "request_id": request_id,
-                            "note": "CancellationToken fired; running task will exit at its next await point.",
+                            // Honest for both entry classes: background
+                            // sub-agent runs observe the fired token at their
+                            // next await point; running-only registrations
+                            // from other surfaces (team-chat members,
+                            // delegations) treat it as advisory — their
+                            // owners stop them (teams.chat.cancel / their
+                            // wall-clock timeouts).
+                            "note": "CancellationToken fired. Background sub-agents exit at their \
+                                     next await point; runs owned by other surfaces (team chat, \
+                                     delegations) are stopped by their owners — use teams.chat.cancel \
+                                     for a chat fan-out tree.",
                         }),
                     };
                 }
@@ -428,6 +435,11 @@ impl LoopTool for SubagentTool {
                 // check_status still sees the same result.
                 return match self.background_tracker.result_snapshot(&request_id) {
                     Some(snap) => {
+                        // The parent has now seen the terminal result via this
+                        // cancel; mark it consumed so the proactive announce
+                        // does not spend a fresh turn re-delivering it
+                        // (mirrors check_status / wait).
+                        self.background_tracker.mark_consumed(&request_id);
                         if let CompletedOutcome::Err(err) = &snap.outcome {
                             return ToolResult::Error {
                                 error: format!(
@@ -609,18 +621,37 @@ impl LoopTool for SubagentTool {
                     prepared.iter().map(|(_, _, m, _)| m.clone()).collect();
                 let mut handles = Vec::with_capacity(prepared.len());
                 for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
+                    let batch_cancel = self.cancel_for_child_with(&cancel);
+                    // W12 — running-only registration so the gateway Interrupt
+                    // demote guard (`session_has_running`) sees this sync
+                    // fan-out child: a parent mid-batch must read as busy, not
+                    // interruptible. RAII: the entry delists when the child
+                    // future settles (completion, panic, or cancel) — no
+                    // completed entry is retained, so nothing feeds the
+                    // proactive announce (results are returned inline below).
+                    let running_reg = RunningRegistration::register(
+                        self.background_tracker.clone(),
+                        uuid::Uuid::new_v4().to_string(),
+                        batch_cancel.clone(),
+                        task.clone(),
+                        SpawnMeta {
+                            parent_id: None,
+                            depth: child_chain.depth,
+                            root_session: self.parent_session_id.clone().unwrap_or_default(),
+                            model: model.clone(),
+                        },
+                    );
                     let runtime_config = AgentRuntimeConfig {
                         agent_def,
                         task,
                         context_summary: args.context_summary.clone(),
                         model,
                         timeout_secs: timeout,
-                        strategy: None,
                     };
 
-                    let batch_cancel = self.cancel_for_child_with(&cancel);
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
                     handles.push(tokio::spawn(async move {
+                        let _running_reg = running_reg;
                         let _cancel_guard = CancelGuard::new(batch_cancel.clone());
                         let outcome = AssertUnwindSafe(runtime.run(runtime_config))
                             .catch_unwind()
@@ -651,6 +682,9 @@ impl LoopTool for SubagentTool {
                                 "iterations": r.iterations,
                                 "tool_calls_made": r.tool_calls_made,
                                 "total_tokens": r.total_tokens,
+                                // R8 honesty: a capped proposal is a partial
+                                // result, not a clean completion.
+                                "hit_iteration_limit": r.hit_limit,
                             })
                         }
                         Ok((idx, Ok(Err(e)))) => json!({
@@ -732,10 +766,25 @@ impl LoopTool for SubagentTool {
                         context_summary: args.context_summary.clone(),
                         model: args.aggregator_model.clone().or_else(|| args.model.clone()),
                         timeout_secs: args.timeout_secs,
-                        strategy: None,
                     };
                     let agg_cancel = self.cancel_for_child_with(&cancel);
                     let _agg_cancel_guard = CancelGuard::new(agg_cancel.clone());
+                    // W12 — the aggregator reduce is the tail of the same
+                    // expensive MoA fan-out; keep the parent reading as busy
+                    // (Interrupt demote guard) while it synthesizes. Same
+                    // running-only RAII shape as the batch children above.
+                    let _agg_running_reg = RunningRegistration::register(
+                        self.background_tracker.clone(),
+                        uuid::Uuid::new_v4().to_string(),
+                        agg_cancel.clone(),
+                        "MoA aggregator (synthesis reduce)".to_string(),
+                        SpawnMeta {
+                            parent_id: None,
+                            depth: child_chain.depth,
+                            root_session: self.parent_session_id.clone().unwrap_or_default(),
+                            model: args.aggregator_model.clone().or_else(|| args.model.clone()),
+                        },
+                    );
                     let runtime = self.build_runtime(child_chain.clone(), agg_cancel.clone());
 
                     let agg_outcome = runtime.run(runtime_config).await;
@@ -745,6 +794,7 @@ impl LoopTool for SubagentTool {
                             output: json!({
                                 "status": "moa_completed",
                                 "synthesis": r.final_text.unwrap_or_else(|| "(no output)".to_string()),
+                                "hit_iteration_limit": r.hit_limit,
                                 "proposer_count": proposer_count,
                                 "results": results,
                             }),
@@ -825,35 +875,14 @@ impl LoopTool for SubagentTool {
             }
         };
 
-        // 4. Teammate registration (when name + team_name are both provided)
-        if let (Some(ref name), Some(ref tname)) = (&args.name, &args.team_name) {
-            if let Some(ref mgr) = self.teammate_manager {
-                match mgr.ensure_team(tname, &self.parent_agent_id).await {
-                    Ok(tid) => {
-                        if let Err(e) = mgr.register_teammate(&tid, name, "worker").await {
-                            return ToolResult::Error {
-                                error: format!("Failed to register teammate '{name}': {e}"),
-                                retryable: true,
-                            };
-                        }
-                    }
-                    Err(e) => {
-                        return ToolResult::Error {
-                            error: format!("Failed to create team '{tname}': {e}"),
-                            retryable: false,
-                        };
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    name = %name,
-                    team = %tname,
-                    "subagent: teammate_manager not configured, skipping team registration"
-                );
-            }
-        }
+        // NOTE: ephemeral spawns are deliberately NOT registered as team
+        // members. The old `name`/`team_name` registration created a roster
+        // row the child could never read (the SubAgent-mode recursion guard
+        // denies it the `subagent` tool hosting `read_inbox`, and the name
+        // never reached the child) — a silent dead-letter trap. Durable,
+        // addressable members belong to the teams tools.
 
-        // 5. Foreground vs background execution
+        // 4. Foreground vs background execution
         if args.run_in_background {
             let request_id = self.spawn_background(
                 agent_def,
@@ -880,7 +909,6 @@ impl LoopTool for SubagentTool {
                 context_summary: args.context_summary,
                 model: args.model,
                 timeout_secs: args.timeout_secs,
-                strategy: None,
             };
 
             let child_cancel = self.cancel_for_child_with(&cancel);
@@ -905,7 +933,11 @@ impl LoopTool for SubagentTool {
                             "result": result.final_text.unwrap_or_else(|| "(no output)".to_string()),
                             "iterations": result.iterations,
                             "tool_calls_made": result.tool_calls_made,
-                            "total_tokens": result.total_tokens
+                            "total_tokens": result.total_tokens,
+                            // R8 honesty: a child that hit its iteration cap
+                            // must not read as a clean completion — the parent
+                            // model decides how to react (R7).
+                            "hit_iteration_limit": result.hit_limit
                         }),
                     }
                 }

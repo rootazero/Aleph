@@ -123,6 +123,12 @@ pub struct MemberRunOutcome {
 /// `model_override` pins the member run to a specific model (a workflow step's
 /// per-step `model`); `None` keeps the run on the agent's default. It is ignored
 /// for `AcpSession` targets — an external coding CLI owns its own model.
+///
+/// `think_level` pins the member run's reasoning depth (a workflow step's
+/// per-step `effort`, already normalised to a canonical think-level id); it is
+/// delivered via the run's `think_level` metadata — the same per-run channel a
+/// composer pill uses. `None` keeps the session default. Ignored for
+/// `AcpSession` targets, exactly like `model_override`.
 pub async fn execute_member_task(
     context: &GatewayContext,
     target: &MemberDispatchTarget,
@@ -132,6 +138,7 @@ pub async fn execute_member_task(
     timeout_secs: u64,
     isolate_workspace: bool,
     model_override: Option<crate::gateway::model_override::ModelOverride>,
+    think_level: Option<String>,
 ) -> MemberRunOutcome {
     // ACP-backed members short-circuit through the adapter pool — they
     // never visit the in-process registry, never take a worktree handle.
@@ -197,6 +204,15 @@ pub async fn execute_member_task(
         let mut m = HashMap::new();
         m.insert("team_id".to_string(), team_id.to_string());
         m.insert("task_id".to_string(), task_id.to_string());
+        // Per-step effort override (workflow `effort`): the execution engine's
+        // `resolve_turn_think_level` reads this request-carried key first, so
+        // the member run thinks at the step's declared depth.
+        if let Some(level) = think_level {
+            m.insert(
+                crate::agents::thinking::THINK_LEVEL_SESSION_KEY.to_string(),
+                level,
+            );
+        }
         if let Some(handle) = worktree_handle.as_ref() {
             m.insert(
                 "team_worktree_path".to_string(),

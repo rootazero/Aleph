@@ -195,6 +195,7 @@ pub struct TeamDispatcherConfigToml {
 /// max_fanout_width = 3         # tighter @all blast radius
 /// max_total_activations = 64   # larger team, more total member runs per turn
 /// transcript_token_budget = 12000
+/// member_run_timeout_secs = 900  # wall-clock cap per member run
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct TeamBroadcastConfigToml {
@@ -213,6 +214,12 @@ pub struct TeamBroadcastConfigToml {
     /// (over budget ⇒ most-recent kept from the tail).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_token_budget: Option<usize>,
+    /// Wall-clock timeout (seconds) for a single group-chat member run.
+    /// Absent ⇒ default (600, mirroring the dispatcher's `task_timeout_secs`);
+    /// `0` ⇒ use the default (a literal 0 would kill every member run at
+    /// birth — same P7 boundary clamp as the storm guards above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_run_timeout_secs: Option<u64>,
 }
 
 // =============================================================================

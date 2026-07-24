@@ -394,12 +394,89 @@ pub async fn handle_chat_send(
         coord_task_store,
         broadcast_cfg,
     );
+    // The minted run_id is the fan-out TREE identity. Register the tree
+    // BEFORE spawning the dispatch (and before this RPC returns), so the id
+    // the Panel receives is cancellable the instant it is visible —
+    // `teams.chat.cancel` can never race the registration into NOT_FOUND.
     let run_id = uuid::Uuid::new_v4().to_string();
+    let fanout = crate::teams::broadcast::GroupChatBroadcaster::register_fanout(
+        run_id.clone(),
+        &params.team_id,
+    );
     let team_id = params.team_id.clone();
     let message = params.message.clone();
     tokio::spawn(async move {
-        broadcaster.dispatch_user(team_id, message).await;
+        broadcaster.dispatch_user(team_id, message, fanout).await;
     });
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "run_id": run_id }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChatCancelParams {
+    pub run_id: String,
+}
+
+/// teams.chat.cancel — stop an in-flight `teams.chat.send` fan-out tree.
+///
+/// `run_id` is the id `teams.chat.send` returned (the tree's tracker node,
+/// registered by `dispatch_user`). Order matters: poison FIRST so the
+/// recursive fan-out spawns no new members while we walk, THEN abort every
+/// in-flight member run through the engine's per-run CancellationToken path —
+/// the same `ExecutionAdapter::cancel` the `agent.cancel` RPC uses. Pure I/O
+/// plumbing (R4): no reasoning, no new registry — the tree lives in the
+/// process-global `BackgroundAgentTracker`.
+pub async fn handle_chat_cancel(
+    request: JsonRpcRequest,
+    context: Arc<crate::gateway::context::GatewayContext>,
+) -> JsonRpcResponse {
+    let params: ChatCancelParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    debug!(run_id = %params.run_id, "Handling teams.chat.cancel request");
+    if params.run_id.trim().is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "run_id is required".to_string());
+    }
+
+    let tracker = crate::agents::background_tracker::BackgroundAgentTracker::global();
+    // 1. Poison the tree: fires the tree-level token stored at registration,
+    //    so dispatch/run_member spawn no further members.
+    let tree_found = tracker.cancel(&params.run_id);
+    if !tree_found {
+        return JsonRpcResponse::error(
+            request.id,
+            RESOURCE_NOT_FOUND,
+            format!(
+                "No running team-chat fan-out with run_id '{}' (already settled or unknown)",
+                params.run_id
+            ),
+        );
+    }
+    // 2. Walk the tree: every still-running member registered under this
+    //    run_id gets its engine run aborted (fires the per-run token). A
+    //    member whose engine run already finished (or has not started yet)
+    //    yields a cancel error — counted, not fatal; the tree poison covers
+    //    the not-yet-started ones.
+    let members = tracker.running_children_of(&params.run_id);
+    let mut signalled = 0usize;
+    for member_run_id in &members {
+        if context
+            .execution_adapter()
+            .cancel(member_run_id)
+            .await
+            .is_ok()
+        {
+            signalled += 1;
+        }
+    }
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "run_id": params.run_id,
+            "cancelled": true,
+            "members_running": members.len(),
+            "members_signalled": signalled,
+        }),
+    )
 }

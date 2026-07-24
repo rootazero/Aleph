@@ -571,14 +571,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 let hit_limit = harness.hit_limit();
 
                 let total_tokens = harness.total_tokens();
-                let result = extract_run_result(
-                    base.session.as_ref(),
-                    &child_id,
-                    &child_chain,
-                    hit_limit,
-                    total_tokens,
-                )
-                .await?;
+                let result =
+                    extract_run_result(base.session.as_ref(), &child_id, hit_limit, total_tokens)
+                        .await?;
 
                 // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
                 //    can distil parent-side lessons. Skipped silently when no writer is
@@ -663,13 +658,13 @@ fn build_effective_task(
 /// `tool_calls_made` := count of `ToolCallRequested` events.
 /// `final_text` := text of the last `AssistantMessage`, or `None`.
 /// `hit_limit` := passed in by the caller (sourced from
-///                 `AgentHarness::hit_limit()` after the run).
+///                 `AgentHarness::hit_limit()` after the run); surfaced to the
+///                 parent model as `hit_iteration_limit` by the subagent tool.
 /// `total_tokens` := passed in by the caller (sourced from
 ///                 `AgentHarness::total_tokens()` after the run).
 async fn extract_run_result(
     session: &dyn SessionService,
     child_id: &SessionId,
-    chain: &ChainContext,
     hit_limit: bool,
     total_tokens: u64,
 ) -> Result<LoopRunResult, String> {
@@ -690,12 +685,13 @@ async fn extract_run_result(
                     final_text = Some(content.text.clone());
                 } else if is_last_assistant(&events, rec) {
                     // Edge case: the *last* AssistantMessage is pure tool_use
-                    // (no text). Clear any earlier textual answer so the
-                    // gateway's `hit_limit && final_text.is_empty()` check in
-                    // `helpers::gateway_response_from_outcome` surfaces
-                    // `ErrLoopExhausted` instead of echoing a stale earlier
-                    // message. The dedicated `final_text_cleared_when_…`
-                    // regression test below asserts this behavior.
+                    // (no text) — the run ended mid-work (typically a capped
+                    // run, `hit_limit=true`). Clear any earlier textual answer
+                    // so stale mid-run narration is never presented as the
+                    // final result; the subagent tool surfaces the cap via
+                    // `hit_iteration_limit` instead. The dedicated
+                    // `final_text_cleared_when_…` regression test below
+                    // asserts this behavior.
                     final_text = None;
                 }
             }
@@ -712,8 +708,6 @@ async fn extract_run_result(
         tool_calls_made,
         total_tokens: total_tokens as usize,
         hit_limit,
-        chain_id: chain.chain_id.clone(),
-        depth: chain.depth,
     })
 }
 

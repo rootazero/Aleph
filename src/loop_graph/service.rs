@@ -56,6 +56,19 @@ fn debounce_pass(watcher_job_id: &str) -> bool {
     }
 }
 
+/// Forget the stamp [`debounce_pass`] just recorded — called when the poke it
+/// admitted failed to run (cron "already running" / disabled), so the failure
+/// does not consume the window: a settle landing while the watcher is mid-run
+/// would otherwise be dropped AND suppress every retry for the next 60s.
+/// Safe: the fresh stamp blocks concurrent passes for the whole window, so the
+/// entry removed here is always the one this failed poke inserted.
+fn debounce_rollback(watcher_job_id: &str) {
+    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(watcher_job_id);
+}
+
 /// Cron job ids of every `watches` watcher pointed at `node_id`. Pure lookup
 /// (unit-testable); empty on store errors.
 fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) -> Vec<String> {
@@ -96,15 +109,19 @@ async fn notify_node_settled(node_id: &str) {
                     "loop_graph: victory claim — watcher cron poked");
             }
             Err(e) => {
+                debounce_rollback(&job_id);
                 warn!(node = %node_id, watcher = %job_id, error = %e,
-                    "loop_graph: failed to poke watcher cron");
+                    "loop_graph: failed to poke watcher cron (debounce rolled back)");
             }
         }
     }
 }
 
-/// Goal victory-claim entry. Call sites: the goal continuation hook's
-/// gate-less terminal complete and gate-pass commit moments.
+/// Goal victory-claim entry. Call sites (all guarded by the store's
+/// settle-notify CAS): the goal continuation hook's gate-less terminal
+/// complete and gate-pass commit moments, plus the goal tool's Passive
+/// `Complete` arm (`builtin_tools/goal.rs` — Passive goals never reach the
+/// continuation hook).
 pub async fn notify_goal_settled(session: &str) {
     notify_node_settled(&format!("goal:{session}")).await;
 }
@@ -347,5 +364,20 @@ mod tests {
             "second poke within window must be dropped"
         );
         assert!(debounce_pass("job-y"), "distinct watcher unaffected");
+    }
+
+    #[test]
+    fn failed_poke_rolls_back_its_debounce_stamp() {
+        // A poke that never ran (run_job error) must not consume the window —
+        // the next settle retries immediately instead of being suppressed.
+        assert!(debounce_pass("job-rollback"));
+        assert!(!debounce_pass("job-rollback"));
+        debounce_rollback("job-rollback");
+        assert!(
+            debounce_pass("job-rollback"),
+            "a failed poke must not consume the debounce window"
+        );
+        // Rolling back an unknown watcher is a no-op.
+        debounce_rollback("job-never-passed");
     }
 }

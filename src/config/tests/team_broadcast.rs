@@ -19,6 +19,7 @@ max_chain_depth = 8
 max_fanout_width = 3
 max_total_activations = 64
 transcript_token_budget = 12000
+member_run_timeout_secs = 900
 "#;
 
     let config: Config = toml::from_str(toml_str).expect("should parse");
@@ -27,6 +28,7 @@ transcript_token_budget = 12000
     assert_eq!(tb.max_fanout_width, Some(3));
     assert_eq!(tb.max_total_activations, Some(64));
     assert_eq!(tb.transcript_token_budget, Some(12000));
+    assert_eq!(tb.member_run_timeout_secs, Some(900));
 }
 
 #[test]
@@ -44,6 +46,7 @@ max_fanout_width = 2
     assert_eq!(tb.max_chain_depth, None);
     assert_eq!(tb.max_total_activations, None);
     assert_eq!(tb.transcript_token_budget, None);
+    assert_eq!(tb.member_run_timeout_secs, None);
 }
 
 #[test]
