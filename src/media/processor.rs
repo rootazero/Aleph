@@ -162,7 +162,7 @@ impl MediaProcessor {
         );
 
         // Encode to base64
-        let b64 = match MediaCache::to_base64(&cached) {
+        let b64 = match MediaCache::to_base64(&cached).await {
             Ok(b) => b,
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "failed to base64-encode image");
