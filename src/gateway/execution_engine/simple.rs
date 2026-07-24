@@ -100,7 +100,6 @@ impl SimpleExecutionEngine {
                     cancel_tx: Some(cancel_tx),
                     seq_counter: AtomicU64::new(0),
                     chunk_counter: AtomicU32::new(0),
-                    demote_protected: std::sync::atomic::AtomicBool::new(false),
                 },
             );
         }

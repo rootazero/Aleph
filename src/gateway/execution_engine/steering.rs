@@ -87,40 +87,6 @@ pub(super) fn has_steering_content(request: &RunRequest) -> bool {
     !request.input.trim().is_empty() || !request.attachments.is_empty()
 }
 
-/// Pure policy: may an `Interrupt` busy-input request tear down the same-session
-/// sibling it found, given the session's in-flight signals?
-///
-/// A run driving a live sub-agent fan-out (team dispatch / parallel subagents)
-/// holds expensive parallel work that a single mid-task course-correction must
-/// not destroy. hermes demotes exactly this Interrupt to `queue`
-/// (`run.py:5436-5446`); Aleph mirrors it — when protected work is in flight the
-/// Interrupt is *not* honoured as a cancel, it falls through to the busy queue
-/// (wait for the current run to finish, then restart as a fresh run). Pure and
-/// positional so the policy is unit-tested without the process-global tracker.
-///
-/// Deliberately a single boolean today. A compaction-in-flight signal is *not*
-/// folded in: Aleph's mid-run context compaction lives inside the harness
-/// (`src/context/`) and the gateway must not reach into it (R10/P1), the
-/// gateway-level `memory::compression` service is neither session-scoped nor
-/// exposes an in-flight flag, and A3 reconstructible-state makes interrupting a
-/// compaction non-corrupting (the successor run re-reads the full log). If a
-/// cheap session-scoped compaction observable ever appears, it ANDs in here —
-/// one seam, no churn at the call site.
-pub(super) fn run_is_interruptible(has_active_subagents: bool) -> bool {
-    !has_active_subagents
-}
-
-/// Single seam the `Interrupt` branch consults before cancelling a sibling.
-/// Gathers the one cheap session-scoped observable (any sub-agent still running
-/// under this session, keyed by `SessionKey::to_key_string()` — the same string
-/// the run loop stamps as each child's `root_session`) and applies the pure
-/// [`run_is_interruptible`] policy.
-pub(super) fn session_is_interruptible(session_key: &SessionKey) -> bool {
-    let has_active_subagents = crate::agents::background_tracker::BackgroundAgentTracker::global()
-        .session_has_running(&session_key.to_key_string());
-    run_is_interruptible(has_active_subagents)
-}
-
 /// Render the user-visible session text for a steering interjection: the raw
 /// input, plus a text marker for any attachment.
 ///
@@ -499,7 +465,6 @@ mod tests {
                 cancel_tx: None,
                 seq_counter: AtomicU64::new(0),
                 chunk_counter: AtomicU32::new(0),
-                demote_protected: std::sync::atomic::AtomicBool::new(false),
             },
         )
     }
@@ -599,15 +564,6 @@ mod tests {
             data: None,
         }];
         assert!(has_steering_content(&req));
-    }
-
-    #[test]
-    fn interruptible_only_when_no_active_subagents() {
-        // No live fan-out → the Interrupt may cancel the sibling.
-        assert!(run_is_interruptible(false));
-        // A live sub-agent fan-out → protected; the Interrupt demotes to queue
-        // instead of destroying the parallel work (hermes parity).
-        assert!(!run_is_interruptible(true));
     }
 
     #[test]

@@ -622,13 +622,14 @@ impl LoopTool for SubagentTool {
                 let mut handles = Vec::with_capacity(prepared.len());
                 for (idx, (agent_def, task, model, timeout)) in prepared.into_iter().enumerate() {
                     let batch_cancel = self.cancel_for_child_with(&cancel);
-                    // W12 — running-only registration so the gateway Interrupt
-                    // demote guard (`session_has_running`) sees this sync
-                    // fan-out child: a parent mid-batch must read as busy, not
-                    // interruptible. RAII: the entry delists when the child
-                    // future settles (completion, panic, or cancel) — no
-                    // completed entry is retained, so nothing feeds the
-                    // proactive announce (results are returned inline below).
+                    // W12 — running-only registration so the gateway can reach
+                    // this sync fan-out child on a leader cancel: `cancel_session`
+                    // walks `running_runs_of_session` to cooperatively cancel it
+                    // (and `session_has_running` reports the parent busy). RAII:
+                    // the entry delists when the child future settles (completion,
+                    // panic, or cancel) — no completed entry is retained, so
+                    // nothing feeds the proactive announce (results are returned
+                    // inline below).
                     let running_reg = RunningRegistration::register(
                         self.background_tracker.clone(),
                         uuid::Uuid::new_v4().to_string(),

@@ -114,98 +114,63 @@ where
             // path.
             match super::BusyInputMode::from_metadata(&request.metadata) {
                 super::BusyInputMode::Interrupt => {
-                    // Cancel the running sibling on THIS session, then let the
-                    // inbound router's FIFO busy queue restart this message as
-                    // a fresh run once the slot frees — the new run reads the
-                    // interrupted task's full context from the session log
-                    // plus this instruction. Reuses `cancel` + the `AgentBusy`
-                    // delivery path; no new dispatch machinery (R10). If no
-                    // same-session sibling is running (e.g. cross-session
-                    // busy), fall through to plain busy-queue waiting without
-                    // cancelling anything.
+                    // Cancel the running sibling on THIS session — AND any
+                    // in-flight delegated children it owns — then let the inbound
+                    // router's FIFO busy queue restart this message as a fresh run
+                    // once the slot frees. The new run reads the interrupted
+                    // task's full context from the session log plus this
+                    // instruction. Reuses `cancel_session` + the `AgentBusy`
+                    // delivery path; no new dispatch machinery (R10).
                     //
                     // A content-less request (resume-style continuation, or a
                     // synthetic run that lost the `try_start_run` race and only
-                    // inherited an `Interrupt` busy-input key) must never cancel
-                    // a healthy sibling: there is nothing new to contribute, so
-                    // tearing down in-flight work is pure loss. Symmetric with
-                    // the `Steer` empty-content guard, and the same intrinsic
-                    // protection Hermes gives `internal` events.
+                    // inherited an `Interrupt` busy-input key) must never cancel a
+                    // healthy sibling: there is nothing new to contribute, so
+                    // tearing down in-flight work is pure loss. Symmetric with the
+                    // `Steer` empty-content guard, and the same intrinsic
+                    // protection Hermes gives `internal` events. Likewise, when no
+                    // same-session sibling is running (e.g. a cross-session busy),
+                    // there is nothing to cancel — the message just waits its turn.
                     //
-                    // A run driving a live sub-agent fan-out is likewise
-                    // protected: a single mid-task course-correction must not
-                    // destroy expensive parallel work. When such work is in
-                    // flight the Interrupt is demoted to the follow-up queue
-                    // (wait for the current run to finish, then restart as a
-                    // fresh run) instead of cancelling — hermes
-                    // `run.py:5436-5446` demote-to-queue parity. `/stop` and
-                    // Panel `chat.abort` are explicit user-stop intents and go
-                    // through `cancel_session`, NOT this branch, so they are
-                    // never demoted.
-                    //
-                    // Past any of these gates the message just waits its turn in
-                    // the busy queue.
-                    let target = if !super::steering::has_steering_content(request) {
-                        None
+                    // A live sub-agent fan-out is no longer a special case. It
+                    // used to force this Interrupt to *demote* to the follow-up
+                    // queue, because a delegated fan-out was un-cancellable and
+                    // cancelling the parent would detach its member runs (a token
+                    // leak). Item 1 made delegated members cooperatively
+                    // cancellable — `cancel_session` walks the tracker and fires
+                    // each child's per-run token — so an Interrupt now cancels the
+                    // whole session uniformly, exactly like `/stop`, rather than
+                    // second-guessing the channel's declared `Interrupt` policy
+                    // (R10: the gateway does not re-score in-flight work). Operators
+                    // who want in-flight work preserved use the first-class `Queue`
+                    // / `Steer` modes. (`/stop` and Panel `chat.abort` are explicit
+                    // user-stops that already route straight through
+                    // `cancel_session`, NOT this branch.)
+                    let has_sibling = if !super::steering::has_steering_content(request) {
+                        false
                     } else {
                         let runs = self.active_runs.read().await;
-                        match super::steering::find_steering_target_id(
+                        super::steering::find_steering_target_id(
                             &runs,
                             run_id,
                             &request.session_key,
-                        ) {
-                            None => None,
-                            Some(target_id) => {
-                                // Demotion is STICKY per target run: the busy
-                                // queue re-runs this whole decision every ~2s
-                                // poll with unchanged metadata, so a guard that
-                                // only read the LIVE sub-agent signal protected
-                                // the run merely while children were in flight
-                                // — the instant the last one exited, the next
-                                // poll cancelled the parent mid-synthesis and
-                                // destroyed the very results the demote had
-                                // protected. Once demoted, always demoted (for
-                                // this run); the flag dies with the run entry.
-                                let already_demoted = runs.get(&target_id).is_some_and(|r| {
-                                    r.demote_protected
-                                        .load(std::sync::atomic::Ordering::Relaxed)
-                                });
-                                if already_demoted
-                                    || !super::steering::session_is_interruptible(
-                                        &request.session_key,
-                                    )
-                                {
-                                    if let Some(r) = runs.get(&target_id) {
-                                        r.demote_protected
-                                            .store(true, std::sync::atomic::Ordering::Relaxed);
-                                    }
-                                    if !already_demoted {
-                                        info!(
-                                            session = %request.session_key.to_key_string(),
-                                            target_run = %target_id,
-                                            "busy-input interrupt: session has an active sub-agent fan-out; demoting to the follow-up queue (protecting in-flight parallel work) — message will restart as a fresh run once the current run finishes",
-                                        );
-                                    }
-                                    None
-                                } else {
-                                    Some(target_id)
-                                }
-                            }
-                        }
+                        )
+                        .is_some()
                     };
-                    if let Some(target_id) = target {
-                        let _ = self.cancel(&target_id).await;
-                        // No interruption marker is persisted here: the
-                        // harness bridge emits `RunFinished{Cancelled}` when
-                        // the cancelled loop tears down, and the prompt
-                        // builder replays that as a `<system-reminder>`
-                        // interruption note (covers /stop, Panel chat.abort
-                        // and this Interrupt mode alike) — single source,
-                        // nothing stored twice.
+                    if has_sibling {
+                        // Cancel the leader's own run AND its delegated children
+                        // (no detached-member leak). A bare `self.cancel(target)`
+                        // would kill only the parent and re-open that leak. No
+                        // interruption marker is persisted here: the harness
+                        // bridge emits `RunFinished{Cancelled}` when each cancelled
+                        // loop tears down, and the prompt builder replays it as a
+                        // `<system-reminder>` interruption note (covers /stop,
+                        // Panel chat.abort and this Interrupt mode alike) — single
+                        // source, nothing stored twice.
+                        let _ = self.cancel_session(&request.session_key).await;
                         info!(
                             session = %request.session_key.to_key_string(),
-                            target_run = %target_id,
-                            "busy-input interrupt: cancelled running sibling; message will restart as a fresh run via the busy queue",
+                            "busy-input interrupt: cancelled running sibling and any delegated children; message will restart as a fresh run via the busy queue",
                         );
                     }
                     return Err(ExecutionError::AgentBusy(agent.id().to_string()));
@@ -280,7 +245,6 @@ where
                     cancel_tx: Some(cancel_tx),
                     seq_counter: crate::sync_primitives::AtomicU64::new(0),
                     chunk_counter: crate::sync_primitives::AtomicU32::new(0),
-                    demote_protected: std::sync::atomic::AtomicBool::new(false),
                 },
             );
         }

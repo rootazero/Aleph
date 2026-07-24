@@ -577,6 +577,161 @@ async fn cancel_session_cancels_in_flight_delegated_child() {
     drop(member_outcome);
 }
 
+/// Companion to `cancel_session_cancels_in_flight_delegated_child` (which covers
+/// the leader having NO own run): a `cancel_session` on a leader that IS running
+/// its own run AND owns an in-flight delegated child must cancel BOTH rails at
+/// once — the leader's own run (returned as `Some(run_id)`) and the tracked
+/// child (its real per-run cancel token fires). Locks the two cancel paths
+/// composing so a future change can't quietly drop one.
+#[tokio::test]
+async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "delegate-agent").await;
+    let engine = test_engine();
+
+    let leader_key = SessionKey::peer("delegate-agent", "leader-own-and-child");
+    let leader_run_id = "leader-run-own-1";
+    let member_key = SessionKey::task("delegate-agent", "team", "task-own-child");
+    let member_run_id = "member-run-own-child-1";
+
+    // Leader's OWN run — admitted on the leader session with a real cancel_tx.
+    let leader_req = gate_test_request(&leader_key, leader_run_id);
+    let (leader_tx, mut leader_rx) = mpsc::channel::<()>(1);
+    let leader_outcome = engine
+        .admit_run(&leader_req, leader_run_id, &agent, leader_tx)
+        .await
+        .expect("leader run must be admitted");
+    assert!(matches!(leader_outcome, GateOutcome::Admitted(_)));
+
+    // Delegated member run — admitted on its own task session with a real
+    // cancel_tx, then registered in the tracker under the leader's root_session
+    // (mirrors the delegate registration wired in Item 1 / Task 8).
+    let member_req = gate_test_request(&member_key, member_run_id);
+    let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
+    let member_outcome = engine
+        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .await
+        .expect("member run must be admitted");
+    assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
+    let _reg = crate::agents::background_tracker::RunningRegistration::register(
+        crate::sync_primitives::Arc::clone(
+            &crate::agents::background_tracker::BackgroundAgentTracker::global(),
+        ),
+        member_run_id.to_string(),
+        tokio_util::sync::CancellationToken::new(),
+        "delegated member".to_string(),
+        crate::agents::background_tracker::SpawnMeta {
+            parent_id: None,
+            depth: 1,
+            root_session: leader_key.to_key_string(),
+            model: None,
+        },
+    );
+
+    // Cancel the leader session: own run + delegated child must both be cancelled.
+    let cancelled = engine
+        .cancel_session(&leader_key)
+        .await
+        .expect("cancel_session must not error");
+    assert_eq!(
+        cancelled,
+        Some(leader_run_id.to_string()),
+        "cancel_session must return the leader's own cancelled run id"
+    );
+
+    leader_rx
+        .try_recv()
+        .expect("the leader's own run cancel_tx must have fired");
+    member_rx
+        .try_recv()
+        .expect("the delegated child's cancel_tx must have fired (child walk)");
+
+    drop(leader_outcome);
+    drop(member_outcome);
+}
+
+/// Item 1 follow-up (demote → real cancel): a busy-input `Interrupt` that lands
+/// on a session driving an in-flight sub-agent fan-out must now CANCEL the
+/// running sibling AND its delegated children (then restart via the busy queue),
+/// NOT demote-to-queue. Before the simplification the fan-out signal force-
+/// demoted the Interrupt so nothing was cancelled; after it, the Interrupt fires
+/// a real `cancel_session` — the same mechanism `/stop` uses. Exercises the new
+/// semantic end-to-end through the actual `admit_run` gate.
+#[tokio::test]
+async fn interrupt_on_fanout_session_cancels_parent_and_children() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "delegate-agent").await;
+    let engine = test_engine();
+
+    let leader_key = SessionKey::peer("delegate-agent", "leader-interrupt-fanout");
+    let leader_run_id = "leader-run-interrupt-1";
+    let member_key = SessionKey::task("delegate-agent", "team", "task-interrupt");
+    let member_run_id = "member-run-interrupt-1";
+
+    // Leader's own run holds the leader session claim.
+    let leader_req = gate_test_request(&leader_key, leader_run_id);
+    let (leader_tx, mut leader_rx) = mpsc::channel::<()>(1);
+    let leader_outcome = engine
+        .admit_run(&leader_req, leader_run_id, &agent, leader_tx)
+        .await
+        .expect("leader run must be admitted");
+    assert!(matches!(leader_outcome, GateOutcome::Admitted(_)));
+
+    // In-flight delegated child: admitted (real cancel_tx) + tracker-registered
+    // under the leader's root_session. This is the "active fan-out" signal that
+    // used to force the Interrupt to demote-to-queue.
+    let member_req = gate_test_request(&member_key, member_run_id);
+    let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
+    let member_outcome = engine
+        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .await
+        .expect("member run must be admitted");
+    assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
+    let _reg = crate::agents::background_tracker::RunningRegistration::register(
+        crate::sync_primitives::Arc::clone(
+            &crate::agents::background_tracker::BackgroundAgentTracker::global(),
+        ),
+        member_run_id.to_string(),
+        tokio_util::sync::CancellationToken::new(),
+        "delegated member".to_string(),
+        crate::agents::background_tracker::SpawnMeta {
+            parent_id: None,
+            depth: 1,
+            root_session: leader_key.to_key_string(),
+            model: None,
+        },
+    );
+
+    // A second message on the leader session with Interrupt busy-input mode and
+    // real steering content ("hello" from gate_test_request). It loses
+    // `try_claim` → busy path → Interrupt branch.
+    let mut interrupt_req = gate_test_request(&leader_key, "interrupt-run");
+    interrupt_req.metadata.insert(
+        BUSY_INPUT_MODE_KEY.to_string(),
+        BusyInputMode::Interrupt.as_wire().to_string(),
+    );
+    let (int_tx, _int_rx) = mpsc::channel::<()>(1);
+    let outcome = engine
+        .admit_run(&interrupt_req, "interrupt-run", &agent, int_tx)
+        .await;
+    assert!(
+        matches!(outcome, Err(ExecutionError::AgentBusy(_))),
+        "an Interrupt on a busy session returns AgentBusy (message restarts via the busy queue)"
+    );
+
+    // Real cancel, not demote: BOTH the leader's own run and the delegated child
+    // must have received their real per-run cancel signals.
+    leader_rx
+        .try_recv()
+        .expect("Interrupt must cancel the leader's own run (demote → real cancel)");
+    member_rx
+        .try_recv()
+        .expect("Interrupt must cancel the in-flight delegated child (no detached leak)");
+
+    drop(leader_outcome);
+    drop(member_outcome);
+}
+
 // =============================================================================
 // Cascade timeout resolution
 // =============================================================================

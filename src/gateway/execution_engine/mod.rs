@@ -319,12 +319,6 @@ pub(crate) struct ActiveRun {
     pub(crate) cancel_tx: Option<mpsc::Sender<()>>,
     pub(crate) seq_counter: AtomicU64,
     pub(crate) chunk_counter: AtomicU32,
-    /// Sticky Interrupt-demotion marker (`gate.rs`): once an `Interrupt` was
-    /// demoted to the follow-up queue to protect this run's sub-agent fan-out,
-    /// every later poll of that queued message keeps demoting — even after the
-    /// last child exits — so the run's synthesis turn survives. Atomic so the
-    /// gate can stamp it under the `active_runs` READ lock; dies with the run.
-    pub(crate) demote_protected: std::sync::atomic::AtomicBool,
 }
 
 impl ActiveRun {

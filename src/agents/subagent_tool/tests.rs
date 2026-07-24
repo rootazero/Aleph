@@ -690,8 +690,9 @@ async fn execute_batch_sync_returns_aggregated_results() {
     }
 }
 
-/// W12 — sync batch children must hold running-only tracker entries: visible
-/// to the gateway Interrupt demote guard (`session_has_running`) while in
+/// W12 — sync batch children must hold running-only tracker entries: visible to
+/// the gateway's session child-walk (`running_runs_of_session`, so a leader
+/// cancel reaches them; `session_has_running` reports the parent busy) while in
 /// flight, and fully delisted afterwards with NO completed retention (the
 /// results are returned inline, so a completed entry would only feed the
 /// proactive announce / `list` with duplicates).
@@ -744,8 +745,9 @@ async fn sync_batch_registers_running_only_entries() {
         .await
     });
 
-    // While the children are parked on the gate the demote guard must read
-    // the parent session as busy (this is the whole point of W12).
+    // While the children are parked on the gate the tracker must read the
+    // parent session as having running children — so a leader cancel / status
+    // query reaches them (this is the whole point of W12).
     let mut saw_running = false;
     for _ in 0..400 {
         if tracker.session_has_running(root) {
