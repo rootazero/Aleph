@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Error during initialization
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 #[error("[{phase}] {message}")]
 pub struct InitError {
     /// Which phase failed

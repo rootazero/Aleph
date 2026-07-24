@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::sync_primitives::Arc;
 use crate::utils::paths::{get_config_dir, get_runtimes_dir};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{info, warn};
 
@@ -35,6 +35,7 @@ fn join_error_to_init_error(phase: &str, e: tokio::task::JoinError) -> InitError
 
 /// Initialization phase identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InitPhase {
     Directories,
     Config,
@@ -92,7 +93,7 @@ pub trait InitProgressHandler: Send + Sync {
     fn on_phase_progress(&self, phase: String, progress: f64, message: String);
     fn on_phase_completed(&self, phase: String);
     fn on_download_progress(&self, item: String, downloaded: u64, total: u64);
-    fn on_error(&self, phase: String, message: String, is_retryable: bool);
+    fn on_error(&self, phase: &str, message: &str, is_retryable: bool);
 }
 
 /// Main initialization coordinator
@@ -196,7 +197,7 @@ impl InitializationCoordinator {
                     warn!(phase = %phase.name(), error = %e, "Phase failed");
 
                     if let Some(h) = &self.handler {
-                        h.on_error(e.phase.clone(), e.message.clone(), e.is_retryable);
+                        h.on_error(&e.phase, &e.message, e.is_retryable);
                     }
 
                     // Rollback completed phases
@@ -375,8 +376,10 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn create_directories(&self) -> Result<(), InitError> {
-        let dirs = [
-            self.config_dir.clone(),
+        // Create root config dir (no clone needed — use the reference)
+        Self::ensure_dir(self.config_dir.as_path()).await?;
+
+        let subdirs: [PathBuf; 5] = [
             self.config_dir.join("logs"),
             self.config_dir.join("cache"),
             self.config_dir.join("output"),
@@ -384,32 +387,38 @@ impl InitializationCoordinator {
             self.config_dir.join("models"),
         ];
 
-        for dir in &dirs {
-            tokio::fs::create_dir_all(dir).await.map_err(|e| {
-                InitError::new("directories", format!("Failed to create {dir:?}: {e}"))
-            })?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let metadata = tokio::fs::metadata(dir).await.map_err(|e| {
-                    InitError::new(
-                        "directories",
-                        format!("Failed to get metadata for {dir:?}: {e}"),
-                    )
-                })?;
-                let mut perms = metadata.permissions();
-                perms.set_mode(0o700);
-                tokio::fs::set_permissions(dir, perms).await.map_err(|e| {
-                    InitError::new(
-                        "directories",
-                        format!("Failed to set permissions for {dir:?}: {e}"),
-                    )
-                })?;
-            }
+        for dir in &subdirs {
+            Self::ensure_dir(dir).await?;
         }
 
         info!(dir = ?self.config_dir, "Directory structure created");
+        Ok(())
+    }
+
+    async fn ensure_dir(path: &Path) -> Result<(), InitError> {
+        tokio::fs::create_dir_all(path).await.map_err(|e| {
+            InitError::new("directories", format!("Failed to create {path:?}: {e}"))
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+                InitError::new(
+                    "directories",
+                    format!("Failed to get metadata for {path:?}: {e}"),
+                )
+            })?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o700);
+            tokio::fs::set_permissions(path, perms).await.map_err(|e| {
+                InitError::new(
+                    "directories",
+                    format!("Failed to set permissions for {path:?}: {e}"),
+                )
+            })?;
+        }
+
         Ok(())
     }
 
@@ -501,8 +510,9 @@ impl InitializationCoordinator {
         // path of migrate_from_legacy returns an in-memory-only ledger, and
         // first-run detection (needs_initialization) requires the file to be
         // present for the runtimes phase to count as completed.
-        let dir = runtimes_dir.clone();
-        tokio::task::spawn_blocking(move || migrate_from_legacy(&dir).and_then(|l| l.persist()))
+        tokio::task::spawn_blocking(move || {
+            migrate_from_legacy(&runtimes_dir).and_then(|l| l.persist())
+        })
             .await
             .map_err(|e| join_error_to_init_error("runtimes", e))?
             .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {e}")))?;
@@ -526,8 +536,8 @@ impl InitializationCoordinator {
         // The bundle_skills_dir path is not available from Rust core
         // Directory was created in phase 1; this phase validates the skills system
 
-        let system = shared_skill_system().clone();
-        system.init(vec![skills_dir.clone()]).await.map_err(|e| {
+        let system = shared_skill_system();
+        system.init(vec![skills_dir]).await.map_err(|e| {
             InitError::new("skills", format!("Failed to initialize skill system: {e}"))
         })?;
 
