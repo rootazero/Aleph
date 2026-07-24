@@ -932,6 +932,33 @@ mod tests {
     }
 
     #[test]
+    fn moa_schema_emits_canonical_advisor_timeout_seconds() {
+        // Task 5 (2e86b318e) renamed the model-facing arg
+        // `advisor_timeout_secs` -> `advisor_timeout_seconds` and hand-edited
+        // the hand-written `impl JsonSchema for MoaManageArgs` (this schema
+        // is NOT `#[derive(JsonSchema)]`-generated, so nothing re-checks it
+        // against the struct field/alias). Guard against a future edit
+        // silently reverting the emitted property key back to the legacy
+        // spelling, which would re-diverge the model-facing schema from the
+        // serde-accepted name with zero other test failing.
+        let def = MoaManageTool::default().definition();
+        let props = def.parameters["properties"]
+            .as_object()
+            .expect("schema has a properties object");
+
+        assert!(
+            props.contains_key("advisor_timeout_seconds"),
+            "schema must declare the canonical `advisor_timeout_seconds` property; got keys: {:?}",
+            props.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !props.contains_key("advisor_timeout_secs"),
+            "schema must NOT declare the legacy `advisor_timeout_secs` property key; got keys: {:?}",
+            props.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn flat_shaped_json_parses_into_tagged_args() {
         // The flat declared schema and the serde tagged-enum parse layer must
         // accept the same shapes — lock the two most complex actions.
