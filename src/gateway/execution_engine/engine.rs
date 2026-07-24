@@ -411,13 +411,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         Ok(())
     }
 
-    /// Cancel the `Running` run on `session_key`, if any. Returns the
-    /// cancelled run's id, or `None` when nothing is running on the session.
+    /// Cancel the `Running` run on `session_key`, if any, AND any in-flight
+    /// delegated child runs it owns. Returns the leader's own cancelled run
+    /// id, or `None` when nothing was running on the session itself (the
+    /// child walk still happens either way).
     ///
-    /// Channel-facing seam for `/stop`: channels know their session key, not
-    /// the engine-internal run id. Reuses the same same-session predicate as
-    /// the busy-input paths (`find_steering_target_id`, with no run excluded —
-    /// the empty exclusion id never matches a real run).
+    /// Channel-facing seam for `/stop` and Panel `chat.abort`: channels know
+    /// their session key, not the engine-internal run id. Reuses the same
+    /// same-session predicate as the busy-input paths (`find_steering_target_id`,
+    /// with no run excluded — the empty exclusion id never matches a real run).
+    ///
+    /// A leader that delegated work (`task_manage` / bash-code / delegate
+    /// workflows) registers its member run's REAL engine `run_id` in the
+    /// `BackgroundAgentTracker` under `root_session = leader`. Without this
+    /// walk, cancelling the leader left that member DETACHED — still running,
+    /// still burning tokens, with no way back to it. Firing the same
+    /// cooperative per-run token (`cancel`) for each tracked child closes that
+    /// leak; a child id that is not a live engine run (e.g. an in-process
+    /// subagent) is simply a harmless `cancel` miss.
     pub async fn cancel_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
@@ -426,12 +437,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let runs = self.active_runs.read().await;
             super::steering::find_steering_target_id(&runs, "", session_key)
         };
-        match target {
+        // Cancel the leader's own run (if any).
+        let own = match target {
             Some(run_id) => {
                 self.cancel(&run_id).await?;
-                Ok(Some(run_id))
+                Some(run_id)
             }
-            None => Ok(None),
+            None => None,
+        };
+        // Also cancel any in-flight delegated child runs owned by this
+        // session, regardless of whether the leader had its own run.
+        let children = crate::agents::background_tracker::BackgroundAgentTracker::global()
+            .running_runs_of_session(&session_key.to_key_string());
+        for child in children {
+            let _ = self.cancel(&child).await;
         }
+        Ok(own)
     }
 }

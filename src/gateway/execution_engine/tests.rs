@@ -493,6 +493,90 @@ async fn run_slot_drop_releases_session_for_reclaim() {
     assert!(matches!(outcome2, GateOutcome::Admitted(_)));
 }
 
+/// Task 9 regression: `cancel_session` on a LEADER session must also cancel
+/// an in-flight DELEGATED CHILD run registered in the process-global
+/// `BackgroundAgentTracker` under the leader's `root_session` — otherwise a
+/// `/stop` / Panel `chat.abort` on the leader leaves the delegated member
+/// DETACHED (still running, still burning tokens).
+///
+/// This exercises the REAL cancel chain, not just the tracker's own API
+/// (Task 8's test only proved shape-parity): the member run is admitted
+/// through the actual engine gate (`admit_run`, the same seam `execute()`
+/// uses), which registers it in `active_runs` with a REAL `cancel_tx` under
+/// a known run_id — exactly the state a genuine delegated child run would be
+/// in. That id is then registered in the tracker under the leader's
+/// `root_session` (mirroring what `delegate.rs` now does at spawn time —
+/// Task 8). Calling `engine.cancel_session(&leader_key)` must walk the
+/// tracker, find the child, and fire `engine.cancel(child)` on it — observed
+/// here by actually receiving the signal on the member run's own `cancel_tx`
+/// channel, the same channel a real `execute()` loop selects on to tear down
+/// its `AgentLoop`. No orchestrator is wired in this harness (matching every
+/// other gate test in this file), so this is the deepest real assertion
+/// available without spinning one up — it is the exact mechanism, not a
+/// restatement of the tracker's own `running_runs_of_session` unit test.
+#[tokio::test]
+async fn cancel_session_cancels_in_flight_delegated_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "delegate-agent").await;
+    let engine = test_engine();
+
+    let leader_key = SessionKey::main("leader-cancel-it");
+    let member_key = SessionKey::task("delegate-agent", "team", "task-cancel");
+    let member_run_id = "member-run-cancel-1";
+
+    // Start a REAL member run through the engine's admission gate. This
+    // registers `member_run_id` in `active_runs` with a real `cancel_tx`,
+    // just as `execute()` does for a genuine delegated child run.
+    let member_req = gate_test_request(&member_key, member_run_id);
+    let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
+    let member_outcome = engine
+        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .await
+        .expect("member run must be admitted");
+    assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
+
+    // Register that SAME run_id in the tracker under the leader's root
+    // session — mirrors the delegate registration wired in Task 8.
+    let _reg = crate::agents::background_tracker::RunningRegistration::register(
+        crate::sync_primitives::Arc::clone(
+            &crate::agents::background_tracker::BackgroundAgentTracker::global(),
+        ),
+        member_run_id.to_string(),
+        tokio_util::sync::CancellationToken::new(),
+        "delegated member".to_string(),
+        crate::agents::background_tracker::SpawnMeta {
+            parent_id: None,
+            depth: 1,
+            root_session: leader_key.to_key_string(),
+            model: None,
+        },
+    );
+
+    // The leader has no own active run — `cancel_session` must still walk
+    // and cancel the delegated child (the child walk runs regardless of
+    // whether an own-run target existed).
+    let cancelled = engine
+        .cancel_session(&leader_key)
+        .await
+        .expect("cancel_session must not error");
+    assert_eq!(
+        cancelled, None,
+        "leader has no own run; the returned id must stay None (contract unchanged)"
+    );
+
+    // The member's REAL per-run cancel token must have fired. Receiving here
+    // proves `cancel_session` walked the tracker, found the child under the
+    // leader's root_session, and invoked the real engine `cancel()` on it —
+    // closing the detached-member leak.
+    member_rx
+        .try_recv()
+        .expect("cancel_session must have fired the member run's real cancel_tx");
+
+    // Keep the member's RunSlot alive until here, mirroring the neighbouring
+    // busy-path tests.
+    drop(member_outcome);
+}
+
 // =============================================================================
 // Cascade timeout resolution
 // =============================================================================
