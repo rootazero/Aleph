@@ -110,7 +110,7 @@ impl FenceSpan {
 }
 
 /// Result of attempting to split at a fence boundary.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceSplit {
     /// Line to close the fence before the break
     pub close_line: String,
