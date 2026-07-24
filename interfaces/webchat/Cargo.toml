@@ -3,6 +3,12 @@ name = "aleph-panel"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.92"
+description = "Aleph Panel — Web chat interface for Aleph"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/rootazero/Aleph"
+categories = ["web-programming", "command-line-utilities"]
+keywords = ["aleph", "panel", "assistant", "automation"]
 
 [lib]
 name = "aleph_panel"
