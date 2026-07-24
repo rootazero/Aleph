@@ -110,7 +110,7 @@ impl ClaudeVisionProvider {
     fn detect_mime_from_extension(ext: Option<&str>) -> Result<&'static str, VisionError> {
         match ext.map(|e| e.to_lowercase()).as_deref() {
             Some("png") => Ok("image/png"),
-            Some("jpg") | Some("jpeg") => Ok("image/jpeg"),
+            Some("jpg" | "jpeg") => Ok("image/jpeg"),
             Some("webp") => Ok("image/webp"),
             Some("gif") => Ok("image/gif"),
             Some(other) => Err(VisionError::ImageError(format!(

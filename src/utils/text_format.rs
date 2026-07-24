@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn test_format_timestamp() {
         // 2024-01-15 00:00:00 UTC
-        let result = format_timestamp(1705276800);
+        let result = format_timestamp(1_705_276_800);
         assert!(result.contains("2024-01-15"));
     }
 

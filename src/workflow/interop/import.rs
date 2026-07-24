@@ -305,7 +305,7 @@ fn read_first_string_literal(s: &str) -> Option<String> {
 fn read_first_string_literal_chars(chars: &[char]) -> Option<String> {
     let i = first_non_ws(chars, 0);
     match chars.get(i).copied() {
-        Some('\'') | Some('"') => read_literal_at(chars, i).map(|(lit, _)| lit),
+        Some('\'' | '"') => read_literal_at(chars, i).map(|(lit, _)| lit),
         _ => None,
     }
 }
@@ -468,7 +468,7 @@ fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> {
         }
         match chars.get(j) {
             Some(']') | None => break,
-            Some('\'') | Some('"') => match read_literal_at(chars, j) {
+            Some('\'' | '"') => match read_literal_at(chars, j) {
                 Some((lit, next)) => {
                     out.push(lit);
                     j = next;
@@ -559,7 +559,7 @@ fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
         }
         i = first_non_ws(chars, i + 1);
         match chars.get(i) {
-            Some('\'') | Some('"') => match read_literal_at(chars, i) {
+            Some('\'' | '"') => match read_literal_at(chars, i) {
                 Some((lit, next)) => {
                     assign_string_opt(&mut opts, &key, lit);
                     i = next;
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn bare_js_extracts_meta_and_agents() {
-        let src = r#"
+        let src = r"
 export const meta = {
   name: 'hand-written',
   description: 'a manual workflow',
@@ -970,7 +970,7 @@ export const meta = {
 }
 await agent('first step')
 await agent('second step')
-"#;
+";
         let outcome = parse_workflow_js(src).expect("scan bare js");
         assert_eq!(outcome.manifest.name, "hand-written");
         assert_eq!(outcome.manifest.description, "a manual workflow");
@@ -985,13 +985,13 @@ await agent('second step')
 
     #[test]
     fn imperative_constructs_recorded_in_dropped() {
-        let src = r#"
+        let src = r"
 export const meta = { name: 'loopy' }
 for (const x of items) {
   await agent('do thing')
 }
 const r = await pipeline(items, s1, s2)
-"#;
+";
         let outcome = parse_workflow_js(src).expect("scan");
         assert!(outcome.dropped.iter().any(|d| d.contains("for loop")));
         assert!(outcome.dropped.iter().any(|d| d.contains("pipeline")));
@@ -1163,14 +1163,14 @@ const r = await pipeline(items, s1, s2)
         // `phase()` markers are reconstructed into manifest.phases (in order) and
         // each following step inherits the active phase — the headline bare-path
         // fidelity fix.
-        let src = r#"
+        let src = r"
 export const meta = { name: 'phased' }
 phase('Audit')
 await agent('audit the code')
 phase('Fix')
 await agent('fix the bug')
 await agent('fix more')
-"#;
+";
         let outcome = parse_workflow_js(src).expect("scan phased js");
         let m = outcome.manifest;
         assert_eq!(

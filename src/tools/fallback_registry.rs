@@ -228,9 +228,10 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
 fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSuggestion> {
     use FallbackSuggestion as S;
     match (family, kind) {
-        (ToolFamily::Network, ToolErrorKind::Unauthorized)
-        | (ToolFamily::Network, ToolErrorKind::RateLimited)
-        | (ToolFamily::Network, ToolErrorKind::BlockedByPolicy) => vec![
+        (
+            ToolFamily::Network,
+            ToolErrorKind::Unauthorized | ToolErrorKind::RateLimited | ToolErrorKind::BlockedByPolicy,
+        ) => vec![
             S::new("search", "find a different source via search"),
             S::new("web_fetch", "fetch an alternate canonical URL directly"),
             S::new("autocli", "use logged-in browser session if available"),
@@ -244,8 +245,10 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
             "approach the goal from a different source",
         )],
 
-        (ToolFamily::File, ToolErrorKind::UpstreamNotFound)
-        | (ToolFamily::File, ToolErrorKind::Execution) => vec![S::new(
+        (
+            ToolFamily::File,
+            ToolErrorKind::UpstreamNotFound | ToolErrorKind::Execution,
+        ) => vec![S::new(
             "file_ops",
             "stat / list the directory to confirm the path",
         )],

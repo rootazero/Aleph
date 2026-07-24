@@ -200,7 +200,7 @@ Content"#;
 
     #[test]
     fn test_extract_markdown_section() {
-        let content = r#"
+        let content = r"
 # Title
 
 Some intro text.
@@ -214,7 +214,7 @@ command --flag value
 ## Notes
 
 Some notes here.
-"#;
+";
         let examples = extract_markdown_section(content, "Examples").unwrap();
         assert!(examples.contains("```bash"));
         assert!(examples.contains("command --flag value"));
@@ -230,14 +230,14 @@ Some notes here.
 
     #[test]
     fn test_extract_first_paragraph() {
-        let content = r#"
+        let content = r"
 # Title
 
 This is the first paragraph.
 It has multiple lines.
 
 This is the second paragraph.
-"#;
+";
         let para = extract_first_paragraph(content);
         assert_eq!(para, "This is the first paragraph. It has multiple lines.");
     }
