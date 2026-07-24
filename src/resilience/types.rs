@@ -16,6 +16,7 @@ use std::fmt;
 /// Task execution status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TaskStatus {
     /// Task is waiting to be executed
     Pending,
@@ -86,6 +87,7 @@ impl std::str::FromStr for TaskStatus {
 /// Risk level for task recovery decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RiskLevel {
     /// Low risk: read-only operations, safe to auto-resume
     Low,
@@ -130,6 +132,7 @@ impl std::str::FromStr for RiskLevel {
 /// Priority lane for resource isolation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Lane {
     /// Main lane: user interactions, abort commands (high priority)
     Main,
@@ -180,6 +183,7 @@ impl std::str::FromStr for Lane {
 /// Represents a task dispatched to a subagent, with all necessary
 /// metadata for Shadow Replay recovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AgentTask {
     /// Unique task identifier
     pub id: String,
