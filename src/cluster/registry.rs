@@ -242,9 +242,11 @@ impl NodeRegistry {
     }
 
     /// Resolve an online node by name or id, returning its reverse RPC channel
-    /// + declared command catalog. `node_invoke` / `node_file` use this to
-    /// address + fail-fast validate. Ambiguity / miss is returned as a
-    /// structured [`ResolveError`], letting callers give precise hints to the LLM.
+    /// and declared command catalog.
+    ///
+    /// `node_invoke` / `node_file` use this to address and fail-fast validate.
+    /// Ambiguity or miss is returned as a structured [`ResolveError`],
+    /// letting callers give precise hints to the LLM.
     pub fn resolve(
         &self,
         name_or_id: &str,

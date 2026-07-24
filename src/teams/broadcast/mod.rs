@@ -30,11 +30,13 @@ pub const TRANSCRIPT_TOKEN_BUDGET: usize = 8000;
 /// `timeout_secs: None`, inheriting `ExecutionEngine::default_timeout_secs`'s 48-hour
 /// fallback — one wedged provider call would pin a member run (and the fan-out branch
 /// + activation slot waiting on it) for two full days with no stop button.
-/// Note: the group-chat leader's run is subject to the same cap — if the leader
-/// synchronously calls `team_delegate` inside the group chat, the entire delegation
-/// must fit within this window (when killed by the cap, the delegate's settle-on-drop
-/// fence immediately marks the coord task Failed and releases the lock); for long
-/// delegation scenarios, tune up via `[team_broadcast] member_run_timeout_secs`.
+///
+/// Note: the group-chat leader's run is subject to the same cap:
+/// if the leader synchronously calls `team_delegate` inside the group chat,
+/// the entire delegation must fit within this window (when killed by the cap,
+/// the delegate's settle-on-drop fence immediately marks the coord task Failed
+/// and releases the lock); for long delegation scenarios, tune up via
+/// `[team_broadcast] member_run_timeout_secs`.
 pub const MEMBER_RUN_TIMEOUT_SECS: u64 = 600;
 /// Reserved handle: agents must not @-reply to the user (prevents self-loop).
 /// openteams `RESERVED_USER_HANDLE`.
