@@ -94,13 +94,22 @@ impl AlephTool for AgentInfoTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(agent_id = %args.agent_id, "agent_info requested");
 
-        let agent_def = self.registry.get(&args.agent_id).ok_or_else(|| {
-            let available = self.registry.list_ids().join(", ");
-            AlephError::NotFound(format!(
-                "Agent '{}' not found. Available agents: {}",
-                args.agent_id, available
-            ))
-        })?;
+        // `resolve`, not `get`: the inspect face must accept exactly what the
+        // delegation face accepts — project overlays, builtin aliases
+        // (`planner` → `plan`), and plugin-shipped sub-agents. With a bare `get`
+        // a model could successfully delegate to a plugin agent but was told the
+        // same id "not found" the moment it asked what that agent does.
+        let project_root = crate::projects::current_project_root();
+        let agent_def = self
+            .registry
+            .resolve(&args.agent_id, project_root.as_deref())
+            .ok_or_else(|| {
+                let available = self.registry.available_agent_ids().join(", ");
+                AlephError::NotFound(format!(
+                    "Agent '{}' not found. Available agents: {}",
+                    args.agent_id, available
+                ))
+            })?;
 
         // Report the *effective* allowlist: expand named tool sets (e.g.
         // "INVESTIGATION") into concrete tools and union with the flat
@@ -167,6 +176,22 @@ mod tests {
             info.allowed_tools
         );
         assert!(info.denied_tools.contains(&"bash".to_string()));
+    }
+
+    /// The inspect face accepts what the delegation face accepts: a builtin
+    /// alias (`planner` → `plan`) resolved for `subagent` but reported "not
+    /// found" here, so the model could delegate to an agent it could not
+    /// describe.
+    #[tokio::test]
+    async fn info_resolves_builtin_alias() {
+        let tool = AgentInfoTool::new(test_registry());
+        let info = tool
+            .call(AgentInfoArgs {
+                agent_id: "planner".to_string(),
+            })
+            .await
+            .expect("alias must resolve like it does for delegation");
+        assert_eq!(info.id, "plan");
     }
 
     #[tokio::test]

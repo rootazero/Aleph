@@ -87,11 +87,11 @@ impl LoopTool for SubagentTool {
                 "proposer_models": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Mixture-of-Agents shorthand: replicate the top-level 'task' across these models as parallel proposers (same prompt, different model). Pair with synthesize=true to fold their answers into one. Ignored when explicit 'batch_tasks' is provided."
+                    "description": "Mixture-of-Agents shorthand: replicate the top-level 'task' across these models as parallel proposers (same prompt, different model). Each entry follows the same rules as 'model', so qualifying them ('openai/gpt-5.2', 'anthropic/claude-opus-5') fans the proposals out across vendors rather than across models of one provider. Pair with synthesize=true to fold their answers into one. Ignored when explicit 'batch_tasks' is provided."
                 },
                 "synthesize": {
                     "type": "boolean",
-                    "description": "After a synchronous batch (batch_tasks or proposer_models) fans out and all proposers return, run ONE aggregator sub-agent that synthesizes the proposals into a single answer (Mixture-of-Agents reduce). Requires run_in_background=false. Returns status 'moa_completed' with a 'synthesis' field plus the raw 'results'.",
+                    "description": "After a synchronous batch (batch_tasks or proposer_models) fans out and all proposers return, run ONE aggregator sub-agent that synthesizes the proposals into a single answer (Mixture-of-Agents reduce). Requires run_in_background=false. Returns status 'moa_completed' with a 'synthesis' field plus the raw 'results'; 'moa_synthesis_failed' if the aggregator itself failed (raw results still returned), or 'moa_no_proposals' if no proposer succeeded so there was nothing to fold.",
                     "default": false
                 },
                 "aggregator_model": {
@@ -108,7 +108,7 @@ impl LoopTool for SubagentTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Model hint for the sub-agent (e.g., 'fast', 'deep')."
+                    "description": "Concrete model id for the sub-agent, stamped onto its requests verbatim (e.g. 'claude-opus-5', 'gpt-5.2'). Qualify it as 'provider/model' (e.g. 'openai/gpt-5.2') to run the sub-agent on that configured provider instead of yours — that is how one fan-out reaches several vendors. Omit to inherit the model this run is using."
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -540,7 +540,8 @@ impl LoopTool for SubagentTool {
                         match self.agent_registry.resolve(agent_type, project_root_ref) {
                             Some(def) => def,
                             None => {
-                                let available = self.agent_registry.list_ids().join(", ");
+                                let available =
+                                    self.agent_registry.available_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -553,7 +554,8 @@ impl LoopTool for SubagentTool {
                         match self.agent_registry.resolve(agent_type, project_root_ref) {
                             Some(def) => def,
                             None => {
-                                let available = self.agent_registry.list_ids().join(", ");
+                                let available =
+                                    self.agent_registry.available_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -718,7 +720,8 @@ impl LoopTool for SubagentTool {
                         match self.agent_registry.resolve(agent_type, project_root_ref) {
                             Some(def) => def,
                             None => {
-                                let available = self.agent_registry.list_ids().join(", ");
+                                let available =
+                                    self.agent_registry.available_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -813,6 +816,21 @@ impl LoopTool for SubagentTool {
                     };
                 }
 
+                // R8 honesty: a requested reduce that never ran must say so.
+                // Reporting a plain `batch_completed` let the model believe it
+                // was handed a synthesized answer when every proposer had in
+                // fact failed and the aggregator was skipped.
+                if args.synthesize {
+                    return ToolResult::Success {
+                        output: json!({
+                            "status": "moa_no_proposals",
+                            "count": results.len(),
+                            "results": results,
+                            "note": "Synthesis was requested but no proposer returned a result, so the aggregator never ran. The per-proposal errors are in 'results'.",
+                        }),
+                    };
+                }
+
                 return ToolResult::Success {
                     output: json!({
                         "status": "batch_completed",
@@ -838,7 +856,7 @@ impl LoopTool for SubagentTool {
             match self.agent_registry.resolve(agent_type, project_root_ref) {
                 Some(def) => def,
                 None => {
-                    let available = self.agent_registry.list_ids().join(", ");
+                    let available = self.agent_registry.available_agent_ids().join(", ");
                     return ToolResult::Error {
                         error: format!(
                             "Unknown agent_type '{agent_type}'. Available agents: {available}"

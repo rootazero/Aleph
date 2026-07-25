@@ -99,6 +99,23 @@ impl AgentRegistry {
         ids
     }
 
+    /// Every `agent_type` / `agent_id` selector a caller may legitimately pass —
+    /// registered ids ∪ plugin-shipped sub-agent ids, deduped and sorted.
+    ///
+    /// This is the set [`Self::resolve`] actually accepts, so it is what the
+    /// "Unknown agent_type. Available agents: …" errors must print. Printing
+    /// `list_ids()` alone told a model that a plugin agent the prompt's
+    /// `<available_agents>` catalog advertises (plugin defs are folded in there
+    /// too) does not exist — while a delegation to that very id would have
+    /// succeeded.
+    pub fn available_agent_ids(&self) -> Vec<String> {
+        let mut ids = self.list_ids();
+        ids.extend(plugin_subagents().into_iter().map(|a| a.id));
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// List all sub-agents (excluding primary, sorted by id)
     pub fn list_subagents(&self) -> Vec<AgentDef> {
         let agents = self.agents.read().unwrap_or_else(|e| {
@@ -738,6 +755,24 @@ mod tests {
 
         // Genuinely-unknown still None even with plugins published.
         assert!(registry.resolve("no-such-agent-at-all", None).is_none());
+
+        // The "Available agents: …" faces must offer the same set `resolve`
+        // accepts — a delegatable plugin id must never be reported as
+        // nonexistent — and a shadowed collision appears exactly once.
+        let available = registry.available_agent_ids();
+        assert!(
+            available.contains(&"plugin-delegate-xyz".to_string()),
+            "available ids must include delegatable plugin agents: {available:?}"
+        );
+        assert_eq!(
+            available.iter().filter(|id| *id == "explore").count(),
+            1,
+            "a plugin id colliding with a builtin must not be listed twice"
+        );
+        assert!(
+            available.windows(2).all(|w| w[0] <= w[1]),
+            "available ids must be sorted for deterministic error text"
+        );
 
         // Hygiene: clear the process-global for other tests.
         publish_plugin_subagents(Vec::new());

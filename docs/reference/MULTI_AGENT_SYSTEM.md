@@ -67,6 +67,33 @@ Per the P1 zero-override decision, subagents do not currently support per-agent 
 
 The shared assembly path lives in `src/orchestrator/deps_builder.rs` (`build_fallback_llm`, `build_stability_triple`); both the main runner (`aleph-server` boot) and the subagent spawner consume the same builders so wiring stays consistent.
 
+### Provider / model routing at spawn (round-7, 2026-07-25)
+
+`model` (and each `proposer_models` / `batch_tasks[].model` entry) is stamped
+onto the child's requests verbatim by `ModelOverrideProvider`. Which *provider*
+serves it is decided by `agents/runtime.rs::resolve_spawn_route`, in this order:
+
+1. `agent_def.provider_hint` names a configured provider → pin it (the chain
+   still falls through globally). Model string passed through untouched.
+2. The model is `provider/model` and the prefix names the **parent's own**
+   provider (read via `serving_provider_hint()`, canonicalised through
+   `model_catalog::canonical_provider_id`) → keep the parent provider, stamp the
+   bare model id.
+3. The prefix names **another configured** provider (matched against
+   `ProviderChain::agent_overrides`, same canonicalisation — so a `[providers]
+   kimi` entry serves `moonshot/…`) → run the child on that provider with the
+   bare model id. This is how one fan-out reaches several vendors:
+   `proposer_models: ["openai/gpt-5.2", "anthropic/claude-opus-5"]`.
+4. Nothing matched → the parent's provider, model string **untouched**. This is
+   deliberate: an OpenAI-compatible aggregator primary (OpenRouter and friends)
+   expects the qualified id on the wire, and such a deployment has no separate
+   `[providers] anthropic` entry to match in step 3.
+
+A bare model id is byte-identical to the pre-round-7 behaviour. Bare-name vendor
+inference is deliberately **not** done — it would divert an aggregator primary's
+traffic to a direct vendor. Ties between two entries canonicalising to one
+vendor resolve to the lexicographically smallest key, never HashMap order.
+
 ### Recursion Protection
 
 SubAgent-mode agents are structurally denied from invoking the `subagent`
@@ -625,7 +652,15 @@ aggregator sub-agent that folds the proposals into a single answer) +
 `loop_tool.rs`; Wang et al., "Mixture-of-Agents Enhances Large Language Model
 Capabilities", 2406.04692). `synthesize` requires a foreground batch
 (`run_in_background=false`) and returns `status: "moa_completed"` with a
-`synthesis` field plus the raw `results`.
+`synthesis` field plus the raw `results` — or `moa_synthesis_failed` if the
+aggregator itself failed, or `moa_no_proposals` if no proposer survived, so a
+requested reduce that never ran is never reported as a plain `batch_completed`.
+
+Each `proposer_models` entry follows the same rules as `model`, so qualifying
+them (`["openai/gpt-5.2", "anthropic/claude-opus-5"]`) fans the proposals out
+across *vendors* rather than across models of one provider — see "Provider /
+model routing at spawn" above. Unqualified names all run on whichever provider
+the parent holds.
 
 ### The distinction
 
@@ -689,7 +724,7 @@ the **`TeamNotifier`** routes them to the team leader's inbox (R5).
 |------|-------------|
 | `subagent` (action=`run`) | Spawn an ephemeral sub-agent for a focused task (`batch_tasks` = parallel fan-out; `run_in_background` = fire-and-forget) |
 | `subagent` (action=`check_status`/`wait`) | Poll or event-park on a background sub-agent |
-| `subagent` (action=`cancel`/`list`) | Fire a run's CancellationToken / enumerate running+completed |
+| `subagent` (action=`cancel`/`list`) | Fire a run's CancellationToken / enumerate running+completed (presence-only fan-out entries excluded — see "Argument validation" / `list` Action) |
 | `subagent` (action=`send_message`/`read_inbox`) | Team-store messaging faces (`team_name` → team id via `TeammateManager::ensure_team`) |
 
 ### Delegate
@@ -939,6 +974,42 @@ holds — running and recently-completed — so the parent can recover a
 }
 ```
 
+`list` reports only ids the parent can act on. *Presence-only* registrations —
+the running-only entries the sync fan-out seams create (sync `batch_tasks` /
+MoA proposals and aggregator, `team_delegate`, team-chat members, the fan-out
+tree root) — are excluded, because they deliver their result inline at their own
+seam and never reach `completed`: listing them handed the model request_ids whose
+every follow-up `check_status` / `wait` answers "no background sub-agent found".
+They remain fully visible to the cancel walks (`session_has_running`,
+`running_runs_of_session`, `running_children_of`) and to `cancel(id)`. The same
+exclusion applies to `flat_nodes` / the `subagent.tree` RPC — that snapshot cold-
+starts a live event stream, and nothing emits `Spawned` / `Settled` for these
+entries, so including them left Panel rows frozen at `Running`. Re-admitting them
+to the tree requires giving `RunningRegistration::drop` an honest terminal
+lifecycle (it cannot observe the outcome today) plus the paired events; simply
+dropping the filter reinstates the ghost rows.
+
+### Argument validation (round-7, 2026-07-25)
+
+The `subagent` tool's arguments are parsed by hand (`subagent_tool/parse.rs`),
+not by serde, so two guards stand in for `#[serde(deny_unknown_fields)]`:
+
+- **Unknown top-level keys are rejected**, with the accepted set in the error. A
+  near-miss (`agent` for `agent_type`, `prompt` for `task`, `background` for
+  `run_in_background`) previously ran with a different meaning than requested and
+  reported success. An explicit JSON `null` counts as absent, since
+  schema-completing providers emit `"key": null` for properties they are not
+  using. The accepted set lives in `types.rs::ACCEPTED_ARG_KEYS` and a drift-guard
+  test pins it bidirectionally to the advertised schema properties (sole
+  exception: `name`, kept out of the schema so its dedicated "sub-agents are not
+  addressable teammates" rejection can fire).
+- **`timeout_secs` is clamped** into `[1, budget − headroom]` for `run` and for
+  every `batch_tasks` entry. The ceiling is derived from the `subagent` row in
+  `tools::budget`, so the child's own wall-clock timeout always fires before the
+  tool budget — the model then gets an actionable `Sub-agent timed out after Ns`
+  instead of an opaque budget overrun that discards a child still doing work.
+  `0` no longer means "time out before the first turn".
+
 ### Why cap=50?
 
 This is a designed memory/observability tradeoff (P2 Q6, hardcoded). For
@@ -951,11 +1022,20 @@ steps remain visible. Configurable cap is a future stage if needed.
 tool collections instead of (or alongside) flat allowlists. Three sets are
 predefined:
 
-| Name           | Tools                                                  | Purpose                                       |
-|----------------|--------------------------------------------------------|-----------------------------------------------|
-| `READ_ONLY`    | glob, grep, read_file                                  | Pure filesystem inspection                    |
-| `INVESTIGATION`| glob, grep, read_file, search, web_fetch, subagent     | Read-only research with remote sources        |
-| `ASYNC_SAFE`   | glob, grep, read_file, search                          | Background-safe (no side effects, no exfil)   |
+| Name           | Tools                                                       | Purpose                                       |
+|----------------|-------------------------------------------------------------|-----------------------------------------------|
+| `READ_ONLY`    | file_read, file_ops                                         | Pure filesystem inspection                    |
+| `INVESTIGATION`| file_read, file_ops, search, web_fetch, subagent            | Read-only research with remote sources        |
+| `ASYNC_SAFE`   | file_read, file_ops, search                                 | Background-safe (no side effects, no exfil)   |
+
+> Doc correction (2026-07-25): this table listed `glob, grep, read_file` — names
+> no registered tool ever bore. The sets themselves were fixed in `tool_sets.rs`
+> (whose header records the same phantom-name incident: an INVESTIGATION-mode
+> agent saw 1–2 usable tools and gave up after one turn); the table had kept the
+> pre-fix values. The canonical builtins are `file_read` (single-file read) and
+> `file_ops` (list/search/read/write/edit/move/copy/delete/mkdir — admitted here
+> for its read-side operations; its write side is gated by `denied_tools` and the
+> sandbox path policy).
 
 ### Composition Rules
 

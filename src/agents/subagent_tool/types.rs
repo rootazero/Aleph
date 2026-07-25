@@ -15,6 +15,67 @@ pub(super) const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 120;
 /// the model chunks a longer wait into repeated bounded calls.
 pub(super) const MAX_WAIT_TIMEOUT_SECS: u64 = 600;
 
+/// Default wall-clock ceiling for one `run` (seconds) when the caller omits
+/// `timeout_secs`. Must stay in sync with the schema's advertised default.
+pub(super) const DEFAULT_RUN_TIMEOUT_SECS: u64 = 120;
+
+/// Gap between a child's own wall-clock timeout and the `subagent` tool's
+/// advertised budget, so the CHILD's `tokio::time::timeout` is what fires. The
+/// model then reads "Sub-agent timed out after Ns" (actionable: it knows which
+/// child, and can retry with a smaller task) instead of an opaque tool-budget
+/// overrun on the whole call. Same clock-ordering invariant the `ask_user` row
+/// in `tools::budget` documents, applied in the other direction.
+const RUN_TIMEOUT_HEADROOM_SECS: u64 = 300;
+
+/// Ceiling used when `subagent` is somehow absent from the builtin budget table.
+const FALLBACK_MAX_RUN_TIMEOUT_SECS: u64 = 1_500;
+
+/// Ceiling on one `run` (and on each `batch_tasks` entry), derived from the
+/// tool's own budget so the two never drift apart.
+///
+/// A model-supplied `timeout_secs` is clamped into `[1, this]`: `0` would make
+/// `tokio::time::timeout` elapse immediately ("timed out after 0s" before the
+/// child ever thinks), and anything above this lets the harness budget fire
+/// first, discarding a child that was still working.
+pub(super) fn max_run_timeout_secs() -> u64 {
+    crate::tools::budget::builtin_tool_budget_ms("subagent")
+        .map(|ms| (ms / 1000).saturating_sub(RUN_TIMEOUT_HEADROOM_SECS))
+        .filter(|secs| *secs > 0)
+        .unwrap_or(FALLBACK_MAX_RUN_TIMEOUT_SECS)
+}
+
+/// Every top-level argument key the tool accepts.
+///
+/// This is the parser's half of the tool contract; the schema in `loop_tool.rs`
+/// is the model-facing half, and `subagent_schema_properties_match_accepted_keys`
+/// (tests) pins the two together — the schema is hand-written, so nothing else
+/// stops them from drifting.
+///
+/// `name` is listed even though the schema does NOT advertise it: it has a
+/// dedicated "sub-agents are not addressable teammates" rejection further down
+/// the parser, and that specific message is far more useful than a generic
+/// unknown-key error.
+pub(super) const ACCEPTED_ARG_KEYS: &[&str] = &[
+    "action",
+    "agent_type",
+    "aggregator_model",
+    "batch_tasks",
+    "context_summary",
+    "model",
+    "name",
+    "proposer_models",
+    "request_id",
+    "request_ids",
+    "run_in_background",
+    "synthesis_instruction",
+    "synthesize",
+    "task",
+    "team_name",
+    "text",
+    "timeout_secs",
+    "to",
+];
+
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
 pub(super) enum SubagentAction {

@@ -7,11 +7,50 @@
 use serde_json::Value;
 
 use super::types::{
-    BatchTask, RunArgs, SubagentAction, DEFAULT_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS,
+    max_run_timeout_secs, BatchTask, RunArgs, SubagentAction, ACCEPTED_ARG_KEYS,
+    DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_WAIT_TIMEOUT_SECS, MAX_WAIT_TIMEOUT_SECS,
 };
+
+/// Reject top-level keys the tool does not accept.
+///
+/// The hand-rolled parser reads the keys it knows and ignored everything else,
+/// so a near-miss (`agent` for `agent_type`, `prompt` for `task`,
+/// `background` for `run_in_background`) ran with a *different* meaning than the
+/// caller asked for — the default role instead of the requested one, the
+/// parent's model instead of the pinned one — and reported success. Rejecting is
+/// the honest answer: the model reads the accepted set and retries correctly on
+/// the next turn. This is what `#[serde(deny_unknown_fields)]` gives codex's V2
+/// handlers for free; here it is explicit, with a drift guard against the
+/// advertised schema.
+///
+/// An explicit JSON `null` counts as absent — schema-completing providers emit
+/// `"key": null` for properties they are not using, and those carry no intent
+/// (same rule as the `name` / `team_name` rejection below).
+fn reject_unknown_keys(input: &Value) -> Result<(), String> {
+    let Some(obj) = input.as_object() else {
+        return Ok(());
+    };
+    let mut unknown: Vec<&str> = obj
+        .iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, _)| k.as_str())
+        .filter(|k| !ACCEPTED_ARG_KEYS.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    Err(format!(
+        "unknown argument(s): {}. Accepted arguments: {}",
+        unknown.join(", "),
+        ACCEPTED_ARG_KEYS.join(", ")
+    ))
+}
 
 /// Parse the input JSON into a [`SubagentAction`].
 pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
+    reject_unknown_keys(input)?;
+
     // Determine action from explicit field, falling back to legacy heuristics.
     let action = match input.get("action") {
         Some(v) => match v.as_str() {
@@ -137,6 +176,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Parse batch_tasks early — when present, top-level `task` is optional
     // since each sub-task carries its own.
+    let max_run_timeout = max_run_timeout_secs();
     let batch_tasks = input
         .get("batch_tasks")
         .and_then(|v| v.as_array())
@@ -157,7 +197,13 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                             .get("model")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
-                        timeout_secs: item.get("timeout_secs").and_then(|v| v.as_u64()),
+                        // Clamped like the top-level value below — a per-entry
+                        // override must not escape the tool-budget ordering
+                        // either.
+                        timeout_secs: item
+                            .get("timeout_secs")
+                            .and_then(|v| v.as_u64())
+                            .map(|t| t.clamp(1, max_run_timeout)),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -188,10 +234,14 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Bounded window: default when omitted, clamped to [1, MAX] so the child's
+    // own wall-clock timeout always fires before the `subagent` tool budget
+    // (and a `0` can never mean "die before the first turn").
     let timeout_secs = input
         .get("timeout_secs")
         .and_then(|v| v.as_u64())
-        .unwrap_or(120);
+        .unwrap_or(DEFAULT_RUN_TIMEOUT_SECS)
+        .clamp(1, max_run_timeout);
 
     let run_in_background = input
         .get("run_in_background")

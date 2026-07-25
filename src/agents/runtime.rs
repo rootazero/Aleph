@@ -468,16 +468,24 @@ impl AgentRuntime {
             depth: self.child_chain.depth.saturating_sub(1),
             max_depth: self.child_chain.max_depth,
         };
-        // Phase 3 — resolve the per-agent provider: when `provider_hint` names
-        // a registered override, the subagent runs on that provider (pinned,
-        // then falling through the global chain); otherwise the shared default.
-        let provider = config
-            .agent_def
-            .provider_hint
+        // Phase 3 — resolve the per-agent provider: `provider_hint` pins a
+        // registered override (pinned, then falling through the global chain);
+        // a `provider/model` model id routes across vendors; otherwise the
+        // shared default. See `resolve_spawn_route`.
+        //
+        // The effective model is `model` then `model_hint` — the same order the
+        // spawner resolves — so a role whose frontmatter carries the qualified
+        // form routes too.
+        let effective_model = config
+            .model
             .as_deref()
-            .and_then(|hint| self.provider_overrides.get(hint))
-            .cloned()
-            .unwrap_or_else(|| self.provider.clone());
+            .or(config.agent_def.model_hint.as_deref());
+        let (provider, routed_model) = resolve_spawn_route(
+            &self.provider,
+            &self.provider_overrides,
+            &config.agent_def,
+            effective_model,
+        );
         let base = SpawnerBase {
             session: self.session.clone(),
             parent_tools: self.parent_tools.clone(),
@@ -512,7 +520,10 @@ impl AgentRuntime {
             agent_def: &config.agent_def,
             task: &config.task,
             context_summary: config.context_summary.as_deref(),
-            model: config.model.as_deref(),
+            // A rewritten (de-qualified) id wins; otherwise pass the caller's
+            // model through untouched and let the spawner apply its own
+            // `model_hint` fallback.
+            model: routed_model.as_deref().or(config.model.as_deref()),
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
             isolation: config.agent_def.isolation.clone(),
@@ -526,6 +537,94 @@ impl AgentRuntime {
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/// Resolve which provider a spawn runs on, and the model id that goes on the
+/// wire.
+///
+/// Precedence:
+///   1. `agent_def.provider_hint` — an explicit author/operator choice, and the
+///      only form that existed before. Wins outright.
+///   2. A `provider/model` id whose prefix names the PARENT's own provider: keep
+///      the parent provider, stamp the bare model id. Without this a direct
+///      single-vendor deployment (the common case) sent `anthropic/claude-…` to
+///      Anthropic verbatim and got a 404.
+///   3. A `provider/model` id whose prefix names another CONFIGURED provider
+///      (`overrides`, keyed by `[providers]` toml name and matched through
+///      `canonical_provider_id`, so `kimi` ≡ `moonshot/…` and `vertex-anthropic`
+///      ≡ `anthropic/…`): run the child there with the bare model id. This is
+///      what makes a cross-vendor MoA fan-out
+///      (`proposer_models: ["openai/gpt-5.2", "anthropic/claude-opus-5"]`)
+///      actually reach two vendors instead of handing both strings to whichever
+///      provider the parent happened to hold.
+///   4. Otherwise: the parent's provider, model string untouched. Untouched
+///      matters — an OpenAI-compatible aggregator primary (OpenRouter and
+///      friends) *wants* `anthropic/claude-…` on the wire, and such a deployment
+///      has no separate `[providers] anthropic` entry to match in step 3.
+///
+/// Returns the provider plus `Some(bare_model)` when the id was rewritten, and
+/// `None` when the caller's model string must be passed through as-is.
+fn resolve_spawn_route(
+    parent: &Arc<dyn AiProvider>,
+    overrides: &HashMap<String, Arc<dyn AiProvider>>,
+    agent_def: &AgentDef,
+    model: Option<&str>,
+) -> (Arc<dyn AiProvider>, Option<String>) {
+    if let Some(pinned) = agent_def
+        .provider_hint
+        .as_deref()
+        .and_then(|hint| overrides.get(hint))
+    {
+        return (pinned.clone(), None);
+    }
+    let Some((prefix, bare)) = model.and_then(split_provider_prefix) else {
+        return (parent.clone(), None);
+    };
+    let want = crate::providers::model_catalog::canonical_provider_id(prefix);
+    let parent_vendor = parent
+        .serving_provider_hint()
+        .and_then(|name| crate::providers::model_catalog::canonical_provider_id(&name));
+    if want.is_some() && want == parent_vendor {
+        return (parent.clone(), Some(bare.to_string()));
+    }
+    match override_for_provider(overrides, prefix, want) {
+        Some(provider) => (provider, Some(bare.to_string())),
+        None => (parent.clone(), None),
+    }
+}
+
+/// Look up a configured non-primary provider by `[providers]` toml name, falling
+/// back to a canonical-vendor match. The fallback resolves ties by the
+/// lexicographically smallest key so two entries for one vendor pick
+/// deterministically (same rule as `MultiProviderRegistry::default_provider`).
+fn override_for_provider(
+    overrides: &HashMap<String, Arc<dyn AiProvider>>,
+    name: &str,
+    canonical: Option<&'static str>,
+) -> Option<Arc<dyn AiProvider>> {
+    if let Some(provider) = overrides.get(name) {
+        return Some(provider.clone());
+    }
+    let want = canonical?;
+    overrides
+        .iter()
+        .filter(|(key, _)| {
+            crate::providers::model_catalog::canonical_provider_id(key) == Some(want)
+        })
+        .min_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, provider)| provider.clone())
+}
+
+/// Split a `provider/model` id into `(provider, model)`.
+///
+/// `None` when there is no prefix, or when either half is blank — those are not
+/// qualified ids and must be passed through untouched. Only the FIRST `/` is
+/// split on, so a nested aggregator id (`x-ai/openai/…`) keeps its remainder.
+fn split_provider_prefix(model: &str) -> Option<(&str, &str)> {
+    let (prefix, rest) = model.split_once('/')?;
+    let prefix = prefix.trim();
+    let rest = rest.trim();
+    (!prefix.is_empty() && !rest.is_empty()).then_some((prefix, rest))
+}
 
 /// Truncate a string for log output, appending "..." if truncated.
 #[must_use]
@@ -628,6 +727,166 @@ mod tests {
 
     fn make_agent_def() -> AgentDef {
         AgentDef::new("test-agent", crate::agents::AgentMode::SubAgent)
+    }
+
+    /// Provider stub that reports a configured key through
+    /// `serving_provider_hint`, the way `HttpProvider` does at the leaf of the
+    /// decorator stack.
+    struct NamedProvider(&'static str);
+
+    impl crate::providers::AiProvider for NamedProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: crate::providers::adapter::RequestPayload<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "stub".to_string(),
+                ))
+            })
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+        fn serving_provider_hint(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(std::borrow::Cow::Borrowed(self.0))
+        }
+    }
+
+    fn named(name: &'static str) -> Arc<dyn AiProvider> {
+        Arc::new(NamedProvider(name))
+    }
+
+    fn overrides(entries: &[(&str, &'static str)]) -> HashMap<String, Arc<dyn AiProvider>> {
+        entries
+            .iter()
+            .map(|(key, provider)| ((*key).to_string(), named(provider)))
+            .collect()
+    }
+
+    /// An explicit `provider_hint` is an author decision and still wins outright
+    /// — the model id never redirects it.
+    #[test]
+    fn spawn_route_provider_hint_wins() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("openai", "openai")]);
+        let def = make_agent_def().with_provider_hint("openai");
+        let (provider, model) = resolve_spawn_route(&parent, &ovr, &def, Some("openai/gpt-5"));
+        assert_eq!(provider.name(), "openai");
+        assert_eq!(
+            model, None,
+            "a pinned provider passes the caller's model string through untouched"
+        );
+    }
+
+    /// A qualified id naming the parent's OWN vendor keeps the parent provider
+    /// and drops the prefix — the direct single-vendor deployment used to send
+    /// `anthropic/claude-…` to Anthropic verbatim.
+    #[test]
+    fn spawn_route_strips_prefix_for_parent_vendor() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("openai", "openai")]);
+        let (provider, model) = resolve_spawn_route(
+            &parent,
+            &ovr,
+            &make_agent_def(),
+            Some("anthropic/claude-opus-5"),
+        );
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(model.as_deref(), Some("claude-opus-5"));
+    }
+
+    /// A qualified id naming a different configured provider routes there — the
+    /// case that makes a cross-vendor MoA fan-out actually reach two vendors.
+    #[test]
+    fn spawn_route_crosses_to_configured_provider() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("openai", "openai-chain")]);
+        let (provider, model) =
+            resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("openai/gpt-5.2"));
+        assert_eq!(provider.name(), "openai-chain");
+        assert_eq!(model.as_deref(), Some("gpt-5.2"));
+    }
+
+    /// Provider keys are operator-chosen, so the match falls back to canonical
+    /// vendor slugs: a `[providers] kimi` entry serves `moonshot/…`.
+    #[test]
+    fn spawn_route_matches_provider_alias() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("kimi", "kimi-chain")]);
+        let (provider, model) =
+            resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("moonshot/kimi-k2.7"));
+        assert_eq!(provider.name(), "kimi-chain");
+        assert_eq!(model.as_deref(), Some("kimi-k2.7"));
+    }
+
+    /// An unmatched prefix must pass through untouched: an aggregator primary
+    /// (OpenRouter and friends) wants the qualified id on the wire, and a
+    /// deployment with no matching `[providers]` entry has nothing to route to.
+    #[test]
+    fn spawn_route_leaves_unmatched_prefix_untouched() {
+        let parent = named("openrouter");
+        let (provider, model) = resolve_spawn_route(
+            &parent,
+            &HashMap::new(),
+            &make_agent_def(),
+            Some("anthropic/claude-opus-5"),
+        );
+        assert_eq!(provider.name(), "openrouter");
+        assert_eq!(model, None);
+    }
+
+    /// A bare model id keeps the pre-existing behaviour exactly: parent
+    /// provider, model stamped by the spawner as given.
+    #[test]
+    fn spawn_route_bare_model_is_unchanged() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("openai", "openai")]);
+        for model in [None, Some("gpt-5"), Some("claude-opus-5")] {
+            let (provider, routed) = resolve_spawn_route(&parent, &ovr, &make_agent_def(), model);
+            assert_eq!(provider.name(), "anthropic");
+            assert_eq!(routed, None, "bare id {model:?} must not be rewritten");
+        }
+    }
+
+    /// Two entries for one vendor resolve deterministically (smallest key), so
+    /// the route never depends on HashMap iteration order.
+    #[test]
+    fn spawn_route_alias_tie_break_is_deterministic() {
+        let parent = named("anthropic");
+        let ovr = overrides(&[("zeta-gpt", "zeta"), ("alpha-gpt", "alpha")]);
+        for _ in 0..8 {
+            let (provider, _) =
+                resolve_spawn_route(&parent, &ovr, &make_agent_def(), Some("openai/gpt-5"));
+            assert_eq!(provider.name(), "alpha");
+        }
+    }
+
+    /// A blank half is not a qualified id.
+    #[test]
+    fn split_provider_prefix_rejects_blank_halves() {
+        assert_eq!(
+            split_provider_prefix("openai/gpt-5"),
+            Some(("openai", "gpt-5"))
+        );
+        assert_eq!(split_provider_prefix("/gpt-5"), None);
+        assert_eq!(split_provider_prefix("openai/"), None);
+        assert_eq!(split_provider_prefix("gpt-5"), None);
+        // Only the first slash is split, so nested aggregator ids keep the rest.
+        assert_eq!(
+            split_provider_prefix("x-ai/openai/gpt-5"),
+            Some(("x-ai", "openai/gpt-5"))
+        );
     }
 
     #[test]
