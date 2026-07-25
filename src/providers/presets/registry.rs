@@ -70,11 +70,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://console.anthropic.com/settings/keys")
         .with_aux_model("claude-haiku-4-5")
         .with_models_url("https://api.anthropic.com/v1/models")
-        .with_fallback_models(&[
-            "claude-sonnet-5",
-            "claude-opus-4-8",
-            "claude-haiku-4-5",
-        ]),
+        .with_fallback_models(&["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"]),
     ),
     (
         "amazon-bedrock",
@@ -328,7 +324,13 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://bailian.console.aliyun.com")
         .with_description("Alibaba DashScope OpenAI-compatible endpoint")
         .with_aux_model("qwen3.6-flash")
-        .with_fallback_models(&["qwen3-max-2026-01-23", "qwen3.6-plus", "qwen-plus"]),
+        .with_fallback_models(&[
+            "qwen3-max-2026-01-23",
+            "qwen3.6-plus",
+            // Cheap last resort. Replaces the legacy rolling `qwen-plus`
+            // alias, which is superseded by qwen3.6-plus and carried no rate.
+            "qwen3.6-flash",
+        ]),
     ),
     (
         "baichuan",
@@ -385,7 +387,8 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         ProviderPreset::new("https://api.t8star.cn/v1", "openai", "#f59e0b", "")
             .with_display("T8Star")
             .with_homepage("https://t8star.cn")
-            .with_description("OpenAI-compatible aggregator"),
+            .with_description("OpenAI-compatible aggregator; name your model")
+            .requires_explicit_model(),
     ),
     // ─── Western specialty / inference ────────────────────────────────────────
     (
@@ -500,7 +503,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "",
         )
         .with_display("Anyscale")
-        .with_homepage("https://www.anyscale.com"),
+        .with_homepage("https://www.anyscale.com")
+        .with_description("Per-deployment endpoints; name your model")
+        .requires_explicit_model(),
     ),
     (
         "replicate",
@@ -508,7 +513,8 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_display("Replicate")
             .with_homepage("https://replicate.com")
             .with_signup("https://replicate.com/account/api-tokens")
-            .with_description("Hosting; image/video via generation layer"),
+            .with_description("Hosting; image/video via generation layer")
+            .requires_explicit_model(),
     ),
     (
         "openrouter",
@@ -516,7 +522,13 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://openrouter.ai/api",
             "openai-responses",
             "#6467f2",
-            "openai/gpt-4o",
+            // OpenRouter mirrors each vendor's own id under a `<vendor>/` tag,
+            // so this roster is derived from the direct-vendor presets above
+            // rather than maintained independently — it had drifted two
+            // generations behind them (gpt-4o / sonnet-4 / gemini-2.5-flash).
+            // For aggregators generally, the durable answer is on-demand
+            // discovery (`model_catalog::discovery`), not a hand-kept list.
+            "openai/gpt-5.6",
         )
         .with_aliases(&["or"])
         .with_display("OpenRouter")
@@ -524,16 +536,18 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_signup("https://openrouter.ai/keys")
         .with_description("Multi-model router")
         .with_fallback_models(&[
-            "openai/gpt-4o",
-            "anthropic/claude-sonnet-4",
-            "google/gemini-2.5-flash",
+            "openai/gpt-5.6",
+            "anthropic/claude-sonnet-5",
+            "google/gemini-3.1-pro-preview",
         ]),
     ),
     (
         "lepton",
         ProviderPreset::new("https://api.lepton.ai/api/v1", "openai", "#4f46e5", "")
             .with_display("Lepton AI")
-            .with_homepage("https://www.lepton.ai"),
+            .with_homepage("https://www.lepton.ai")
+            .with_description("Per-deployment hosting; name your model")
+            .requires_explicit_model(),
     ),
     (
         "hyperbolic",
@@ -567,7 +581,10 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_display("xAI Grok")
             .with_homepage("https://docs.x.ai")
             .with_signup("https://console.x.ai")
-            .with_aux_model("grok-3-mini")
+            // Aux is the *current* cheap tier, not the previous generation's:
+            // grok-4-fast ($0.20/$0.50) beats grok-3-mini ($0.30/$0.50) on both
+            // axes and shares the grok-4 window.
+            .with_aux_model("grok-4-fast")
             .with_fallback_models(&["grok-4.3", "grok-4-fast", "grok-3-mini"]),
     ),
     // ─── Cloud / gateway / local ──────────────────────────────────────────────

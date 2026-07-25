@@ -26,6 +26,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::gateway::security::SharedTokenManager;
 use crate::providers::metadata::Modality;
+use crate::providers::model_catalog::{ModelRecord, ModelSource};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -46,6 +47,17 @@ pub struct ListModelsArgs {
         description = "Include unconfigured presets too (default: only credentialed providers)."
     )]
     pub all: bool,
+
+    /// When true, ask each credentialed provider for its live model list
+    /// before answering.
+    #[serde(default)]
+    #[schemars(
+        description = "Ask each configured provider for its current model list before answering \
+            (one network call per provider, ~10s cap each). Use when the built-in roster looks \
+            stale, when a model you expect is missing, or when the provider is an aggregator \
+            whose catalog changes independently of Aleph releases."
+    )]
+    pub refresh: bool,
 }
 
 /// One selectable model with its static capability + cost metadata. Absent
@@ -83,11 +95,32 @@ pub struct ModelEntry {
     /// USD per million output tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_per_mtok: Option<f64>,
+    /// `"direct"` when the rate is the serving provider's own published price,
+    /// `"vendor_inferred"` when it was taken from the model's vendor because
+    /// the provider is an aggregator / cloud reseller — treat the latter as a
+    /// floor. Absent when the model has no rate at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_basis: Option<String>,
     /// Endpoint locality of the provider serving this model: `"local"`
     /// (on-machine / LAN) or `"cloud"` (public API). Lets the model prefer an
     /// on-machine option (privacy / offline / cost) when one exists. Always
     /// present — an absent/unparseable `base_url` classifies as `"cloud"`.
     pub endpoint: String,
+    /// `"active"` / `"preview"` / `"deprecated"`. A deprecated id will be
+    /// refused by `select_model`; prefer `successor` instead.
+    pub status: String,
+    /// The model the vendor points at, when this one is deprecated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub successor: Option<String>,
+    /// Caveat attached to a non-active status (retirement date, preview note).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_note: Option<String>,
+    /// How Aleph knows about this id: `"preset_default"` (the provider's
+    /// shipped default), `"preset_fallback"` (a curated alternative from the
+    /// same vendor), `"preset_aux"` (the cheap tier), `"configured"` (listed
+    /// by the operator) or `"discovered"` (returned by the provider's live
+    /// `/models` endpoint just now).
+    pub source: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,24 +175,129 @@ impl ListModelsTool {
         self
     }
 
-    /// True when the provider has a usable credential: an `api_key` in
-    /// `config.toml` or a secret under `ai:{provider}` in the vault. Mirrors
-    /// `handle_catalog`'s `has_api_key` derivation.
+    /// The provider's usable credential: an `api_key` in `config.toml` or a
+    /// secret under `ai:{provider}` in the vault. Mirrors `handle_catalog`'s
+    /// `has_api_key` derivation.
+    fn resolve_api_key(&self, name: &str, cfg_api_key: Option<&String>) -> Option<String> {
+        if let Some(key) = cfg_api_key {
+            return Some(key.clone());
+        }
+        let vault = self.vault.as_ref()?;
+        crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
+    }
+
+    /// True when the provider has a usable credential.
     fn provider_configured(&self, name: &str, cfg_api_key: Option<&String>) -> bool {
-        if cfg_api_key.is_some() {
-            return true;
+        self.resolve_api_key(name, cfg_api_key).is_some()
+    }
+
+    /// Ask every credentialed provider for its live model list, concurrently.
+    ///
+    /// Returns `provider → [model id]` for the providers that answered.
+    /// Failures are dropped, not surfaced as errors: discovery is an
+    /// enrichment pass over a catalog that already works, so one unreachable
+    /// vendor must not fail the tool call. The per-provider reasons are logged
+    /// and the counts come back in the tool's `message`.
+    ///
+    /// The config lock is taken only to *build the target list* and released
+    /// before any network call — a `list_models { refresh: true }` must not
+    /// hold a read lock across ~10s of I/O while other turns want to write it.
+    async fn discover_live_models(
+        &self,
+        config: &Arc<RwLock<Config>>,
+    ) -> (std::collections::HashMap<String, Vec<String>>, usize) {
+        struct Target {
+            provider: String,
+            base_url: String,
+            protocol: String,
+            api_key: String,
         }
-        match &self.vault {
-            Some(vault) => {
-                crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault).is_some()
+
+        let targets: Vec<Target> = {
+            let guard = config.read().await;
+            guard
+                .providers
+                .iter()
+                .filter(|(_, cfg)| cfg.enabled)
+                .filter_map(|(name, cfg)| {
+                    let preset = crate::providers::presets::get_preset(name);
+                    let base_url = cfg
+                        .base_url
+                        .clone()
+                        .or_else(|| preset.map(|p| p.base_url.to_string()))?;
+                    let protocol = cfg
+                        .protocol
+                        .clone()
+                        .or_else(|| preset.map(|p| p.protocol.to_string()))
+                        .unwrap_or_else(|| "openai".to_string());
+                    let api_key = self.resolve_api_key(name, cfg.api_key.as_ref())?;
+                    Some(Target {
+                        provider: name.clone(),
+                        base_url,
+                        protocol,
+                        api_key,
+                    })
+                })
+                .collect()
+        };
+
+        let attempted = targets.len();
+        let mut out = std::collections::HashMap::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        for t in targets {
+            // A listing fetched moments ago is reused rather than refetched.
+            // `list_models` is open to chat-tier callers, so an unconditional
+            // fetch would make "call this repeatedly" a way to hammer every
+            // configured vendor with the operator's keys. The operator RPC
+            // (`providers.modelsRefresh`) still forces a real round trip —
+            // that path is an explicit, authorised "go look now".
+            if let Some(cached) = crate::providers::model_catalog::cached_models(&t.provider) {
+                if cached.is_fresh(crate::providers::model_catalog::discovery::CACHE_TTL) {
+                    out.insert(
+                        t.provider,
+                        cached.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
+                    );
+                    continue;
+                }
             }
-            None => false,
+            tasks.spawn(async move {
+                let outcome = crate::providers::model_catalog::refresh_models(
+                    &t.provider,
+                    &t.base_url,
+                    &t.protocol,
+                    &t.api_key,
+                )
+                .await;
+                (t.provider, outcome)
+            });
         }
+
+        while let Some(joined) = tasks.join_next().await {
+            let Ok((provider, outcome)) = joined else {
+                continue;
+            };
+            match outcome {
+                Ok(listing) => {
+                    out.insert(
+                        provider,
+                        listing.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(provider = %provider, error = %e, "model discovery skipped");
+                }
+            }
+        }
+        (out, attempted)
     }
 }
 
 /// Project a `(provider, model)` pair into a fully-enriched [`ModelEntry`].
-/// Pure given the static capability/cost tables — no I/O.
+///
+/// The four-table join itself lives in
+/// [`ModelRecord::resolve`](crate::providers::model_catalog::ModelRecord) —
+/// this only flattens it into the tool's wire shape, so a fifth dimension
+/// added to the catalog reaches the LLM without another hand-written join.
 fn enrich(
     provider: &str,
     model: &str,
@@ -167,12 +305,14 @@ fn enrich(
     is_default: bool,
     display_name: Option<String>,
     base_url: Option<&str>,
+    source: ModelSource,
 ) -> ModelEntry {
-    let caps = crate::providers::capabilities_for(model);
-    let rate = crate::pricing::rate_card(provider, model);
+    let record = ModelRecord::resolve(provider, model, base_url, source);
+    let caps = record.capabilities;
+    let rate = record.cost;
     ModelEntry {
-        provider: provider.to_string(),
-        model: model.to_string(),
+        provider: record.provider,
+        model: record.model,
         configured,
         is_default,
         display_name,
@@ -183,21 +323,30 @@ fn enrich(
         supports_reasoning: caps.map(|c| c.supports_reasoning),
         input_per_mtok: rate.and_then(|r| r.input_per_mtok),
         output_per_mtok: rate.and_then(|r| r.output_per_mtok),
-        endpoint: crate::providers::endpoint_kind_for_base_url(base_url)
-            .as_str()
-            .to_string(),
+        price_basis: rate.map(|r| match r.basis {
+            crate::pricing::RateBasis::Direct => "direct".to_string(),
+            crate::pricing::RateBasis::VendorInferred => "vendor_inferred".to_string(),
+        }),
+        endpoint: record.endpoint.as_str().to_string(),
+        status: record.lifecycle.status.as_str().to_string(),
+        successor: record.lifecycle.successor.map(str::to_string),
+        status_note: record.lifecycle.note.map(str::to_string),
+        source: record.source.as_str().to_string(),
     }
 }
 
 #[async_trait]
 impl crate::tools::AlephTool for ListModelsTool {
     const NAME: &'static str = "list_models";
-    const DESCRIPTION: &'static str = "List the LLM models you can switch to, each with its context \
-        window, vision/tool/reasoning support, and price per million tokens. Use this to discover \
-        options before calling `select_model` — e.g. to find a vision-capable model for an image, a \
-        long-context model for a big document, a reasoning model for a hard problem, or a cheaper \
-        model for simple chat. Returns only credentialed providers by default; pass `all: true` to \
-        see every built-in preset.";
+    const DESCRIPTION: &'static str =
+        "List the LLM models you can switch to, each with its context \
+        window, vision/tool/reasoning support, price per million tokens, and lifecycle status. Use \
+        this to discover options before calling `select_model` — e.g. to find a vision-capable \
+        model for an image, a long-context model for a big document, a reasoning model for a hard \
+        problem, or a cheaper model for simple chat. Each provider contributes its default model, \
+        its curated alternatives and its cheap tier. Returns only credentialed providers by \
+        default; pass `all: true` to see every built-in preset, or `refresh: true` to ask each \
+        provider for its current live model list first.";
 
     type Args = ListModelsArgs;
     type Output = ListModelsOutput;
@@ -210,6 +359,14 @@ impl crate::tools::AlephTool for ListModelsTool {
                 message: "Model catalog unavailable: no config handle.".to_string(),
                 moa_presets: Vec::new(),
             });
+        };
+
+        // Live discovery runs before the main read lock is taken (see
+        // `discover_live_models`) so no network I/O happens under it.
+        let (discovered, discovery_attempted) = if args.refresh {
+            self.discover_live_models(config).await
+        } else {
+            (std::collections::HashMap::new(), 0)
         };
 
         let guard = config.read().await;
@@ -237,12 +394,56 @@ impl crate::tools::AlephTool for ListModelsTool {
             }
             let display_name = preset.display_name.map(String::from);
 
-            // Candidate ids: the preset default plus any explicitly configured
-            // models, de-duplicated case-insensitively (default first).
+            // Candidate ids, in provenance order. Until this round the roster
+            // stopped at "default + whatever the operator typed into config",
+            // so a model asking for a bigger sibling saw *one* id per vendor —
+            // even though the preset already curates a fallback chain and a
+            // cheap aux tier, and the Panel picker (`providers.catalog`) has
+            // been showing both all along. Same data, same source of truth;
+            // it just never reached the LLM.
+            //
+            // The full roster is only worth its tokens for providers the caller
+            // can actually reach. Under `all: true` the question is "which
+            // providers exist" — listing every uncredentialed preset's whole
+            // chain would triple that answer's size to enumerate models nobody
+            // can select, so uncredentialed presets contribute their default
+            // only.
+            let curated: Vec<(String, ModelSource)> = if configured {
+                preset
+                    .fallback_models
+                    .iter()
+                    .map(|m| ((*m).to_string(), ModelSource::PresetFallback))
+                    .chain(
+                        preset
+                            .default_aux_model
+                            .map(|m| (m.to_string(), ModelSource::PresetAux)),
+                    )
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let candidates: Vec<(String, ModelSource)> =
+                std::iter::once((preset.default_model.to_string(), ModelSource::PresetDefault))
+                    .chain(curated)
+                    .chain(
+                        cfg.map(|c| c.models.clone())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|m| (m, ModelSource::Configured)),
+                    )
+                    .chain(
+                        discovered
+                            .get(entry.name)
+                            .into_iter()
+                            .flatten()
+                            .map(|m| (m.clone(), ModelSource::Discovered)),
+                    )
+                    .collect();
+
+            // First mention wins, so an id keeps its most authoritative
+            // provenance (default ▸ fallback ▸ aux ▸ configured ▸ discovered).
             let mut seen = std::collections::HashSet::new();
-            for model in std::iter::once(preset.default_model.to_string())
-                .chain(cfg.map(|c| c.models.clone()).unwrap_or_default())
-            {
+            for (model, source) in candidates {
                 let key = model.to_ascii_lowercase();
                 if model.is_empty() || !seen.insert(key) {
                     continue;
@@ -256,6 +457,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     is_default,
                     display_name.clone(),
                     Some(preset.base_url),
+                    source,
                 ));
             }
         }
@@ -273,8 +475,21 @@ impl crate::tools::AlephTool for ListModelsTool {
             if configured {
                 configured_providers.insert(name.clone());
             }
-            for model in &cfg.models {
-                if model.is_empty() {
+            let candidates: Vec<(&String, ModelSource)> = cfg
+                .models
+                .iter()
+                .map(|m| (m, ModelSource::Configured))
+                .chain(
+                    discovered
+                        .get(name.as_str())
+                        .into_iter()
+                        .flatten()
+                        .map(|m| (m, ModelSource::Discovered)),
+                )
+                .collect();
+            let mut seen = std::collections::HashSet::new();
+            for (model, source) in candidates {
+                if model.is_empty() || !seen.insert(model.to_ascii_lowercase()) {
                     continue;
                 }
                 let is_default = default_provider.as_deref() == Some(name.as_str());
@@ -285,6 +500,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                     is_default,
                     None,
                     cfg.base_url.as_deref(),
+                    source,
                 ));
             }
         }
@@ -322,10 +538,7 @@ impl crate::tools::AlephTool for ListModelsTool {
                                 .iter()
                                 .map(|s| format!("{}:{}", s.provider, s.model))
                                 .collect(),
-                            aggregator: format!(
-                                "{}:{}",
-                                p.aggregator.provider, p.aggregator.model
-                            ),
+                            aggregator: format!("{}:{}", p.aggregator.provider, p.aggregator.model),
                             is_default: cfg.default_preset.as_deref() == Some(name.as_str()),
                         }
                     })
@@ -352,6 +565,22 @@ impl crate::tools::AlephTool for ListModelsTool {
             message.push_str(&format!(
                 " {} MoA preset(s) available — select with model \"moa:<name>\".",
                 moa_presets.len()
+            ));
+        }
+        if args.refresh {
+            // Say how many providers actually answered. Silence here would let
+            // "I refreshed and this is everything" stand for "every provider I
+            // asked timed out and you are reading the built-in roster".
+            message.push_str(&format!(
+                " Live refresh: {}/{} provider(s) answered.",
+                discovered.len(),
+                discovery_attempted
+            ));
+        }
+        let deprecated = models.iter().filter(|m| m.status == "deprecated").count();
+        if deprecated > 0 {
+            message.push_str(&format!(
+                " {deprecated} listed id(s) are deprecated — see `successor` before selecting."
             ));
         }
 
@@ -404,7 +633,13 @@ mod tests {
         );
         let tool = ListModelsTool::new().with_config(cfg);
 
-        let out = tool.call(ListModelsArgs { all: false }).await.unwrap();
+        let out = tool
+            .call(ListModelsArgs {
+                all: false,
+                refresh: false,
+            })
+            .await
+            .unwrap();
         assert!(out.ok);
         assert!(!out.models.is_empty(), "configured provider must appear");
         assert!(
@@ -432,8 +667,20 @@ mod tests {
         );
         let tool = ListModelsTool::new().with_config(cfg);
 
-        let configured_only = tool.call(ListModelsArgs { all: false }).await.unwrap();
-        let everything = tool.call(ListModelsArgs { all: true }).await.unwrap();
+        let configured_only = tool
+            .call(ListModelsArgs {
+                all: false,
+                refresh: false,
+            })
+            .await
+            .unwrap();
+        let everything = tool
+            .call(ListModelsArgs {
+                all: true,
+                refresh: false,
+            })
+            .await
+            .unwrap();
         assert!(
             everything.models.len() > configured_only.models.len(),
             "all=true surfaces presets without a credential"
@@ -462,6 +709,7 @@ mod tests {
             true,
             None,
             Some("https://api.anthropic.com"),
+            ModelSource::PresetDefault,
         );
         assert_eq!(cloud.endpoint, "cloud");
 
@@ -472,11 +720,111 @@ mod tests {
             false,
             None,
             Some("http://localhost:11434"),
+            ModelSource::Configured,
         );
         assert_eq!(local.endpoint, "local");
 
         // Absent base_url falls back to the conservative cloud default.
-        let unknown = enrich("custom", "mystery-model", false, false, None, None);
+        let unknown = enrich(
+            "custom",
+            "mystery-model",
+            false,
+            false,
+            None,
+            None,
+            ModelSource::Configured,
+        );
         assert_eq!(unknown.endpoint, "cloud");
+    }
+
+    /// The curated roster is the reason the LLM can now see more than one model
+    /// per vendor. Before this round `list_models` returned only the default
+    /// plus whatever the operator had typed into config, while the Panel picker
+    /// showed the preset's whole fallback chain from the same data.
+    #[tokio::test]
+    async fn preset_fallbacks_and_aux_reach_the_model() {
+        let cfg = config_with("claude", Some("sk-test"), &["claude-sonnet-5"], true);
+        let tool = ListModelsTool::new().with_config(cfg);
+        let out = tool
+            .call(ListModelsArgs {
+                all: false,
+                refresh: false,
+            })
+            .await
+            .unwrap();
+
+        let ids: Vec<&str> = out.models.iter().map(|m| m.model.as_str()).collect();
+        let preset = crate::providers::presets::get_preset("claude").unwrap();
+        for expected in preset.fallback_models {
+            assert!(
+                ids.contains(expected),
+                "fallback {expected} missing from {ids:?}"
+            );
+        }
+        let aux = preset.default_aux_model.unwrap();
+        assert!(ids.contains(&aux), "aux {aux} missing from {ids:?}");
+
+        // Provenance is reported, so the model can tell a curated alternative
+        // from something the operator pinned.
+        let default_row = out.models.iter().find(|m| m.is_default).unwrap();
+        assert_eq!(default_row.source, "preset_default");
+        assert!(out.models.iter().any(|m| m.source == "preset_fallback"));
+    }
+
+    /// Lifecycle reaches the model: a retired id it might otherwise pick is
+    /// labelled, with the successor to use instead.
+    #[tokio::test]
+    async fn retired_configured_model_is_labelled_with_its_successor() {
+        let cfg = config_with("deepseek", Some("sk-test"), &["deepseek-chat"], true);
+        let tool = ListModelsTool::new().with_config(cfg);
+        let out = tool
+            .call(ListModelsArgs {
+                all: false,
+                refresh: false,
+            })
+            .await
+            .unwrap();
+
+        let retired = out
+            .models
+            .iter()
+            .find(|m| m.model == "deepseek-chat")
+            .expect("configured model is listed");
+        assert_eq!(retired.status, "deprecated");
+        assert_eq!(retired.successor.as_deref(), Some("deepseek-v4-flash"));
+        assert!(out.message.contains("deprecated"), "{}", out.message);
+
+        // The preset's own default is current, and says so.
+        let default_row = out.models.iter().find(|m| m.is_default).unwrap();
+        assert_eq!(default_row.status, "active");
+    }
+
+    /// Aggregator-served models used to carry no price at all, which also made
+    /// `cost_aware` routing rank them last. They now price through the vendor,
+    /// flagged so the reseller margin is not passed off as a quote.
+    #[test]
+    fn aggregator_rows_carry_an_inferred_price_basis() {
+        let row = enrich(
+            "openrouter",
+            "anthropic/claude-sonnet-5",
+            true,
+            false,
+            None,
+            Some("https://openrouter.ai/api"),
+            ModelSource::Configured,
+        );
+        assert_eq!(row.price_basis.as_deref(), Some("vendor_inferred"));
+        assert!(row.input_per_mtok.is_some());
+
+        let direct = enrich(
+            "claude",
+            "claude-sonnet-5",
+            true,
+            true,
+            None,
+            Some("https://api.anthropic.com"),
+            ModelSource::PresetDefault,
+        );
+        assert_eq!(direct.price_basis.as_deref(), Some("direct"));
     }
 }

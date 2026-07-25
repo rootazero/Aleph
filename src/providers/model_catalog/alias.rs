@@ -24,9 +24,11 @@
 const VENDOR_TAGS: &[&str] = &[
     "anthropic/",
     // Bedrock-style dot tag ("anthropic.claude-sonnet-4-6") — stripping it
-    // lets the capability catalog resolve Bedrock-hosted Claude ids. Pricing
-    // stays gated on the *provider* id, so this cannot mis-price a
-    // Bedrock-named provider.
+    // lets the capability catalog resolve Bedrock-hosted Claude ids, and (since
+    // `pricing::lookup_rates` gained its vendor-inferred fallback) also lets
+    // `amazon-bedrock` be priced at Anthropic's rates instead of `Unknown`.
+    // The estimate is flagged `RateBasis::VendorInferred` so the Bedrock
+    // margin stays visible rather than being passed off as a quote.
     "anthropic.",
     "openai/",
     "google/",
@@ -91,7 +93,15 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
 /// ```text
 /// "anthropic/Claude-Sonnet-4-6-20250520" -> "claude-sonnet-4-6"
 /// "gpt-4o-2024-11-20"                     -> "gpt-4o-2024-11-20" (non-8-digit tail kept)
+/// "deepseek-ai/DeepSeek-V3"               -> "deepseek-v3"       (org path collapsed)
+/// "accounts/fireworks/models/llama-v3p3"  -> "llama-v3p3"        (host path collapsed)
+/// "llama3.3:70b"                          -> "llama3.3"          (ollama size tag)
 /// ```
+///
+/// The result is a **table-lookup key only** — pricing, capabilities and
+/// [`infer_vendor`] all consume it, and none of them ever puts it back on the
+/// wire. The outgoing request always carries the operator's raw model id, so
+/// collapsing a host path here can never mis-address a provider.
 #[must_use]
 pub fn canonicalize_model_id(model: &str) -> String {
     let mut m = model.trim().to_ascii_lowercase();
@@ -109,6 +119,24 @@ pub fn canonicalize_model_id(model: &str) -> String {
         if m.len() == before {
             break;
         }
+    }
+    // Collapse any remaining host/org path to its last segment. [`VENDOR_TAGS`]
+    // only knows the tags aggregators had when it was written; hosts keep
+    // inventing new shapes ("deepseek-ai/…", "accounts/fireworks/models/…",
+    // "@cf/meta/…"), and every unlisted shape used to miss BOTH the capability
+    // table (→ conservative 128K window → premature compression) and the price
+    // table (→ `CostStatus::Unknown` → `u64::MAX` under `cost_aware`). The
+    // trailing segment is the vendor's own model id in every hosting scheme we
+    // ship a preset for, so this generalises the fixed table instead of
+    // chasing it.
+    if let Some(idx) = m.rfind('/') {
+        m = m[idx + 1..].to_string();
+    }
+    // Drop an Ollama-style `:tag` (size / quantisation variant): "llama3.3:70b",
+    // "qwen3:8b-q4_K_M". The tag picks a *weight file*, not a different model
+    // family, so it must not defeat the family lookup.
+    if let Some(idx) = m.find(':') {
+        m.truncate(idx);
     }
     // Drop a trailing 8-digit date stamp (e.g. "-20250520"). Arbitrary
     // dash-separated dates with non-8-digit tails are left intact.
@@ -323,6 +351,50 @@ mod tests {
         // Model-name path: doubao ids -> doubao (parity with the alias path).
         assert_eq!(infer_vendor("doubao-seed-1-8-251228"), Some("doubao"));
         assert_eq!(infer_vendor("doubao-1.5-pro-256k"), Some("doubao"));
+    }
+
+    #[test]
+    fn canonicalize_collapses_unlisted_host_paths() {
+        // Hosting schemes absent from VENDOR_TAGS used to miss both lookup
+        // tables entirely; the trailing segment is the vendor id in all of them.
+        assert_eq!(
+            canonicalize_model_id("deepseek-ai/DeepSeek-V3"),
+            "deepseek-v3"
+        );
+        assert_eq!(
+            canonicalize_model_id("accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            "llama-v3p3-70b-instruct"
+        );
+        assert_eq!(
+            canonicalize_model_id("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            "llama-3.3-70b-instruct-fp8-fast"
+        );
+        // Listed tags keep working (peeled before the collapse, same result).
+        assert_eq!(canonicalize_model_id("openai/gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn canonicalize_strips_ollama_size_tag() {
+        assert_eq!(canonicalize_model_id("llama3.3:70b"), "llama3.3");
+        assert_eq!(canonicalize_model_id("qwen3:8b-q4_K_M"), "qwen3");
+        // A colon-free id is untouched.
+        assert_eq!(canonicalize_model_id("gpt-4o"), "gpt-4o");
+    }
+
+    #[test]
+    fn infer_vendor_resolves_hosted_ids() {
+        // The whole point of the collapse: hosted/aggregated ids now reach the
+        // vendor table, which is what the pricing fallback keys on.
+        assert_eq!(infer_vendor("deepseek-ai/DeepSeek-V3"), Some("deepseek"));
+        assert_eq!(
+            infer_vendor("accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            Some("meta")
+        );
+        assert_eq!(
+            infer_vendor("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            Some("meta")
+        );
+        assert_eq!(infer_vendor("llama3.3:70b"), Some("meta"));
     }
 
     #[test]

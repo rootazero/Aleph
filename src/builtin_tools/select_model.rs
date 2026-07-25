@@ -23,7 +23,11 @@ use crate::tools::AlephTool;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SelectModelArgs {
     /// Model id to use for the rest of this conversation, e.g.
-    /// `"claude-opus-4"`, `"gpt-5"`, `"deepseek-chat"`.
+    /// `"claude-sonnet-5"`, `"gpt-5.6"`, `"deepseek-v4-flash"`.
+    ///
+    /// Keep these examples on current ids: they are the only model ids many
+    /// callers ever see, and this doc previously offered `deepseek-chat` —
+    /// retired 2026-07-24 — as a suggestion.
     #[schemars(
         description = "Model id to switch to for the rest of this conversation. Pass \"moa:<preset>\" \
             (or \"moa\" for the default preset) to activate Mixture-of-Agents advisory instead of a \
@@ -139,11 +143,27 @@ impl AlephTool for SelectModelTool {
             }
         }
 
+        // Validate before recording. The `moa:` branch above has always
+        // rejected an unknown preset; the plain-model branch accepted any
+        // string at all, wrote it to the session handle, and let the *next*
+        // turn fail at the provider with an opaque 400 — one turn removed from
+        // the tool call that caused it, and with no successor named. The two
+        // arms of one selector now behave the same way.
+        if let Some(refusal) = refuse_unusable_model(&args.model) {
+            notify_tool_result(Self::NAME, &refusal, false);
+            return Ok(SelectModelOutput {
+                ok: false,
+                model: args.model,
+                provider: args.provider,
+                message: refusal,
+            });
+        }
+
         // Normal pick: selector-slot exclusivity clears any MoA sticky.
         crate::providers::moa::activation::disarm(&key);
         session_model_handle::set_session_model(&key, args.provider.clone(), args.model.clone());
 
-        let message = match &args.provider {
+        let mut message = match &args.provider {
             Some(p) => format!(
                 "Model switched to '{}' (provider '{}'); takes effect from the next turn.",
                 args.model, p
@@ -153,6 +173,10 @@ impl AlephTool for SelectModelTool {
                 args.model
             ),
         };
+        if let Some(caveat) = caveat_for_model(&args.model, args.provider.as_deref()) {
+            message.push(' ');
+            message.push_str(&caveat);
+        }
         notify_tool_result(Self::NAME, &message, true);
         Ok(SelectModelOutput {
             ok: true,
@@ -161,6 +185,62 @@ impl AlephTool for SelectModelTool {
             message,
         })
     }
+}
+
+/// Hard refusals: picks that are known to fail, or that name nothing at all.
+///
+/// Deliberately narrow. An id absent from the reference tables is *not*
+/// refused — the tables are curated and always behind, custom relays alias
+/// their own names, and refusing the unknown would make Aleph unable to reach
+/// any model released since the binary was built. Only two cases are certain
+/// enough to block: an empty selection, and an id the vendor has retired.
+fn refuse_unusable_model(model: &str) -> Option<String> {
+    if model.trim().is_empty() {
+        return Some("No model id given; model unchanged.".to_string());
+    }
+    let life = crate::providers::model_catalog::lifecycle_for(model);
+    if !life.is_deprecated() {
+        return None;
+    }
+    let mut msg = format!("'{model}' has been retired by its vendor and will fail");
+    if let Some(note) = life.note {
+        msg.push_str(&format!(" ({note})"));
+    }
+    msg.push_str("; model unchanged.");
+    if let Some(successor) = life.successor {
+        msg.push_str(&format!(" Use '{successor}' instead."));
+    }
+    Some(msg)
+}
+
+/// Soft caveats appended to a successful switch.
+///
+/// The pick still happens — this is the "we did it, but you should know"
+/// channel, so the model can course-correct on the same turn instead of
+/// discovering the problem from a downstream failure.
+fn caveat_for_model(model: &str, provider: Option<&str>) -> Option<String> {
+    let record = crate::providers::model_catalog::ModelRecord::resolve(
+        provider.unwrap_or_default(),
+        model,
+        None,
+        crate::providers::model_catalog::ModelSource::Configured,
+    );
+    if matches!(
+        record.lifecycle.status,
+        crate::providers::model_catalog::ModelStatus::Preview
+    ) {
+        return Some(format!(
+            "Note: '{model}' is a vendor preview id — it can change or disappear without notice."
+        ));
+    }
+    if record.is_unknown() {
+        return Some(format!(
+            "Note: '{model}' is not in Aleph's model catalog, so its context window and cost are \
+             unknown (the request will still be sent as-is). Call `list_models` — optionally with \
+             `refresh: true` — if you meant a catalogued id."
+        ));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -205,6 +285,108 @@ mod tests {
         assert_eq!(pref.model, "gpt-5");
         assert_eq!(pref.provider.as_deref(), Some("openai"));
         session_model_handle::clear_session_model(&key);
+    }
+
+    /// A retired id must be refused at the tool call, not one turn later at
+    /// the provider — and the refusal must name the successor.
+    #[tokio::test]
+    async fn retired_model_is_refused_with_its_successor() {
+        let sk = SessionKey::Ephemeral {
+            agent_id: "main".to_string(),
+            ephemeral_id: "select-retired".to_string(),
+        };
+        let key = sk.to_key_string();
+        session_model_handle::clear_session_model(&key);
+
+        let ctx = TurnContext {
+            session_key: sk,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+        let out = TURN_CONTEXT
+            .scope(ctx, async {
+                SelectModelTool
+                    .call(SelectModelArgs {
+                        model: "deepseek-chat".to_string(),
+                        provider: Some("deepseek".to_string()),
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert!(!out.ok, "{}", out.message);
+        assert!(out.message.contains("deepseek-v4-flash"), "{}", out.message);
+        // Nothing recorded: the session keeps whatever it had.
+        assert!(session_model_handle::get_session_model(&key).is_none());
+    }
+
+    /// An id Aleph has never heard of must still be accepted — the catalog is
+    /// curated and always trails the vendors — but with the caveat attached so
+    /// the model knows the window and cost figures are unavailable.
+    #[tokio::test]
+    async fn unknown_model_is_accepted_with_a_caveat() {
+        let sk = SessionKey::Ephemeral {
+            agent_id: "main".to_string(),
+            ephemeral_id: "select-unknown".to_string(),
+        };
+        let key = sk.to_key_string();
+        session_model_handle::clear_session_model(&key);
+
+        let ctx = TurnContext {
+            session_key: sk,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+        let out = TURN_CONTEXT
+            .scope(ctx, async {
+                SelectModelTool
+                    .call(SelectModelArgs {
+                        model: "internal-relay-model-v9".to_string(),
+                        provider: None,
+                    })
+                    .await
+            })
+            .await
+            .unwrap();
+
+        assert!(out.ok, "{}", out.message);
+        assert!(
+            out.message.contains("not in Aleph's model catalog"),
+            "{}",
+            out.message
+        );
+        assert_eq!(
+            session_model_handle::get_session_model(&key).unwrap().model,
+            "internal-relay-model-v9"
+        );
+        session_model_handle::clear_session_model(&key);
+    }
+
+    #[test]
+    fn refusals_cover_empty_and_retired_only() {
+        assert!(refuse_unusable_model("   ").is_some());
+        assert!(refuse_unusable_model("deepseek-reasoner").is_some());
+        // Current ids and unknown ids both pass the hard gate.
+        assert!(refuse_unusable_model("claude-sonnet-5").is_none());
+        assert!(refuse_unusable_model("some-brand-new-model").is_none());
+    }
+
+    #[test]
+    fn preview_ids_get_a_caveat_but_not_a_refusal() {
+        assert!(refuse_unusable_model("gemini-3.1-pro-preview").is_none());
+        let caveat = caveat_for_model("gemini-3.1-pro-preview", Some("gemini")).unwrap();
+        assert!(caveat.contains("preview"), "{caveat}");
+        // A fully catalogued stable model gets no noise at all.
+        assert!(caveat_for_model("claude-sonnet-5", Some("anthropic")).is_none());
     }
 
     #[tokio::test]

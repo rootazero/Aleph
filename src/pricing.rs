@@ -17,11 +17,19 @@
 //!
 //! Model matching is **prefix-based on the canonicalised model id**.
 //! `canonicalize_model` lowercases the input, strips leading provider tags
-//! (`anthropic/`, `openai/`, etc.) and trailing date stamps. The table is
-//! scanned in declaration order and the first prefix match wins, so
-//! more-specific entries (e.g. `claude-opus-4`) come before broader ones
-//! (`claude`). Operators bumping prices update one numeric literal and
-//! recompile — there is no runtime config knob.
+//! (`anthropic/`, `openai/`, etc.), collapses host paths and trailing date
+//! stamps. The table is scanned in declaration order and the first prefix
+//! match wins, so more-specific entries (e.g. `claude-opus-4`) come before
+//! broader ones (`claude`). Operators bumping prices update one numeric
+//! literal and recompile — there is no runtime config knob.
+//!
+//! The table is sectioned by **vendor**, but models are routinely served by
+//! somebody other than their vendor. [`lookup_rates`] therefore tries the
+//! provider id first and falls back to the vendor named by the *model* id,
+//! tagging which one answered via [`RateBasis`]. Without that fallback every
+//! aggregator, cloud reseller and private relay priced as `Unknown` — and
+//! `cost_aware` routing sorts unpriced cloud candidates last, so the cheapest
+//! tier on offer was reliably ranked worst.
 //!
 //! # Long-context tiers
 //!
@@ -48,6 +56,10 @@ pub struct CostEstimate {
     pub provider: String,
     /// Model identifier the table was queried with (e.g. `"claude-sonnet-4-6"`).
     pub model: String,
+    /// Which table the rates came from — see [`RateBasis`]. `None` when
+    /// [`status`] is `Unknown` (no rates were found at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<RateBasis>,
 }
 
 impl CostEstimate {
@@ -59,8 +71,37 @@ impl CostEstimate {
             status: CostStatus::Unknown,
             provider: provider.into(),
             model: model.into(),
+            basis: None,
         }
     }
+}
+
+/// Which vendor table a set of rates was resolved through.
+///
+/// Aleph prices per *vendor*, but a model is frequently served by somebody
+/// other than its vendor — aggregators (OpenRouter, Groq, Together,
+/// Fireworks, SiliconFlow…), clouds (Bedrock, Vertex) and private relays all
+/// resell another vendor's model under their own provider id. Those provider
+/// ids have no price section of their own, so a provider-id-only lookup
+/// returned `Unknown` for roughly 30 of the 52 built-in presets — and since
+/// unpriced *cloud* candidates sort at `u64::MAX` under
+/// [`cost_aware`](crate::providers::route_policy) routing, the aggregators
+/// (often the cheapest tier available) were systematically ranked last.
+///
+/// Falling back to the model id's own vendor fixes that, but the two answers
+/// are not equally trustworthy: a reseller's margin is real. This flag keeps
+/// them distinguishable everywhere the figure surfaces (picker, `list_models`,
+/// route status) instead of silently blending them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateBasis {
+    /// The provider id itself resolves to a vendor that prices this model —
+    /// the rate is the vendor's published price for its own endpoint.
+    Direct,
+    /// The provider id has no price section; rates were taken from the vendor
+    /// named by the *model* id. Reseller margin is not modelled, so treat the
+    /// figure as a floor rather than a quote.
+    VendorInferred,
 }
 
 /// Confidence band attached to every [`CostEstimate`].
@@ -370,9 +411,9 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "google",
         &[
             Rates {
-                // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input;
-                // long-context >200K steps up (~$4/$18) but is left to the base
-                // rate here — best-effort. Must precede broad `gemini` (flash).
+                // Gemini 3.1 Pro (current default). $2/$12 for ≤200K input; the
+                // >200K step-up ($4/$18) now lives in `TIER_TABLE`. Must
+                // precede broad `gemini` (flash).
                 model_prefix: "gemini-3.1-pro",
                 input_per_mtok: Some(2.0),
                 output_per_mtok: Some(12.0),
@@ -470,6 +511,21 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 input_per_mtok: Some(0.20),
                 output_per_mtok: Some(0.50),
                 cache_read_per_mtok: Some(0.05),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // grok-3-mini is the cheap tier, but it used to inherit the
+                // broad `grok` row below — the *flagship* grok-3 rate — which
+                // priced it ~5x its own primary. The cross-table drift guard
+                // (`aux_model_is_not_pricier_than_the_default`) is what
+                // surfaced it: xAI's preset named grok-3-mini as its cheap aux
+                // model while the table billed it at $18/Mtok blended against
+                // grok-4.3's $3.75. xAI's published mini rate is $0.30/$0.50.
+                model_prefix: "grok-3-mini",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(0.50),
+                cache_read_per_mtok: Some(0.075),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -700,6 +756,24 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
 const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "google",
+        // Gemini 3.1 Pro (current `gemini` preset default, 1M window): the base
+        // row's own comment recorded the >200K step-up ($4/$18) as "left to the
+        // base rate — best-effort". That note predates nothing: it just never
+        // got a tier row, so every long-context run on the *current default*
+        // was billed at half price. Must precede `gemini-2.5-pro` only in
+        // spirit (distinct prefixes); order here is newest-first for reading.
+        "gemini-3.1-pro",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(4.0),
+            output_per_mtok: Some(18.0),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: Some(18.0),
+        }],
+    ),
+    (
+        "google",
         // Gemini 2.5 Pro: prompts over 200K input tokens bill at ~2x.
         "gemini-2.5-pro",
         &[PriceTier {
@@ -709,6 +783,29 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
             cache_read_per_mtok: None,
             cache_creation_per_mtok: None,
             reasoning_per_mtok: Some(15.0),
+        }],
+    ),
+    (
+        "anthropic",
+        // Sonnet 5 (current `claude` preset default) carries the 1M window, so
+        // it takes the same >200K long-context premium the 4.x 1M beta did —
+        // identical base rate ($3/$15), identical published multipliers (input
+        // and cache 2x, output 1.5x). Without this row the flagship default was
+        // the one model whose long-context runs were *never* tiered.
+        //
+        // Deliberately absent: `claude-opus-4-6/7/8` and `claude-fable-5` also
+        // carry 1M windows, but their >200K rates are not published as a
+        // multiple we can confirm. Extrapolating Sonnet's 2x/1.5x onto them
+        // would be invented data; they stay flat-priced (a documented
+        // under-estimate) until a vendor figure is in hand.
+        "claude-sonnet-5",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(6.0),
+            output_per_mtok: Some(22.50),
+            cache_read_per_mtok: Some(0.60),
+            cache_creation_per_mtok: Some(7.50),
+            reasoning_per_mtok: None,
         }],
     ),
     (
@@ -772,21 +869,64 @@ pub struct RateCard {
     /// rate (Anthropic, `OpenAI` o-series), so a `None` here is not "free".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_per_mtok: Option<f64>,
+    /// How these rates were resolved. `vendor_inferred` means the serving
+    /// provider (an aggregator / cloud / relay) has no price section of its
+    /// own and the vendor's own rate was used — a floor, not a quote.
+    pub basis: RateBasis,
+}
+
+/// A resolved price-table hit: the rates, the vendor section they came from
+/// (needed for the parallel [`TIER_TABLE`] lookup) and how we got there.
+#[derive(Debug, Clone, Copy)]
+struct ResolvedRates {
+    rates: &'static Rates,
+    vendor_key: &'static str,
+    basis: RateBasis,
+}
+
+/// Find the first [`Rates`] row in `vendor`'s section that prefix-matches an
+/// already-canonicalised model id.
+fn rates_in(vendor: &str, canonical_model: &str) -> Option<&'static Rates> {
+    PRICE_TABLE
+        .iter()
+        .find(|(p, _)| *p == vendor)?
+        .1
+        .iter()
+        .find(|r| canonical_model.starts_with(r.model_prefix))
 }
 
 /// Resolve the [`Rates`] entry for a `(provider, model)` pair, or `None` when
-/// the provider/model is not in the table. Shared by [`estimate`] and
-/// [`rate_card`] so both stay on one canonicalisation + lookup path.
-fn lookup_rates(provider: &str, model: &str) -> Option<&'static Rates> {
-    let provider_key = canonical_provider(provider);
-    if provider_key.is_empty() {
-        return None;
-    }
+/// neither the provider nor the model names a vendor that prices it. Shared by
+/// [`estimate`] and [`rate_card`] so both stay on one canonicalisation +
+/// lookup path.
+///
+/// Two passes, in confidence order (see [`RateBasis`]):
+/// 1. **Direct** — the provider id canonicalises to a vendor whose section
+///    prices this model. Unchanged from the original behaviour.
+/// 2. **Vendor-inferred** — otherwise, the *model* id names its vendor
+///    ([`infer_vendor`]). This is what makes aggregators, Bedrock and private
+///    relays priceable instead of permanently `Unknown`.
+fn lookup_rates(provider: &str, model: &str) -> Option<ResolvedRates> {
     let canonical = canonicalize_model(model);
-    let entries = PRICE_TABLE.iter().find(|(p, _)| *p == provider_key)?.1;
-    entries
-        .iter()
-        .find(|r| canonical.starts_with(r.model_prefix))
+
+    let provider_key = canonical_provider(provider);
+    if !provider_key.is_empty() {
+        if let Some(rates) = rates_in(provider_key, &canonical) {
+            return Some(ResolvedRates {
+                rates,
+                vendor_key: provider_key,
+                basis: RateBasis::Direct,
+            });
+        }
+    }
+
+    let vendor = crate::providers::model_catalog::infer_vendor(model)?;
+    let rates = rates_in(vendor, &canonical)?;
+    Some(ResolvedRates {
+        rates,
+        vendor_key: vendor,
+        basis: RateBasis::VendorInferred,
+    })
 }
 
 /// Resolve the [`PriceTier`] slice for an already-canonicalised
@@ -841,12 +981,16 @@ fn effective_rates(
 /// cost-at-a-glance column (`providers.catalog`).
 #[must_use]
 pub fn rate_card(provider: &str, model: &str) -> Option<RateCard> {
-    lookup_rates(provider, model).map(|r| RateCard {
-        input_per_mtok: r.input_per_mtok,
-        output_per_mtok: r.output_per_mtok,
-        cache_read_per_mtok: r.cache_read_per_mtok,
-        cache_creation_per_mtok: r.cache_creation_per_mtok,
-        reasoning_per_mtok: r.reasoning_per_mtok,
+    lookup_rates(provider, model).map(|resolved| {
+        let r = resolved.rates;
+        RateCard {
+            input_per_mtok: r.input_per_mtok,
+            output_per_mtok: r.output_per_mtok,
+            cache_read_per_mtok: r.cache_read_per_mtok,
+            cache_creation_per_mtok: r.cache_creation_per_mtok,
+            reasoning_per_mtok: r.reasoning_per_mtok,
+            basis: resolved.basis,
+        }
     })
 }
 
@@ -881,20 +1025,22 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
 /// the table — callers should treat that as "no estimate available".
 #[must_use]
 pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> CostEstimate {
-    let base = match lookup_rates(provider, model) {
+    let resolved = match lookup_rates(provider, model) {
         Some(r) => r,
         None => return CostEstimate::unknown(provider, model),
     };
     // Select the long-context tier (if any) from the prompt's input size —
-    // the cached portions of the prompt count toward the threshold.
+    // the cached portions of the prompt count toward the threshold. Tiers are
+    // keyed by the vendor section the rates actually came from, so a
+    // vendor-inferred hit picks up that vendor's long-context premium too.
     let prompt_tokens = breakdown
         .input
         .saturating_add(breakdown.cache_read)
         .saturating_add(breakdown.cache_creation);
     let effective = effective_rates(
-        canonical_provider(provider),
+        resolved.vendor_key,
         &canonicalize_model(model),
-        base,
+        resolved.rates,
         prompt_tokens,
     );
     let (usd, status) = apply_rates(breakdown, &effective);
@@ -903,6 +1049,7 @@ pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> Cost
         status,
         provider: provider.to_string(),
         model: model.to_string(),
+        basis: Some(resolved.basis),
     }
 }
 
@@ -933,6 +1080,114 @@ mod tests {
                 "TIER_TABLE vendor {vendor:?} is unreachable via canonical_provider"
             );
         }
+    }
+
+    /// Prefix-shadow guard. Lookup is "first declaration whose prefix matches",
+    /// so a broad row placed above a specific one silently kills it — the
+    /// specific row still compiles, still reads correctly, and is simply never
+    /// reached. Every `claude-opus-4-*` rate would vanish behind a stray
+    /// `claude` row, and nothing but a hand-computed estimate would notice.
+    #[test]
+    fn no_price_row_is_shadowed_by_an_earlier_broader_prefix() {
+        for (vendor, rows) in PRICE_TABLE {
+            for (i, later) in rows.iter().enumerate() {
+                for earlier in &rows[..i] {
+                    assert!(
+                        !later.model_prefix.starts_with(earlier.model_prefix),
+                        "{vendor}: {:?} is unreachable — the earlier {:?} row \
+                         already prefix-matches it. Move the specific row up.",
+                        later.model_prefix,
+                        earlier.model_prefix
+                    );
+                }
+            }
+        }
+    }
+
+    /// Same hazard on the tier axis, where the entries are `(vendor, prefix)`
+    /// pairs in one flat list.
+    #[test]
+    fn no_tier_row_is_shadowed_by_an_earlier_broader_prefix() {
+        for (i, (vendor, prefix, _)) in TIER_TABLE.iter().enumerate() {
+            for (earlier_vendor, earlier_prefix, _) in &TIER_TABLE[..i] {
+                if earlier_vendor != vendor {
+                    continue;
+                }
+                assert!(
+                    !prefix.starts_with(earlier_prefix),
+                    "{vendor}: tier {prefix:?} is unreachable behind {earlier_prefix:?}"
+                );
+            }
+        }
+    }
+
+    /// The long-context tier must apply to whatever the *current* flagships
+    /// are, not to whichever generation happened to be current when the tier
+    /// was written. `claude-sonnet-4` and `gemini-2.5-pro` had tiers while the
+    /// 1M-window defaults that replaced them did not, so every long-context run
+    /// on the current defaults billed at roughly half price.
+    #[test]
+    fn current_long_context_defaults_are_tiered() {
+        // Input-only breakdowns: mixing output tokens in would let the output
+        // rate dominate the short case and mask the input tier entirely.
+        let long_prompt = TokenBreakdown {
+            input: 400_000,
+            ..Default::default()
+        };
+        let short_prompt = TokenBreakdown {
+            input: 100_000,
+            ..Default::default()
+        };
+        for (provider, model) in [
+            ("anthropic", "claude-sonnet-5"),
+            ("google", "gemini-3.1-pro-preview"),
+        ] {
+            let long = estimate(provider, model, &long_prompt);
+            let short = estimate(provider, model, &short_prompt);
+            let long_rate = long.usd / 400_000.0;
+            let short_rate = short.usd / 100_000.0;
+            assert!(
+                long_rate > short_rate,
+                "{provider}/{model}: a 400K prompt must bill above the base \
+                 input rate (long={long:?}, short={short:?})"
+            );
+        }
+    }
+
+    /// Aggregators, clouds and relays resell other vendors' models under their
+    /// own provider id. Before the vendor-inferred fallback they all priced as
+    /// `Unknown`, which — combined with `unpriced_cost(Cloud) == u64::MAX` —
+    /// sorted them last under `cost_aware` routing.
+    #[test]
+    fn resold_models_price_through_their_vendor() {
+        for (provider, model) in [
+            ("openrouter", "anthropic/claude-sonnet-5"),
+            ("amazon-bedrock", "anthropic.claude-sonnet-5"),
+            ("siliconflow", "deepseek-ai/DeepSeek-V3"),
+            ("github-copilot", "gpt-4o"),
+        ] {
+            let card = rate_card(provider, model)
+                .unwrap_or_else(|| panic!("{provider}/{model} must be priceable"));
+            assert_eq!(
+                card.basis,
+                RateBasis::VendorInferred,
+                "{provider}/{model} should be flagged as inferred, not quoted"
+            );
+        }
+        // A vendor serving its own model stays `Direct` — the fallback must not
+        // relabel first-party rates.
+        assert_eq!(
+            rate_card("anthropic", "claude-sonnet-5").unwrap().basis,
+            RateBasis::Direct
+        );
+
+        // Deliberate limit, asserted so it stays deliberate: the fallback keys
+        // on the model's *vendor*, and open-weight families have no vendor
+        // price — Meta does not sell Llama inference, and each host prices it
+        // differently (Groq / Together / Cerebras / Fireworks all differ). So a
+        // hosted Llama stays unpriced rather than being assigned a fictional
+        // "Meta rate". `unpriced_cost` still ranks it by endpoint tier.
+        assert!(rate_card("groq", "llama-3.3-70b-versatile").is_none());
     }
 
     #[test]
@@ -973,10 +1228,17 @@ mod tests {
             status: CostStatus::Complete,
             provider: "anthropic".into(),
             model: "claude-sonnet-4-6".into(),
+            basis: Some(RateBasis::Direct),
         };
         let json = serde_json::to_string(&est).expect("serialize");
         let back: CostEstimate = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(est, back);
+
+        // Estimates persisted before `basis` existed must still load — the
+        // field is `#[serde(default)]` precisely so old run summaries do.
+        let legacy = r#"{"usd":1.23,"status":"complete","provider":"anthropic","model":"m"}"#;
+        let parsed: CostEstimate = serde_json::from_str(legacy).expect("legacy deserialize");
+        assert_eq!(parsed.basis, None);
     }
 
     #[test]
@@ -1127,7 +1389,10 @@ mod tests {
             pro.usd
         );
         let broad = estimate("deepseek", "deepseek-chat", &breakdown);
-        assert!(broad.usd < pro.usd, "broad fallback must be cheaper than v4-pro");
+        assert!(
+            broad.usd < pro.usd,
+            "broad fallback must be cheaper than v4-pro"
+        );
     }
 
     #[test]
@@ -1492,7 +1757,11 @@ mod tests {
         };
         let est = estimate("minimax", "MiniMax-M3", &input_1m);
         assert_eq!(est.status, CostStatus::Complete);
-        assert!((est.usd - 0.60).abs() < 1e-6, "expected $0.60, got ${}", est.usd);
+        assert!(
+            (est.usd - 0.60).abs() < 1e-6,
+            "expected $0.60, got ${}",
+            est.usd
+        );
     }
 
     #[test]

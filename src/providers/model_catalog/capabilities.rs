@@ -465,6 +465,21 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    (
+        // Broad fallback for the rest of the family (medium / small /
+        // codestral / ministral) — all 128K-window tool-callers. The `mistral`
+        // preset advertises `mistral-medium-latest` and `mistral-small-latest`
+        // in its fallback chain, and without this row both sized at the
+        // conservative 128K default *by accident* rather than by record.
+        "mistral",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
     // ── MiniMax ──────────────────────────────────────────────────────────
     // Aleph ships a `minimax` preset (default MiniMax-M3) with per-model
     // metadata so panel picker / list_models / context budgeting size it
@@ -765,6 +780,42 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // ── StepFun ────────────────────────────────────────────────────────────
+    // StepFun encodes the window in the id itself (`step-1-8k`, `step-1-32k`,
+    // `step-1-256k`); the `stepfun` preset ships the 8K variant, which is far
+    // below the conservative 128K default it used to inherit — the one
+    // direction where a missing row is actively dangerous, since the context
+    // budget would have planned for 16x the room the model has.
+    (
+        "step-1-256k",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "step-1-32k",
+        ModelCapabilities {
+            context_window: 32_768,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    (
+        "step-1-8k",
+        ModelCapabilities {
+            context_window: 8_192,
+            max_output_tokens: 4_096,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
 ];
 
 /// Look up capability metadata for a model id (raw or canonical).
@@ -866,6 +917,61 @@ mod tests {
     #[test]
     fn unknown_model_is_none() {
         assert!(capabilities_for("totally-made-up-model").is_none());
+    }
+
+    /// Prefix-shadow guard. Lookup takes the first declaration whose prefix
+    /// matches, so a broad row above a specific one makes the specific row
+    /// unreachable — it still compiles and still reads correctly, it just never
+    /// runs. Table order is load-bearing and nothing else enforces it.
+    #[test]
+    fn no_capability_row_is_shadowed_by_an_earlier_broader_prefix() {
+        for (i, (later, _)) in CAPABILITY_TABLE.iter().enumerate() {
+            for (earlier, _) in &CAPABILITY_TABLE[..i] {
+                assert!(
+                    !later.starts_with(earlier),
+                    "{later:?} is unreachable — the earlier {earlier:?} row already \
+                     prefix-matches it. Move the specific row above the broad one."
+                );
+            }
+        }
+    }
+
+    /// Hosted and aggregated ids must reach the same rows their vendor-native
+    /// form does. Every scheme below used to miss the table entirely and fall
+    /// back to `CONSERVATIVE_CONTEXT_WINDOW`, which over-compresses a
+    /// large-window model.
+    #[test]
+    fn hosted_and_aggregated_ids_resolve_to_their_family() {
+        for id in [
+            "deepseek-ai/DeepSeek-V3",
+            "accounts/fireworks/models/llama-v3p3-70b-instruct",
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "llama3.3:70b",
+            "anthropic.claude-sonnet-5",
+            "openai/gpt-5.6",
+        ] {
+            assert!(
+                capabilities_for(id).is_some(),
+                "{id} should resolve to a capability row"
+            );
+        }
+    }
+
+    /// StepFun states the window in the id; without these rows `step-1-8k`
+    /// inherited the 128K conservative default — planning for 16x the room the
+    /// model actually has, the one direction where a missing row is dangerous
+    /// rather than merely pessimistic.
+    #[test]
+    fn stepfun_windows_follow_the_id() {
+        assert_eq!(capabilities_for("step-1-8k").unwrap().context_window, 8_192);
+        assert_eq!(
+            capabilities_for("step-1-32k").unwrap().context_window,
+            32_768
+        );
+        assert_eq!(
+            capabilities_for("step-1-256k").unwrap().context_window,
+            262_144
+        );
     }
 
     #[test]
@@ -1119,7 +1225,10 @@ mod tests {
     fn glm_5_2_precedes_glm_5_prefix() {
         // glm-5.2 (1M) must win over the glm-5 (200K) prefix it starts with;
         // glm-5.1 still resolves to the 200K glm-5 row.
-        assert_eq!(capabilities_for("glm-5.2").unwrap().context_window, 1_000_000);
+        assert_eq!(
+            capabilities_for("glm-5.2").unwrap().context_window,
+            1_000_000
+        );
         assert_eq!(capabilities_for("glm-5.1").unwrap().context_window, 200_000);
     }
 }

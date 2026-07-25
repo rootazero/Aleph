@@ -70,10 +70,13 @@ mod tests {
             notes: None,
             modalities: vec![],
             models: models.iter().map(|m| (*m).into()).collect(),
+            fallback_models: vec![],
             has_api_key: true,
             verified: true,
             enabled: true,
             is_default: false,
+            lifecycle: crate::api::providers::ModelLifecycle::default(),
+            requires_explicit_model: false,
         }
     }
 

@@ -227,4 +227,13 @@ pub struct CatalogEntryView {
     /// without a side lookup. Always present (absent/unparseable `base_url`
     /// conservatively classifies as `"cloud"`).
     pub endpoint: String,
+    /// Lifecycle of `default_model`: `"active"` / `"preview"` /
+    /// `"deprecated"`, with the vendor's successor when it has retired. Lets
+    /// the picker warn instead of offering an id that now 400s.
+    pub lifecycle: crate::providers::model_catalog::ModelLifecycle,
+    /// This provider ships no default — the operator must name a model. The
+    /// picker should prompt for one rather than rendering `default_model`'s
+    /// empty string as if it were a choice.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_explicit_model: bool,
 }

@@ -202,12 +202,17 @@ pub fn ModelPicker() -> impl IntoView {
                                         let provider_id = entry.id.clone();
                                         let display = entry.display_name.clone();
                                         let color = entry.color.clone();
-                                        // Models to show: user-extended list if any, otherwise the default.
-                                        let models = if entry.models.is_empty() {
-                                            vec![entry.default_model]
-                                        } else {
-                                            entry.models
-                                        };
+                                        // Models to show: operator list if any,
+                                        // otherwise the preset's curated roster.
+                                        let models = roster(&entry);
+                                        // A retired default must not read as a
+                                        // live choice; the successor rides the
+                                        // tooltip so the fix is one hover away.
+                                        let retired = entry
+                                            .lifecycle
+                                            .is_deprecated()
+                                            .then(|| entry.default_model.clone());
+                                        let retired_note = entry.lifecycle.successor.clone();
                                         view! {
                                             <div class="pt-1.5">
                                                 <div class="flex items-center gap-1.5 px-2.5 pb-1">
@@ -229,9 +234,19 @@ pub fn ModelPicker() -> impl IntoView {
                                                                 if provider == pid_active && model == mid_active
                                                         )
                                                     };
+                                                    let is_retired = retired.as_deref() == Some(mid.as_str());
+                                                    let title = if is_retired {
+                                                        retired_note.clone().map_or_else(
+                                                            || "Retired by the vendor".to_string(),
+                                                            |s| format!("Retired by the vendor — use {s}"),
+                                                        )
+                                                    } else {
+                                                        String::new()
+                                                    };
                                                     let display_text = model_id;
                                                     view! {
                                                         <button
+                                                            title=title
                                                             on:click=move |_| select_entry(pid.clone(), mid.clone())
                                                             class=move || {
                                                                 let base = "w-full text-left px-2.5 py-1.5 rounded-md \
@@ -245,6 +260,11 @@ pub fn ModelPicker() -> impl IntoView {
                                                             }
                                                         >
                                                             {display_text}
+                                                            {is_retired.then(|| view! {
+                                                                <span class="ml-1.5 text-[9px] uppercase tracking-wider text-warning">
+                                                                    "retired"
+                                                                </span>
+                                                            })}
                                                         </button>
                                                     }
                                                 }).collect::<Vec<_>>()}
@@ -276,11 +296,38 @@ pub fn ModelPicker() -> impl IntoView {
 /// * Otherwise the provider is kept only if at least one model id matches, and
 ///   only the matching models are retained.
 /// * Each kept entry's `models` is normalised to the list the picker actually
-///   renders (`models` when non-empty, else the single `default_model`), so the
-///   view's fallback branch never has to re-resolve it.
+///   renders (see [`roster`]), so the view's fallback branch never has to
+///   re-resolve it.
 ///
 /// An empty or whitespace-only query returns the catalog untouched (clones),
 /// so the no-filter render stays behaviourally identical to before.
+/// The model ids the picker offers for one provider.
+///
+/// Operator-configured `models` win outright — if someone listed exactly what
+/// they want, that is the roster. Otherwise the preset's own curated set is
+/// used: `default_model` first, then `fallback_models`. That second branch is
+/// the fix for a long-standing mismatch — the backend has always sent
+/// `fallback_models` (its doc comment even says "used by the picker"), the
+/// `list_models` tool now offers them to the model, and the picker was the only
+/// surface still showing a single row per provider.
+///
+/// Deduplicated case-insensitively because `fallback_models[0]` is the default
+/// by convention, and empties are dropped so a bring-your-own-model relay
+/// (`requires_explicit_model`) yields nothing rather than a blank button.
+#[must_use]
+pub(crate) fn roster(entry: &CatalogEntry) -> Vec<String> {
+    if !entry.models.is_empty() {
+        return entry.models.clone();
+    }
+    let mut seen = std::collections::HashSet::new();
+    std::iter::once(&entry.default_model)
+        .chain(entry.fallback_models.iter())
+        .filter(|m| !m.trim().is_empty())
+        .filter(|m| seen.insert(m.to_lowercase()))
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn filter_catalog(entries: &[CatalogEntry], query: &str) -> Vec<CatalogEntry> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -290,11 +337,7 @@ pub(crate) fn filter_catalog(entries: &[CatalogEntry], query: &str) -> Vec<Catal
         .iter()
         .filter_map(|e| {
             // Same resolution the view uses for the rendered model list.
-            let models: Vec<String> = if e.models.is_empty() {
-                vec![e.default_model.clone()]
-            } else {
-                e.models.clone()
-            };
+            let models = roster(e);
             let provider_match =
                 e.display_name.to_lowercase().contains(&q) || e.id.to_lowercase().contains(&q);
             if provider_match {
@@ -335,10 +378,13 @@ mod tests {
             notes: None,
             modalities: Vec::new(),
             models: models.iter().map(|m| m.to_string()).collect(),
+            fallback_models: Vec::new(),
             has_api_key: false,
             verified: false,
             enabled: false,
             is_default: false,
+            lifecycle: crate::api::providers::ModelLifecycle::default(),
+            requires_explicit_model: false,
         }
     }
 
@@ -417,5 +463,52 @@ mod tests {
     fn case_insensitive() {
         assert_eq!(filter_catalog(&catalog(), "OPENAI").len(), 1);
         assert_eq!(filter_catalog(&catalog(), "OpEnAi").len(), 1);
+    }
+
+    #[test]
+    fn roster_uses_curated_fallbacks_when_operator_listed_nothing() {
+        // The regression this closes: a provider the operator has not
+        // customised showed exactly one model, while the backend was already
+        // sending its whole curated chain.
+        let mut e = entry("anthropic", "Anthropic", "claude-sonnet-5", &[]);
+        e.fallback_models = vec![
+            "claude-sonnet-5".to_string(),
+            "claude-opus-4-8".to_string(),
+            "claude-haiku-4-5".to_string(),
+        ];
+        // `fallback_models[0]` is the default by convention — deduplicated, not
+        // rendered twice.
+        assert_eq!(
+            roster(&e),
+            vec![
+                "claude-sonnet-5".to_string(),
+                "claude-opus-4-8".to_string(),
+                "claude-haiku-4-5".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn roster_prefers_the_operator_list_verbatim() {
+        let mut e = entry("anthropic", "Anthropic", "claude-sonnet-5", &["my-pin"]);
+        e.fallback_models = vec!["claude-opus-4-8".to_string()];
+        assert_eq!(roster(&e), vec!["my-pin".to_string()]);
+    }
+
+    #[test]
+    fn roster_of_a_byo_model_relay_is_empty() {
+        // `requires_explicit_model` presets ship no default; an empty roster is
+        // correct — a blank button would not be.
+        let e = entry("replicate", "Replicate", "", &[]);
+        assert!(roster(&e).is_empty());
+    }
+
+    #[test]
+    fn filter_searches_the_curated_roster_too() {
+        let mut e = entry("anthropic", "Anthropic", "claude-sonnet-5", &[]);
+        e.fallback_models = vec!["claude-sonnet-5".to_string(), "claude-opus-4-8".to_string()];
+        let out = filter_catalog(&[e], "opus");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].models, vec!["claude-opus-4-8".to_string()]);
     }
 }

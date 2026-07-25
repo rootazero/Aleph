@@ -94,6 +94,15 @@ pub struct CatalogEntry {
     pub modalities: Vec<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    /// Curated alternatives the preset ships for this provider. The backend has
+    /// sent these since the field was introduced, documented as "used by the
+    /// picker" — but nothing here read them, so a provider with no
+    /// operator-configured `models` rendered exactly one row. [`roster`] is now
+    /// the single place that decides what the picker shows.
+    ///
+    /// [`roster`]: crate::components::model_picker::roster
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
     #[serde(default)]
     pub has_api_key: bool,
     #[serde(default)]
@@ -102,6 +111,41 @@ pub struct CatalogEntry {
     pub enabled: bool,
     #[serde(default)]
     pub is_default: bool,
+    /// Lifecycle of `default_model` — lets the picker mark an id the vendor has
+    /// retired instead of offering it as a live choice.
+    #[serde(default)]
+    pub lifecycle: ModelLifecycle,
+    /// This provider ships no default; the operator must name a model.
+    #[serde(default)]
+    pub requires_explicit_model: bool,
+}
+
+/// Wire form of the backend's `model_catalog::ModelLifecycle`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelLifecycle {
+    /// `"active"` / `"preview"` / `"deprecated"`.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl Default for ModelLifecycle {
+    fn default() -> Self {
+        Self {
+            status: "active".to_string(),
+            successor: None,
+            note: None,
+        }
+    }
+}
+
+impl ModelLifecycle {
+    #[must_use]
+    pub fn is_deprecated(&self) -> bool {
+        self.status == "deprecated"
+    }
 }
 
 /// Filter applied by the chat-window picker when querying the catalog.

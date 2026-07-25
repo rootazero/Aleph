@@ -403,6 +403,16 @@ pub(in crate::commands::start) fn register_config_handlers(
         config,
         shared_token_mgr
     );
+    // On-demand model discovery: asks each configured provider for its live
+    // `/models` list. Operator-facing half of `model_catalog::discovery`; the
+    // model-facing half is the `list_models` tool's `refresh` argument.
+    register_handler!(
+        server,
+        "providers.modelsRefresh",
+        providers::handle_models_refresh,
+        config,
+        shared_token_mgr
+    );
 
     // MoA presets (visual config; shares MoaPresetStore with the `moa` tool)
     register_handler!(server, "moa.listPresets", moa::handle_list_presets, config);

@@ -662,6 +662,93 @@ pub async fn handle_healthcheck(
 }
 
 // ============================================================================
+// Live model discovery
+// ============================================================================
+
+/// `providers.modelsRefresh` — ask configured providers what they serve now.
+///
+/// The operator-facing half of `model_catalog::discovery`; the LLM-facing half
+/// is `list_models { refresh: true }`. Both call the same leaf, so the picker
+/// and the model can never disagree about what a provider offers.
+///
+/// Optional `provider` param narrows the sweep to one id (what the picker's
+/// per-row refresh button wants); omitted, it sweeps every enabled provider
+/// concurrently. Per-provider failures are reported as rows, not as an RPC
+/// error — one unreachable vendor must not blank the whole result.
+pub async fn handle_models_refresh(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    let only: Option<String> = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("provider"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+
+    // Same discipline as `handle_healthcheck`: snapshot under the read lock,
+    // release before any network I/O.
+    let targets: Vec<(String, String, String, String)> = {
+        let cfg = config.read().await;
+        cfg.providers
+            .iter()
+            .filter(|(name, pc)| {
+                pc.enabled && only.as_ref().is_none_or(|o| o.eq_ignore_ascii_case(name))
+            })
+            .filter_map(|(name, pc)| {
+                let preset = crate::providers::presets::get_preset(name);
+                let base_url = pc
+                    .base_url
+                    .clone()
+                    .or_else(|| preset.map(|p| p.base_url.to_string()))?;
+                let protocol = pc
+                    .protocol
+                    .clone()
+                    .or_else(|| preset.map(|p| p.protocol.to_string()))
+                    .unwrap_or_else(|| "openai".to_string());
+                let api_key = pc
+                    .api_key
+                    .clone()
+                    .or_else(|| resolve_api_key(name, &vault))?;
+                Some((name.clone(), base_url, protocol, api_key))
+            })
+            .collect()
+    };
+
+    let sweeps = targets
+        .into_iter()
+        .map(|(name, base_url, protocol, api_key)| async move {
+            let outcome = crate::providers::model_catalog::refresh_models(
+                &name, &base_url, &protocol, &api_key,
+            )
+            .await;
+            match outcome {
+                Ok(listing) => json!({
+                    "provider": name,
+                    "ok": true,
+                    "fetched_at": listing.fetched_at,
+                    "models": listing.models,
+                }),
+                Err(e) => json!({
+                    "provider": name,
+                    "ok": false,
+                    "error": e.to_string(),
+                }),
+            }
+        });
+
+    let mut rows = futures::future::join_all(sweeps).await;
+    rows.sort_by(|a, b| {
+        a.get("provider")
+            .and_then(serde_json::Value::as_str)
+            .cmp(&b.get("provider").and_then(serde_json::Value::as_str))
+    });
+
+    JsonRpcResponse::success(request.id, json!({ "providers": rows }))
+}
+
+// ============================================================================
 // Needs Setup
 // ============================================================================
 
@@ -911,16 +998,19 @@ pub async fn handle_catalog(
                 .display_name
                 .map_or_else(|| entry.name.to_string(), String::from);
 
-            // Per-model metadata for the default model. Best-effort: both
-            // resolve to `None` for unknown/unpriced families, leaving the
-            // JSON fields absent (skip_serializing_if). This is the R7
-            // "enable the LLM" surface — capability + cost data the picker
-            // and the model can reason over, not an auto-router.
-            let capabilities = crate::providers::capabilities_for(preset.default_model);
-            let cost = crate::pricing::rate_card(entry.name, preset.default_model);
-            let endpoint = crate::providers::endpoint_kind_for_base_url(Some(preset.base_url))
-                .as_str()
-                .to_string();
+            // Per-model metadata for the default model, via the one join
+            // point (`ModelRecord::resolve`) rather than a hand-written
+            // capability + cost + endpoint lookup. Best-effort: unknown /
+            // unpriced families leave the JSON fields absent
+            // (skip_serializing_if). This is the R7 "enable the LLM" surface —
+            // reference data the picker and the model can reason over, not an
+            // auto-router.
+            let record = crate::providers::model_catalog::ModelRecord::resolve(
+                entry.name,
+                preset.default_model,
+                Some(preset.base_url),
+                crate::providers::model_catalog::ModelSource::PresetDefault,
+            );
 
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
@@ -949,9 +1039,11 @@ pub async fn handle_catalog(
                 verified,
                 enabled,
                 is_default: default_provider.as_deref() == Some(entry.name),
-                capabilities,
-                cost,
-                endpoint,
+                capabilities: record.capabilities,
+                cost: record.cost,
+                endpoint: record.endpoint.as_str().to_string(),
+                lifecycle: record.lifecycle,
+                requires_explicit_model: preset.requires_explicit_model,
             })
         })
         .collect();
@@ -969,11 +1061,12 @@ pub async fn handle_catalog(
             let api_key = resolve_api_key(name, &vault);
             let has_api_key = api_key.is_some() || cfg.api_key.is_some();
             let default_model = cfg.models.first().cloned().unwrap_or_default();
-            let capabilities = crate::providers::capabilities_for(&default_model);
-            let cost = crate::pricing::rate_card(name, &default_model);
-            let endpoint = crate::providers::endpoint_kind_for_base_url(cfg.base_url.as_deref())
-                .as_str()
-                .to_string();
+            let record = crate::providers::model_catalog::ModelRecord::resolve(
+                name,
+                &default_model,
+                cfg.base_url.as_deref(),
+                crate::providers::model_catalog::ModelSource::Configured,
+            );
             CatalogEntryView {
                 id: name.clone(),
                 display_name: name.clone(),
@@ -993,9 +1086,14 @@ pub async fn handle_catalog(
                 verified: cfg.verified,
                 enabled: cfg.enabled,
                 is_default: default_provider.as_deref() == Some(name.as_str()),
-                capabilities,
-                cost,
-                endpoint,
+                capabilities: record.capabilities,
+                cost: record.cost,
+                endpoint: record.endpoint.as_str().to_string(),
+                lifecycle: record.lifecycle,
+                // Custom providers are operator-defined: whatever they listed
+                // in `models` is the roster, so there is never a "no default
+                // shipped" state to announce.
+                requires_explicit_model: false,
             }
         })
         .collect();
@@ -1064,6 +1162,11 @@ pub async fn handle_catalog(
                 // Virtual multiplexer, not a reachable host — conservatively
                 // "cloud" like any other absent/unparseable base_url.
                 endpoint: "cloud".to_string(),
+                // A preset name is not a vendor model id, so no vendor
+                // lifecycle applies. (A preset whose *slots* name retired
+                // models is caught where those slots are resolved, not here.)
+                lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
+                requires_explicit_model: false,
             });
         }
     }

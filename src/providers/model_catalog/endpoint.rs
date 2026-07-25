@@ -21,10 +21,15 @@
 //! [`infer_vendor`]: super::alias::infer_vendor
 //! [`Cloud`]: EndpointKind::Cloud
 
+use serde::Serialize;
 use url::Url;
 
 /// Where a provider endpoint physically lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialises to the same lowercase strings [`EndpointKind::as_str`] returns,
+/// so embedding the enum in a record and formatting it by hand agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EndpointKind {
     /// On this machine or the local network (loopback / `.local` / RFC-1918).
     Local,

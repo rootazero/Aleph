@@ -80,6 +80,17 @@ pub struct ProviderPreset {
     /// Vendor docs / landing page URL. Distinct from `signup_url` which
     /// points at the API-key creation flow.
     pub homepage: Option<&'static str>,
+    /// This provider serves no fixed roster — the operator must name a model.
+    ///
+    /// A handful of presets are pure relays or per-deployment hosts (Replicate,
+    /// Lepton, Anyscale, T8Star): there is no id Aleph could ship that would be
+    /// right for an arbitrary account. They carried `default_model: ""`, which
+    /// reads as "the default is the empty string" — `list_models` silently
+    /// skipped them, the catalog rendered a blank cell, and selecting one would
+    /// have put `model: ""` on the wire. This flag states the fact instead, so
+    /// the surfaces can say "pick a model" and the drift guard can tell a
+    /// deliberate blank from a forgotten one.
+    pub requires_explicit_model: bool,
 }
 
 /// Default modality for chat-side presets — used when no override is set.
@@ -104,6 +115,7 @@ impl Default for ProviderPreset {
             supports_health_check: true,
             modalities: DEFAULT_CHAT_MODALITIES,
             homepage: None,
+            requires_explicit_model: false,
         }
     }
 }
@@ -133,6 +145,7 @@ impl ProviderPreset {
             supports_health_check: true,
             modalities: DEFAULT_CHAT_MODALITIES,
             homepage: None,
+            requires_explicit_model: false,
         }
     }
 
@@ -199,6 +212,14 @@ impl ProviderPreset {
     #[must_use]
     pub const fn with_modalities(mut self, modalities: &'static [Modality]) -> Self {
         self.modalities = modalities;
+        self
+    }
+
+    /// Mark this preset as bring-your-own-model: it ships no `default_model`
+    /// because no single id would be right for an arbitrary account.
+    #[must_use]
+    pub const fn requires_explicit_model(mut self) -> Self {
+        self.requires_explicit_model = true;
         self
     }
 
