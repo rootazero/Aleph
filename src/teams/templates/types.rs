@@ -50,6 +50,18 @@ pub struct TemplateLeader {
     /// Prompt addendum appended to SOUL.md under a `## Team Role` heading.
     #[serde(default)]
     pub prompt_addendum: Option<String>,
+    /// Tools this leader may call. `None` (the default) = every tool, which is
+    /// how every team behaved before members could declare a surface. Entries
+    /// support a trailing-`*` prefix glob (`task_*`). A declared list must
+    /// still admit the orchestration verbs the leader prompt contracts it to
+    /// call — see `teams::member_provision::LEADER_ESSENTIAL_TOOLS`.
+    /// Ignored when `id = "self"`: the caller is an existing agent and keeps
+    /// its own surface.
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    /// Tools explicitly withheld from this leader, applied over `tools`.
+    #[serde(default)]
+    pub tools_denied: Option<Vec<String>>,
 }
 
 /// Worker (non-leader) member definition.
@@ -67,6 +79,17 @@ pub struct TemplateMember {
     /// Prompt addendum appended to SOUL.md under `## Team Role`.
     #[serde(default)]
     pub prompt_addendum: Option<String>,
+    /// Tools this member may call. `None` (the default) = every tool, matching
+    /// the behaviour of every team created before this field existed. Entries
+    /// support a trailing-`*` prefix glob (`task_*`). A declared list must
+    /// still admit the hand-off verbs the member prompt contracts it to call —
+    /// see `teams::member_provision::WORKER_ESSENTIAL_TOOLS`. Ignored when the
+    /// id names an agent that already exists (it keeps its own surface).
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    /// Tools explicitly withheld from this member, applied over `tools`.
+    #[serde(default)]
+    pub tools_denied: Option<Vec<String>>,
 }
 
 /// Initial task definition. References sibling tasks via `depends_on` keys
@@ -216,6 +239,8 @@ mod tests {
                 role: None,
                 model: None,
                 prompt_addendum: None,
+                tools: None,
+                tools_denied: None,
             },
             members: vec![],
             tasks: vec![],
@@ -231,6 +256,8 @@ mod tests {
             role: None,
             model: None,
             prompt_addendum: None,
+            tools: None,
+            tools_denied: None,
         });
         assert!(matches!(
             t.validate(),
@@ -298,6 +325,8 @@ mod tests {
             role: None,
             model: None,
             prompt_addendum: None,
+            tools: None,
+            tools_denied: None,
         });
         t.tasks.push(TemplateTask {
             key: "k1".into(),

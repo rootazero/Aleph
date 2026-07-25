@@ -7,10 +7,13 @@ use tracing::info;
 
 use crate::builtin_tools::agent_manage::create::validate_agent_id;
 use crate::config::agent_manager::AgentManager;
-use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
 use crate::error::{AlephError, Result};
-use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::sync_primitives::Arc;
+use crate::teams::member_provision::{
+    register_member_agent, validate_toolset, MemberContract, MemberToolset, ProvisionDeps,
+    ProvisionRequest,
+};
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 use crate::tools::AlephTool;
 
@@ -39,6 +42,20 @@ pub struct CreateAgentSpec {
     /// template is automatically appended to the agent's system prompt.
     #[serde(default)]
     pub role: Option<String>,
+    /// Tools this member may call. Omit (the default) to give it every tool,
+    /// which is how members behaved before this field existed. Entries support
+    /// a trailing-`*` prefix glob, so `["task_*", "team_*", "message_send",
+    /// "search"]` is a research member that cannot run shell commands or edit
+    /// files. A declared list must still admit the hand-off verbs the member's
+    /// launch prompt instructs it to call (`task_submit`, `message_send`) —
+    /// creation fails with the missing names otherwise.
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    /// Tools explicitly withheld from this member, applied over `tools`.
+    /// Use this to subtract from the full surface (`["bash", "code_exec"]`)
+    /// without having to enumerate everything it keeps.
+    #[serde(default)]
+    pub tools_denied: Option<Vec<String>>,
 }
 
 // =============================================================================
@@ -261,6 +278,21 @@ impl TeamCreateTool {
             return Ok(spec.id.clone());
         }
 
+        // Inline members always run under the worker contract — `team_create`
+        // makes the *calling* agent the leader, so a member created here never
+        // gets the orchestration prompt. Checked before any directory is
+        // created so a stranding declaration leaves nothing behind.
+        let toolset = MemberToolset::new(spec.tools.clone(), spec.tools_denied.clone());
+        validate_toolset(&toolset, MemberContract::Worker).map_err(|missing| {
+            AlephError::other(format!(
+                "Agent '{}' declares `tools` that hide {}, which its team launch \
+                 prompt instructs it to call. Add them (a `task_*` glob works) or \
+                 omit `tools` to keep the full surface.",
+                spec.id,
+                missing.join(", ")
+            ))
+        })?;
+
         let agents_state_root = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
             .join(".aleph/agents");
@@ -328,46 +360,26 @@ impl TeamCreateTool {
             })?;
         }
 
-        // Create AgentInstance
         let model = spec.model.as_deref().unwrap_or(leader_model);
-        let config = AgentInstanceConfig {
-            agent_id: spec.id.clone(),
-            workspace: workspace_path.clone(),
-            model: model.to_string(),
-            system_prompt: combined_prompt,
-            agent_dir: agents_state_root.join(&spec.id),
-            ..Default::default()
-        };
+        register_member_agent(
+            ProvisionRequest {
+                agent_id: spec.id.clone(),
+                display_name: spec.name.clone(),
+                workspace: workspace_path,
+                agent_dir: agents_state_root.join(&spec.id),
+                model: model.to_string(),
+                system_prompt: combined_prompt,
+                toolset,
+            },
+            ProvisionDeps {
+                registry: &self.registry,
+                session_store: &self.session_store,
+                agent_manager: self.agent_manager.as_ref(),
+            },
+        )
+        .await
+        .map_err(AlephError::other)?;
 
-        let instance =
-            AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
-                AlephError::other(format!(
-                    "Failed to create agent instance '{}': {}",
-                    spec.id, e
-                ))
-            })?;
-
-        // Register in runtime registry
-        self.registry.register(instance).await;
-
-        // Persist to TOML config (non-fatal)
-        if let Some(ref manager) = self.agent_manager {
-            let def = AgentDefinition {
-                id: spec.id.clone(),
-                name: spec.name.clone(),
-                model: Some(AgentModelRef::Legacy(model.to_string())),
-                ..Default::default()
-            };
-            if let Err(e) = manager.create(def) {
-                tracing::warn!(
-                    agent_id = %spec.id,
-                    error = %e,
-                    "team_create: failed to persist inline agent to TOML (runtime registration succeeded)"
-                );
-            }
-        }
-
-        info!(agent_id = %spec.id, "team_create: created inline agent");
         Ok(spec.id.clone())
     }
 }

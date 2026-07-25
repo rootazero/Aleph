@@ -416,6 +416,49 @@ via `[team_broadcast]`). Lifecycle ownership (2026-07-24):
 This is the teams peer group chat — distinct from the `src/group_chat/`
 persona roundtable (`[group_chat]` config), a separate system.
 
+### Member Tool Surface (成员工具面)
+
+A team member created inline may declare the tools it is allowed to call.
+Declared on `CreateAgentSpec` (`team_create`) and on `TemplateMember` /
+`TemplateLeader` (team templates) as `tools` / `tools_denied`; both accept a
+trailing-`*` prefix glob (`task_*`). **Omitting them keeps every tool**, which
+is what every team got before the fields existed — so no existing team or
+template changes behaviour.
+
+The declaration lands in `teams::member_provision`, the shared provisioning
+tail both creation paths call. It must reach **both** ends of one chain:
+
+```text
+AgentDefinition.skills ──from_resolved──▶ AgentInstanceConfig.tool_whitelist
+                                                     │
+                                          AgentInstance::is_tool_allowed
+                                                     │
+                    run_loop/inner.rs:156 ── retain ──▶ tools the model sees
+```
+
+The runtime config governs the current boot; the persisted `AgentDefinition`
+is what `AgentInstanceConfig::from_resolved` rebuilds from after a restart.
+Writing only one silently widens or narrows the surface on restart — hence the
+single tail (two copies were two chances to write one end) and the
+`restart_round_trip_preserves_the_surface` test.
+
+**Contract validation (fail-fast).** A member's launch prompt *instructs* it to
+call specific verbs: `broadcast::member_prompt` tells workers to hand work back
+with `task_submit`; `teams::leader_prompt` gives leaders the four-step
+`task_create` → `team_delegate` → `task_read_artifact` → `task_review` duty.
+A declared list that hides these does not yield a narrower member — it yields
+one told to do something it cannot do, failing silently at the first hand-off.
+Creation therefore **rejects** such a declaration, naming the missing tools,
+before any directory is created. Essentials live in
+`WORKER_ESSENTIAL_TOOLS` / `LEADER_ESSENTIAL_TOOLS`.
+
+Note the glob matcher is `gateway::agent_instance::tool_allowed_by`, shared
+with the run-time gate — validation and enforcement cannot disagree.
+
+**Not derived from `role`.** `role` is free text ("估值建模"); inferring a tool
+surface from it would be keyword matching, which P8 forbids. Declaration is
+explicit or absent.
+
 ## Mode 4: A2A (Remote Agent Delegation)
 
 **Tools**: `a2a_delegate`, `a2a_agents`

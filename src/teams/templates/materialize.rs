@@ -14,12 +14,15 @@ use super::substitute::substitute;
 use super::types::{TeamTemplate, TeamTemplateError, TemplateMember};
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask};
 use crate::config::agent_manager::AgentManager;
-use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
 use crate::error::AlephError;
-use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 use crate::teams::dispatcher::schedule::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
+use crate::teams::member_provision::{
+    register_member_agent, validate_toolset, MemberContract, MemberToolset, ProvisionDeps,
+    ProvisionRequest,
+};
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 
 /// Convenient identifier for "the calling agent should become the leader".
@@ -125,14 +128,30 @@ pub async fn materialize_template(
             role: Some(tpl.leader.role.clone().unwrap_or_else(|| "leader".into())),
             model: tpl.leader.model.clone(),
             prompt_addendum: tpl.leader.prompt_addendum.clone(),
+            tools: tpl.leader.tools.clone(),
+            tools_denied: tpl.leader.tools_denied.clone(),
         };
-        provision_member(deps, &pseudo_member, &req.current_agent_id, &vars).await?
+        provision_member(
+            deps,
+            &pseudo_member,
+            &req.current_agent_id,
+            &vars,
+            MemberContract::Leader,
+        )
+        .await?
     };
 
     // --- 2. Resolve / create each worker member -------------------------
     let mut enrolled_members: Vec<String> = Vec::with_capacity(tpl.members.len());
     for m in &tpl.members {
-        let agent_id = provision_member(deps, m, &req.current_agent_id, &vars).await?;
+        let agent_id = provision_member(
+            deps,
+            m,
+            &req.current_agent_id,
+            &vars,
+            MemberContract::Worker,
+        )
+        .await?;
         enrolled_members.push(agent_id);
     }
 
@@ -332,11 +351,17 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
 
 /// Look up an agent by id; if missing, create it inline with the given
 /// prompt addendum.
+///
+/// `contract` selects which launch prompt this member will run under, and
+/// therefore which tools a declared `tools` list must still admit. It is
+/// checked before any filesystem work so a stranding declaration fails without
+/// leaving a half-created agent behind.
 async fn provision_member(
     deps: &MaterializeDeps,
     member: &TemplateMember,
     caller_agent_id: &str,
     vars: &HashMap<&str, &str>,
+    contract: MemberContract,
 ) -> Result<String, TeamTemplateError> {
     // Reuse existing agent when present.
     if deps.registry.get(&member.id).await.is_some() {
@@ -352,6 +377,18 @@ async fn provision_member(
     // takes addendum text directly rather than a role name.
     crate::builtin_tools::agent_manage::create::validate_agent_id(&member.id).map_err(|e| {
         TeamTemplateError::Materialize(format!("invalid member id `{}`: {e}", member.id))
+    })?;
+
+    // Reject a stranding tool declaration before any directory is created.
+    let toolset = MemberToolset::new(member.tools.clone(), member.tools_denied.clone());
+    validate_toolset(&toolset, contract).map_err(|missing| {
+        TeamTemplateError::Materialize(format!(
+            "member `{}` declares `tools` that hide {}, which its launch prompt \
+             instructs it to call — add them (a `task_*` / `team_*` glob works) \
+             or drop `tools` to keep the full surface",
+            member.id,
+            missing.join(", ")
+        ))
     })?;
 
     let agents_root = aleph_home().join("agents");
@@ -421,42 +458,25 @@ async fn provision_member(
 
     let system_prompt = if body.is_empty() { None } else { Some(body) };
 
-    let config = AgentInstanceConfig {
-        agent_id: member.id.clone(),
-        workspace: workspace_path,
-        model: model.clone(),
-        system_prompt,
-        agent_dir: agent_state_dir,
-        ..Default::default()
-    };
+    register_member_agent(
+        ProvisionRequest {
+            agent_id: member.id.clone(),
+            display_name: member.name.clone(),
+            workspace: workspace_path,
+            agent_dir: agent_state_dir,
+            model,
+            system_prompt,
+            toolset,
+        },
+        ProvisionDeps {
+            registry: &deps.registry,
+            session_store: &deps.session_store,
+            agent_manager: deps.agent_manager.as_ref(),
+        },
+    )
+    .await
+    .map_err(TeamTemplateError::Materialize)?;
 
-    let instance = AgentInstance::new(config, Arc::clone(&deps.session_store)).map_err(|e| {
-        TeamTemplateError::Materialize(format!(
-            "AgentInstance::new for `{}` failed: {e}",
-            member.id
-        ))
-    })?;
-
-    deps.registry.register(instance).await;
-
-    // Best-effort persistence to the TOML registry.
-    if let Some(manager) = &deps.agent_manager {
-        let def = AgentDefinition {
-            id: member.id.clone(),
-            name: member.name.clone(),
-            model: Some(AgentModelRef::Legacy(model)),
-            ..Default::default()
-        };
-        if let Err(e) = manager.create(def) {
-            warn!(
-                agent_id = %member.id,
-                error = %e,
-                "team_template: failed to persist inline agent to TOML (runtime registration succeeded)"
-            );
-        }
-    }
-
-    info!(agent_id = %member.id, "team_template: created inline agent");
     Ok(member.id.clone())
 }
 
@@ -575,6 +595,8 @@ mod tests {
                 role: None,
                 model: None,
                 prompt_addendum: None,
+                tools: None,
+                tools_denied: None,
             },
             members: vec![TemplateMember {
                 id: "w".into(),
@@ -582,6 +604,8 @@ mod tests {
                 role: Some("worker".into()),
                 model: None,
                 prompt_addendum: None,
+                tools: None,
+                tools_denied: None,
             }],
             tasks: vec![
                 TemplateTask {
