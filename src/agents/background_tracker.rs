@@ -115,6 +115,16 @@ pub struct BackgroundAgentTracker {
 struct RunningAgent {
     cancel_token: CancellationToken,
     task_description: String,
+    /// True for a *presence-only* registration ([`RunningRegistration`]): a sync
+    /// fan-out seam that delivers its result inline and never reaches
+    /// `mark_completed`. Such an entry exists solely so the cancel walks and the
+    /// busy guard can see in-flight work, so it is excluded from the two
+    /// *enumeration* faces — [`list_running`](BackgroundAgentTracker::list_running)
+    /// (the LLM's `subagent list`) and
+    /// [`flat_nodes`](BackgroundAgentTracker::flat_nodes) (the Panel tree) —
+    /// where it would otherwise read as a pollable background sub-agent that
+    /// `check_status` can never resolve and a tree node that never settles.
+    presence_only: bool,
     started_at: Instant,
     /// FIFO-capped progress events; capacity 50.
     progress: VecDeque<SubagentProgress>,
@@ -288,6 +298,43 @@ impl BackgroundAgentTracker {
         task_description: String,
         meta: SpawnMeta,
     ) {
+        self.insert_running(
+            request_id,
+            cancel_token,
+            task_description,
+            meta,
+            /*presence_only*/ false,
+        );
+    }
+
+    /// Register a *presence-only* entry — visible to the cancel walks and the
+    /// busy guard, hidden from the enumeration faces (`list_running` /
+    /// `flat_nodes`). Backs [`RunningRegistration`]; see `RunningAgent`'s
+    /// `presence_only` field for why the distinction exists.
+    pub fn register_presence_only(
+        &self,
+        request_id: String,
+        cancel_token: CancellationToken,
+        task_description: String,
+        meta: SpawnMeta,
+    ) {
+        self.insert_running(
+            request_id,
+            cancel_token,
+            task_description,
+            meta,
+            /*presence_only*/ true,
+        );
+    }
+
+    fn insert_running(
+        &self,
+        request_id: String,
+        cancel_token: CancellationToken,
+        task_description: String,
+        meta: SpawnMeta,
+        presence_only: bool,
+    ) {
         let mut running = self.running.write().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
             e.into_inner()
@@ -297,6 +344,7 @@ impl BackgroundAgentTracker {
             RunningAgent {
                 cancel_token,
                 task_description,
+                presence_only,
                 started_at: Instant::now(),
                 progress: VecDeque::with_capacity(50),
                 meta,
@@ -639,6 +687,12 @@ impl BackgroundAgentTracker {
     }
 
     /// List running agents as (`request_id`, `task_description`, `elapsed_secs`).
+    ///
+    /// Backs the `subagent` tool's `list` action, so it reports only ids the
+    /// parent model can actually act on: presence-only entries are skipped
+    /// because they never reach `completed`, which would make every follow-up
+    /// `check_status` / `wait` on such an id answer "no background sub-agent
+    /// found" the moment the inline result was already returned at its own seam.
     pub fn list_running(&self) -> Vec<(String, String, u64)> {
         let running = self.running.read().unwrap_or_else(|e| {
             warn!("BackgroundAgentTracker lock poisoned, recovering");
@@ -646,6 +700,7 @@ impl BackgroundAgentTracker {
         });
         running
             .iter()
+            .filter(|(_, agent)| !agent.presence_only)
             .map(|(id, agent)| {
                 (
                     id.clone(),
@@ -719,6 +774,13 @@ impl BackgroundAgentTracker {
     /// `subagent.tree` RPC: the gateway runs `aleph_protocol::build_tree` over
     /// this to produce the hierarchy. Bounded by the TTL prune on completed
     /// entries.
+    ///
+    /// This snapshot is the *cold start* of a live event stream (the panel merges
+    /// it, then applies `Spawned` / `Progress` / `Settled` deltas), so it may only
+    /// contain nodes that participate in that stream. Presence-only entries do
+    /// not: nothing emits `Spawned` for them and their RAII delist emits no
+    /// `Settled`, so including them left the panel with rows frozen at `Running`
+    /// forever. They are skipped here for exactly that reason.
     #[must_use]
     pub fn flat_nodes(&self, root_session: Option<&str>) -> Vec<SubagentNode> {
         let mut out = Vec::new();
@@ -760,8 +822,9 @@ impl BackgroundAgentTracker {
             });
             for (id, agent) in running.iter() {
                 // Skip an id that is already emitted as completed (transition
-                // double-presence) or filtered out by `root_session`.
-                if completed_ids.contains(id) {
+                // double-presence), a presence-only entry (never settles — see
+                // the method doc), or one filtered out by `root_session`.
+                if agent.presence_only || completed_ids.contains(id) {
                     continue;
                 }
                 if root_session.is_some_and(|f| agent.meta.root_session != f) {
@@ -889,6 +952,13 @@ impl Default for BackgroundAgentTracker {
 ///   * `teams.chat.cancel` can enumerate live members of a fan-out tree
 ///     ([`running_children_of`](BackgroundAgentTracker::running_children_of)).
 ///
+/// Registered as *presence-only*
+/// ([`register_presence_only`](BackgroundAgentTracker::register_presence_only)):
+/// the cancel walks and the busy guard see the entry, the enumeration faces
+/// (`list_running` / `flat_nodes`) do not — an id that never reaches `completed`
+/// must not be advertised to the model as pollable, nor to the panel as a tree
+/// node awaiting a `Settled` event that no one will ever send.
+///
 /// Registers on construction, delists on `Drop` — which runs on normal scope
 /// exit, panic unwind, AND future-drop when the owning task is cancelled, so
 /// entries cannot leak into the guard permanently.
@@ -910,7 +980,7 @@ impl RunningRegistration {
         task_description: String,
         meta: SpawnMeta,
     ) -> Self {
-        tracker.register_with_meta(request_id.clone(), cancel_token, task_description, meta);
+        tracker.register_presence_only(request_id.clone(), cancel_token, task_description, meta);
         Self {
             tracker,
             request_id,
@@ -1493,6 +1563,106 @@ mod tests {
             tracker.result_snapshot("sync-child").is_none(),
             "running-only registration must not retain a completed entry"
         );
+    }
+
+    /// A presence-only registration must NOT appear in the `subagent` tool's
+    /// `list` action: its result is delivered inline at its own seam and it never
+    /// reaches `completed`, so an advertised id would answer every follow-up
+    /// `check_status` with "no background sub-agent found".
+    #[test]
+    fn presence_only_registration_is_hidden_from_list_running() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        tracker.register(
+            "real-bg".into(),
+            CancellationToken::new(),
+            "background spawn".into(),
+        );
+        let _reg = RunningRegistration::register(
+            tracker.clone(),
+            "moa-proposal".into(),
+            CancellationToken::new(),
+            "MoA proposal".into(),
+            SpawnMeta::default(),
+        );
+        let listed: Vec<String> = tracker
+            .list_running()
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(listed, vec!["real-bg".to_string()]);
+    }
+
+    /// Same entry must be absent from the panel tree snapshot: nothing emits
+    /// `Spawned` for it and its delist emits no `Settled`, so a snapshot row
+    /// would sit frozen at `Running` for the rest of the session.
+    #[test]
+    fn presence_only_registration_is_hidden_from_flat_nodes() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let root = "agent:leader:peer:user";
+        tracker.register_with_meta(
+            "real-bg".into(),
+            CancellationToken::new(),
+            "background spawn".into(),
+            SpawnMeta {
+                root_session: root.into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        let _reg = RunningRegistration::register(
+            tracker.clone(),
+            "sync-child".into(),
+            CancellationToken::new(),
+            "sync batch child".into(),
+            SpawnMeta {
+                root_session: root.into(),
+                depth: 1,
+                ..SpawnMeta::default()
+            },
+        );
+        let ids: Vec<String> = tracker
+            .flat_nodes(Some(root))
+            .into_iter()
+            .map(|n| n.node_id)
+            .collect();
+        assert_eq!(ids, vec!["real-bg".to_string()]);
+    }
+
+    /// …while staying fully visible to everything the cancel path needs: the
+    /// busy guard, the leader-cancel walk, the fan-out tree walk, and a
+    /// cancel-by-id. Hiding it from the *enumeration* faces must not make it
+    /// uncancellable.
+    #[test]
+    fn presence_only_registration_stays_visible_to_cancel_walks() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        let root = "agent:leader:peer:user";
+        let token = CancellationToken::new();
+        let probe = token.clone();
+        let _reg = RunningRegistration::register(
+            tracker.clone(),
+            "member-1".into(),
+            token,
+            "team-chat member".into(),
+            SpawnMeta {
+                parent_id: Some("tree-run".into()),
+                depth: 1,
+                root_session: root.into(),
+                model: None,
+            },
+        );
+        assert!(tracker.session_has_running(root), "busy guard must see it");
+        assert_eq!(
+            tracker.running_runs_of_session(root),
+            vec!["member-1".to_string()],
+            "leader-cancel walk must see it"
+        );
+        assert_eq!(
+            tracker.running_children_of("tree-run"),
+            vec!["member-1".to_string()],
+            "fan-out tree walk must see it"
+        );
+        assert!(tracker.cancel("member-1"), "cancel-by-id must still hit");
+        assert!(probe.is_cancelled());
     }
 
     /// W12 risk — the guard must delist on panic unwind so entries never leak

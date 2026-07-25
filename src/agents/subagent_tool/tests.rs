@@ -221,6 +221,127 @@ fn test_parse_args_null_name_team_name_read_as_absent() {
     assert!(matches!(action, SubagentAction::Run(_)));
 }
 
+/// The `model` argument is stamped onto the child's requests verbatim, so the
+/// schema must not advertise abstract tiers. It used to suggest "'fast', 'deep'",
+/// neither of which resolves anywhere — a model that followed the example sent
+/// `model: "fast"` to the API and the whole spawn failed.
+#[test]
+fn schema_model_description_advertises_no_phantom_tiers() {
+    let schema = make_tool().schema();
+    let desc = schema["properties"]["model"]["description"]
+        .as_str()
+        .expect("model description present");
+    assert!(
+        !desc.contains("'fast'") && !desc.contains("'deep'"),
+        "model description must not advertise tier vocabulary that resolves nowhere: {desc}"
+    );
+    assert!(
+        desc.contains("provider/model"),
+        "the qualified form is the cross-vendor route — it must be discoverable: {desc}"
+    );
+}
+
+/// A near-miss key must be rejected, not silently ignored: `agent` instead of
+/// `agent_type` used to run the DEFAULT role while reporting success, so the
+/// caller never learned its role selection was dropped.
+#[test]
+fn parse_args_rejects_unknown_keys() {
+    for (input, offender) in [
+        (json!({ "task": "t", "agent": "explore" }), "agent"),
+        (json!({ "prompt": "t" }), "prompt"),
+        (json!({ "task": "t", "background": true }), "background"),
+    ] {
+        let err = parse_args(&input).expect_err("unknown key must be rejected");
+        assert!(
+            err.contains("unknown argument(s)") && err.contains(offender),
+            "unexpected error for {input}: {err}"
+        );
+        assert!(
+            err.contains("agent_type"),
+            "error must list the accepted arguments: {err}"
+        );
+    }
+}
+
+/// Explicit `null` on an unknown key carries no intent (schema-completing
+/// providers emit it) — it must not trip the rejection.
+#[test]
+fn parse_args_ignores_null_unknown_keys() {
+    let action = parse_args(&json!({ "task": "t", "reasoning": null }))
+        .expect("null unknown key must read as absent");
+    assert!(matches!(action, SubagentAction::Run(_)));
+}
+
+/// Drift guard: the parser's accepted-key set and the hand-written schema are
+/// two halves of one contract. Every advertised property must be accepted, and
+/// every accepted key must be advertised — except `name`, which is deliberately
+/// unadvertised so its dedicated rejection message can fire.
+#[test]
+fn subagent_schema_properties_match_accepted_keys() {
+    let schema = make_tool().schema();
+    let props = schema["properties"]
+        .as_object()
+        .expect("schema advertises an object of properties");
+    for key in props.keys() {
+        assert!(
+            super::types::ACCEPTED_ARG_KEYS.contains(&key.as_str()),
+            "schema advertises '{key}' but the parser rejects it as unknown"
+        );
+    }
+    for key in super::types::ACCEPTED_ARG_KEYS {
+        if *key == "name" {
+            continue;
+        }
+        assert!(
+            props.contains_key(*key),
+            "parser accepts '{key}' but the schema never advertises it"
+        );
+    }
+}
+
+/// A model-supplied `timeout_secs` is clamped so the child's own wall-clock
+/// timeout always fires before the `subagent` tool budget, and `0` can never
+/// mean "die before the first turn".
+#[test]
+fn parse_args_clamps_run_timeout_into_range() {
+    let max = crate::tools::budget::builtin_tool_budget_ms("subagent")
+        .expect("subagent has a budget row")
+        / 1000;
+
+    let action = parse_args(&json!({ "task": "t", "timeout_secs": 0 })).unwrap();
+    match action {
+        SubagentAction::Run(args) => assert_eq!(args.timeout_secs, 1),
+        _ => unreachable!("expected Run"),
+    }
+
+    let action = parse_args(&json!({ "task": "t", "timeout_secs": 999_999 })).unwrap();
+    match action {
+        SubagentAction::Run(args) => {
+            assert!(
+                args.timeout_secs < max,
+                "clamped run timeout {} must leave headroom under the {max}s tool budget",
+                args.timeout_secs
+            );
+        }
+        _ => unreachable!("expected Run"),
+    }
+
+    // Per-entry batch overrides are clamped by the same ceiling.
+    let action = parse_args(&json!({
+        "task": "t",
+        "batch_tasks": [{ "task": "a", "timeout_secs": 999_999 }, { "task": "b", "timeout_secs": 0 }],
+    }))
+    .unwrap();
+    match action {
+        SubagentAction::Run(args) => {
+            let batch = args.batch_tasks.expect("batch parsed");
+            assert!(batch[0].timeout_secs.expect("clamped") < max);
+            assert_eq!(batch[1].timeout_secs, Some(1));
+        }
+        _ => unreachable!("expected Run"),
+    }
+}
+
 /// W2 defense-in-depth — the ghost 'result' action (coached by old announce
 /// prompts) parses as check_status instead of erroring.
 #[test]
@@ -868,6 +989,71 @@ async fn execute_moa_returns_synthesis() {
             assert!(output["synthesis"].is_string(), "synthesis must be present");
             let results = output["results"].as_array().expect("results is array");
             assert_eq!(results.len(), 2, "raw proposals are preserved");
+        }
+        ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
+    }
+}
+
+/// Provider whose `process` always fails, so every proposer in a fan-out dies.
+struct FailingProvider;
+impl AiProvider for FailingProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async {
+            Err(crate::error::AlephError::Other {
+                message: "provider down".to_string(),
+                suggestion: None,
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "failing"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// A requested MoA reduce that never ran must not report as a plain
+/// `batch_completed`: the model asked for one synthesized answer, and silently
+/// handing back N raw failures let it believe the synthesis had happened.
+#[tokio::test]
+async fn execute_moa_reports_when_no_proposal_survived() {
+    let provider: Arc<dyn AiProvider> = Arc::new(FailingProvider);
+    let chain = crate::harness::chain_context::ChainContext::new();
+    let tool = SubagentTool::new(
+        provider,
+        chain,
+        make_registry(),
+        make_tracker(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    );
+
+    let result = tool
+        .execute(
+            json!({
+                "task": "what is the answer",
+                "proposer_models": ["model-a", "model-b"],
+                "synthesize": true,
+                "agent_type": "explore",
+                "timeout_secs": 10
+            }),
+            CancellationToken::new(),
+        )
+        .await;
+
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "moa_no_proposals");
+            assert!(
+                output["note"].is_string(),
+                "must explain the skipped reduce"
+            );
+            let results = output["results"].as_array().expect("results is array");
+            assert_eq!(results.len(), 2, "raw per-proposal failures are preserved");
         }
         ToolResult::Error { error, .. } => unreachable!("expected success, got error: {error}"),
     }
