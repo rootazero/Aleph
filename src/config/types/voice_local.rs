@@ -68,6 +68,14 @@ impl Default for VoiceLocalConfig {
 ///
 /// `enabled = false` (default) means voice input uses the non-streaming
 /// `/v1/audio/transcriptions` path instead.
+///
+/// ⚠️ **Self-hosted WhisperLiveKit must be started with `--pcm-input`.** Aleph
+/// streams raw s16le PCM at 16 kHz; WhisperLiveKit only bypasses FFmpeg for raw
+/// PCM when that flag is set, and its Deepgram-compatible endpoint ignores the
+/// `encoding=linear16&sample_rate=16000` query parameters Aleph sends. Without
+/// the flag the server pipes headerless PCM into FFmpeg, which decodes nothing —
+/// the stream connects, no transcript ever arrives, and the Panel silently
+/// strikes out to the batch path after two empty utterances.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct StreamingConfig {
@@ -157,6 +165,63 @@ pub struct VoiceSection {
     /// provider).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub llm_model: String,
+    /// Domain vocabulary biased *into* recognition — proper nouns, product and
+    /// agent names, jargon the acoustic model has never seen ("Aleph", "Leptos",
+    /// a colleague's name). Empty (default) sends nothing.
+    ///
+    /// This is upstream *data*, not a downstream text-rewriting pass. Reference
+    /// dictation apps ship a post-hoc regex find-and-replace over the transcript;
+    /// that is a deterministic rules engine over natural language (violates
+    /// R7/P8, and `[voice.format]`'s LLM already owns transcript polish). Biasing
+    /// the decoder fixes the recognition instead of patching its output, and it
+    /// is exactly the class of thing the ASR cannot know on its own.
+    ///
+    /// Reaches: batch Whisper (`prompt` form field) and the WhisperLive
+    /// handshake (`hotwords` + `initial_prompt`, the two fields WhisperLive's own
+    /// client documents as "domain vocabulary or names"). **Not** the Deepgram
+    /// dialect — the parameter name there is model-dependent (`keywords` on
+    /// nova-2, `keyterm` on nova-3) and guessing wrong is a 400 that kills a
+    /// working cloud stream; WhisperLiveKit ignores query parameters anyway.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary: Vec<String>,
+}
+
+/// Character ceiling on the rendered vocabulary hint. Whisper's `initial_prompt`
+/// is bounded by the decoder's 224-token context, and a hint that overruns it
+/// crowds out the audio itself; terms past the limit are dropped whole rather
+/// than truncated mid-word.
+const MAX_VOCABULARY_CHARS: usize = 800;
+
+impl VoiceSection {
+    /// Render [`Self::vocabulary`] as the single hint string every backend takes
+    /// (comma-separated), or `None` when nothing usable is configured.
+    ///
+    /// One renderer for all three consumers so the batch and streaming paths
+    /// cannot bias the decoder differently.
+    #[must_use]
+    pub fn vocabulary_hint(&self) -> Option<String> {
+        let mut out = String::new();
+        for term in self
+            .vocabulary
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+        {
+            let extra = if out.is_empty() {
+                term.chars().count()
+            } else {
+                term.chars().count() + 2
+            };
+            if out.chars().count() + extra > MAX_VOCABULARY_CHARS {
+                break;
+            }
+            if !out.is_empty() {
+                out.push_str(", ");
+            }
+            out.push_str(term);
+        }
+        (!out.is_empty()).then_some(out)
+    }
 }
 
 /// The BYO endpoint's provider key: used both as the map entry name and as
@@ -388,6 +453,43 @@ mod tests {
         );
         assert!(cfg.generation.speech_providers.contains_key("openai_tts"));
         assert!(!cfg.generation.speech_providers.contains_key("local"));
+    }
+
+    #[test]
+    fn vocabulary_hint_is_none_when_unset_or_blank() {
+        let mut v = VoiceSection::default();
+        assert!(v.vocabulary_hint().is_none());
+        v.vocabulary = vec![String::new(), "   ".into()];
+        assert!(
+            v.vocabulary_hint().is_none(),
+            "blank terms must not produce an empty hint that still hits the wire"
+        );
+    }
+
+    #[test]
+    fn vocabulary_hint_joins_and_trims() {
+        let v = VoiceSection {
+            vocabulary: vec!["  Aleph ".into(), String::new(), "Leptos".into()],
+            ..VoiceSection::default()
+        };
+        assert_eq!(v.vocabulary_hint().as_deref(), Some("Aleph, Leptos"));
+    }
+
+    #[test]
+    fn vocabulary_hint_is_bounded_by_the_decoder_budget() {
+        // Whisper's initial_prompt competes with the audio for decoder context;
+        // terms past the ceiling are dropped whole, never truncated mid-word.
+        let v = VoiceSection {
+            vocabulary: (0..500).map(|i| format!("term{i:04}")).collect(),
+            ..VoiceSection::default()
+        };
+        let hint = v.vocabulary_hint().expect("some terms fit");
+        assert!(hint.chars().count() <= MAX_VOCABULARY_CHARS);
+        assert!(
+            hint.split(", ")
+                .all(|t| t.starts_with("term") && t.len() == 8),
+            "no partial term survived: {hint}"
+        );
     }
 
     #[test]

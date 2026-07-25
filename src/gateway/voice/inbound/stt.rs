@@ -13,6 +13,9 @@ pub struct SttConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+    /// Rendered `[voice] vocabulary` hint sent as the Whisper `prompt` field to
+    /// bias recognition toward the user's proper nouns. Empty = omit the field.
+    pub vocabulary: String,
 }
 
 /// STT source. Local is the BYO endpoint (P7: a request failure against it
@@ -102,6 +105,13 @@ pub async fn transcribe_bytes(
     }
     if let Some(lang) = language.filter(|l| !l.is_empty()) {
         form = form.text("language", lang.to_string());
+    }
+    // Vocabulary bias. `prompt` is the OpenAI-documented decoder hint every
+    // Whisper-dialect server accepts (and BYO servers that don't simply ignore
+    // the extra multipart field), so the user's proper nouns get recognized
+    // rather than regex-replaced after the fact.
+    if !config.vocabulary.is_empty() {
+        form = form.text("prompt", config.vocabulary.clone());
     }
 
     let url = format!(

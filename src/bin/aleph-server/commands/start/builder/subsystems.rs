@@ -793,9 +793,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // endpoint) source carries a pre-resolved cloud fallback for P7 retry.
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
-        if let Some(stt) =
-            alephcore::gateway::voice::inbound::resolve_stt_source(&cfg.generation, &vault)
-        {
+        if let Some(stt) = alephcore::gateway::voice::inbound::resolve_stt_source(
+            &cfg.generation,
+            &vault,
+            cfg.voice_local.vocabulary_hint().as_deref(),
+        ) {
             inbound_router = inbound_router.with_stt_source(stt);
             if !daemon {
                 println!("  Inbound router: voice STT enabled (local-aware source)");

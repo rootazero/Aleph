@@ -74,7 +74,11 @@ pub async fn handle_transcribe(
 
     let stt_source = {
         let cfg = config.read().await;
-        resolve_stt_source(&cfg.generation, &vault)
+        resolve_stt_source(
+            &cfg.generation,
+            &vault,
+            cfg.voice_local.vocabulary_hint().as_deref(),
+        )
     };
     let Some(stt_source) = stt_source else {
         return JsonRpcResponse::error(
@@ -420,6 +424,7 @@ pub async fn handle_stream_start(
             api_key: s.api_key.clone(),
             language: s.language.clone(),
             model: s.model.clone(),
+            vocabulary: cfg.voice_local.vocabulary_hint().unwrap_or_default(),
         }
     };
     // `open()` falls back to `target.language` when the per-call language is None.

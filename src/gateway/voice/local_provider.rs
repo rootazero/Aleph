@@ -35,6 +35,11 @@ impl LocalTranscription {
                 api_key: config.api_key.clone().unwrap_or_default(),
                 base_url: local_base_url(config),
                 model: config.models.first().cloned().unwrap_or_default(),
+                // No vocabulary bias here: this is the media-pipeline
+                // `TranscriptionService` (attachment transcription), built from a
+                // `GenerationProviderConfig` alone with no `[voice]` handle in
+                // reach. The voice-conversation paths carry it.
+                vocabulary: String::new(),
             },
             client: voice_client(config.timeout_seconds),
         }
