@@ -4,11 +4,15 @@
 //! ([`super::capabilities`]), rates ([`crate::pricing`]), endpoint locality
 //! ([`super::endpoint`]) and lifecycle ([`super::lifecycle`]). Every surface
 //! that shows a model to a human or to the LLM needs all four, and until now
-//! each one re-did the join by hand: `list_models`' `enrich`, the
-//! `providers.catalog` RPC (twice — once for presets, once for custom
-//! providers) and `route_observe`. Four hand-written joins over four tables is
-//! how a fifth table (lifecycle) would have been wired into three of them and
-//! forgotten in the fourth.
+//! each one re-did the join by hand: `list_models`' `enrich` and the
+//! `providers.catalog` RPC twice over (once for presets, once for custom
+//! providers). Three hand-written joins is how a fourth table (lifecycle)
+//! would have reached two of them and been forgotten in the third — silently,
+//! since a missing field is not a compile error.
+//!
+//! (`route_observe::price_milli_per_mtok` and `failover::price_hint` read
+//! [`crate::pricing`] alone and stay that way: they need one scalar to sort on,
+//! not a record to display.)
 //!
 //! opencode solves the same problem by composing its catalog through ordered
 //! plugins (`modelsDev → env → account → provider → config → discovery`), each
