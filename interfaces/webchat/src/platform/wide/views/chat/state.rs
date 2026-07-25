@@ -834,6 +834,11 @@ impl ChatState {
             });
         });
         self.error_message.set(None);
+        // The banner describes the LAST send attempt, so a new one retires it.
+        // Without this a corrective send (remove the attachment, drop the
+        // flagged phrasing) left the old red banner pinned above the transcript
+        // until the session was cleared, reading as if the fix had failed.
+        self.send_error.set(None);
     }
 
     /// Start a new assistant message placeholder (streaming).
@@ -1235,6 +1240,11 @@ impl ChatState {
         self.prompt_queue.set(Vec::new());
         self.team_id.set(None);
         self.team_members.set(Vec::new());
+        // Clear the task strip too. Leaving it behind meant switching from
+        // group A to group B showed A's tasks under B's name until the new
+        // team's `teams.list_tasks` came back — and, worse, leaving a group for
+        // a single chat kept a phantom strip pinned above the composer.
+        self.team_tasks.set(Vec::new());
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);

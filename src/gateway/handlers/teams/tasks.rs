@@ -659,17 +659,55 @@ pub(crate) struct ChatHistoryItem {
     pub(crate) from_agent: String,
     pub(crate) content: String,
     pub(crate) msg_type: String,
+    /// How the Panel must render this row: `"user"` (right-aligned own bubble),
+    /// `"agent"` (attributed left bubble), `"system"` (centered notice chip).
+    /// Derived server-side so the Panel never has to re-derive the same
+    /// classification from `from_agent`/`msg_type` — one source, one answer.
+    pub(crate) kind: &'static str,
     /// Milliseconds since Unix epoch — Panel uses this for chronological order.
     pub(crate) created_at: i64,
 }
 
+/// Whether a stored team message belongs in the group-chat transcript at all.
+///
+/// `team_messages` is a shared bus: besides the conversation itself it carries
+/// **directed inbox traffic** — the `TeamNotifier`'s leader digests, the
+/// router's thread-escalation hints, discovery pings. Those have explicit
+/// `recipients` and were never shown live, so replaying them turned a re-opened
+/// group chat into a different (noisier) conversation than the one the user had
+/// just been watching. Conversation rows (`MessageType::Message`) and the
+/// broadcaster's in-chat notices are recipient-less, which is exactly the
+/// discriminator.
+fn is_chat_visible(m: &crate::teams::messages::TeamMessage) -> bool {
+    use crate::teams::messages::MessageType;
+    m.msg_type == MessageType::Message || m.recipients.is_empty()
+}
+
+/// Render class for a chat-visible row. `system` covers the broadcaster's
+/// in-chat notices ([`crate::teams::broadcast::SYSTEM_HANDLE`]) plus any
+/// recipient-less notification that slipped into the transcript.
+fn history_kind(m: &crate::teams::messages::TeamMessage) -> &'static str {
+    use crate::teams::messages::MessageType;
+    if m.from_agent == crate::teams::broadcast::RESERVED_USER_HANDLE {
+        "user"
+    } else if m.from_agent == crate::teams::broadcast::SYSTEM_HANDLE
+        || m.msg_type != MessageType::Message
+    {
+        "system"
+    } else {
+        "agent"
+    }
+}
+
 /// Map a flat list of [`TeamMessage`] values to [`ChatHistoryItem`] values,
-/// sorted chronologically. Extracted as a free function so it is unit-testable
-/// without any async store.
+/// sorted chronologically, dropping directed inbox traffic. Extracted as a free
+/// function so it is unit-testable without any async store.
 pub(crate) fn map_history(msgs: Vec<crate::teams::messages::TeamMessage>) -> Vec<ChatHistoryItem> {
     let mut items: Vec<ChatHistoryItem> = msgs
         .into_iter()
+        .filter(is_chat_visible)
         .map(|m| ChatHistoryItem {
+            kind: history_kind(&m),
             from_agent: m.from_agent,
             content: m.content,
             msg_type: m.msg_type.as_str().to_string(),
@@ -694,14 +732,23 @@ pub async fn handle_chat_history(
         Err(resp) => return resp,
     };
 
-    // 200 messages is ample for the Panel's initial hydrate; store query is
-    // oldest-first after internal DESC→reverse, so .take(200) is the tail.
+    // 200 chat bubbles is ample for the Panel's initial hydrate. The store
+    // query is a raw tail over `team_messages`, which also carries directed
+    // inbox traffic that `map_history` drops — so over-fetch and trim AFTER
+    // filtering, or a team whose leader got a burst of notifier digests would
+    // hydrate with a near-empty conversation.
+    const CHAT_BUBBLE_LIMIT: usize = 200;
+    const RAW_FETCH_LIMIT: usize = CHAT_BUBBLE_LIMIT * 3;
     let msgs = msg_store
-        .list_team_messages(&params.team_id, 200)
+        .list_team_messages(&params.team_id, RAW_FETCH_LIMIT)
         .await
         .unwrap_or_default();
 
-    let items = map_history(msgs);
+    let mut items = map_history(msgs);
+    // Keep the newest window; `map_history` returns oldest-first.
+    if items.len() > CHAT_BUBBLE_LIMIT {
+        items.drain(..items.len() - CHAT_BUBBLE_LIMIT);
+    }
     JsonRpcResponse::success(request.id, serde_json::json!({ "items": items }))
 }
 

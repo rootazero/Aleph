@@ -115,8 +115,13 @@ pub fn count_for_column(tasks: &[CoordTaskDto], col_status: &str) -> usize {
         .count()
 }
 
-/// Localized column header / chip label for a stored status key. An unknown
-/// key degrades to the raw string rather than rendering blank.
+/// Localized label for a stored `CoordTaskStatus` key. An unknown key degrades
+/// to the raw string rather than rendering blank.
+///
+/// Serves both the kanban column headers/chips and the team-chat task strip
+/// and drawer. `unsatisfiable` has no column of its own (it folds into
+/// `blocked` on the board) but is a real stored status a task can carry, so it
+/// still needs a label wherever tasks are listed rather than bucketed.
 pub fn column_label(i18n: I18nContext<Locale>, status: &str) -> String {
     match status {
         "pending" => t_string!(i18n, teams.kanban.columns.pending).to_string(),
@@ -128,6 +133,7 @@ pub fn column_label(i18n: I18nContext<Locale>, status: &str) -> String {
         "skipped" => t_string!(i18n, teams.kanban.columns.skipped).to_string(),
         "failed" => t_string!(i18n, teams.kanban.columns.failed).to_string(),
         "cancelled" => t_string!(i18n, teams.kanban.columns.cancelled).to_string(),
+        "unsatisfiable" => t_string!(i18n, teams.kanban.columns.unsatisfiable).to_string(),
         other => other.to_string(),
     }
 }

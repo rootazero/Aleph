@@ -13,7 +13,9 @@ mod voice;
 
 use super::mention_palette::{update_mention_palette, MentionPaletteView};
 use super::project_menu::ProjectMenu;
-use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView};
+use super::state::{
+    ChatPhase, ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt, TeamMemberView,
+};
 use super::TodoPanel;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::team_task_strip::TeamTaskStrip;
@@ -153,6 +155,19 @@ pub(super) fn InputArea() -> impl IntoView {
             return;
         }
 
+        // `teams.chat.send` carries `{team_id, message}` only — there is no
+        // attachment leg on the group transcript. The team branch below used to
+        // run AFTER the tray was cleared, so a user who attached a spec and hit
+        // Enter watched it vanish with no reply and no error. Refuse the send
+        // instead, and leave the tray intact so nothing is lost.
+        if chat.team_id.get_untracked().is_some() && !files.is_empty() {
+            chat.set_send_error(ChatSendError::new(
+                ChatSendErrorCode::Unknown,
+                t_string!(i18n, chat.team_attachments_unsupported).to_string(),
+            ));
+            return;
+        }
+
         // G1 client-side prompt-injection guard — hard-blocks save a
         // wasted round-trip; reviews are surfaced live by the banner
         // below but still permitted through (server is final authority).
@@ -178,10 +193,19 @@ pub(super) fn InputArea() -> impl IntoView {
         if let Some(team_id) = chat.team_id.get_untracked() {
             let dash = dashboard;
             let team_text = text.clone();
+            // Optimistic busy state: the authoritative signal is the
+            // `team.<id>.fanout` `started` event, but that is a round-trip away
+            // and the first member reply can be a minute out. Without this the
+            // group chat sits visually idle right after Enter, exactly the
+            // stretch where the user most needs to see something happening.
+            chat.phase.set(ChatPhase::Thinking);
             spawn_local(async move {
                 if let Err(e) =
                     crate::api::team_chat::TeamChatApi::send(&dash, &team_id, &team_text).await
                 {
+                    // The fan-out never started, so no `settled` event is coming
+                    // — drop back to idle or the composer hangs on "thinking".
+                    chat.phase.set(ChatPhase::Idle);
                     chat.set_send_error(ChatSendError::classify(e));
                 }
                 is_sending.set(false);
@@ -865,12 +889,25 @@ pub(super) fn InputArea() -> impl IntoView {
         // Suppress exactly one auto-drain: an explicit Stop must not let the
         // queue immediately re-fire its head (the "Stop does nothing" trap).
         user_interrupted.set(true);
-        if let Some(run_id) = chat.active_run_id.get() {
-            let dash = dashboard;
-            spawn_local(async move {
+        let Some(run_id) = chat.active_run_id.get() else {
+            return;
+        };
+        // In team chat the id is a fan-out TREE, not an engine run: `chat.abort`
+        // looks it up in `active_runs`, misses, and the group keeps talking.
+        // `teams.chat.cancel` poisons the tree and walks its member runs.
+        let is_team = chat.team_id.get_untracked().is_some();
+        let dash = dashboard;
+        spawn_local(async move {
+            if is_team {
+                let _ = crate::api::team_chat::TeamChatApi::cancel(&dash, &run_id).await;
+                // The tree is gone, so no `settled` event will arrive to clear
+                // the slot — release it here or the composer stays stuck on Stop.
+                chat.active_run_id.set(None);
+                chat.phase.set(ChatPhase::Idle);
+            } else {
                 let _ = ChatApi::abort(&dash, &run_id).await;
-            });
-        }
+            }
+        });
     };
 
     let select_for_callback = select_palette_entry;

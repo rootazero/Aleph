@@ -468,6 +468,58 @@ plus those two. Since `subagent` spawns a differently-scoped agent, treat
 surface from it would be keyword matching, which P8 forbids. Declaration is
 explicit or absent.
 
+#### Live surface: the `team.<id>.*` topic family
+
+Everything the Panel's group-chat view knows in real time arrives on five
+topics, all sharing one `{topic, data}` envelope published through the single
+source `gateway::event_emitter::team_fanout::publish_team_event` (the
+per-run `TeamFanoutEmitter` calls it too):
+
+| Topic | Payload | Published by | Panel effect |
+|-------|---------|--------------|--------------|
+| `team.<id>.message` | `{agent_id, text, run_id, final}` | `TeamFanoutEmitter` on `RunComplete` | attributed bubble |
+| `team.<id>.system` | `{text}` | `GroupChatBroadcaster::post_system` | centered notice chip |
+| `team.<id>.activity` | `{agent_id, status: working\|done\|error}` | member spawn, `ToolStart`, `RunComplete`, `RunError`, adapter failure | roster status dot |
+| `team.<id>.fanout` | `{run_id, status: started\|settled}` | `dispatch_user`, head and tail | `active_run_id` + `ChatPhase` |
+| `team.<id>.task.<verb>` | `{task_id, status, …}` | `CoordTaskStore` | task strip / drawer |
+
+Contract notes (2026-07-25):
+
+- **One parse point.** The Panel resolves the topic exactly once, in
+  `views::chat::team_events::parse_team_topic`, which returns `(team_id, kind)`.
+  Team ids are opaque and may contain dots, so the kind is matched as a suffix,
+  not by positional split; `team.changed` (the global team-list invalidation)
+  deliberately does not match. Any new consumer must go through it rather than
+  re-testing `topic.starts_with("team.")` — that shortcut is what leaked a
+  background team's bubbles into whatever conversation happened to be open.
+- **Scope before projecting.** Gateway subscription is the `team.*` wildcard, so
+  every team the daemon runs is delivered. Consumers filter on the team the user
+  is actually viewing. The sidebar uses the same parse to badge *other* groups as
+  unread instead of dropping their activity on the floor.
+- **`fanout` owns the run slot.** `started`/`settled` is the only writer of
+  `active_run_id` in team mode, which is what gives group chat a Stop button
+  (routed to `teams.chat.cancel`, not `chat.abort` — a fan-out tree is not an
+  engine `active_runs` entry) and, for free, the busy→idle edge the composer's
+  prompt-queue auto-drain already watches.
+- **`system` is not an agent.** Storm-guard explanations used to be
+  transcript-only: the gates fired, the room went quiet, and a live user saw
+  nothing until they left and came back. They now go out live and render as
+  chrome, never as a bubble from a participant named `system`
+  (`broadcast::SYSTEM_HANDLE`).
+
+#### History replay fidelity
+
+`teams.chat.history` replays the durable transcript, but `team_messages` is a
+shared bus that also carries **directed inbox traffic** (the notifier's leader
+digests, thread-escalation hints, discovery pings). `map_history` keeps only
+conversation rows — `MessageType::Message`, or any recipient-less row — and
+stamps each with a server-derived `kind` (`user` | `agent` | `system`) so the
+Panel renders replayed history identically to what it showed live. The row cap
+is applied *after* filtering (raw fetch over-reads 3×), so a burst of
+notifications cannot squeeze the conversation out of the window. Panels talking
+to an older core default `kind` to `"agent"` and fall back to the reserved-handle
+check for the user's own rows. (teams: rewire the group-chat Panel surface (§4.5))
+
 ## Mode 4: A2A (Remote Agent Delegation)
 
 **Tools**: `a2a_delegate`, `a2a_agents`

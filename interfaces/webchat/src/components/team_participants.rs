@@ -7,9 +7,11 @@
 //! `agent_identity::{agent_color_for_id, monogram}` for color/glyph. The pure
 //! helpers (`member_glyph`, `cluster_overflow`, `status_color`) are host-tested.
 
+use crate::i18n::{t_string, use_i18n, Locale};
 use crate::views::chat::agent_identity::{agent_color_for_id, monogram};
 use crate::views::chat::state::{ChatState, MemberStatus, TeamMemberView};
 use leptos::prelude::*;
+use leptos_i18n::I18nContext;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -51,15 +53,16 @@ pub fn status_color(s: MemberStatus) -> &'static str {
     }
 }
 
-/// Chinese status word shown beside a member's name in the expanded roster bar.
-/// Reuses the 4 existing `MemberStatus` variants (no "审阅中" state — spec §2).
+/// Localized status word shown beside a member's name in the expanded roster
+/// bar and the popover. Reuses the 4 existing `MemberStatus` variants (no
+/// "reviewing" state — spec §2).
 #[must_use]
-pub fn member_status_label(s: MemberStatus) -> &'static str {
+pub fn member_status_label(i18n: I18nContext<Locale>, s: MemberStatus) -> String {
     match s {
-        MemberStatus::Working => "工作中",
-        MemberStatus::Idle => "空闲",
-        MemberStatus::Done => "完成",
-        MemberStatus::Error => "错误",
+        MemberStatus::Working => t_string!(i18n, chat.team_roster_working).to_string(),
+        MemberStatus::Idle => t_string!(i18n, chat.team_roster_idle).to_string(),
+        MemberStatus::Done => t_string!(i18n, chat.team_roster_done).to_string(),
+        MemberStatus::Error => t_string!(i18n, chat.team_roster_error).to_string(),
     }
 }
 
@@ -73,7 +76,7 @@ pub fn collapse_for_count(n: usize) -> bool {
 
 /// Responsive roster bar for team chat. At wide widths (≥560px) renders an
 /// expanded horizontal pill bar — one labeled capsule per member with status
-/// dot, Chinese label, and a "leader" chip for the leader. At narrow widths (or
+/// dot, localized status label, and a "leader" chip for the leader. At narrow widths (or
 /// when the team exceeds `CLUSTER_CAP`) it collapses to an avatar cluster
 /// button that opens a popover. A `ResizeObserver` publishes the bar's
 /// rendered height to `--aleph-team-roster-h` so the message list can pad its
@@ -82,6 +85,7 @@ pub fn collapse_for_count(n: usize) -> bool {
 #[must_use]
 pub fn TeamParticipants() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let open = RwSignal::new(false);
     let root_ref = NodeRef::<leptos::html::Div>::new();
 
@@ -153,7 +157,7 @@ pub fn TeamParticipants() -> impl IntoView {
                             .map(|m| {
                                 let color = agent_color_for_id(&m.agent_id);
                                 let dot = status_color(m.status);
-                                let label = member_status_label(m.status);
+                                let label = member_status_label(i18n, m.status);
                                 let glyph = member_glyph(&m);
                                 view! {
                                     <span class="aleph-roster-pill">
@@ -177,7 +181,9 @@ pub fn TeamParticipants() -> impl IntoView {
                                         <span class="text-xs font-semibold max-w-[68px] truncate">{m.name}</span>
                                         {m.is_leader.then(|| view! {
                                             <span class="text-[10px] px-1 rounded \
-                                                         bg-primary/15 text-primary">"队长"</span>
+                                                         bg-primary/15 text-primary">
+                                                {t_string!(i18n, chat.team_leader_badge).to_string()}
+                                            </span>
                                         })}
                                         <span class="text-[10px]" style=format!("color: {dot};")>"●"</span>
                                         <span class="text-[10px] opacity-60">{label}</span>
@@ -264,7 +270,7 @@ pub fn TeamParticipants() -> impl IntoView {
                                 .map(|m| {
                                     let color = agent_color_for_id(&m.agent_id);
                                     let dot = status_color(m.status);
-                                    let label = member_status_label(m.status);
+                                    let label = member_status_label(i18n, m.status);
                                     let glyph = member_glyph(&m);
                                     view! {
                                         <div class="flex items-center gap-2 text-xs px-1.5 py-1 rounded">
@@ -279,7 +285,9 @@ pub fn TeamParticipants() -> impl IntoView {
                                             </span>
                                             {m.is_leader.then(|| view! {
                                                 <span class="text-[10px] px-1 rounded \
-                                                             bg-primary/15 text-primary">"队长"</span>
+                                                             bg-primary/15 text-primary">
+                                                    {t_string!(i18n, chat.team_leader_badge).to_string()}
+                                                </span>
                                             })}
                                             <span class="truncate">{m.name}</span>
                                             <span class="text-[10px] opacity-60 ml-auto">{label}</span>
@@ -358,13 +366,10 @@ mod tests {
         assert_eq!(status_color(MemberStatus::Idle), "#6b7280");
     }
 
-    #[test]
-    fn member_status_label_maps_all_variants() {
-        assert_eq!(member_status_label(MemberStatus::Working), "工作中");
-        assert_eq!(member_status_label(MemberStatus::Idle), "空闲");
-        assert_eq!(member_status_label(MemberStatus::Done), "完成");
-        assert_eq!(member_status_label(MemberStatus::Error), "错误");
-    }
+    // `member_status_label` is now a pure `t_string!` lookup keyed on the same
+    // 4 variants — no branch logic left to test, and `leptos_i18n` fails the
+    // build outright on a missing key, which is a stronger guarantee than the
+    // hardcoded-string assertions this replaced.
 
     #[test]
     fn collapse_only_above_cluster_cap() {

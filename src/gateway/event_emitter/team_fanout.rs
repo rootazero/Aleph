@@ -2,8 +2,14 @@
 //!
 //! When a member agent run belongs to a team, this decorator republishes a
 //! normalized, agent-attributed view of key stream events onto
-//! `team.<team_id>.{message,activity,task}` topics so the Panel's team-chat
-//! view can render attributed bubbles and roster status badges in real time.
+//! `team.<team_id>.{message,activity}` topics so the Panel's team-chat view can
+//! render attributed bubbles and roster status badges in real time.
+//!
+//! [`publish_team_event`] is the same wire format without a run behind it: the
+//! broadcaster uses it for the fan-out tree's `fanout` lifecycle and for
+//! in-chat `system` notices, and `CoordTaskStore` publishes `task.<verb>`.
+//! Every `team.<id>.*` topic therefore shares one envelope shape, matched
+//! Panel-side by `views::chat::team_events::parse_team_topic`.
 //!
 //! # Design
 //!
@@ -67,6 +73,33 @@ pub fn team_event_bus() -> Option<Arc<GatewayEventBus>> {
     guard.clone()
 }
 
+/// Publish one `{topic: "team.<team_id>.<suffix>", data}` envelope on the
+/// injected bus. Single source for the team-topic wire format: both
+/// [`TeamFanoutEmitter`] (per-run stream projection) and the broadcaster's
+/// lifecycle/system notices go through here, so the Panel only ever has to
+/// match one envelope shape.
+///
+/// Best-effort: no bus (pre-boot / unit tests) or a serialization failure is a
+/// silent no-op — a lagging subscriber must never abort a run.
+pub fn publish_team_event(team_id: &str, suffix: &str, data: Value) {
+    let Some(bus) = team_event_bus() else { return };
+    publish_team_event_on(&bus, team_id, suffix, data);
+}
+
+/// [`publish_team_event`] against an explicit bus (used by the emitter, which
+/// holds its own handle, and by tests that build a local bus).
+fn publish_team_event_on(bus: &GatewayEventBus, team_id: &str, suffix: &str, data: Value) {
+    let topic = format!("team.{team_id}.{suffix}");
+    let envelope = json!({ "topic": topic, "data": data });
+    // Raw string-channel publish (not publish_frame): team.<id>.* is an ad-hoc
+    // topic with no GatewayEventFrame variant, and this {topic,data} envelope is
+    // byte-identical to publish_frame's non-streaming wire format that the Panel's
+    // topic subscription already matches.
+    if let Ok(json) = serde_json::to_string(&envelope) {
+        bus.publish(json);
+    }
+}
+
 /// Decorator that republishes a team member run's events onto
 /// `team.<team_id>.*` topics, tagged with the producing `agent_id`.
 ///
@@ -120,15 +153,7 @@ impl TeamFanoutEmitter {
         if let Some(obj) = data.as_object_mut() {
             obj.insert("agent_id".to_string(), json!(self.agent_id));
         }
-        let topic = format!("team.{}.{}", self.team_id, suffix);
-        let envelope = json!({ "topic": topic, "data": data });
-        if let Ok(json) = serde_json::to_string(&envelope) {
-            // Raw string-channel publish (not publish_frame): team.<id>.* is an ad-hoc
-            // topic with no GatewayEventFrame variant, and this {topic,data} envelope is
-            // byte-identical to publish_frame's non-streaming wire format that the Panel's
-            // topic subscription already matches.
-            self.event_bus.publish(json);
-        }
+        publish_team_event_on(&self.event_bus, &self.team_id, suffix, data);
     }
 }
 
@@ -200,6 +225,44 @@ mod tests {
     use super::*;
     use crate::gateway::event_emitter::RunSummary;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn run_less_publish_uses_the_same_envelope_as_the_emitter() {
+        // The broadcaster's `fanout` / `system` notices have no StreamEvent
+        // behind them, but the Panel matches ONE envelope shape for every
+        // `team.<id>.*` topic — so they must go out byte-compatible with what
+        // the emitter produces, not as a second ad-hoc format.
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+
+        publish_team_event_on(
+            &bus,
+            "team-7",
+            "fanout",
+            json!({ "run_id": "r1", "status": "started" }),
+        );
+
+        let raw = rx.recv().await.expect("published");
+        let v: Value = serde_json::from_str(&raw).expect("valid json envelope");
+        assert_eq!(v["topic"], "team.team-7.fanout");
+        assert_eq!(v["data"]["run_id"], "r1");
+        assert_eq!(v["data"]["status"], "started");
+    }
+
+    #[tokio::test]
+    async fn run_less_publish_does_not_inject_an_agent_id() {
+        // A tree-level or system event belongs to nobody. Injecting an
+        // `agent_id` here would make the Panel attribute it to a member.
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+
+        publish_team_event_on(&bus, "team-7", "system", json!({ "text": "depth cap" }));
+
+        let raw = rx.recv().await.expect("published");
+        let v: Value = serde_json::from_str(&raw).expect("valid json envelope");
+        assert_eq!(v["topic"], "team.team-7.system");
+        assert!(v["data"].get("agent_id").is_none());
+    }
 
     #[tokio::test]
     async fn test_fanout_publishes_message_topic_with_agent_id() {

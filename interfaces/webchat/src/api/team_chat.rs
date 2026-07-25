@@ -30,7 +30,16 @@ pub struct TeamMessageItem {
     pub from_agent: String,
     pub content: String,
     pub msg_type: String,
+    /// Server-derived render class: `"user"` | `"agent"` | `"system"`. Defaults
+    /// to `"agent"` so a Panel talking to an older core still replays member
+    /// replies correctly (it just loses the centered system-chip styling).
+    #[serde(default = "default_history_kind")]
+    pub kind: String,
     pub created_at: i64,
+}
+
+fn default_history_kind() -> String {
+    "agent".to_string()
 }
 
 pub struct TeamChatApi;
@@ -49,6 +58,18 @@ impl TeamChatApi {
             )
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Stop an in-flight fan-out tree. `run_id` is the id [`Self::send`]
+    /// returned (also carried by the `team.<id>.fanout` `started` event) — the
+    /// group-chat analogue of `chat.abort`, which cannot reach a fan-out
+    /// because the tree is not an `active_runs` entry of the single-agent
+    /// engine.
+    pub async fn cancel(state: &DashboardState, run_id: &str) -> Result<(), String> {
+        state
+            .rpc_call("teams.chat.cancel", json!({ "run_id": run_id }))
+            .await
+            .map(|_| ())
     }
 
     /// Replay the durable group-chat transcript as bubbles, chronologically.
@@ -79,11 +100,31 @@ mod tests {
 
     #[test]
     fn deserializes_history_item() {
-        let j =
-            r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message","created_at":123}"#;
+        let j = r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message",
+                    "kind":"agent","created_at":123}"#;
         let it: TeamMessageItem = serde_json::from_str(j).unwrap();
         assert_eq!(it.from_agent, "risk_analyst");
+        assert_eq!(it.kind, "agent");
         assert_eq!(it.created_at, 123);
+    }
+
+    #[test]
+    fn history_item_without_kind_defaults_to_agent() {
+        // Forward/backward compatibility: an older core omits `kind`; the
+        // replay must still produce attributed member bubbles rather than
+        // failing the whole hydrate on a missing field.
+        let j =
+            r#"{"from_agent":"risk_analyst","content":"hi","msg_type":"message","created_at":1}"#;
+        let it: TeamMessageItem = serde_json::from_str(j).unwrap();
+        assert_eq!(it.kind, "agent");
+    }
+
+    #[test]
+    fn deserializes_system_history_item() {
+        let j = r#"{"from_agent":"system","content":"depth cap","msg_type":"system_notification",
+                    "kind":"system","created_at":9}"#;
+        let it: TeamMessageItem = serde_json::from_str(j).unwrap();
+        assert_eq!(it.kind, "system");
     }
 
     #[test]

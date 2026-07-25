@@ -41,6 +41,11 @@ pub const MEMBER_RUN_TIMEOUT_SECS: u64 = 600;
 /// Reserved handle: agents must not @-reply to the user (prevents self-loop).
 /// openteams `RESERVED_USER_HANDLE`.
 pub const RESERVED_USER_HANDLE: &str = "user";
+/// Reserved `from_agent` for in-chat system notices posted by the broadcaster
+/// (guard explanations, member-failure traces). The Panel keys its centered
+/// system-chip rendering off this handle, so it must stay in one place —
+/// `teams.chat.history` classifies replayed rows by comparing against it.
+pub const SYSTEM_HANDLE: &str = "system";
 
 /// Operator-tunable storm-prevention guards for group-chat broadcast (§4.5),
 /// the broadcast-side parallel to [`DispatcherConfig`](crate::teams::dispatcher::DispatcherConfig)
@@ -85,7 +90,9 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::background_tracker::{BackgroundAgentTracker, RunningRegistration, SpawnMeta};
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::gateway::context::GatewayContext;
-use crate::gateway::event_emitter::team_fanout::{team_event_bus, TeamFanoutEmitter};
+use crate::gateway::event_emitter::team_fanout::{
+    publish_team_event, team_event_bus, TeamFanoutEmitter,
+};
 use crate::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::reply_emitter::extract_final_response;
@@ -309,20 +316,37 @@ impl GroupChatBroadcaster {
         // Destructure keeps the RAII registration alive until the whole tree
         // settles — no completed entry, no announce.
         let RegisteredFanout { tree, _tree_reg } = fanout;
+        // Tree lifecycle → Panel. Without this the group-chat surface has no
+        // honest "the team is working / the team is done" signal: member
+        // `.activity` only fires per-member and a fan-out that ends with every
+        // member declining to speak emits nothing at all, leaving the composer
+        // stuck showing a Stop button for a tree that already settled.
+        publish_team_event(
+            &team_id,
+            "fanout",
+            serde_json::json!({ "run_id": tree.run_id.as_str(), "status": "started" }),
+        );
         let leader_first = self.maybe_plan_team_strategy(&team_id, &content).await;
         let budget = Arc::new(AtomicUsize::new(0));
         self.clone()
             .dispatch(
-                team_id,
+                team_id.clone(),
                 content,
                 RESERVED_USER_HANDLE.to_string(),
                 0,
                 true,
                 leader_first,
                 budget,
-                tree,
+                tree.clone(),
             )
             .await;
+        // `dispatch` awaits the whole recursive tree, so reaching here means
+        // every member run has settled (completed, failed, or been cancelled).
+        publish_team_event(
+            &team_id,
+            "fanout",
+            serde_json::json!({ "run_id": tree.run_id.as_str(), "status": "settled" }),
+        );
     }
 
     /// Recursive core. `user_triggered`=false means no fallback when no @ (chain naturally stops).
@@ -567,6 +591,16 @@ impl GroupChatBroadcaster {
                 model: None,
             },
         );
+        // Member is live NOW. `TeamFanoutEmitter` only reports "working" on the
+        // first ToolStart, so a member that answers straight from the model
+        // (no tool call) never showed as active at all — the roster sat Idle
+        // from send to reply and the group chat looked frozen. Emitting the
+        // same `activity` shape here makes presence honest for every member.
+        publish_team_event(
+            &team_id,
+            "activity",
+            serde_json::json!({ "run_id": run_id, "agent_id": agent_id, "status": "working" }),
+        );
         let metadata = member_run_metadata(&team_id, chain_depth);
         let req = RunRequest {
             run_id,
@@ -603,6 +637,15 @@ impl GroupChatBroadcaster {
             .await
         {
             tracing::warn!(team_id = %team_id, agent_id = %agent_id, error = %e, "group-chat member run failed");
+            // Release the roster badge this member claimed above. An adapter-level
+            // failure (spawn refused, timeout) never reaches the emitter's
+            // `RunError` arm, so without this the avatar stays amber "working"
+            // for the rest of the session.
+            publish_team_event(
+                &team_id,
+                "activity",
+                serde_json::json!({ "agent_id": agent_id, "status": "error", "error": e.to_string() }),
+            );
             // Failure/timeout must leave a trace in the group transcript — otherwise
             // an @'ed member vanishes silently, leaving a traceless hole in
             // subsequent rounds and Panel history (mirroring the depth/width gate
@@ -704,12 +747,18 @@ impl GroupChatBroadcaster {
         .await;
     }
 
+    /// Post an in-chat system notice (guard explanations, member failure
+    /// traces). Durable in the transcript AND fanned out live on
+    /// `team.<id>.system` — without the live leg the storm guards fire, the
+    /// conversation stops dead, and the user sees nothing at all until they
+    /// leave and re-enter the group (the notice was history-only).
     async fn post_system(&self, team_id: &str, text: &str) {
+        publish_team_event(team_id, "system", serde_json::json!({ "text": text }));
         let _ = self
             .msg_store
             .send_message(NewMessage {
                 team_id: team_id.to_string(),
-                from_agent: "system".to_string(),
+                from_agent: SYSTEM_HANDLE.to_string(),
                 msg_type: MessageType::SystemNotification,
                 subject: String::new(),
                 content: text.to_string(),

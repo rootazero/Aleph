@@ -240,6 +240,12 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     TimelineRow::Message { message, clock } => {
                                         if let Some(p) = message.plan_archive.clone() {
                                             view! { <PlanArchiveCell plan=p /> }.into_any()
+                                        } else if message.role == "system" {
+                                            // Group-chat notice from the broadcaster
+                                            // (storm-guard explanation, member failure).
+                                            // Nobody's turn — a centered chip, never a
+                                            // bubble attributed to an agent called "system".
+                                            view! { <SystemNoticeRow message=message /> }.into_any()
                                         } else if message.role == "tool" {
                                             // Trace-less history fallback: a run with no
                                             // replayable trace persists its tool call/result
@@ -986,6 +992,22 @@ fn NarrationRow(message: ChatMessage) -> impl IntoView {
     view! {
         <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
             <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+        </div>
+    }
+}
+
+/// A group-chat system notice: the broadcaster explaining why the conversation
+/// stopped (depth / activation caps) or that a member's run failed. Rendered as
+/// a centered, muted chip — the Telegram "X joined the group" register — so it
+/// reads as chrome rather than as a participant speaking.
+#[component]
+fn SystemNoticeRow(message: ChatMessage) -> impl IntoView {
+    view! {
+        <div class="flex justify-center py-1">
+            <span class="max-w-[80%] px-2.5 py-1 rounded-full text-[11px] text-text-tertiary
+                         bg-surface-sunken/60 border border-border/40 text-center">
+                {message.content}
+            </span>
         </div>
     }
 }

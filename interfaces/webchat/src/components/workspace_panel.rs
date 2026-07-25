@@ -284,13 +284,14 @@ fn TeamDeliverablesView() -> impl IntoView {
             if data.is_empty() {
                 view! { <div class="text-xs text-text-tertiary py-2">{t!(i18n, common.team_no_deliverables)}</div> }.into_any()
             } else {
-                // Color each artifact by its producing agent's roster slot, so
-                // the deliverable accent matches the chat attribution color.
-                let members = chat.team_members.get_untracked();
+                // Color each artifact by its producing agent, through the SAME
+                // id-hashed palette the chat bubbles and roster use. The old
+                // roster-slot lookup was a second, independent color source:
+                // it fell back to slot 0 for any agent missing from the roster
+                // and drifted from the bubble accent whenever roster order and
+                // hash order disagreed — i.e. almost always.
                 data.into_iter().map(|a| {
-                    let color = crate::views::chat::team_events::agent_color(
-                        members.iter().position(|m| m.agent_id == a.agent_id).unwrap_or(0)
-                    );
+                    let color = crate::views::chat::agent_identity::agent_color_for_id(&a.agent_id);
                     view! {
                         <div class="border-l-2 pl-2 py-1 mb-1" style=format!("border-color:{color}")>
                             <div class="text-xs font-semibold">{a.title}</div>
