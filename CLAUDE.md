@@ -195,6 +195,7 @@
 
 **A4 · 统一 Launch / Pause / Resume 契约 (Unified Lifecycle Contract, F6)**
 > 把已存在的取消（`cancellation.rs`）、续跑（`resume_coordinator.rs`）、改需求打断/注入（`steering.rs` 三态 Steer/Interrupt/Queue）、workflow resume 命名为**一组生命周期契约**：任何长跑单元（goal / loop / workflow / team task）都应可被一致地启动、暂停、恢复、取消。
+> **进展（2026-07-25）**：goal 与 loop 两条自治续跑链已补齐 pause/resume——loop 新增 `LoopStatus::Paused` 与唯一原子迁移原语 `LoopRegistry::transition`（goal 侧 `GoalStatus::Paused` 早有，本轮补 `GoalStore::pause_if_active`）。同批落地**跨会话生命周期管控**（`loop(action='stop'|'pause', session=…)` / `goal(action='clear'|'update status=paused', session=…)` + `stop_all` / `pause_all` 杀手闸），闭合"`list` 跨会话可见但只能在本会话停"的 R6/R8 断线。**边界规则（新增，适用于任何后续长跑单元）：跨会话只能"降活跃度"**——quiet（stop/pause/clear）可跨，arm（start/resume/加配额）必须在该单元自己的会话跑，因为下一步只由**它自己会话**的完成钩子认领；跨会话操作一律带工具内 operator 闸。详见 FEATURE_LOCATOR §4.1/§4.2。
 > 关联：R5（AI 主动到达）、R6（一核多端）。统一 API 面（薄 facade，**不进 harness**）列为 backlog（见审计文档 B §P1-1）。
 > ↳ 采纳·非红线
 

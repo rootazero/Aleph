@@ -1154,25 +1154,18 @@ pub(super) fn spawn_continuation_run(
             match kind {
                 ContinuationKind::Loop { .. } => {
                     if let Some(reg) = crate::looping::global() {
-                        if let Some(state) = reg.get_active(&session_key_str) {
-                            reg.put(
-                                state
-                                    .with_status(crate::looping::LoopStatus::Stopped)
-                                    .with_stop_reason(Some(format!(
-                                        "Halted: agent '{cont_agent_id}' no longer exists"
-                                    ))),
-                            );
+                        if matches!(
+                            reg.transition(
+                                &session_key_str,
+                                crate::looping::LoopStatus::Stopped,
+                                Some(format!("Halted: agent '{cont_agent_id}' no longer exists")),
+                            ),
+                            crate::looping::TransitionOutcome::Applied { .. }
+                        ) {
                             // Mirror the tool-stop cleanup: clear the welded
                             // strategy so the stale plan cannot bleed into a
                             // future session under a recreated agent.
-                            if let Some(strat) = crate::strategy::global() {
-                                if let Err(e) =
-                                    strat.delete(&crate::strategy::loop_key(&session_key_str))
-                                {
-                                    info!(session = %session_key_str, error = %e,
-                                        "loop: failed to delete welded strategy on agent-miss stop (ignored)");
-                                }
-                            }
+                            clear_loop_welded_strategy(&session_key_str, "agent-miss stop");
                         }
                     }
                 }
@@ -1377,16 +1370,19 @@ async fn stop_loop_on_failure(
 ) {
     let reason: String = format!("{error}").chars().take(300).collect();
     if let Some(reg) = crate::looping::global() {
-        // Only stop a loop still Active — never clobber one the user already
-        // stopped between the tick firing and its failure landing. Store the
-        // failure reason so loop(action='status') explains the halt even for
-        // Panel-only sessions that have no origin channel to receive the notice.
-        if let Some(state) = reg.get_active(session_key_str) {
-            reg.put(
-                state
-                    .with_status(crate::looping::LoopStatus::Stopped)
-                    .with_stop_reason(Some(format!("Halted by an error: {reason}"))),
-            );
+        // `transition` refuses a move out of the terminal `Stopped`, so a loop
+        // the user already stopped between the tick firing and its failure
+        // landing is never clobbered. The stored reason explains the halt to
+        // loop(action='status') even for Panel-only sessions with no origin
+        // channel to receive the notice.
+        if matches!(
+            reg.transition(
+                session_key_str,
+                crate::looping::LoopStatus::Stopped,
+                Some(format!("Halted by an error: {reason}")),
+            ),
+            crate::looping::TransitionOutcome::Applied { .. }
+        ) {
             // Mirror the tool-stop cleanup (loop_manage stop): clear the
             // loop-welded Strategy so the stale plan neither bleeds into
             // later turns nor blocks a future start from re-planning.

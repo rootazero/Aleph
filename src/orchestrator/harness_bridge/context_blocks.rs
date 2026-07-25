@@ -155,11 +155,18 @@ fn goal_tier_live(session_key: &str) -> bool {
 /// turn of the resumed session. Gating on registry *presence* (any status —
 /// the tool `stop` and both gateway stop paths already delete the weld, so a
 /// present-but-stopped loop briefly keeping the tier live is harmless) keeps
-/// the row on disk while it stops steering. Registry uninitialized (host
+/// the row on disk while it stops steering.
+///
+/// `Paused` is the one status that must be excluded explicitly, exactly as
+/// [`goal_tier_live`] excludes `GoalStatus::Paused`. A pause deliberately does
+/// NOT delete the weld — the plan is still the plan when the loop resumes — and
+/// unlike the momentary stopped-but-present window, a pause can last hours. Left
+/// live, the held loop's plan would keep steering every ordinary turn of a
+/// session whose watch the user explicitly put down. Registry uninitialized (host
 /// tests, early boot) → fail open, matching `goal_tier_live`.
 fn loop_tier_live(session_key: &str) -> bool {
     match crate::looping::global() {
-        Some(reg) => reg.get(session_key).is_some(),
+        Some(reg) => reg.get(session_key).is_some_and(|l| !l.is_paused()),
         None => true,
     }
 }

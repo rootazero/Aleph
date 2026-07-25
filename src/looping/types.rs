@@ -65,8 +65,32 @@ pub fn fmt_duration_ms(ms: u64) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopStatus {
+    /// Ticking: the continuation hook claims a tick after every completed run.
     Active,
+    /// Suspended but intact — caps, tick count, prompt and cadence all survive.
+    /// The hook skips it (`is_active()` is false), so no tick is ever claimed;
+    /// `resume` puts it back to `Active` and the resuming turn's completion
+    /// hook claims the next tick. The reversible half of the lifecycle contract
+    /// (A4), mirroring `goal`'s long-standing `GoalStatus::Paused`.
+    Paused,
+    /// Terminal. Only `start` brings a loop back from here.
     Stopped,
+}
+
+impl LoopStatus {
+    /// Canonical snake_case name — identical to the serde wire form and to the
+    /// `action='…'` verb that produces it. Single source for every renderer
+    /// (`human_summary` / `stable_summary` / the tool's `list` line), so a new
+    /// variant can never be surfaced in one place and forgotten in another.
+    /// Mirrors `goal::GoalStatus::as_str`.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 /// One session's loop. Immutable-update style: `with_*` / `spent_*` return
@@ -262,6 +286,26 @@ impl LoopState {
         self.status == LoopStatus::Active
     }
 
+    /// Suspended-but-intact. The tick pipeline treats `Paused` exactly like
+    /// `Stopped` (both fail `is_active`, so no tick is ever claimed or
+    /// confirmed); this predicate exists for the *lifecycle* callers that must
+    /// tell a reversible pause from a terminal stop — `update`, which re-paces
+    /// a paused loop, and `resume`, which will not resurrect a stopped one.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.status == LoopStatus::Paused
+    }
+
+    /// May the `loop` tool mutate this loop's fields in place? A paused loop is
+    /// the whole point of pausing — adjust caps/cadence/prompt while it is
+    /// quiet, then `resume`. A stopped one cannot be re-paced: the hook only
+    /// ever fires `Active` loops, so an "update" there would report success
+    /// over a loop that can never run again.
+    #[must_use]
+    pub fn is_adjustable(&self) -> bool {
+        self.is_active() || self.is_paused()
+    }
+
     /// User-facing one-paragraph status. Replaces a raw `{:?}` Debug dump with
     /// prose the model can relay verbatim: cadence in human units, ticks done
     /// (vs cap), any caps, the next wake for model-paced loops, and the stop
@@ -273,10 +317,7 @@ impl LoopState {
     /// use it — see [`Self::stable_summary`].
     #[must_use]
     pub fn human_summary(&self, now_ms: u64) -> String {
-        let mut parts = vec![match self.status {
-            LoopStatus::Active => "Loop active".to_string(),
-            LoopStatus::Stopped => "Loop stopped".to_string(),
-        }];
+        let mut parts = vec![format!("Loop {}", self.status.as_str())];
         parts.push(format!("cadence: {}", self.cadence.describe()));
         match self.max_iterations {
             Some(max) => parts.push(format!("ticks: {}/{max}", self.iterations_used)),
@@ -335,10 +376,7 @@ impl LoopState {
     /// prefix. That is caching working correctly, not cache thrash.
     #[must_use]
     pub fn stable_summary(&self) -> String {
-        let mut parts = vec![match self.status {
-            LoopStatus::Active => "Loop active".to_string(),
-            LoopStatus::Stopped => "Loop stopped".to_string(),
-        }];
+        let mut parts = vec![format!("Loop {}", self.status.as_str())];
         parts.push(format!("cadence: {}", self.cadence.describe()));
         match self.max_iterations {
             Some(max) => parts.push(format!("ticks: {}/{max}", self.iterations_used)),
@@ -567,9 +605,7 @@ mod tests {
             "existence, not remaining time"
         );
         assert!(
-            !out.contains("time left")
-                && !out.contains("next wake")
-                && !out.contains("next tick"),
+            !out.contains("time left") && !out.contains("next wake") && !out.contains("next tick"),
             "no countdown may reach the cached prefix; got: {out}"
         );
         // Byte-identical regardless of when it is rendered — the whole point.
@@ -623,6 +659,57 @@ mod tests {
         }
         .describe()
         .contains("model-paced"));
+    }
+
+    #[test]
+    fn paused_is_inert_to_the_tick_pipeline_but_still_adjustable() {
+        // The whole safety argument for Paused: it fails `is_active`, so
+        // `try_claim_tick` / `confirm_fire` / `get_active` treat it exactly like
+        // Stopped and no tick can ever fire. What it keeps is adjustability —
+        // that is what separates a pause from a stop.
+        let paused = sample().with_status(LoopStatus::Paused);
+        assert!(!paused.is_active(), "a paused loop must never fire");
+        assert!(paused.is_paused());
+        assert!(paused.is_adjustable(), "pause exists to be re-paced");
+
+        let stopped = sample().with_status(LoopStatus::Stopped);
+        assert!(!stopped.is_paused());
+        assert!(
+            !stopped.is_adjustable(),
+            "a stopped loop can never run again — update must refuse it"
+        );
+        assert!(sample().is_adjustable(), "active loops are adjustable too");
+    }
+
+    #[test]
+    fn paused_loop_keeps_its_accumulated_progress() {
+        // Pause is reversible: unlike stop→start, the tick count, caps, prompt
+        // and cadence all survive so `resume` continues where it left off.
+        let paused = sample()
+            .with_max_iterations(Some(20))
+            .spent_iteration()
+            .spent_iteration()
+            .with_status(LoopStatus::Paused);
+        assert_eq!(paused.iterations_used, 2);
+        assert_eq!(paused.max_iterations, Some(20));
+        let resumed = paused.with_status(LoopStatus::Active);
+        assert_eq!(
+            resumed.iterations_used, 2,
+            "resume does not rewind the count"
+        );
+        assert!(resumed.is_active());
+    }
+
+    #[test]
+    fn status_as_str_is_the_single_render_source() {
+        // Both summaries render the status through `as_str`, so a new variant
+        // can never surface in one and be forgotten in the other.
+        assert_eq!(LoopStatus::Active.as_str(), "active");
+        assert_eq!(LoopStatus::Paused.as_str(), "paused");
+        assert_eq!(LoopStatus::Stopped.as_str(), "stopped");
+        let paused = sample().with_status(LoopStatus::Paused);
+        assert!(paused.human_summary(2_000).starts_with("Loop paused"));
+        assert!(paused.stable_summary().starts_with("Loop paused"));
     }
 
     #[test]

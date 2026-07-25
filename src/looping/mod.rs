@@ -61,6 +61,21 @@ pub enum RearmDecision {
     Drop,
 }
 
+/// Outcome of [`LoopRegistry::transition`] — the single atomic lifecycle move
+/// (`pause` / `resume` / `stop`) every caller goes through, so the legality
+/// matrix and the pending-marker bookkeeping live in exactly one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransitionOutcome {
+    /// The loop moved to the requested status; `from` is what it was.
+    Applied { from: LoopStatus },
+    /// The loop exists but the move is illegal or a no-op (already there, or
+    /// resuming a terminal `Stopped`). `current` is what it actually is, so the
+    /// caller can report the truth instead of a generic failure.
+    Refused { current: LoopStatus },
+    /// No loop registered for this session at all.
+    Missing,
+}
+
 /// In-memory map of `session_key` → `LoopState`.
 #[derive(Default)]
 pub struct LoopRegistry {
@@ -112,6 +127,96 @@ impl LoopRegistry {
         self.lock().values().cloned().collect()
     }
 
+    /// The one atomic lifecycle move: `pause`, `resume` and every flavour of
+    /// `stop` (tool, cap, failure, session retirement, agent deletion) go
+    /// through here instead of the `get` → mutate → `put` shape they each used
+    /// to spell out. Two things that used to be re-derived per call site are now
+    /// invariants of the type:
+    ///
+    /// 1. **Legality.** `Stopped` is terminal — only `start` (a fresh `put`)
+    ///    leaves it, so resuming one is `Refused`, not a silent resurrection.
+    ///    `Paused` is reachable only from `Active`, `Active` only from `Paused`.
+    ///    A move to the status a loop already has is `Refused` too, so callers
+    ///    can report "already stopped" honestly.
+    /// 2. **Pending-marker hygiene.** Leaving `Active` clears
+    ///    `pending_tick_wake_ms`, which is what makes pause/resume actually
+    ///    responsive: the sleeping tick's `confirm_fire` then mismatches (`None`
+    ///    ≠ `Some(wake)`) and skips, and `resume` starts from a clean slate. Had
+    ///    the marker survived, the next `try_claim_tick` would return `Idle`
+    ///    until the 60 s stale grace elapsed *past the original wake* — for a
+    ///    loop paused early in a 1 h cadence that is a ~56-minute dead zone
+    ///    after resume.
+    ///
+    /// `reason` is stored as the loop's `stop_reason` (the "why it is not
+    /// ticking" note surfaced by `status`/`list`) for the quiet states, and
+    /// cleared on a resume — a running loop has no stop reason.
+    pub fn transition(
+        &self,
+        session_id: &str,
+        to: LoopStatus,
+        reason: Option<String>,
+    ) -> TransitionOutcome {
+        let mut map = self.lock();
+        let Some(live) = map.get(session_id) else {
+            return TransitionOutcome::Missing;
+        };
+        let from = live.status;
+        let legal = match (from, to) {
+            (LoopStatus::Active, LoopStatus::Paused | LoopStatus::Stopped)
+            | (LoopStatus::Paused, LoopStatus::Active | LoopStatus::Stopped) => true,
+            // Stopped is terminal, and same→same is a no-op worth reporting.
+            _ => false,
+        };
+        if !legal {
+            return TransitionOutcome::Refused { current: from };
+        }
+        let next = live
+            .clone()
+            .with_status(to)
+            .with_stop_reason(if to == LoopStatus::Active {
+                None
+            } else {
+                reason
+            })
+            // Leaving Active retires the in-flight tick; entering it starts with
+            // no tick claimed (the resuming turn's completion hook claims one).
+            .with_pending_tick(None);
+        map.insert(session_id.to_string(), next);
+        TransitionOutcome::Applied { from }
+    }
+
+    /// Kill switch: stop every loop that is still running or merely paused,
+    /// across ALL sessions, under ONE lock guard. Returns the session keys
+    /// actually stopped (already-stopped loops are left untouched and omitted),
+    /// so the caller can clear each one's welded strategy and report a truthful
+    /// count.
+    ///
+    /// The bulk sibling of [`Self::transition`] and the incident-response
+    /// counterpart to `list_all`: before this, a loop started on one channel was
+    /// *visible* from anywhere (`loop(action='list')`) but only stoppable from
+    /// its own session, so "stop everything" was not expressible in
+    /// conversation at all (R6 one core many channels / R8 chat IS the admin
+    /// panel).
+    pub fn stop_all(&self, reason: &str) -> Vec<String> {
+        let mut map = self.lock();
+        let targets: Vec<String> = map
+            .values()
+            .filter(|l| l.status != LoopStatus::Stopped)
+            .map(|l| l.session_id.clone())
+            .collect();
+        for session in &targets {
+            if let Some(live) = map.get(session) {
+                let next = live
+                    .clone()
+                    .with_status(LoopStatus::Stopped)
+                    .with_stop_reason(Some(reason.to_string()))
+                    .with_pending_tick(None);
+                map.insert(session.clone(), next);
+            }
+        }
+        targets
+    }
+
     /// The continuation hook's whole post-run decision, under ONE lock guard:
     /// seed the token baseline, gate on an in-flight tick, then either claim
     /// the next tick (bump the counter, stamp the pending wake) or stop an
@@ -136,7 +241,11 @@ impl LoopRegistry {
         }
         // Lazy token-baseline capture on the first claim that sees a budget:
         // just-captured → 0 spent, never a false over-budget.
-        let state = match (current.token_budget, current.baseline_captured, tokens_total) {
+        let state = match (
+            current.token_budget,
+            current.baseline_captured,
+            tokens_total,
+        ) {
             (Some(_), false, Some(total)) => current.clone().with_baseline(total),
             _ => current.clone(),
         };
@@ -256,18 +365,32 @@ impl LoopRegistry {
     /// interleaved with an in-turn tool call). Returns `false` — a no-op — if
     /// the loop vanished or was stopped since the tool's read (a concurrent
     /// stop won the race); the caller reports that honestly.
+    ///
+    /// `status` and `stop_reason` are taken from the LIVE row for the same
+    /// reason `pending_tick_wake_ms` is: they belong to the lifecycle pipeline
+    /// ([`Self::transition`] / [`Self::try_claim_tick`]), not to a field update.
+    /// A paused loop IS updatable — re-pacing while quiet is what pause is for —
+    /// so without this guard a snapshot read while the loop was `Active`, racing
+    /// a concurrent `pause`, would write its stale `Active` back and silently
+    /// un-pause the loop.
     #[must_use]
     pub fn commit_field_update(&self, next: LoopState, reschedule: bool) -> bool {
         let mut map = self.lock();
         match map.get(&next.session_id) {
-            Some(live) if live.is_active() => {
+            Some(live) if live.is_adjustable() => {
                 let pending = if reschedule {
                     None
                 } else {
                     live.pending_tick_wake_ms
                 };
+                let (status, stop_reason) = (live.status, live.stop_reason.clone());
                 let session = next.session_id.clone();
-                map.insert(session, next.with_pending_tick(pending));
+                map.insert(
+                    session,
+                    next.with_status(status)
+                        .with_stop_reason(stop_reason)
+                        .with_pending_tick(pending),
+                );
                 true
             }
             _ => false,
@@ -356,10 +479,17 @@ mod tests {
         reg.put(st("b").with_status(LoopStatus::Stopped));
         reg.put(st("c"));
         let all = reg.list_all();
-        assert_eq!(all.len(), 3, "one row per session, active and stopped alike");
+        assert_eq!(
+            all.len(),
+            3,
+            "one row per session, active and stopped alike"
+        );
         let ids: std::collections::HashSet<_> = all.iter().map(|l| l.session_id.as_str()).collect();
         assert!(ids.contains("a") && ids.contains("b") && ids.contains("c"));
-        assert!(LoopRegistry::default().list_all().is_empty(), "empty registry");
+        assert!(
+            LoopRegistry::default().list_all().is_empty(),
+            "empty registry"
+        );
     }
 
     #[test]
@@ -468,7 +598,10 @@ mod tests {
         assert_eq!(wake, 7_000 + delay);
         let s = reg.get("a").unwrap();
         assert_eq!(s.pending_tick_wake_ms, Some(wake));
-        assert_eq!(s.iterations_used, ticks_before, "retry must not burn a tick");
+        assert_eq!(
+            s.iterations_used, ticks_before,
+            "retry must not burn a tick"
+        );
         // While the retry is pending, neither a second re-arm nor a fresh
         // claim may double-schedule.
         assert!(matches!(
@@ -514,7 +647,10 @@ mod tests {
             .with_pending_tick(Some(100));
         // Simulate the concurrent tick pipeline moving pending to 200.
         reg.put(reg.get("a").unwrap().with_pending_tick(Some(200)));
-        assert!(reg.commit_field_update(stale_next, false), "active → commits");
+        assert!(
+            reg.commit_field_update(stale_next, false),
+            "active → commits"
+        );
         let s = reg.get("a").unwrap();
         assert_eq!(s.max_iterations, Some(9), "cap change applied");
         assert_eq!(
@@ -548,6 +684,153 @@ mod tests {
             !reg.commit_field_update(st("gone").with_max_iterations(Some(5)), false),
             "no loop for this session → false"
         );
+    }
+
+    #[test]
+    fn transition_enforces_the_legality_matrix() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        // Active → Paused → Active → Stopped is the legal round trip.
+        assert_eq!(
+            reg.transition("a", LoopStatus::Paused, Some("user".into())),
+            TransitionOutcome::Applied {
+                from: LoopStatus::Active
+            }
+        );
+        assert_eq!(reg.get("a").unwrap().stop_reason.as_deref(), Some("user"));
+        assert_eq!(
+            reg.transition("a", LoopStatus::Active, None),
+            TransitionOutcome::Applied {
+                from: LoopStatus::Paused
+            }
+        );
+        assert!(
+            reg.get("a").unwrap().stop_reason.is_none(),
+            "resuming clears the why-it-is-not-ticking note"
+        );
+        assert!(matches!(
+            reg.transition("a", LoopStatus::Stopped, Some("done".into())),
+            TransitionOutcome::Applied { .. }
+        ));
+        // Stopped is terminal: neither resume nor pause may resurrect it, and a
+        // second stop is a reportable no-op rather than a silent success.
+        for to in [LoopStatus::Active, LoopStatus::Paused, LoopStatus::Stopped] {
+            assert_eq!(
+                reg.transition("a", to, None),
+                TransitionOutcome::Refused {
+                    current: LoopStatus::Stopped
+                },
+                "{to:?} out of Stopped must be refused"
+            );
+        }
+        assert_eq!(
+            reg.get("a").unwrap().stop_reason.as_deref(),
+            Some("done"),
+            "a refused move must not overwrite the real stop reason"
+        );
+        assert_eq!(
+            reg.transition("gone", LoopStatus::Stopped, None),
+            TransitionOutcome::Missing
+        );
+    }
+
+    #[test]
+    fn pause_retires_the_in_flight_tick_so_resume_is_immediate() {
+        // The dead-zone bug this guards: a loop paused early in a long cadence
+        // keeps a far-future pending marker, and `try_claim_tick` would answer
+        // Idle until 60s past THAT wake — ~56 minutes of silence after resume on
+        // an hourly loop. Leaving Active must clear the marker.
+        let reg = LoopRegistry::default();
+        reg.put(LoopState::new(
+            "a",
+            "p",
+            Cadence::Fixed {
+                interval_ms: 3_600_000,
+            },
+            0,
+        ));
+        let TickDecision::Fire { wake_ms, .. } = reg.try_claim_tick("a", None, 1_000) else {
+            panic!("expected Fire");
+        };
+        assert!(reg.get("a").unwrap().pending_tick_wake_ms.is_some());
+
+        assert!(matches!(
+            reg.transition("a", LoopStatus::Paused, None),
+            TransitionOutcome::Applied { .. }
+        ));
+        assert!(reg.get("a").unwrap().pending_tick_wake_ms.is_none());
+        // The tick still sleeping out its hour must not execute on wake.
+        assert!(
+            !reg.confirm_fire("a", wake_ms),
+            "paused loop kills its tick"
+        );
+        // While paused, the hook sees nothing to do.
+        assert_eq!(reg.try_claim_tick("a", None, 2_000), TickDecision::Idle);
+        assert!(reg.get_active("a").is_none());
+
+        // Resume, and the very next completed run claims a fresh tick — no wait
+        // for the retired wake or the stale grace.
+        assert!(matches!(
+            reg.transition("a", LoopStatus::Active, None),
+            TransitionOutcome::Applied { .. }
+        ));
+        assert!(matches!(
+            reg.try_claim_tick("a", None, 2_000),
+            TickDecision::Fire { .. }
+        ));
+    }
+
+    #[test]
+    fn stop_all_quiets_every_session_and_reports_only_real_stops() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        reg.put(st("b").with_status(LoopStatus::Paused));
+        reg.put(
+            st("c")
+                .with_status(LoopStatus::Stopped)
+                .with_stop_reason(Some("earlier cap".into())),
+        );
+        let mut stopped = reg.stop_all("Stopped by kill switch.");
+        stopped.sort();
+        assert_eq!(
+            stopped,
+            vec!["a".to_string(), "b".to_string()],
+            "already-stopped loops are not re-reported"
+        );
+        for s in ["a", "b"] {
+            let l = reg.get(s).unwrap();
+            assert!(!l.is_active() && !l.is_paused());
+            assert_eq!(l.stop_reason.as_deref(), Some("Stopped by kill switch."));
+            assert!(l.pending_tick_wake_ms.is_none());
+        }
+        assert_eq!(
+            reg.get("c").unwrap().stop_reason.as_deref(),
+            Some("earlier cap"),
+            "an untouched loop keeps its original reason"
+        );
+        assert!(LoopRegistry::default().stop_all("x").is_empty());
+    }
+
+    #[test]
+    fn commit_field_update_keeps_the_live_lifecycle_state() {
+        // A paused loop is updatable (that is what pause is for), but the tool's
+        // snapshot may have been taken while it was still Active. Committing the
+        // snapshot's status would silently un-pause it.
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        let stale_active_snapshot = reg.get("a").unwrap().with_max_iterations(Some(7));
+        assert!(matches!(
+            reg.transition("a", LoopStatus::Paused, Some("held".into())),
+            TransitionOutcome::Applied { .. }
+        ));
+        assert!(
+            reg.commit_field_update(stale_active_snapshot, false),
+            "a paused loop accepts field updates"
+        );
+        let live = reg.get("a").unwrap();
+        assert_eq!(live.max_iterations, Some(7), "the cap change landed");
+        assert!(live.is_paused(), "the live pause survived a stale snapshot");
+        assert_eq!(live.stop_reason.as_deref(), Some("held"));
     }
 
     #[test]

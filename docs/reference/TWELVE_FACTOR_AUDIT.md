@@ -37,7 +37,8 @@
 - 原则：用简单 API 启动/暂停/恢复 agent。
 - 现状：机件齐全但分散——取消、续跑、改需求三态打断/注入、workflow resume 各自独立，**未作为一组契约命名**。
 - 锚点：`src/gateway/cancellation.rs`、`src/gateway/resume_coordinator.rs`、`src/gateway/execution_engine/steering.rs`、`src/workflow/`。已对应 R5/R6。
-- 缺口：缺统一契约命名 + API 面（B §P1-1）。
+- **进展（2026-07-25）**：两条**自治续跑链**已补齐 pause/resume 并跨会话可控——loop 新增 `LoopStatus::Paused` + 唯一原子迁移原语 `LoopRegistry::transition`（goal 的 `GoalStatus::Paused` 早有，本轮补可逆孪生 `GoalStore::pause_if_active`）；`loop(stop|pause, session=…)` / `goal(clear|update status=paused, session=…)` 与 `stop_all` / `pause_all` 杀手闸闭合了"`list` 跨会话可见、只能在本会话停"的 R6/R8 断线。新增可复用边界规则：**跨会话只能 quiet，不能 arm**（下一步只由该单元自己会话的完成钩子认领），跨会话操作带工具内 operator 闸。锚点：`src/looping/mod.rs`、`src/goal/store.rs`、`src/builtin_tools/{loop_manage,goal}.rs`；详见 FEATURE_LOCATOR §4.1/§4.2。
+- 剩余缺口：workflow / team task 两类长跑单元尚未纳入同一组命名；统一 API 面（薄 facade）仍待评估（B §P1-1）。
 
 ### F7 · Contact Humans With Tool Calls — ✅
 - 原则：人在环 = 结构化工具调用，而非特例分支。
