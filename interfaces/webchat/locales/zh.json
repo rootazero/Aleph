@@ -72,8 +72,6 @@
     "inspector_plan_title": "任务计划",
     "inspector_plan_empty": "暂无进行中的计划",
     "inspector_objective": "目标",
-    "inspector_canvas_soon": "画布即将到来",
-    "inspector_browser_soon": "内置浏览器即将到来",
     "token_wall_title": "授权此设备",
     "token_wall_instruction": "输入 Gateway token 以连接到此 Aleph 核心。可在核心机器的「设置 → 安全」中获取，或在核心机器上运行 `aleph-server bootstrap-token`。授权后，此设备将拥有与本地应用相同的访问权限。",
     "token_wall_submit": "授权",

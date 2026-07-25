@@ -36,11 +36,4 @@ pub enum InspectorTarget {
     Reasoning { run_id: String },
     /// A run's task plan / scratchpad detail.
     Plan { run_id: String },
-    /// Placeholder seam for the future UI-canvas surface. No key point emits
-    /// this yet — the variant exists so a real canvas renderer is a drop-in
-    /// (add the emitter + swap the stub component). See `canvas_stub.rs`.
-    Canvas { doc_id: String },
-    /// Placeholder seam for the future built-in-browser surface. Unreachable
-    /// until an emitter exists; see `browser_stub.rs`.
-    Browser { url: String },
 }

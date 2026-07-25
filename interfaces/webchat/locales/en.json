@@ -72,8 +72,6 @@
     "inspector_plan_title": "Task plan",
     "inspector_plan_empty": "No active plan",
     "inspector_objective": "Objective",
-    "inspector_canvas_soon": "Canvas coming soon",
-    "inspector_browser_soon": "Built-in browser coming soon",
     "token_wall_title": "Authorize this device",
     "token_wall_instruction": "Enter the Gateway token to connect to this Aleph core. Get it from the core's Settings → Security, or run `aleph-server bootstrap-token` on the core machine. Once authorized, this device has the same access as the local app.",
     "token_wall_submit": "Authorize",

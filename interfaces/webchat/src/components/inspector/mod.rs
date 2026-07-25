@@ -9,15 +9,11 @@
 //! `tool_card::render_body`'s per-kind dispatch. Adding a surface is one arm
 //! here plus one component module; nothing else changes (OCP / R10-thin).
 
-mod browser_stub;
-mod canvas_stub;
 mod plan_surface;
 mod reasoning_surface;
 mod run_meta_surface;
 mod tool_surface;
 
-use browser_stub::BrowserStub;
-use canvas_stub::CanvasStub;
 use plan_surface::PlanInspector;
 use reasoning_surface::ReasoningInspector;
 use run_meta_surface::RunMetaInspector;
@@ -60,12 +56,6 @@ pub fn InspectorSurface() -> impl IntoView {
         }
         Some(InspectorTarget::Plan { run_id }) => {
             view! { <PlanInspector run_id /> }.into_any()
-        }
-        Some(InspectorTarget::Canvas { doc_id }) => {
-            view! { <CanvasStub doc_id /> }.into_any()
-        }
-        Some(InspectorTarget::Browser { url }) => {
-            view! { <BrowserStub url /> }.into_any()
         }
     }
 }
