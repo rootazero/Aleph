@@ -138,6 +138,10 @@ fn VoiceSession() -> impl IntoView {
     // At STREAM_STRIKE_LIMIT the session flips `streaming_off` and every later
     // utterance rides the (independently working) batch WAV path.
     let stream_strikes: StoredValue<u32> = StoredValue::new(0);
+    // "This session rides batch." Latched by the strike limit above OR by core
+    // answering `voice.stream.start` with an explicit `stream_id: null` (BYO
+    // streaming disabled in config — a fact that cannot change mid-session, so
+    // re-asking once per utterance was pure round-trip waste).
     let streaming_off: StoredValue<bool> = StoredValue::new(false);
 
     // The mic and the interval handle outlive their writer (the async mic-open
@@ -753,14 +757,23 @@ fn VoiceSession() -> impl IntoView {
 }
 
 /// Open ONE fresh streaming session for the listening period that is about to
-/// begin: ask core for a `stream_id`, and — when streaming is enabled — reset
-/// the live caption, install the frame sink, and start the mic's streaming tap.
+/// begin: start the mic's streaming tap, ask core for a `stream_id`, and — when
+/// streaming is enabled — reset the live caption and install the frame sink
+/// (which flushes everything the tap buffered while the open was in flight).
 ///
-/// `stream_id == None` means BYO streaming is disabled in core; the slot stays
-/// None and the batch path (`handle_utterance`) handles the utterance unchanged.
-/// Called from the mic-open task (first entry) and the phase-watching Effect
-/// (every re-entry into Listening). Each call gives the next utterance its own
-/// backend decoder — the previous stream was closed at its UtteranceEnd.
+/// The tap starts BEFORE the RPC on purpose. Frames were previously produced
+/// only after the open resolved, so the whole open latency was silent: the
+/// 320 ms pre-roll ring covered a fast local server, but a cloud TLS handshake
+/// or a busy self-hosted backend swallowed the first syllables of a fast
+/// follow-up or post-barge-in utterance. The tap now buffers into
+/// `Capture::pending` and `set_frame_sink` drains it in arrival order.
+///
+/// `stream_id == None` means BYO streaming is disabled in core; the speculative
+/// tap is undone, `streaming_off` latches so later periods skip the pointless
+/// round trip, and the batch path (`handle_utterance`) handles every utterance
+/// unchanged. Called from the mic-open task (first entry) and the phase-watching
+/// Effect (every re-entry into Listening). Each call gives the next utterance its
+/// own backend decoder — the previous stream was closed at its UtteranceEnd.
 fn start_listening_stream(
     session: Rc<MicSession>,
     dash: DashboardState,
@@ -769,9 +782,9 @@ fn start_listening_stream(
     caption_state: RwSignal<CaptionState>,
     streaming_off: StoredValue<bool>,
 ) {
-    // Struck out (repeated backend failures / empty utterances): the session
-    // has fallen back to batch — leave the slot None so `handle_utterance`
-    // owns every later turn.
+    // This session rides the batch path — either core reported streaming
+    // disabled, or repeated backend failures / empty utterances struck it out.
+    // Leave the slot None so `handle_utterance` owns every later turn.
     if streaming_off.get_value() {
         return;
     }
@@ -799,6 +812,9 @@ fn start_listening_stream(
             *g
         })
         .unwrap_or(0);
+    // Arm the tap NOW so the open latency isn't a silent hole (see the doc
+    // comment). Frames land in `Capture::pending` until the sink is installed.
+    session.start_streaming();
     spawn_local(async move {
         let resp = dash
             .rpc_call(
@@ -806,6 +822,12 @@ fn start_listening_stream(
                 serde_json::json!({ "language": Option::<String>::None }),
             )
             .await;
+        // Distinguish "core says streaming is off" (an explicit `stream_id: null`
+        // that will never change within this session) from a transient RPC
+        // failure (worth retrying on the next listening period).
+        let disabled = resp
+            .as_ref()
+            .is_ok_and(|v| v.get("stream_id").is_none_or(serde_json::Value::is_null));
         let sid = resp.ok().and_then(|v| {
             v.get("stream_id")
                 .and_then(|s| s.as_str())
@@ -814,24 +836,35 @@ fn start_listening_stream(
         let still_current = stream_gen.try_with_value(|g| *g == my_gen).unwrap_or(false);
         if still_current {
             stream_id.set_value(sid.clone());
-            if let Some(id) = sid {
-                // Fresh listening period → blank the live caption so the previous
-                // utterance's committed/interim text isn't shown under the new one.
-                caption_state.set(CaptionState::default());
-                session.set_frame_sink(move |b64| {
-                    let id = id.clone();
-                    spawn_local(async move {
-                        let _ = dash
-                            .rpc_call(
-                                "voice.stream.audio",
-                                serde_json::json!({ "stream_id": id, "pcm_base64": b64 }),
-                            )
-                            .await;
+            match sid {
+                Some(id) => {
+                    // Fresh listening period → blank the live caption so the previous
+                    // utterance's committed/interim text isn't shown under the new one.
+                    caption_state.set(CaptionState::default());
+                    // Installing the sink also flushes the frames captured while
+                    // this open was in flight, in arrival order.
+                    session.set_frame_sink(move |b64| {
+                        let id = id.clone();
+                        spawn_local(async move {
+                            let _ = dash
+                                .rpc_call(
+                                    "voice.stream.audio",
+                                    serde_json::json!({ "stream_id": id, "pcm_base64": b64 }),
+                                )
+                                .await;
+                        });
                     });
-                });
-                session.start_streaming();
+                }
+                // Batch fallback: undo the speculative tap (frees the pending
+                // backlog) and, when core said so explicitly, latch it so later
+                // periods don't re-pay the round trip per utterance.
+                None => {
+                    session.stop_streaming();
+                    if disabled {
+                        streaming_off.set_value(true);
+                    }
+                }
             }
-            // sid == None → batch fallback, slot stays None (as before).
         } else if let Some(id) = sid {
             // A newer Listening-entry superseded this open while its start RPC
             // was in flight. Do NOT install (no slot write, no caption reset) —

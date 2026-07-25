@@ -10,21 +10,28 @@ use super::stt::{SttConfig, SttSource};
 /// candidate (if any) rides along as the fallback. Pure cloud setups produce
 /// `Static` exactly as before. Returns `None` when no usable provider exists.
 ///
+/// `vocabulary` is the rendered `[voice] vocabulary` hint
+/// ([`VoiceSection::vocabulary_hint`](crate::config::types::voice_local::VoiceSection::vocabulary_hint)),
+/// carried onto every config in the source — primary *and* fallback — so a
+/// degradation hop does not silently lose the user's proper nouns.
+///
 /// Shared by the boot path (inbound router wiring) and the `voice.transcribe`
 /// panel RPC so both resolve the provider identically.
 pub fn resolve_stt_source(
     gen_cfg: &crate::config::types::generation::GenerationConfig,
     vault: &crate::gateway::security::SharedTokenManager,
+    vocabulary: Option<&str>,
 ) -> Option<SttSource> {
+    let vocab = vocabulary.unwrap_or_default();
     let chosen = choose_transcription_provider(gen_cfg, vault, false)?;
     if chosen.1.provider_type == crate::config::types::voice_local::LOCAL_PROVIDER_TYPE {
-        let config = local_stt_config(chosen.0, chosen.1);
+        let config = local_stt_config(chosen.0, chosen.1, vocab);
         let fallback = choose_transcription_provider(gen_cfg, vault, true)
-            .map(|(key, pcfg)| Box::new(static_stt_config(key, pcfg)));
+            .map(|(key, pcfg)| Box::new(static_stt_config(key, pcfg, vocab)));
         Some(SttSource::Local { config, fallback })
     } else {
         let (key, pcfg) = chosen;
-        Some(SttSource::Static(static_stt_config(key, pcfg)))
+        Some(SttSource::Static(static_stt_config(key, pcfg, vocab)))
     }
 }
 
@@ -92,7 +99,11 @@ fn choose_transcription_provider<'a>(
 /// `SttConfig` for the BYO local endpoint: `base_url` is the configured
 /// endpoint verbatim (no URL rewriting — it already carries its path prefix),
 /// and an empty model means "omit the field, let the server default decide".
-fn local_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
+fn local_stt_config(
+    key: String,
+    pcfg: &crate::GenerationProviderConfig,
+    vocabulary: &str,
+) -> SttConfig {
     SttConfig {
         api_key: key,
         base_url: pcfg
@@ -102,11 +113,16 @@ fn local_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttC
             .trim_end_matches('/')
             .to_string(),
         model: pcfg.models.first().cloned().unwrap_or_default(),
+        vocabulary: vocabulary.to_string(),
     }
 }
 
 /// The original static `SttConfig` construction (url normalize + model pick).
-fn static_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> SttConfig {
+fn static_stt_config(
+    key: String,
+    pcfg: &crate::GenerationProviderConfig,
+    vocabulary: &str,
+) -> SttConfig {
     let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
     let resolved = crate::generation::providers::url_normalize::resolve_base_url(base);
     let stt_endpoint = resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
@@ -123,6 +139,7 @@ fn static_stt_config(key: String, pcfg: &crate::GenerationProviderConfig) -> Stt
         api_key: key,
         base_url: stt_base,
         model: stt_model,
+        vocabulary: vocabulary.to_string(),
     }
 }
 
@@ -158,7 +175,7 @@ mod tests {
             .insert("openai_whisper".into(), cloud);
         gen.default_transcription_provider = Some("local".into());
 
-        match resolve_stt_source(&gen, &vault) {
+        match resolve_stt_source(&gen, &vault, None) {
             Some(SttSource::Local {
                 config,
                 fallback: Some(f),
@@ -187,7 +204,7 @@ mod tests {
         gen.transcription_providers.insert("local".into(), local);
         gen.default_transcription_provider = Some("local".into());
 
-        match resolve_stt_source(&gen, &vault) {
+        match resolve_stt_source(&gen, &vault, None) {
             Some(SttSource::Local {
                 config,
                 fallback: None,
@@ -201,6 +218,35 @@ mod tests {
     }
 
     #[test]
+    fn vocabulary_reaches_the_fallback_too() {
+        // A local→cloud degradation hop must not silently lose the user's proper
+        // nouns — the whole point of the hint is that it survives the retry.
+        use crate::config::types::generation::GenerationConfig;
+        let (_dir, vault) = make_vault();
+        let mut gen = GenerationConfig::default();
+        let mut local = crate::GenerationProviderConfig::new("local");
+        local.api_key = Some(String::new());
+        local.base_url = Some("http://127.0.0.1:8000/v1".into());
+        gen.transcription_providers.insert("local".into(), local);
+        let mut cloud = crate::GenerationProviderConfig::new("openai_whisper");
+        cloud.api_key = Some("sk-cloud".into());
+        gen.transcription_providers
+            .insert("openai_whisper".into(), cloud);
+        gen.default_transcription_provider = Some("local".into());
+
+        match resolve_stt_source(&gen, &vault, Some("Aleph, Leptos")) {
+            Some(SttSource::Local {
+                config,
+                fallback: Some(f),
+            }) => {
+                assert_eq!(config.vocabulary, "Aleph, Leptos");
+                assert_eq!(f.vocabulary, "Aleph, Leptos");
+            }
+            _ => panic!("expected Local with fallback"),
+        }
+    }
+
+    #[test]
     fn resolve_pure_cloud_stays_static() {
         use crate::config::types::generation::GenerationConfig;
         let (_dir, vault) = make_vault();
@@ -209,7 +255,7 @@ mod tests {
         cloud.api_key = Some("sk-cloud".into());
         gen.transcription_providers
             .insert("openai_whisper".into(), cloud);
-        match resolve_stt_source(&gen, &vault) {
+        match resolve_stt_source(&gen, &vault, None) {
             Some(SttSource::Static(cfg)) => assert_eq!(cfg.api_key, "sk-cloud"),
             _ => panic!("expected Static"),
         }

@@ -41,6 +41,10 @@ const MAX_SEGMENT_SECS: f32 = 30.0;
 /// `ScriptProcessorNode` buffer size (frames). 4096 ≈ 85 ms at 48 kHz — small
 /// enough for a tight pre-roll, large enough to avoid callback churn.
 const SCRIPT_BUF: u32 = 4096;
+/// Streaming frames held while the backend stream is still opening (~200 ms
+/// each, so ≈5 s). Bounded because a stream that never opens must not grow a
+/// buffer forever; the oldest frame is dropped on overflow.
+const PENDING_FRAME_CAP: usize = 25;
 
 /// Rolling capture state, shared between the audio-thread callback (writer) and
 /// the VAD tick (which arms/disarms a segment).
@@ -58,6 +62,47 @@ struct Capture {
     /// Upward sink for one base64 s16le-16k frame. Single-threaded wasm, so `Rc`
     /// (no `Send`/`Sync`). `None` until `set_frame_sink` is called.
     on_frame: Option<Rc<dyn Fn(String)>>,
+    /// Frames produced while `streaming` is on but no sink is installed yet —
+    /// i.e. the backend stream is still opening. Drained into the sink the
+    /// moment it arrives, so the utterance onset survives an open that outlasts
+    /// the pre-roll ring (a cloud TLS handshake or a busy self-hosted server can
+    /// take far longer than [`PREROLL_MS`]). Bounded by [`PENDING_FRAME_CAP`].
+    pending: VecDeque<String>,
+}
+
+/// Sample rate every streaming ASR backend is fed at (matches `StreamConfig`).
+const STREAM_RATE: usize = 16_000;
+
+/// Downsample device-rate mono PCM to 16 kHz by averaging each output bin's
+/// source window. Pure — host-testable, no web_sys.
+///
+/// The previous nearest-neighbour pick was plain decimation: at 48 kHz it kept
+/// 1 sample in 3 with no low-pass, so every component above 8 kHz folded back
+/// into the speech band as aliasing noise — worst exactly on the sibilants and
+/// fricatives an ASR model leans on. A box average over the same window is a
+/// crude but real anti-alias filter for the same single pass and allocation.
+///
+/// A rate at or below the target passes through untouched (nothing to fold).
+pub(crate) fn downsample_to_16k(input: &[f32], sample_rate: u32) -> Vec<f32> {
+    let sr = sample_rate as usize;
+    if input.is_empty() || sr == 0 {
+        return Vec::new();
+    }
+    if sr <= STREAM_RATE {
+        return input.to_vec();
+    }
+    // Floor division, so every bin's window start stays inside `input`.
+    let out_len = input.len() * STREAM_RATE / sr;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let start = i * sr / STREAM_RATE;
+        // `max(start + 1)` keeps the window non-empty for any ratio; `min` keeps
+        // the tail bin inside the slice.
+        let end = (((i + 1) * sr / STREAM_RATE).max(start + 1)).min(input.len());
+        let window = &input[start..end];
+        out.push(window.iter().sum::<f32>() / window.len() as f32);
+    }
+    out
 }
 
 /// Convert mono f32 [-1,1] PCM to little-endian s16 bytes (clamped). Scales by
@@ -245,6 +290,7 @@ impl MicSession {
             streaming: false,
             frame_accum: Vec::new(),
             on_frame: None,
+            pending: VecDeque::new(),
         }));
 
         // Flush a streaming frame once the accumulator holds ~200 ms of
@@ -322,10 +368,23 @@ impl MicSession {
         Some((wav::base64_encode(&wav_bytes), "audio/wav".to_string()))
     }
 
-    /// Install the upward sink for streaming s16le-16k base64 frames. Stored as
-    /// `Rc` (single-threaded wasm; no `Send`/`Sync`).
+    /// Install the upward sink for streaming s16le-16k base64 frames, then flush
+    /// whatever the tap buffered while the backend stream was opening — in
+    /// arrival order, ahead of any live frame. Stored as `Rc` (single-threaded
+    /// wasm; no `Send`/`Sync`).
     pub(crate) fn set_frame_sink(&self, cb: impl Fn(String) + 'static) {
-        self.cap.borrow_mut().on_frame = Some(Rc::new(cb));
+        let sink: Rc<dyn Fn(String)> = Rc::new(cb);
+        // Install and take the backlog under one borrow, then RELEASE it before
+        // invoking the sink: the callback spawns an RPC upward and must not
+        // re-enter `Capture` while it is mutably borrowed (BorrowMutError guard).
+        let held: Vec<String> = {
+            let mut c = self.cap.borrow_mut();
+            c.on_frame = Some(Rc::clone(&sink));
+            c.pending.drain(..).collect()
+        };
+        for b64 in held {
+            sink(b64);
+        }
     }
 
     /// Begin emitting streaming frames from the live tap, seeded with the
@@ -334,6 +393,11 @@ impl MicSession {
     /// ring the utterance onset is clipped — the same "hello -> lo" bug the
     /// batch path solved by seeding segments. In the quiet re-entry case the
     /// ring holds ~320 ms of silence, which the backend VAD ignores.
+    ///
+    /// Called *before* `voice.stream.start` resolves, so frames produced during
+    /// the open land in `pending` and are flushed by [`Self::set_frame_sink`].
+    /// The caller MUST undo a speculative start with [`Self::stop_streaming`]
+    /// when the open reports that streaming is off.
     pub(crate) fn start_streaming(&self) {
         let mut c = self.cap.borrow_mut();
         c.streaming = true;
@@ -341,11 +405,19 @@ impl MicSession {
         c.frame_accum = pre;
     }
 
-    /// Stop emitting streaming frames and drop the partial accumulator.
+    /// Stop emitting streaming frames; drop the partial accumulator, the pending
+    /// backlog, and the sink.
+    ///
+    /// Clearing the sink is what keeps "no sink outlives its stream" true: it is
+    /// keyed to one `stream_id`, so leaving it installed would send the next
+    /// listening period's pre-open frames to a stream that is already closed
+    /// (and rob `pending` of them).
     pub(crate) fn stop_streaming(&self) {
         let mut c = self.cap.borrow_mut();
         c.streaming = false;
         c.frame_accum.clear();
+        c.pending.clear();
+        c.on_frame = None;
     }
 
     pub(crate) fn close(&self) {
@@ -407,29 +479,32 @@ fn ingest_pcm(cap: &Rc<RefCell<Capture>>, data: &[f32], sample_rate: u32, frame_
     let mut frames: Vec<String> = Vec::new();
     while c.frame_accum.len() >= frame_chunk {
         let chunk: Vec<f32> = c.frame_accum.drain(..frame_chunk).collect();
-        // Resample device rate → 16 kHz (nearest-neighbor decimation;
-        // STT is robust to this). Handles non-integer ratios (44100→16000).
-        let out_len = chunk.len() * 16_000 / sample_rate as usize;
-        let mut resampled = Vec::with_capacity(out_len);
-        for i in 0..out_len {
-            let src = i * sample_rate as usize / 16_000;
-            resampled.push(chunk[src.min(chunk.len() - 1)]);
-        }
-        let bytes = f32_to_s16le(&resampled);
+        // Resample device rate → 16 kHz with a box average per output bin, which
+        // low-passes as it decimates. Handles non-integer ratios (44100→16000).
+        let bytes = f32_to_s16le(&downsample_to_16k(&chunk, sample_rate));
         frames.push(wav::base64_encode(&bytes));
     }
-    // Snapshot the sink and DROP the borrow before invoking it: the callback
-    // spawns an RPC upward and must not re-enter `Capture` while it is
-    // mutably borrowed (BorrowMutError guard).
     if frames.is_empty() {
         return;
     }
-    let sink = c.on_frame.clone();
-    drop(c);
-    if let Some(sink) = sink {
-        for b64 in frames {
-            sink(b64);
+    // No sink yet = the backend stream is still opening. Hold the frames instead
+    // of dropping them on the floor, so the utterance onset survives an open
+    // slower than the pre-roll ring. Bounded: oldest goes first.
+    let Some(sink) = c.on_frame.clone() else {
+        for f in frames {
+            if c.pending.len() >= PENDING_FRAME_CAP {
+                c.pending.pop_front();
+            }
+            c.pending.push_back(f);
         }
+        return;
+    };
+    // DROP the borrow before invoking the sink: the callback spawns an RPC
+    // upward and must not re-enter `Capture` while it is mutably borrowed
+    // (BorrowMutError guard).
+    drop(c);
+    for b64 in frames {
+        sink(b64);
     }
 }
 
@@ -1002,6 +1077,133 @@ async fn synthesize(dash: &DashboardState, text: &str) -> Option<Audio> {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
+
+    /// A capture already streaming, with no sink installed — i.e. the state
+    /// during a `voice.stream.start` that has not resolved yet.
+    fn streaming_capture() -> Rc<RefCell<Capture>> {
+        Rc::new(RefCell::new(Capture {
+            preroll: VecDeque::new(),
+            preroll_cap: (16_000.0 * PREROLL_MS / 1000.0) as usize,
+            segment: None,
+            max_segment: 0,
+            streaming: true,
+            frame_accum: Vec::new(),
+            on_frame: None,
+            pending: VecDeque::new(),
+        }))
+    }
+
+    /// The open-latency hole: before the backlog existed, every frame produced
+    /// while the backend stream was opening was computed and thrown away, so a
+    /// slow open ate the start of the utterance. The held frames must be exactly
+    /// the tail of what a live sink would have seen — same order, no duplicates —
+    /// and the backlog must stay bounded when the open never completes.
+    #[test]
+    fn held_frames_match_what_a_live_sink_would_have_seen() {
+        let n = PENDING_FRAME_CAP + 5;
+        let frame = 3_200usize; // 200 ms at 16 kHz
+        let payload = |i: usize| vec![(i as f32 + 1.0) / 1000.0; frame];
+
+        // Sink installed from the start: record every frame it is handed.
+        let live = streaming_capture();
+        let seen = Rc::new(RefCell::new(Vec::<String>::new()));
+        {
+            let seen = Rc::clone(&seen);
+            live.borrow_mut().on_frame = Some(Rc::new(move |b64| seen.borrow_mut().push(b64)));
+        }
+        for i in 0..n {
+            ingest_pcm(&live, &payload(i), 16_000, frame);
+        }
+
+        // No sink: the same input must land in the backlog.
+        let held = streaming_capture();
+        for i in 0..n {
+            ingest_pcm(&held, &payload(i), 16_000, frame);
+        }
+
+        let pending: Vec<String> = held.borrow().pending.iter().cloned().collect();
+        let all = seen.borrow();
+        assert_eq!(all.len(), n, "one frame per full chunk");
+        assert_eq!(pending.len(), PENDING_FRAME_CAP, "backlog stays bounded");
+        assert_eq!(
+            pending,
+            all[all.len() - PENDING_FRAME_CAP..],
+            "backlog is the tail of the live sequence, in order"
+        );
+    }
+
+    #[test]
+    fn nothing_is_held_while_not_streaming() {
+        let idle = streaming_capture();
+        idle.borrow_mut().streaming = false;
+        ingest_pcm(&idle, &vec![0.5f32; 3_200], 16_000, 3_200);
+        assert!(idle.borrow().pending.is_empty());
+        // The pre-roll ring keeps filling regardless — that is what seeds the
+        // segment and the streaming tap when either one arms.
+        assert!(!idle.borrow().preroll.is_empty());
+    }
+
+    #[test]
+    fn downsample_48k_produces_one_third_the_samples() {
+        // 200 ms at 48 kHz → 200 ms at 16 kHz.
+        let input = vec![0.5f32; 9600];
+        let out = downsample_to_16k(&input, 48_000);
+        assert_eq!(out.len(), 3200);
+        assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn downsample_44k1_handles_the_non_integer_ratio() {
+        // 200 ms at 44.1 kHz → 200 ms at 16 kHz, no panic on the ragged windows.
+        let input = vec![0.25f32; 8820];
+        assert_eq!(downsample_to_16k(&input, 44_100).len(), 3200);
+    }
+
+    #[test]
+    fn downsample_attenuates_content_above_the_new_nyquist() {
+        // A full-scale alternating signal is the worst case: it sits at the
+        // source Nyquist, far above 8 kHz, so it MUST NOT survive at full
+        // amplitude. Nearest-neighbour decimation just picked the first sample of
+        // each window and reproduced it at ±1.0 — that is the aliasing.
+        let input = [1.0f32, -1.0, 1.0, -1.0, 1.0, -1.0];
+
+        // Even ratio (32k → 16k): each 2-sample window cancels exactly.
+        let even = downsample_to_16k(&input, 32_000);
+        assert_eq!(even.len(), 3);
+        assert!(even.iter().all(|s| s.abs() < 1e-6), "got {even:?}");
+
+        // Ragged ratio (48k → 16k): 3-sample windows leave a 1/3 residue, still
+        // a 9.5 dB cut versus the ±1.0 a nearest-neighbour pick returned.
+        let odd = downsample_to_16k(&input, 48_000);
+        assert_eq!(odd.len(), 2);
+        assert!(
+            odd.iter().all(|s| s.abs() <= 1.0 / 3.0 + 1e-6),
+            "got {odd:?}"
+        );
+    }
+
+    #[test]
+    fn downsample_preserves_a_constant_signal() {
+        // The mirror property: averaging must not attenuate in-band content.
+        let out = downsample_to_16k(&[0.4f32; 12], 48_000);
+        assert!(out.iter().all(|s| (*s - 0.4).abs() < 1e-6), "got {out:?}");
+    }
+
+    #[test]
+    fn downsample_passes_through_at_or_below_target_rate() {
+        let input = [0.1f32, 0.2, 0.3];
+        assert_eq!(downsample_to_16k(&input, 16_000), input.to_vec());
+        assert_eq!(downsample_to_16k(&input, 8_000), input.to_vec());
+    }
+
+    #[test]
+    fn downsample_degenerate_inputs_are_empty_not_panics() {
+        assert!(downsample_to_16k(&[], 48_000).is_empty());
+        assert!(downsample_to_16k(&[0.1], 0).is_empty());
+        // Fewer samples than one output bin → floor(1 * 16000 / 48000) == 0.
+        assert!(downsample_to_16k(&[0.1], 48_000).is_empty());
+    }
+
     #[test]
     fn f32_to_s16le_clamps_and_scales() {
         let pcm = [0.0f32, 1.0, -1.0, 2.0, -2.0];

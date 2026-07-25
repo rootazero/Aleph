@@ -30,6 +30,20 @@ pub struct WhisperLiveDecoder {
     last_locked_text: String,
 }
 
+/// A segment's `start` time, accepting both wire shapes.
+///
+/// WhisperLive's faster-whisper backend serializes it as a formatted **string**
+/// (`"1.230"`), but the TensorRT backend and community forks emit a plain JSON
+/// **number**. Reading only the string form silently yielded `None` for those
+/// servers, which degraded dedup to text identity — and text identity then
+/// discards a legitimately *repeated* segment (a speaker saying "嗯 … 嗯" locks
+/// the first and drops the second).
+fn segment_start(seg: &serde_json::Value) -> Option<f64> {
+    let v = seg.get("start")?;
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+}
+
 impl WhisperLiveDecoder {
     /// Lock `text` into `committed` if it is a segment we have not seen.
     fn lock_segment(&mut self, start: Option<f64>, text: &str) {
@@ -99,11 +113,7 @@ impl WhisperLiveDecoder {
                 .unwrap_or(false);
             if completed {
                 any_completed = true;
-                let start = s
-                    .get("start")
-                    .and_then(|v| v.as_str())
-                    .and_then(|v| v.parse::<f64>().ok());
-                self.lock_segment(start, &text);
+                self.lock_segment(segment_start(s), &text);
             } else {
                 // Last interim wins; hold back replacement-glyph noise from a
                 // decode that split a multibyte char (committed text is final
@@ -120,6 +130,41 @@ impl WhisperLiveDecoder {
             ..TranscriptDelta::default()
         })
     }
+}
+
+/// Build the WhisperLive config handshake (the connection's first message).
+///
+/// `audio_format=int16` so s16le frames forward verbatim. The protocol has no
+/// auth field — `[voice.streaming] api_key` is meaningless for this dialect.
+///
+/// `vocabulary` (when set) goes out as both `hotwords` and `initial_prompt`, the
+/// two fields WhisperLive's own client documents as "domain vocabulary or names"
+/// and forwards to faster-whisper — so the user's proper nouns get *recognized*
+/// rather than find-and-replaced after the fact. Absent keys keep the server's
+/// own defaults, so an unset vocabulary changes the wire not at all.
+///
+/// Pure so the wire shape is host-testable without a WebSocket.
+fn build_handshake(model: &str, language: Option<String>, vocabulary: &str) -> serde_json::Value {
+    let model = if model.trim().is_empty() {
+        DEFAULT_MODEL
+    } else {
+        model.trim()
+    };
+    let mut handshake = serde_json::json!({
+        "uid": uuid::Uuid::new_v4().to_string(),
+        "language": language,
+        "task": "transcribe",
+        "model": model,
+        "use_vad": true,
+        "send_last_n_segments": 10,
+        "audio_format": "int16"
+    });
+    let vocabulary = vocabulary.trim();
+    if !vocabulary.is_empty() {
+        handshake["hotwords"] = serde_json::Value::String(vocabulary.to_string());
+        handshake["initial_prompt"] = serde_json::Value::String(vocabulary.to_string());
+    }
+    handshake
 }
 
 /// WS-connecting adapter speaking the native WhisperLive protocol.
@@ -144,23 +189,11 @@ impl StreamingTranscriber for WhisperLiveStream {
             .replace("http://", "ws://");
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (mut sink, mut stream) = ws.split();
-        // WhisperLive config handshake (first message). audio_format=int16 so we
-        // can forward s16le frames verbatim. NOTE: the protocol has no auth
-        // field — `[voice.streaming] api_key` is meaningless for this dialect.
-        let model = if self.target.model.trim().is_empty() {
-            DEFAULT_MODEL
-        } else {
-            self.target.model.trim()
-        };
-        let handshake = serde_json::json!({
-            "uid": uuid::Uuid::new_v4().to_string(),
-            "language": cfg.language.or_else(|| self.target.language.clone()),
-            "task": "transcribe",
-            "model": model,
-            "use_vad": true,
-            "send_last_n_segments": 10,
-            "audio_format": "int16"
-        });
+        let handshake = build_handshake(
+            &self.target.model,
+            cfg.language.or_else(|| self.target.language.clone()),
+            &self.target.vocabulary,
+        );
         sink.send(Message::Text(handshake.to_string().into()))
             .await?;
 
@@ -353,6 +386,59 @@ mod tests {
         // …while different text still locks.
         let d = dec.push(&msg(vec![seg("世界", true)])).unwrap();
         assert_eq!(d.committed, "你好世界");
+    }
+
+    /// Numeric `start` (TensorRT backend / forks) must be read as a timestamp,
+    /// not fall through to text identity — which would drop the second of two
+    /// segments that happen to carry the same words.
+    #[test]
+    fn numeric_start_is_a_valid_timestamp() {
+        let numeric = |start: f64, text: &str| serde_json::json!({ "start": start, "end": start + 1.0, "text": text, "completed": true });
+        assert_eq!(segment_start(&numeric(1.5, "x")), Some(1.5));
+        assert_eq!(segment_start(&seg_at(2.25, "x", true)), Some(2.25));
+        assert_eq!(segment_start(&seg("x", true)), None);
+
+        let mut dec = WhisperLiveDecoder::default();
+        let _ = dec.push(&msg(vec![numeric(0.0, "嗯")]));
+        // Same words, later timestamp: a genuine repetition, must lock again.
+        let d = dec.push(&msg(vec![numeric(3.0, "嗯")])).unwrap();
+        assert_eq!(d.committed, "嗯嗯");
+        // Window resend of an already-locked segment still dedups.
+        let d = dec.push(&msg(vec![numeric(3.0, "嗯")])).unwrap();
+        assert_eq!(d.committed, "嗯嗯");
+    }
+
+    #[test]
+    fn handshake_carries_the_wire_contract() {
+        let h = build_handshake("", Some("zh".into()), "");
+        // audio_format=int16 is what lets us forward s16le frames verbatim.
+        assert_eq!(h["audio_format"], "int16");
+        assert_eq!(h["task"], "transcribe");
+        assert_eq!(h["language"], "zh");
+        assert_eq!(h["use_vad"], true);
+        // Empty model → the modest default, never an empty string on the wire.
+        assert_eq!(h["model"], DEFAULT_MODEL);
+        assert_eq!(
+            build_handshake("  large-v3 ", None, "")["model"],
+            "large-v3"
+        );
+        assert!(h["language"].is_string());
+        assert!(build_handshake("", None, "")["language"].is_null());
+    }
+
+    #[test]
+    fn vocabulary_rides_the_handshake_only_when_configured() {
+        // Absent keys keep the server's own defaults — an unset vocabulary must
+        // not change the wire at all.
+        let bare = build_handshake("", None, "   ");
+        assert!(bare.get("hotwords").is_none());
+        assert!(bare.get("initial_prompt").is_none());
+
+        // Both fields, because WhisperLive forwards them to faster-whisper for
+        // two different purposes (hotword boost vs decoder priming).
+        let biased = build_handshake("", None, "Aleph, Leptos");
+        assert_eq!(biased["hotwords"], "Aleph, Leptos");
+        assert_eq!(biased["initial_prompt"], "Aleph, Leptos");
     }
 
     #[test]

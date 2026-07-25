@@ -90,6 +90,11 @@ pub struct StreamingTarget {
     /// ASR model requested from the backend. Empty = adapter default
     /// (WhisperLive: `"small"`; Deepgram dialect: server default).
     pub model: String,
+    /// Rendered `[voice] vocabulary` hint. Consumed by the WhisperLive handshake
+    /// (`hotwords` + `initial_prompt`); the Deepgram dialect deliberately ignores
+    /// it (see the config field's docs — the parameter name there is
+    /// model-dependent and a wrong guess is a 400).
+    pub vocabulary: String,
 }
 
 /// Which vendor wire protocol an adapter speaks.
@@ -172,6 +177,7 @@ mod tests {
             api_key: String::new(),
             language: None,
             model: String::new(),
+            vocabulary: String::new(),
         };
         assert!(matches!(
             classify_provider(&cfg.provider),
@@ -183,6 +189,7 @@ mod tests {
             api_key: "k".into(),
             language: None,
             model: String::new(),
+            vocabulary: String::new(),
         };
         assert!(matches!(
             classify_provider(&cfg2.provider),
@@ -205,6 +212,7 @@ mod tests {
             api_key: String::new(),
             language: Some("zh".into()),
             model: String::new(),
+            vocabulary: String::new(),
         };
         let tr = build_transcriber(t);
         let mut h = tr.open(StreamConfig::new(Some("zh".into()))).await.unwrap();

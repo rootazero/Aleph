@@ -105,6 +105,26 @@ fn normalize(text: &str) -> String {
         .to_lowercase()
 }
 
+/// Is `items` nothing but its own `n`-item head, repeated at least `min_reps`
+/// times?
+///
+/// The final repetition may be **cut short**: an endpoint fires mid-phrase, so
+/// real Whisper decode loops routinely arrive truncated ("thank you thank you
+/// thank you thank"). Requiring an exact multiple of `n` — as this did before —
+/// let every one of those through the filter untouched.
+fn repeats_head<T: PartialEq>(items: &[T], n: usize, min_reps: usize) -> bool {
+    if n == 0 || items.len() < n * min_reps {
+        return false;
+    }
+    let Some(head) = items.get(..n) else {
+        return false;
+    };
+    // `chunks` yields full windows plus a possibly-short tail. A full window must
+    // equal the head; the short tail only has to be a prefix of it (which
+    // `starts_with` gives for both cases in one test).
+    items.chunks(n).all(|c| head.starts_with(c))
+}
+
 /// Token-level loop detector: the whole transcript is one n-gram (1..=4 tokens)
 /// repeated back to back. Single tokens need [`TOKEN_LOOP_THRESHOLD`] repeats
 /// ("you you you you"); longer phrases need [`NGRAM_LOOP_THRESHOLD`]
@@ -114,21 +134,14 @@ fn is_token_loop(text: &str) -> bool {
     if tokens.iter().any(String::is_empty) {
         return false;
     }
-    for n in 1..=MAX_LOOP_NGRAM {
+    (1..=MAX_LOOP_NGRAM).any(|n| {
         let min_reps = if n == 1 {
             TOKEN_LOOP_THRESHOLD
         } else {
             NGRAM_LOOP_THRESHOLD
         };
-        if tokens.len() < n * min_reps || !tokens.len().is_multiple_of(n) {
-            continue;
-        }
-        let Some(head) = tokens.get(..n) else { continue; };
-        if tokens.chunks(n).all(|c| c == head) {
-            return true;
-        }
-    }
-    false
+        repeats_head(&tokens, n, min_reps)
+    })
 }
 
 /// Char-level loop detector for whitespace-free (CJK) transcripts: the whole
@@ -144,21 +157,14 @@ fn is_char_loop(normalized: &str) -> bool {
     if chars.len() < CHAR_LOOP_MIN_CHARS {
         return false;
     }
-    for n in 1..=MAX_LOOP_NGRAM {
+    (1..=MAX_LOOP_NGRAM).any(|n| {
         let min_reps = if n == 1 {
             TOKEN_LOOP_THRESHOLD.max(CHAR_LOOP_MIN_CHARS)
         } else {
             NGRAM_LOOP_THRESHOLD
         };
-        if chars.len() < n * min_reps || !chars.len().is_multiple_of(n) {
-            continue;
-        }
-        let Some(head) = chars.get(..n) else { continue; };
-        if chars.chunks(n).all(|c| c == head) {
-            return true;
-        }
-    }
-    false
+        repeats_head(&chars, n, min_reps)
+    })
 }
 
 /// Filter a raw Whisper transcript. Returns the transcript unchanged when it
@@ -284,6 +290,19 @@ mod tests {
     fn nulls_cjk_char_loop() {
         assert!(filter_transcript("谢谢谢谢谢谢").is_empty());
         assert!(filter_transcript("谢谢观看谢谢观看谢谢观看").is_empty());
+    }
+
+    #[test]
+    fn nulls_loop_cut_short_by_the_endpoint() {
+        // The shape the exact-multiple rule missed entirely: the VAD ends the
+        // utterance mid-phrase, so the last repetition is truncated.
+        assert!(filter_transcript("thank you thank you thank you thank").is_empty());
+        assert!(filter_transcript("谢谢观看谢谢观看谢谢观看谢谢").is_empty());
+        // …and one below the repetition floor still survives (2 reps + a tail).
+        assert_eq!(
+            filter_transcript("thank you thank you thank"),
+            "thank you thank you thank"
+        );
     }
 
     #[test]
