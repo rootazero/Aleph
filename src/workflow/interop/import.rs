@@ -12,18 +12,25 @@
 //!    `phase()` markers are captured and assigned to the steps that
 //!    follow them, so a hand-written phased workflow keeps its phase plan. Each
 //!    `agent(prompt, { opts })` call's opts object is parsed too — the literal
-//!    `label`/`phase`/`model`/`isolation`/`agentType` fields and a JSON `schema`
+//!    `label`/`phase`/`model`/`isolation`/`agentType` fields and the `schema`
 //!    are recovered, making the bare path symmetric with `export`'s
 //!    `render_agent_call` (a header-stripped export re-imports its opts intact).
+//!    A `schema` may be an inline literal *or* a `schema: NAME_SCHEMA` reference
+//!    to a hoisted top-level `const` — the engineering format's convention.
+//!    Both are normalised by the bounded data parser in [`super::consts`], which
+//!    accepts JS-lax literals (bare keys, single quotes, trailing commas) that
+//!    plain JSON parsing rejects, and *abstains* on any expression value.
 //!    A `parallel([...])` block is reconstructed into sibling steps of one DAG
 //!    layer (fan-out from the prior step, fan-in to the next), so the
 //!    parallelisation / orchestrator-workers shape round-trips instead of being
 //!    flattened into a sequential chain.
 //!
 //! No JS engine, no full parser (R3). The scan's limits are surfaced via
-//! `dropped`, never hidden.
+//! `dropped` — an unresolved / non-data `schema`, and a count of `agent()` calls
+//! skipped for a dynamic (non-literal) prompt — never hidden (P7).
 
 use crate::error::{AlephError, Result};
+use crate::workflow::interop::consts::{collect_consts, parse_js_data, ConstTable};
 use crate::workflow::interop::export::{EMBED_PREFIX, EMBED_SUFFIX};
 use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep, WorkflowPhase};
 
@@ -127,8 +134,15 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
     let mut prev_layer: Vec<usize> = Vec::new();
     let mut parallel_depth: u32 = 0;
     let mut parallel_group: Vec<usize> = Vec::new();
-    for ev in scan_events(src) {
+    // Hoisted top-level `const NAME = <data-literal>` declarations, so a bare
+    // `schema: AUDIT_SCHEMA` reference in the body resolves to its object.
+    let consts = collect_consts(src);
+    // Count of `agent()`/`clarify()` calls skipped for a dynamic (non-literal)
+    // prompt — reported in `dropped` after the walk so the loss is never silent.
+    let mut dynamic_prompts: usize = 0;
+    for ev in scan_events(src, &consts) {
         match ev {
+            ScanEvent::DynamicPrompt => dynamic_prompts += 1,
             ScanEvent::Phase(title) => {
                 if !phase_titles.iter().any(|t| t == &title) {
                     phase_titles.push(title.clone());
@@ -188,6 +202,12 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     timeout_secs: call.opts.timeout_secs,
                     max_retries: call.opts.max_retries,
                 });
+                // Surface a `schema:` that could not be captured (unknown const
+                // ref or a non-data literal) — the step imports, but say the
+                // schema was lost rather than leave it silently absent (P7).
+                if let Some(note) = call.opts.schema_dropped {
+                    dropped.push(note);
+                }
                 // A sibling inside a parallel block extends the current group; a
                 // sequential step becomes the next singleton layer.
                 if parallel_depth > 0 {
@@ -239,8 +259,24 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
         }
     }
     if steps.is_empty() {
-        return Err(AlephError::invalid_input(
-            "no agent() calls found in .workflow.js; nothing to import",
+        // Distinguish "nothing there" from "everything there was dynamic": a
+        // parameterised engineering file (per-item `buildPrompt(u)`, `.map`)
+        // has agent() calls but none statically importable — say so.
+        return Err(AlephError::invalid_input(if dynamic_prompts > 0 {
+            format!(
+                "no statically-importable agent() calls in .workflow.js \
+                 ({dynamic_prompts} had dynamic (non-literal) prompts); nothing to import"
+            )
+        } else {
+            "no agent() calls found in .workflow.js; nothing to import".to_string()
+        }));
+    }
+    // Report agent()/clarify() calls skipped for a dynamic prompt so a partly
+    // static file discloses exactly what the scan could not capture (P7).
+    if dynamic_prompts > 0 {
+        dropped.push(format!(
+            "{dynamic_prompts} agent()/clarify() call(s) with dynamic (non-literal) \
+             prompts not imported"
         ));
     }
     // Honesty at the boundary (P7): the bare scan cannot know which team
@@ -509,6 +545,11 @@ struct AgentOpts {
     timeout_secs: Option<u64>,
     /// Per-step retry ceiling — parsed from `maxRetries: <n>`.
     max_retries: Option<u32>,
+    /// A `schema:` value that could not be captured — an unknown const
+    /// reference or an object literal holding non-data (expression) values.
+    /// Carried up so `scan_bare` can surface it in `dropped` (P7 honesty) rather
+    /// than the schema vanishing silently.
+    schema_dropped: Option<String>,
 }
 
 /// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
@@ -516,11 +557,14 @@ struct AgentOpts {
 ///
 /// `start` is the index just past the prompt argument. Returns defaults when no
 /// `, {` opts object follows. String-valued keys decode via [`read_literal_at`];
-/// `schema` is captured as raw `{…}` text and JSON-parsed (a non-JSON object is
-/// skipped, leaving `schema` unset). Unknown keys and non-literal values are
-/// skipped without aborting the rest of the object — the inverse of `export`'s
-/// `render_agent_call`, so a header-stripped export round-trips its opts.
-fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
+/// `schema` is normalised by [`parse_js_data`] whether it is an inline literal
+/// or a `schema: NAME` reference into `consts` (a hoisted top-level const), so a
+/// foreign engineering file's JS-lax schema imports instead of vanishing; an
+/// unresolved or non-data schema is recorded in [`AgentOpts::schema_dropped`].
+/// Other unknown keys and non-literal values are skipped without aborting the
+/// rest of the object — the inverse of `export`'s `render_agent_call`, so a
+/// header-stripped export round-trips its opts.
+fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOpts {
     let mut opts = AgentOpts::default();
     let mut i = first_non_ws(chars, start);
     if chars.get(i) != Some(&',') {
@@ -561,36 +605,99 @@ fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
         match chars.get(i) {
             Some('\'' | '"') => match read_literal_at(chars, i) {
                 Some((lit, next)) => {
-                    assign_string_opt(&mut opts, &key, lit);
-                    i = next;
-                }
-                None => break,
-            },
-            Some('{') => match read_brace_object(chars, i) {
-                Some((raw, next)) => {
                     if key == "schema" {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                            opts.schema = Some(v);
-                        }
+                        // A string-valued schema is rare but `schema` is
+                        // `Option<Value>`; capture it verbatim so a
+                        // header-stripped export round-trips it instead of the
+                        // string arm silently dropping it (P7).
+                        opts.schema = Some(serde_json::Value::String(lit));
+                    } else {
+                        assign_string_opt(&mut opts, &key, lit);
                     }
                     i = next;
                 }
                 None => break,
             },
-            // Bare (non-string, non-object) value: capture the raw token so
-            // the executable-core opts export emits as bare literals —
+            // An object / array literal value. Only `schema` carries one; it is
+            // normalised via the bounded data parser, which accepts JS-lax
+            // literals (bare keys, single quotes, trailing commas) that plain
+            // JSON parsing rejects — so a foreign engineering file's
+            // `schema: { type: 'object', … }` imports instead of vanishing. A
+            // literal holding expression values is not pure data → recorded
+            // dropped, never guessed (R3/R7).
+            Some('{' | '[') => {
+                if key == "schema" {
+                    match parse_js_data(chars, i) {
+                        Some((v, next)) => {
+                            opts.schema = Some(v);
+                            i = next;
+                        }
+                        None => {
+                            opts.schema_dropped = Some(
+                                "inline schema literal holds non-data (expression) values — \
+                                 not imported"
+                                    .to_string(),
+                            );
+                            i = skip_value(chars, i);
+                        }
+                    }
+                } else {
+                    // No other opt is object/array-valued; skip it wholesale.
+                    i = skip_value(chars, i);
+                }
+            }
+            // Bare (non-string, non-object) value: capture the raw token. The
+            // executable-core opts export emits as bare literals —
             // `review: true`, `timeoutSecs: 1800`, `maxRetries: 0` — round-trip
-            // instead of being silently dropped. Anything unrecognised is
-            // still skipped, not guessed.
+            // via their raw literal. A bare `schema: SOME_SCHEMA` is a hoisted
+            // const reference: resolve it against the collected const table, or
+            // record it dropped. Anything else unrecognised is skipped, not
+            // guessed.
             _ => {
                 let end = skip_value(chars, i);
                 let raw: String = chars[i..end.min(chars.len())].iter().collect();
-                assign_bare_opt(&mut opts, &key, raw.trim());
+                let raw = raw.trim();
+                if key == "schema" {
+                    resolve_schema_ref(&mut opts, raw, consts);
+                } else {
+                    assign_bare_opt(&mut opts, &key, raw);
+                }
                 i = end;
             }
         }
     }
     opts
+}
+
+/// Resolve a bare `schema: IDENT` reference against the collected top-level
+/// const table. A const bound to an object/array data literal becomes the
+/// step's schema; an unknown name (or a const that abstained as non-data) is
+/// recorded in `schema_dropped` so the loss is surfaced, never silent (P7).
+fn resolve_schema_ref(opts: &mut AgentOpts, raw: &str, consts: &ConstTable) {
+    match consts.get(raw) {
+        Some(v @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+            opts.schema = Some(v.clone());
+        }
+        // The name resolves, but not to an object/array — not a usable schema.
+        Some(_) => {
+            opts.schema_dropped =
+                Some(format!("const '{raw}' is not an object/array schema — not imported"));
+        }
+        // A bare non-object literal (`schema: 42` / `true` / `null`) versus a
+        // genuine unknown identifier — distinct diagnostics either way (P7).
+        None => {
+            let is_literal =
+                raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
+            opts.schema_dropped = Some(if is_literal {
+                format!("non-object schema literal '{raw}' not imported")
+            } else {
+                format!(
+                    "schema reference '{raw}' unresolved (no top-level data-literal \
+                     const '{raw}') — not imported"
+                )
+            });
+        }
+    }
 }
 
 /// Assign a bare-literal opt value (boolean / number) by `.workflow.js` key.
@@ -620,54 +727,6 @@ fn assign_string_opt(opts: &mut AgentOpts, key: &str, val: String) {
         "effort" => opts.effort = Some(val),
         _ => {}
     }
-}
-
-/// Read a balanced `{ … }` object starting at `chars[start] == '{'`, returning
-/// its raw source text (braces included) and the index just past the close.
-/// Brace depth is tracked string-aware so a `}` inside a nested string never
-/// closes early. `None` if the object is unterminated.
-fn read_brace_object(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let n = chars.len();
-    let mut i = start;
-    let mut depth: i32 = 0;
-    let mut raw = String::new();
-    while i < n {
-        let c = chars[i];
-        raw.push(c);
-        match c {
-            '\'' | '"' | '`' => {
-                i += 1;
-                while i < n {
-                    let d = chars[i];
-                    raw.push(d);
-                    if d == '\\' {
-                        if let Some(&e) = chars.get(i + 1) {
-                            raw.push(e);
-                        }
-                        i += 2;
-                        continue;
-                    }
-                    i += 1;
-                    if d == c {
-                        break;
-                    }
-                }
-            }
-            '{' => {
-                depth += 1;
-                i += 1;
-            }
-            '}' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return Some((raw, i));
-                }
-            }
-            _ => i += 1,
-        }
-    }
-    None
 }
 
 /// Skip a value at the current opts cursor, stopping at the next top-level `,` or
@@ -754,6 +813,11 @@ enum ScanEvent {
     /// A `clarify("question", ["a", "b"])` call (an Aleph extension to the
     /// `.workflow.js` vocabulary) — the question plus any literal choices.
     Clarify(ClarifyCall),
+    /// An `agent(…)` / `clarify(…)` call whose first argument is not a static
+    /// literal (a bare identifier, `buildPrompt(u)`, a `.map` expression). It is
+    /// dynamic and not statically importable; counted for an honest `dropped`
+    /// disclosure rather than vanishing silently.
+    DynamicPrompt,
     /// The opening of a `parallel([...])` block — the agents up to the matching
     /// [`ParallelEnd`](ScanEvent::ParallelEnd) are siblings (same DAG layer).
     ParallelStart,
@@ -787,7 +851,7 @@ struct ClarifyCall {
 /// Parenthesis depth is tracked (string contents excluded) so a `parallel(`
 /// block's matching `)` is found: the agents between the emitted `ParallelStart`
 /// and `ParallelEnd` are siblings of one DAG layer.
-fn scan_events(src: &str) -> Vec<ScanEvent> {
+fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
     let mut events = Vec::new();
@@ -842,8 +906,15 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                         // where the prompt ends.
                         "agent" => {
                             if let Some((prompt, end)) = read_agent_prompt(after, 0) {
-                                let opts = read_agent_opts(after, end);
+                                let opts = read_agent_opts(after, end, consts);
                                 events.push(ScanEvent::Agent(AgentCall { prompt, opts }));
+                            } else {
+                                // A non-literal prompt (`agent(promptVar)`,
+                                // `buildPrompt(u)`, a `.map` expression) is
+                                // dynamic and not statically importable — record
+                                // it so `scan_bare` can report the count instead
+                                // of the call vanishing silently (P7).
+                                events.push(ScanEvent::DynamicPrompt);
                             }
                         }
                         // A clarify question is a plain/`join`-array literal (the
@@ -854,6 +925,8 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                             if let Some((prompt, end)) = read_agent_prompt(after, 0) {
                                 let choices = read_clarify_choices(after, end);
                                 events.push(ScanEvent::Clarify(ClarifyCall { prompt, choices }));
+                            } else {
+                                events.push(ScanEvent::DynamicPrompt);
                             }
                         }
                         // The block opens at the `(` the main loop is about to
@@ -1437,6 +1510,193 @@ await agent('fix more')
             "identifier schema left unset, not guessed"
         );
         assert_eq!(s.model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn bare_js_resolves_hoisted_schema_const() {
+        // The engineering format hoists schemas as a top-level JS object literal
+        // (bare keys, single quotes, trailing comma) and references it by name.
+        // The scan resolves the reference to its normalised JSON.
+        let src = "export const meta = { name: 'sc' }\n\
+                   const AUDIT_SCHEMA = { type: 'object', required: ['lens'], }\n\
+                   await agent('audit it', { phase: \"Audit\", schema: AUDIT_SCHEMA })";
+        let outcome = parse_workflow_js(src).expect("scan schema const");
+        let s = &outcome.manifest.steps[0];
+        assert_eq!(
+            s.schema,
+            Some(serde_json::json!({"type": "object", "required": ["lens"]})),
+            "hoisted const schema resolved and normalised to JSON"
+        );
+        assert!(
+            !outcome.dropped.iter().any(|d| d.contains("schema")),
+            "resolved schema is not reported dropped: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn bare_js_resolves_inline_js_literal_schema() {
+        // An inline schema written in JS-lax syntax (single quotes, bare keys)
+        // now normalises to JSON — before, plain JSON parsing rejected it and the
+        // schema vanished silently.
+        let src = "export const meta = { name: 'in' }\n\
+                   await agent('go', { schema: { type: 'string', enum: ['a', 'b'] } })";
+        let outcome = parse_workflow_js(src).expect("scan inline js schema");
+        assert_eq!(
+            outcome.manifest.steps[0].schema,
+            Some(serde_json::json!({"type": "string", "enum": ["a", "b"]}))
+        );
+    }
+
+    #[test]
+    fn bare_js_unresolved_schema_ref_recorded_in_dropped() {
+        // A `schema:` referencing a name with no top-level data-literal const is
+        // surfaced in dropped (P7); the schema stays unset — never guessed.
+        let src = "export const meta = { name: 'un' }\n\
+                   await agent('go', { schema: MISSING_SCHEMA })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert!(outcome.manifest.steps[0].schema.is_none());
+        assert!(
+            outcome
+                .dropped
+                .iter()
+                .any(|d| d.contains("MISSING_SCHEMA") && d.contains("unresolved")),
+            "unresolved schema ref surfaced: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn bare_js_non_data_inline_schema_recorded_in_dropped() {
+        // An inline schema literal holding an expression value is not pure data →
+        // it abstains and is reported, never half-captured (R3/R7).
+        let src = "export const meta = { name: 'nd' }\n\
+                   await agent('go', { schema: { items: buildItems() } })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert!(outcome.manifest.steps[0].schema.is_none());
+        assert!(
+            outcome.dropped.iter().any(|d| d.contains("non-data")),
+            "non-data inline schema surfaced: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn bare_js_dynamic_prompt_calls_counted_in_dropped() {
+        // A mix of a static agent and dynamic-prompt agents: the static one
+        // imports, and the count of skipped dynamic calls is disclosed (P7).
+        let src = "export const meta = { name: 'mix' }\n\
+                   await agent('static one')\n\
+                   await agent(buildPrompt(u))\n\
+                   await agent(promptVar)";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert_eq!(
+            outcome.manifest.steps.len(),
+            1,
+            "only the static agent imports"
+        );
+        assert!(
+            outcome
+                .dropped
+                .iter()
+                .any(|d| d.contains("2 agent()") && d.contains("dynamic")),
+            "dynamic-prompt count disclosed: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn bare_js_all_dynamic_prompts_errors_with_count() {
+        // A fully parameterised file (every prompt dynamic) has nothing to import
+        // — the error names the dynamic count so the failure is legible.
+        let src = "export const meta = { name: 'allDyn' }\n\
+                   await agent(buildPrompt(a))\n\
+                   await agent(buildPrompt(b))";
+        let err = parse_workflow_js(src).expect_err("all-dynamic errors");
+        let msg = err.to_string();
+        assert!(
+            msg.contains('2') && msg.contains("dynamic"),
+            "error names the count: {msg}"
+        );
+    }
+
+    #[test]
+    fn aleph_exported_json_schema_reimports_on_bare_path() {
+        // Aleph renders schema inline as compact JSON. Strip the embed header and
+        // prove the bounded data parser reads Aleph's own JSON output back on the
+        // bare path (JSON is a subset of the accepted grammar) — no regression.
+        let m = WorkflowManifest {
+            name: "js".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![WorkflowManifestStep {
+                id: "a".into(),
+                agent: "agent".into(),
+                prompt: "go".into(),
+                depends_on: vec![],
+                label: None,
+                model: None,
+                phase: None,
+                schema: Some(
+                    serde_json::json!({"type": "object", "properties": {"n": {"type": "integer"}}}),
+                ),
+                isolation: None,
+                agent_type: None,
+                effort: None,
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
+                review: false,
+                timeout_secs: None,
+                max_retries: None,
+            }],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        let outcome = parse_workflow_js(&bare).expect("bare scan of exported schema");
+        assert_eq!(
+            outcome.manifest.steps[0].schema, m.steps[0].schema,
+            "JSON schema round-trips on the bare path"
+        );
+    }
+
+    #[test]
+    fn string_valued_schema_survives_bare_roundtrip() {
+        // `schema` is Option<Value>; a string-valued schema renders as
+        // `schema: "…"` and must survive a header-stripped re-import via the
+        // string arm rather than vanishing (the residual P7 hole, now closed).
+        let m = WorkflowManifest {
+            name: "ss".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![WorkflowManifestStep {
+                id: "a".into(),
+                agent: "agent".into(),
+                prompt: "go".into(),
+                depends_on: vec![],
+                label: None,
+                model: None,
+                phase: None,
+                schema: Some(serde_json::Value::String("opaque-ref".into())),
+                isolation: None,
+                agent_type: None,
+                effort: None,
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
+                review: false,
+                timeout_secs: None,
+                max_retries: None,
+            }],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        let outcome = parse_workflow_js(&bare).expect("bare scan");
+        assert_eq!(
+            outcome.manifest.steps[0].schema,
+            Some(serde_json::Value::String("opaque-ref".into())),
+            "string-valued schema survives the bare path"
+        );
     }
 
     #[test]
