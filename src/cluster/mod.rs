@@ -25,7 +25,10 @@ mod node_runtime;
 mod registry;
 mod reverse_rpc;
 
-pub use enrollment::{admit_node, mint_node_device, NodeAdmission};
+pub use enrollment::{
+    admit_node, deregister_node, enroll_node_device, DeregisterError, DeregisterOutcome,
+    NodeAdmission,
+};
 pub use node_approval::{ApprovalSlot, CenterApprovalRequester, NODE_APPROVAL_TIMEOUT_MS};
 pub(crate) use node_file_cmd::sha256_hex;
 pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};

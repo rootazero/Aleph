@@ -21,7 +21,7 @@
 | 文件 | 角色 | 关键类型 |
 |------|------|----------|
 | `src/cluster/mod.rs` | 模块根 + 再导出 | — |
-| `src/cluster/enrollment.rs` | 中心侧节点准入(登记/复用/拒绝)的单一真源 | `admit_node` / `NodeAdmission` / `mint_node_device` |
+| `src/cluster/enrollment.rs` | 中心侧节点**生命周期**(准入/预登记/注销)的单一真源 | `admit_node` / `NodeAdmission` / `enroll_node_device` / `deregister_node` |
 | `src/cluster/reverse_rpc.rs` | 反向 RPC 传输原语(中心→已连客户端的带 id 请求/响应) | `PendingInvokes` / `ReverseRpcChannel` / `ReverseRpcError` |
 | `src/cluster/registry.rs` | 中心侧节点登记表 + 只读环境投影 | `NodeRegistry` / `NodeSession` / `Environment` / `CommandDescriptor` / `maybe_register_node` |
 | `src/cluster/node_runtime.rs` | 节点侧命令分发(执行臂) | `NodeCommand` / `CommandTable` / `BashNodeCommand` |
@@ -31,6 +31,7 @@
 | `src/builtin_tools/node_invoke.rs` | 中心侧 **LLM 工具**:在单个节点上跑命令 | `NodeInvokeTool` |
 | `src/builtin_tools/node_invoke_many.rs` | 中心侧 **LLM 工具**:按标签把命令并发扇出到一组节点 | `NodeInvokeManyTool` / `invoke_one` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
+| `src/builtin_tools/node_manage.rs` | 中心侧 **LLM 工具**:改变舰队成员(登记/注销) | `NodeManageTool` |
 | `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `cluster.deregister` / `environments.list` | `handle_cluster_enroll` / `handle_cluster_deregister` / `handle_environments_list` |
 | `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `parse_connect_verdict` / `init_node_tracing` |
 
@@ -153,12 +154,19 @@ aleph-server node \
 
 中心侧 RPC。节点**并不需要**先走它。它的作用是让 operator 先把名字占下——节点还没
 拨入前就以 `status:"offline"` 出现在舰队视图里,且节点随后同名拨入时被上表最后一条
-规则归并到这一行。与 connect 自助登记共用同一设备记录真源(`mint_node_device`)。
+规则归并到这一行。与 connect 自助登记共用同一设备记录真源(`enroll_node_device`)。
 
 ```jsonc
 // → cluster.enroll  { "node_name": "worker-1" }
-// ← { "node_id": "<uuid>" }      // 不铸 token
+// ← { "node_id": "<uuid>", "reused": false }   // 不铸 token
 ```
+
+> **登记是幂等的**(2026-07-25 修)。同名再登记返回**同一个** `node_id`(`reused:true`),
+> 不再铸第二行。此前 `mint_node_device` 无条件铸新 UUID,于是 Panel「+ Enroll」多点一次
+> 就多一条同名 `role=node` 行——而这种重复是**自我封死**的:第二行让按名归并变歧义,节点
+> 首启于是既不认领任何一行、又去铸**第三行**;同时 `cluster.deregister` 的离线回退要求
+> 名字唯一命中,于是这几行**一条都删不掉**,operator 只能去改数据库。既有舰队若已被污染,
+> 登记会**报错并要求先按 id 删重复**,而不是再加一行。
 
 Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Panel 拿到 `node_id` 后
 展示的是**要在目标机器上跑的那条命令**,不是 token。
@@ -178,8 +186,28 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Pane
 
 返回 `{ node_id, evicted, device_removed }`。寻址先走在线 `NodeRegistry` 多级匹配,
 不在线则回退 `security_store` 已登记节点(精确 id / **唯一归一化 name**),故
-`environments.list` 里可见的离线节点同样可注销(此时 `evicted:false`)。本调用不强制
-close 节点当前 socket——它在下一次 ping/idle-watchdog 到期时由传输层断开。
+`environments.list` 里可见的离线节点同样可注销(此时 `evicted:false`)。
+
+**第 ① 步现在会当场掐断那条 socket**(2026-07-25):`NodeRegistry::forget` 除了驱逐会话,
+还会触发该连接的 close 信号(`ReverseRpcChannel::close_connection`,与慢消费者踢除共用
+同一根线),读循环退出 → 跑现有全套 cleanup → 关 socket。此前只驱逐不关连接,那条连接要
+熬到下一次 ping / ≤90s 入站 idle-watchdog 才断——而这段窗口里被注销的节点**仍在跑**中心
+先前下发的命令,且它的 `node.approval.request` 通道**仍然活着**,刚把它踢掉的 operator
+还会收到它弹的审批卡。
+
+**这三处 RPC/工具共用同一真源** `cluster::deregister_node`(`enrollment.rs`):
+`cluster.deregister` RPC、`node_manage` 工具、以及它们背后的两段式拆除,都是同一段代码
+——handler 只做 I/O 翻译(R4)。
+
+### 谁能改舰队成员
+
+| 入口 | 面向 | 说明 |
+|------|------|------|
+| Panel 设置 → Aleph 集群 | operator 点按 | `cluster.enroll` / `cluster.deregister` RPC |
+| `node_manage` 工具 | **模型/对话** | R8:「把 worker-3 踢出集群」应当能对话完成 |
+
+两者调的是同一对函数(`enroll_node_device` / `deregister_node`),不存在「Panel 删得掉、
+对话删不掉」这类语义分叉。
 
 ### 重连
 
@@ -265,6 +293,33 @@ local_path, remote_path}` 摘要。两端硬 **8MB**(`MAX_FILE_BYTES`)+ **sha256
 完整性校验**(pull 时不匹配不落盘)。push 需节点声明 `file.write`,pull 需
 `file.read`。
 
+### `node_manage` — 改变舰队成员(R8 的写半边)
+
+```jsonc
+{ "action": "enroll",     "node": "worker-3" }   // 占名,返回 node_id(幂等)
+{ "action": "deregister", "node": "worker-3" }   // 踢出,粘性,离线节点同样可删
+```
+
+`node_list` 只读舰队,这个工具**写**舰队。此前登记/注销只有 Panel RPC,于是「把 worker-3
+踢出集群」是唯一无法对话完成的集群操作(违 R8)。工具与 Panel 走**同一对函数**
+(`enroll_node_device` / `deregister_node`),不新增任何语义。
+
+`enroll` 不会远程安装或启动任何东西——它只是占名并回一个 `node_id`,机器要等有人在那台
+机器上跑 `aleph-server node --center … --name worker-3` 才真正加入。收在 `OPERATOR_TOOLS`
+里:改变「中心拥有哪些机器」比在已有机器上执行更强。
+
+## 版本握手(仅观测,不拒连)
+
+节点在 `connect` 帧带 `version: env!("ALEPH_VERSION")`,中心存进 `NodeSession`,经
+`node_list` / `environments.list` 的 `version` 字段透出(Panel 舰队行也渲染),并在版本与
+中心不一致时 `warn!` 一行。
+
+**刻意不拒连**。openclaw 的 `server.node-version-mismatch` 守卫治的是它**同机 bundled 的
+local node**——版本天然应当一致。Aleph 的节点是 LAN 里独立升级的机器,滚动升级是常态,
+按版本拒连等于**每次升级中心就打掉全部未升级节点**。我们要的只是:当有人报告「那台机器
+表现和别的不一样」时,有一个可对照的事实。离线节点**永远** `version:null`——设备表没有
+版本列,记住的版本是对一台看不见的机器的过期断言。
+
 ## 节点侧执行(`CommandTable`)
 
 - **allowlist 即命令表的 keys,节点侧权威**:中心发什么都得在表里,否则
@@ -326,7 +381,7 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 
 | 方向 | 帧 |
 |------|----|
-| node → center | `connect { device_id?, device_name, commands, tags }`(LAN-trust,无 token;首启省略 `device_id`) |
+| node → center | `connect { device_id?, device_name, commands, tags, version }`(LAN-trust,无 token;首启省略 `device_id`;`version` 仅观测) |
 | center → node | connect 回包 `{ result:{ …, node:{ node_id, status:"registered"|"deregistered", persist } } }` |
 | center → node | 请求 `{ id, method:"tool.call", params:{ tool, args } }` |
 | node → center | 响应 `{ id, result }` / `{ id, error }` |
@@ -373,6 +428,7 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | `node_invoke` | **operator** | 远程执行 |
 | `node_invoke_many` | **operator** | 一次调用打到中心拥有的每一台机器 |
 | `node_file` | **operator** | 跨机器搬字节 |
+| `node_manage` | **operator** | 改变舰队成员本身 |
 
 本地 `bash` 是刻意对 chat-tier 开放的,但集群写工具的**爆炸半径**完全不是一个量级
 ——所以三个写工具收进了 `OPERATOR_TOOLS`,只读的 `node_list` 留在外面。
@@ -393,6 +449,17 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 - jail containment:`node_file_cmd.rs` 的 `file_write_rejects_traversal`。
 - 审批 fail-closed:`node_approval.rs` 的 `outcome_mapping_is_fail_closed` /
   `none_channel_denies` / `transport_closed_denies`。
+- **登记幂等 / 注销真源**:`enrollment.rs` 的 `enroll_is_idempotent_across_name_spellings` /
+  `enroll_refuses_to_deepen_a_pre_existing_duplicate` / `deregister_is_sticky_and_reaches_offline_nodes`,
+  RPC 层 `handlers/cluster.rs::enroll_twice_returns_the_same_node_id`,工具层
+  `node_manage.rs::enroll_is_idempotent_by_name`。
+- **注销掐断连接(真实 socket)**:`tests/cluster_node_enrollment.rs::deregister_tears_down_the_nodes_live_socket`
+  ——**单测钉不住这条线**,测试通道用 `ReverseRpcChannel::new`(无 close 信号)。同一测试顺带钉死
+  版本握手落到 `Environment.version`。
+- **UTF-8 安全**:`registry.rs::{truncate_on_char_boundary_never_splits_a_scalar,
+  ambiguity_labels_survive_non_ascii_node_ids}` / `enrollment.rs::admit_node_survives_a_non_ascii_presented_id`
+  (fixture 刻意让第 16 字节落在标量内部)。
+- **并发 scope 归一化**:`registry_adapter.rs::node_invoke_claim_folds_spelling_variants_onto_one_scope`。
 
 ## 与 openclaw 的对照映射 (Gap Analysis)
 
@@ -418,6 +485,10 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | 出站背压 | `bufferedAmount > MAX_BUFFERED_BYTES` ⇒ **直接关 socket**(`node-registry.ts:894` `rejectSlowNodeSocket`) | 有界 mpsc(容量 64)+ **入队纳入 `timeout_ms` 预算**;入队卡死回 `OutboundWedged` **并触发关连接**(`with_close` 信号→读循环退出→全套 cleanup),节点退避重连 | **对齐**(2026-07-17 闭合;见下「存活性」节) |
 | 超时语义 | 解析为 `{ok:false, error:{code:"TIMEOUT"}}`(值) | `Timeout`(等响应超时)与 `OutboundWedged`(入队卡死)**两个类型化 Err**——「节点慢」与「socket 死」不再混为一谈 | 🟢 **超越**(Rust 类型安全 + 比 openclaw 单一 TIMEOUT 更细粒度,调用方/模型可分辨) |
 | 取消帧 | **无**(靠中心 deadline + 节点自杀子进程 + 断线) | 无(节点侧 bash 自带 60s 超时兜底) | **对齐** |
+| **节点版本握手** | `connect.client.version` 进 NodeSession(`node-registry.ts:202`);其**同机 bundled local node** 版本不符**拒连**(`server.node-version-mismatch.test.ts`) | 节点 connect 帧带 `version`,进 `NodeSession`/`Environment`,`node_list` + Panel 舰队行透出,不一致 `warn!` 一行 | **分道**——采纳观测面,**刻意不拒连**(Aleph 无 local-node 概念,LAN 里滚动升级是常态,按版本拒连＝每次升中心就打掉全部未升节点) |
+| **中心侧命令策略** | `node-command-policy.ts` 423 行:平台默认表 + `allowCommands`/`denyCommands` + dangerous 清单(camera/screen/sms/contacts/calendar…) | 无中心侧策略;节点侧 `CommandTable` allowlist 权威 | **有意不移植**——那 423 行治的是**移动端能力面**,Aleph 节点只有 `bash`+`file.*`(R3 纯执行臂);爆炸半径闸已在 `OPERATOR_TOOLS`,再加一层配置是零消费者的旋钮 |
+| 节点侧 invoke 超时 | `node-host/with-timeout.ts`(AbortSignal 包裹) | `bash` 自带 60s 默认 / ~170s 前台钳位;`file.*` 有界(8MB) | **对齐**(同一效果,不引入第二套超时机件) |
+| **舰队成员写面** | CLI/gateway 方法(`nodes` 命令族),**非 agent 工具** | `node_manage` 工具(enroll/deregister)与 Panel RPC 共用同一对函数 | 🟢 **超越**(R8:对话即管理面板;openclaw 的模型改不了舰队成员) |
 
 ### 有意不移植(YAGNI / 红线)
 
@@ -428,8 +499,45 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 | 离线工作队列 + APNs 唤醒(`node-pending-work.ts`) | Aleph 节点是常驻 headless 机器,不是会睡眠的手机 |
 | `idempotencyKey` | openclaw 自己的 node-host **也完全忽略它**(只用于 pending 去重),移植即死代码 |
 | 三段式 exec 审批(prepare → approve → run + 计划绑定) | Aleph 复用**已有** `ExecApprovalManager` + Panel 审批卡,`node.approval.request` 一跳搞定(更薄,R10) |
+| 中心侧 `allowCommands`/`denyCommands` 命令策略(`node-command-policy.ts`) | 治的是移动端能力面(camera/sms/contacts…);Aleph 节点只有 `bash`+`file.*`,节点侧 allowlist 已权威、`OPERATOR_TOOLS` 已管爆炸半径 —— 再加一层是零消费者的旋钮(R3/YAGNI) |
+| 版本不符**拒连** | 只对 openclaw 同机 bundled local node 成立;Aleph 节点是 LAN 里独立升级的机器,拒连＝每次升中心打掉全部未升节点。**采纳观测面,不采纳拒绝**(见上「版本握手」节) |
 
 ### 已闭合(记账)
+
+- **`cluster.enroll` 幂等化(2026-07-25,自身 bug,非 openclaw delta)**:`handle_cluster_enroll`
+  直接调 `mint_node_device`,**无条件铸新 UUID**——而模块 doc 一直声称「与 connect 自助登记
+  共用同一真源,故同名 enroll 不会铸重复行」。**声称的不变量在代码里根本不存在**:Panel
+  「+ Enroll」双击 / RPC 重试 / 模型问两次,每次都多一条同名 `role=node` 行。伤害是**自我封死**
+  的三连:① 第二行让 `admit_node` 的 `reuse_by_name` 变歧义 ⇒ 节点首启既不认领也不复用,去铸
+  **第三行**;② `cluster.deregister` 的离线回退要求名字**唯一**命中(`[d] => Some, _ => None`)
+  ⇒ 这几行**一条都删不掉**;③ 于是舰队视图里永久挂着 operator 自己造的幽灵行,只能改数据库。
+  现新增 `enroll_node_device`(`enrollment.rs`)作为**唯一**预登记入口:`match_by_name` 三态
+  (`Unique`/`None`/`Ambiguous`)——唯一命中即复用(`reused:true`)、无命中才铸、**已有重复则报错
+  要求先按 id 清理**,绝不再加一行。`mint_node_device` 同时降为**私有**,堵死绕过路径(熵减)。
+  锚点 `cluster/enrollment.rs::{enroll_node_device, match_by_name}`。
+
+- **注销当场掐断 socket(2026-07-25,`with_close` 只连了一半)**:慢消费者踢除那轮建了
+  `ReverseRpcChannel::with_close` + handler 的 `rpc_close` select arm,但**只有 `call()` 的入队
+  卡死会触发它**。`cluster.deregister` 明明要求节点立刻离场,却只驱逐 registry、不碰连接——那条
+  socket 要熬到下一次 ping / ≤90s 入站 idle-watchdog。这段窗口里被注销的节点**仍在执行**中心
+  先前下发的命令,且 `node.approval.request` 通道**仍然活着**:刚把它踢掉的 operator 还会收到
+  它弹的审批卡。现 `NodeRegistry::forget` 直接 `channel.close_connection()`(新公开的第二个
+  producer),复用**同一根线**跑现有全套 cleanup。单测看不见这条线(测试通道用 `new`,无 close
+  信号),故补真实 socket 集成测试 `deregister_tears_down_the_nodes_live_socket`。
+
+- **`ExclusiveScope::Nodes` 的 key 归一化(2026-07-25,又一次自引 SSOT 漂移)**:
+  `registry_adapter.rs` 用**调用方原样 selector** 做并发 scope key,于是同一批次里
+  `{"node":"worker-1"}` 与 `{"node":"Worker 1"}` 被判**互不冲突**、并发跑向同一台机器的
+  **同一个 bash session workspace**——正是该 scope 引入时要防的那个竞态。现折叠进
+  `normalize_node_key`(第 4 个消费者)。**残余(已接受)**:按 name 与按 id 寻址同一节点仍看似
+  disjoint——claim 只由 `input` 计算,手上没有 registry 可解析身份;收窄拼写变体是免费的,在这里
+  解析身份不是。
+
+- **UTF-8 切片 panic ×2(2026-07-25,P7)**:`enrollment.rs` 的 fingerprint(`&id[..16]`)与
+  `registry.rs::candidate_labels` 的短 id(`&node_id[..8]`)都在**字节**切片 node_id。而 node_id
+  **不保证是中心铸的 ASCII UUID**——`admit_node` 的「未知 id」分支会采纳对端 connect 帧里带的
+  任意 `device_id`。字节 16/8 落在多字节标量内部即 **panic 掉整条连接任务**。现统一走
+  `truncate_on_char_boundary`。
 
 - **慢消费者踢除(2026-07-17 闭合,比原设想更彻底)**:openclaw 在出站缓冲超限时
   **主动关掉**坏连接(`rejectSlowNodeSocket`)把坏节点摘掉。此前 Aleph 只做到「调用方

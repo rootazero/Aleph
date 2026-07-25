@@ -74,6 +74,7 @@ pub mod node_file;
 pub mod node_invoke;
 pub mod node_invoke_many;
 pub mod node_list;
+pub mod node_manage;
 pub mod note_graph_query;
 pub mod note_manage;
 pub mod note_orient;
@@ -222,6 +223,7 @@ pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
 pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
 pub use node_list::{NodeListArgs, NodeListTool};
+pub use node_manage::{NodeManageArgs, NodeManageTool};
 pub use pdf_generate::{
     ContentFormat, PageSize, PdfGenerateArgs, PdfGenerateOutput, PdfGenerateTool, RenderEngine,
 };

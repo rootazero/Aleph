@@ -315,7 +315,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | **GRAPH_LAYER.md** | [docs/reference/GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) — 循环治理图（loop-graph governance）：`src/loop_graph/` 六词闭集治理边 + 锚点/冻结/根参照 + 审计环，四种单循环失败（Goodhart/参照盲区/环冲突/测量衰减）的拓扑解法；spec 见 docs/superpowers/specs/2026-07-19 |
 | MULTI_AGENT_SYSTEM.md | [docs/reference/MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
 | GATEWAY.md | [docs/reference/GATEWAY.md](docs/reference/GATEWAY.md) |
-| CLUSTER.md | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — Aleph 集群（单中心非对称节点联邦）：reverse RPC + `node_invoke`/`node_file` + 命令 allowlist + 审批回中心 + 断线 fail-fast |
+| CLUSTER.md | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — Aleph 集群（单中心非对称节点联邦）：reverse RPC + `node_invoke`/`node_file` + `node_manage`(对话式管舰队, R8) + 命令 allowlist + 审批回中心 + 断线 fail-fast + 版本握手(仅观测)；**内含 openclaw 对照映射表(Gap Analysis)，改集群前先看那张表，不必重做对比** |
 | TOOL_SYSTEM.md | [docs/reference/TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
 | **MODEL_CATALOG.md** | [docs/reference/MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) — 预设 provider / 模型参考数据：四张表(presets·capabilities·pricing·lifecycle) + 单一 join 点 `ModelRecord::resolve` + 按需 `/models` 发现 + **漂移守卫契约**；内含 **opencode / kimi-cli 对照表(Gap Analysis)，改这一层前先看那张表，不必重做对比** |
 | **MODE_SYSTEM.md** | [docs/reference/MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) — 会话模式 chat/work/code：exec_tier/think_level 的第三孪生，工具呈现面静态分区（R10 渐进披露例外）+ 模式 prompt line + Panel 模式选择器/右栏差异化 |

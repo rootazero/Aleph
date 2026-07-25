@@ -141,6 +141,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     heartbeat_service: Option<alephcore::tasks::heartbeat::SharedHeartbeatService>,
     daemon: bool,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    // Cluster membership store: the `role=node` device records behind
+    // `node_manage`. The same Arc the gateway auth layer and `cluster.enroll`
+    // write through — a second store would fork the fleet roster.
+    security_store: Arc<alephcore::gateway::security::SecurityStore>,
     // Spec 5 Task 12: wiki orientation handle for DreamDaemon + MemoryContextProvider + tools.
     orientation: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
     note_memory_dir: Option<std::path::PathBuf>,
@@ -736,6 +740,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // gateway server). Always available; unconditional unlike the MCP
         // wiring which depends on a memory backend.
         tool_registry.set_node_registry(server.node_registry.clone());
+        // …and the device records the registry does NOT hold: enrolled-but-
+        // offline nodes, and the `revoked_at` flag that makes a deregister
+        // stick. Without it `node_manage` degrades to a clear "not injected".
+        tool_registry.set_node_security_store(security_store.clone());
 
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());

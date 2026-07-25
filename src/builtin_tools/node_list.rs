@@ -42,7 +42,9 @@ impl AlephTool for NodeListTool {
     const DESCRIPTION: &'static str = r#"List the online cluster nodes (remote execution arms the center can drive).
 
 Each entry shows the node's id, name, declared commands (what node_invoke may run
-there), free-text tags (what node_invoke_many selects on), and connect time. Pass
+there), free-text tags (what node_invoke_many selects on), connect time, and the
+aleph-server version it runs (null on older nodes; a version differing from the
+center's is allowed but worth mentioning if that node misbehaves). Pass
 `tags` (AND match) to preview exactly which nodes a node_invoke_many fan-out with
 those tags would hit; omit it to see every online node. An enrolled node that is
 currently offline does NOT appear here — it cannot be invoked until it reconnects."#;
@@ -65,6 +67,11 @@ currently offline does NOT appear here — it cannot be invoked until it reconne
                     "commands": e.commands.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
                     "tags": e.tags,
                     "connected_at": e.connected_at,
+                    // The node's aleph-server build; null on nodes older than
+                    // the version handshake. Surfaced so a "this node behaves
+                    // differently from the others" report has something to
+                    // correlate against — the center never refuses on skew.
+                    "version": e.version,
                 })
             })
             .collect();
@@ -93,6 +100,7 @@ mod tests {
                 })
                 .collect(),
             tags: tags.into_iter().map(String::from).collect(),
+            version: None,
             connected_at: 1,
         });
     }

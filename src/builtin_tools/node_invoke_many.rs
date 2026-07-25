@@ -190,6 +190,7 @@ mod tests {
                 })
                 .collect(),
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            version: None,
             connected_at: 1,
         });
         (rx, channel)

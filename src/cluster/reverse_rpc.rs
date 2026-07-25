@@ -195,6 +195,28 @@ impl ReverseRpcChannel {
         self.pending.clone()
     }
 
+    /// Ask the owning connection to tear itself down, if this channel carries a
+    /// close signal ([`with_close`](Self::with_close)); a no-op otherwise
+    /// (node-side channels / tests).
+    ///
+    /// Two producers fire this, for the same reason — the connection must go
+    /// away **now**, not at the next idle-watchdog expiry:
+    /// * [`call`](Self::call) on an outbound wedge (slow consumer, see
+    ///   [`OutboundWedged`](ReverseRpcError::OutboundWedged));
+    /// * [`NodeRegistry::forget`](crate::cluster::NodeRegistry::forget) on an
+    ///   operator deregister — evicting the session from the registry only stops
+    ///   *new* dispatches; without this the revoked node keeps its socket (and
+    ///   with it the still-live `node.approval.request` path back to the
+    ///   operator) until the ≤90s inbound watchdog fires.
+    ///
+    /// `notify_one` stores a permit when nobody is waiting yet, so the
+    /// connection's `select!` arm cannot miss the wakeup.
+    pub fn close_connection(&self) {
+        if let Some(close) = &self.close {
+            close.notify_one();
+        }
+    }
+
     /// Initiate a reverse RPC request on the connection and await the response.
     ///
     /// `timeout_ms` is the budget for the **entire call**, covering both "push
@@ -241,9 +263,7 @@ impl ReverseRpcChannel {
             // idle-watchdog, which never fires for a half-open write-wedge.
             Err(_) => {
                 self.pending.cancel(&id);
-                if let Some(close) = &self.close {
-                    close.notify_one();
-                }
+                self.close_connection();
                 return Err(ReverseRpcError::OutboundWedged(timeout_ms));
             }
             Ok(Ok(())) => {}
@@ -404,7 +424,10 @@ mod tests {
             .expect_err("a wedged queue must time out, not hang");
         // Enqueue-wedge is typed distinctly from a slow *response* (Timeout): the
         // frame never reached the wire. A plain `new` channel just reports it.
-        assert!(matches!(err, ReverseRpcError::OutboundWedged(50)), "{err:?}");
+        assert!(
+            matches!(err, ReverseRpcError::OutboundWedged(50)),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
@@ -421,7 +444,10 @@ mod tests {
             .call("tool.call", json!({}), 50)
             .await
             .expect_err("wedged queue must error");
-        assert!(matches!(err, ReverseRpcError::OutboundWedged(50)), "{err:?}");
+        assert!(
+            matches!(err, ReverseRpcError::OutboundWedged(50)),
+            "{err:?}"
+        );
         // notify_one() before the waiter still leaves a stored permit, so this
         // resolves immediately — no lost wakeup.
         tokio::time::timeout(Duration::from_secs(1), close.notified())

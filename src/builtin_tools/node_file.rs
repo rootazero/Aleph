@@ -256,6 +256,7 @@ mod tests {
                 })
                 .collect(),
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         (reg, rx, channel)
@@ -379,6 +380,7 @@ mod tests {
                 schema: json!({}),
             }],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         // Responder lies: content "real" but sha of "fake".

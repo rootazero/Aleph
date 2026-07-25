@@ -40,6 +40,10 @@ pub struct NodeSession {
     /// Operator-assigned free-text labels (e.g. "gpu", "region=us"). Selection
     /// only — never an authorization gate (R7). Stored verbatim; not kv-parsed.
     pub tags: Vec<String>,
+    /// The `aleph-server` build the node runs, as it declared in its connect
+    /// frame. `None` = a node older than the version handshake. **Observation
+    /// only**: a skewed node is never refused (see [`maybe_register_node`]).
+    pub version: Option<String>,
     /// Registration timestamp (Unix seconds).
     pub connected_at: i64,
 }
@@ -86,6 +90,12 @@ pub struct Environment {
     /// `None` + offline = never connected since registration.
     #[serde(default)]
     pub last_seen_at: Option<i64>,
+    /// The node's `aleph-server` build, from its connect frame. Always `None`
+    /// for offline entries — the device store keeps no version column, and a
+    /// remembered version would be a claim about a machine we cannot currently
+    /// see. `None` on an *online* node = it predates the version handshake.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// A matched online node for tag-selected fan-out: enough to dispatch over
@@ -99,6 +109,26 @@ pub struct NodeMatch {
     pub channel: ReverseRpcChannel,
     pub declared_commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
+}
+
+/// Byte-bounded prefix of `value` that never splits a UTF-8 scalar.
+///
+/// `&s[..n]` **panics** when byte `n` lands mid-character, and both call sites
+/// slice a *node id* — which is not always a center-minted ASCII UUID. The
+/// "unknown id" branch of [`crate::cluster::admit_node`] adopts whatever
+/// `device_id` the peer presented in its connect frame, so a node dialling in
+/// with a non-ASCII identity file would otherwise panic the connection task
+/// (P7 UTF-8 safety). Truncating short is always safe here: these are display
+/// affordances (ambiguity labels, device fingerprints), not identities.
+pub(crate) fn truncate_on_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 #[derive(Default)]
@@ -147,7 +177,8 @@ impl NodeRegistry {
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
             return false;
         };
-        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id) {
+        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id)
+        {
             if entry.get().conn_id == conn_id {
                 entry.remove();
                 return true;
@@ -174,6 +205,7 @@ impl NodeRegistry {
                 tags: s.tags.clone(),
                 connected_at: s.connected_at,
                 last_seen_at: None,
+                version: s.version.clone(),
             })
             .collect();
         envs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
@@ -291,16 +323,39 @@ impl NodeRegistry {
     }
 
     /// Actively evict a session by `node_id` (used by operator deregister).
-    /// Removes from both tables; the held [`ReverseRpcChannel`] clone is dropped
-    /// along with it. Returns whether a session was actually removed. Orthogonal
-    /// to [`deregister`](Self::deregister) (disconnect reconciliation by `conn_id`).
+    /// Removes from both tables **and asks the node's connection to close**.
+    /// Returns whether a session was actually removed. Orthogonal to
+    /// [`deregister`](Self::deregister) (disconnect reconciliation by `conn_id`).
+    ///
+    /// **Why the close signal**: eviction alone only stops *new* dispatches
+    /// (`node_invoke` / `node_file` can no longer address the node). The socket
+    /// itself survives until the next ping / ≤90s inbound idle-watchdog, and
+    /// until then the revoked node still runs whatever the center dispatched
+    /// before, and its `node.approval.request` path can still raise approval
+    /// cards at the operator who just deregistered it. Firing the connection's
+    /// close signal (bound per-connection via
+    /// [`ReverseRpcChannel::with_close`]) runs the handler's existing full
+    /// cleanup, after which the node's reconnect meets
+    /// [`NodeAdmission::Deregistered`](crate::cluster::NodeAdmission) and exits.
+    /// No-op for channels built with [`ReverseRpcChannel::new`] (node side,
+    /// tests).
     pub fn forget(&self, node_id: &str) -> bool {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = inner.nodes_by_id.remove(node_id) {
-            inner.nodes_by_conn.remove(&s.conn_id);
-            true
-        } else {
-            false
+        // Drop the write lock before signalling: the notified connection task
+        // runs cleanup that re-enters the registry (`deregister`).
+        let removed = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let session = inner.nodes_by_id.remove(node_id);
+            if let Some(s) = &session {
+                inner.nodes_by_conn.remove(&s.conn_id);
+            }
+            session
+        };
+        match removed {
+            Some(s) => {
+                s.channel.close_connection();
+                true
+            }
+            None => false,
         }
     }
 }
@@ -313,7 +368,7 @@ fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
     let mut labels: Vec<String> = sessions
         .iter()
         .map(|s| {
-            let short = &s.node_id[..s.node_id.len().min(8)];
+            let short = truncate_on_char_boundary(&s.node_id, 8);
             format!("{} ({})", s.device_name, short)
         })
         .collect();
@@ -395,6 +450,31 @@ pub fn maybe_register_node(
         .and_then(|p| p.get("tags"))
         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
         .unwrap_or_default();
+    let version = params
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    // Version skew is **surfaced, not enforced**. A center and its fleet live on
+    // separate upgrade schedules, so refusing a skewed node (openclaw's
+    // `server.node-version-mismatch` guard, which only governs its same-machine
+    // bundled local node) would freeze the whole fleet on the center's release.
+    // One log line per connect + the field on `node_list` / `environments.list`
+    // is enough for an operator to correlate "this node behaves oddly" with
+    // "this node is three releases behind".
+    match version.as_deref() {
+        Some(v) if v != env!("ALEPH_VERSION") => tracing::warn!(
+            node = %device_name,
+            node_version = v,
+            center_version = env!("ALEPH_VERSION"),
+            "cluster node runs a different aleph-server build than the center"
+        ),
+        None => tracing::debug!(
+            node = %device_name,
+            "cluster node declared no version (predates the version handshake)"
+        ),
+        Some(_) => {}
+    }
     registry.register(NodeSession {
         node_id: device_id.to_string(),
         conn_id: conn_id.to_string(),
@@ -402,6 +482,7 @@ pub fn maybe_register_node(
         channel: channel.clone(),
         declared_commands,
         tags,
+        version,
         connected_at: now_unix(),
     });
     true
@@ -435,6 +516,7 @@ mod tests {
                 schema: json!({"type": "object"}),
             }],
             tags: vec![],
+            version: None,
             connected_at: 1,
         }
     }
@@ -556,6 +638,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         // Exact CJK name resolves (was NotFound before: "工作站" → "" → the
@@ -575,6 +658,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         // The operator/LLM can spell the spaced name with a dash, underscore, or
@@ -600,6 +684,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         reg.register(NodeSession {
@@ -609,6 +694,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         assert!(matches!(
@@ -628,6 +714,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         reg.register(NodeSession {
@@ -637,6 +724,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         match reg.resolve_id("worker").unwrap_err() {
@@ -646,6 +734,105 @@ mod tests {
             }
             other => panic!("expected Ambiguous, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn truncate_on_char_boundary_never_splits_a_scalar() {
+        assert_eq!(truncate_on_char_boundary("abcdefghij", 8), "abcdefgh");
+        assert_eq!(truncate_on_char_boundary("abc", 8), "abc");
+        assert_eq!(truncate_on_char_boundary("", 8), "");
+        // "工作站" is 9 bytes with boundaries at 0/3/6/9 — byte 8 is INSIDE the
+        // last scalar, which is exactly where `&s[..8]` panics.
+        assert_eq!(truncate_on_char_boundary("工作站", 8), "工作");
+        // Backing off past a whole scalar can legitimately reach the empty
+        // string rather than panicking.
+        assert_eq!(truncate_on_char_boundary("工", 2), "");
+    }
+
+    #[test]
+    fn ambiguity_labels_survive_non_ascii_node_ids() {
+        // `admit_node`'s "unknown id" branch adopts whatever `device_id` the
+        // peer presented, so a node id is NOT guaranteed to be an ASCII UUID.
+        // Rendering ambiguity candidates used to byte-slice it to 8 chars and
+        // panic the caller's task on a multi-byte boundary.
+        let reg = NodeRegistry::new();
+        for (id, name) in [("节点标识符甲", "worker-1"), ("节点标识符乙", "worker-2")] {
+            reg.register(NodeSession {
+                node_id: id.into(),
+                conn_id: format!("c-{name}"),
+                device_name: name.into(),
+                channel: test_channel(),
+                declared_commands: vec![],
+                tags: vec![],
+                version: None,
+                connected_at: 1,
+            });
+        }
+        match reg.resolve_id("worker").unwrap_err() {
+            ResolveError::Ambiguous(c) => assert_eq!(c.len(), 2, "{c:?}"),
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forget_asks_the_connection_to_close() {
+        // Evicting a session must also tear the socket down. Eviction alone only
+        // stops NEW dispatches; the revoked node would keep its connection (and
+        // its approval path back to the operator) until the ≤90s inbound
+        // idle-watchdog — which never fires while the node keeps sending.
+        let (tx, _rx) = mpsc::channel::<String>(8);
+        let close = std::sync::Arc::new(tokio::sync::Notify::new());
+        let reg = NodeRegistry::new();
+        reg.register(NodeSession {
+            node_id: "n-1".into(),
+            conn_id: "c-1".into(),
+            device_name: "worker-1".into(),
+            channel: ReverseRpcChannel::with_close(tx, close.clone()),
+            declared_commands: vec![],
+            tags: vec![],
+            version: None,
+            connected_at: 1,
+        });
+        assert!(reg.forget("n-1"));
+        tokio::time::timeout(std::time::Duration::from_secs(1), close.notified())
+            .await
+            .expect("forget must fire the connection's close signal");
+    }
+
+    #[test]
+    fn maybe_register_node_records_the_declared_version() {
+        let reg = NodeRegistry::new();
+        let ch = test_channel();
+        let params = json!({"device_name": "worker", "commands": [], "version": "26.7.25"});
+        assert!(maybe_register_node(
+            &reg,
+            Some("node"),
+            "d1",
+            "c1",
+            Some(&params),
+            &ch
+        ));
+        assert_eq!(
+            reg.list_environments()[0].version.as_deref(),
+            Some("26.7.25")
+        );
+        // A node predating the handshake registers fine with no version.
+        let ch2 = test_channel();
+        let legacy = json!({"device_name": "old", "commands": []});
+        assert!(maybe_register_node(
+            &reg,
+            Some("node"),
+            "d2",
+            "c2",
+            Some(&legacy),
+            &ch2
+        ));
+        let old = reg
+            .list_environments()
+            .into_iter()
+            .find(|e| e.id == "d2")
+            .expect("registered");
+        assert!(old.version.is_none(), "skew is observed, never enforced");
     }
 
     #[test]
@@ -719,6 +906,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec!["gpu".into(), "us".into()],
+            version: None,
             connected_at: 1,
         });
         reg.register(NodeSession {
@@ -728,6 +916,7 @@ mod tests {
             channel: test_channel(),
             declared_commands: vec![],
             tags: vec!["gpu".into()],
+            version: None,
             connected_at: 1,
         });
         // AND: both tags required → only "a".

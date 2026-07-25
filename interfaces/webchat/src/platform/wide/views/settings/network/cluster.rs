@@ -167,7 +167,18 @@ pub fn ClusterSection() -> impl IntoView {
                                 <div class="flex items-center justify-between py-3 border-b border-border last:border-0">
                                     <div class="min-w-0">
                                         <div class="text-text-primary font-medium">{node.name.clone()}</div>
-                                        <div class="text-xs text-text-tertiary font-mono">{node.id.clone()}</div>
+                                        <div class="text-xs text-text-tertiary font-mono">
+                                            {node.id.clone()}
+                                            // The build this machine runs. Skew is allowed (the
+                                            // fleet upgrades on its own schedule), but "that node
+                                            // behaves differently" needs something to correlate
+                                            // against. Absent on offline rows and on nodes older
+                                            // than the version handshake.
+                                            {node
+                                                .version
+                                                .clone()
+                                                .map(|v| view! { <span class="ml-2">"v" {v}</span> })}
+                                        </div>
                                         <Show when={
                                             let has = !tags.is_empty();
                                             move || has
@@ -266,6 +277,17 @@ pub fn ClusterSection() -> impl IntoView {
                                             "追加 --tag gpu --tag region=us 可给节点打标签(node_invoke_many 按标签扇出)。"
                                         </p>
                                         <p class="text-xs text-text-tertiary">"node_id: " {r.node_id}</p>
+                                        // Enroll is idempotent: re-enrolling a name returns its
+                                        // existing id. Say so, otherwise the operator sees the
+                                        // same dialog twice and assumes they created two nodes.
+                                        <Show when={
+                                            let reused = r.reused;
+                                            move || reused
+                                        }>
+                                            <p class="text-xs text-text-tertiary">
+                                                "这个名字此前已登记过,沿用原有 node_id(未新建节点)。"
+                                            </p>
+                                        </Show>
                                     </div>
                                 }
                             }

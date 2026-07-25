@@ -187,6 +187,17 @@ impl BuiltinToolRegistry {
         );
         info!("Registered node_invoke_many tool in BuiltinToolRegistry");
 
+        // node_manage — cluster membership (R8 write half of node_list). Needs
+        // the NodeRegistry AND the SecurityStore, both deferred-injected; the
+        // dispatch arm reports which one is missing.
+        reg(
+            tools,
+            "node_manage",
+            crate::builtin_tools::NodeManageTool::DESCRIPTION,
+            schema::<crate::builtin_tools::node_manage::NodeManageArgs>("node_manage"),
+        );
+        info!("Registered node_manage tool in BuiltinToolRegistry");
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(

@@ -124,12 +124,66 @@ async fn reconnect_reuses_the_persisted_id_without_ghost_rows() {
     );
 }
 
+/// 注销必须**当场**掐断那条 socket，而不是等 ≤90s 的入站 idle-watchdog。
+///
+/// 单测看不见这条线：`NodeRegistry::forget` 触发的是每连接绑定的 close 信号，
+/// 只有真实连接才有。不掐断的话，被注销的节点仍在跑中心先前下发的命令，且它的
+/// `node.approval.request` 通道还活着——刚把它踢掉的 operator 还会收到它的审批卡。
+#[tokio::test]
+async fn deregister_tears_down_the_nodes_live_socket() {
+    let (url, store, server) = start_center().await;
+
+    let (mut ws, _r) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    ws.send(Message::Text(
+        json!({"jsonrpc":"2.0","id":1,"method":"connect","params":{
+            "device_name": "worker-1",
+            "commands": [{"name": "bash", "schema": {}}],
+            "tags": ["linux"],
+            "version": env!("ALEPH_VERSION"),
+        }})
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let reply = ws.next().await.expect("a connect reply").unwrap();
+    let Message::Text(text) = reply else {
+        panic!("connect reply must be text");
+    };
+    let v: Value = serde_json::from_str(text.as_str()).unwrap();
+    assert_eq!(v.pointer("/result/node/status").unwrap(), "registered");
+
+    // 版本握手：中心把节点声明的版本存进会话，舰队视图能看见。
+    let envs = server.node_registry.list_environments();
+    assert_eq!(envs.len(), 1);
+    assert_eq!(envs[0].version.as_deref(), Some(env!("ALEPH_VERSION")));
+
+    alephcore::cluster::deregister_node(&server.node_registry, &store, "worker-1")
+        .expect("deregister");
+
+    // 读半边必须收到 EOF/Close——中心主动关了这条连接。
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = ws.next().await {
+            match frame {
+                Ok(Message::Close(_)) | Err(_) => return true,
+                Ok(_) => continue,
+            }
+        }
+        true // 流结束 = socket 已断
+    })
+    .await
+    .expect("deregister must close the socket, not wait out the idle watchdog");
+    assert!(closed);
+}
+
 #[tokio::test]
 async fn first_boot_adopts_the_operators_pre_enrolled_row() {
     let (url, store, _server) = start_center().await;
 
     // Operator 在 Panel 预登记（cluster.enroll 走的同一个真源）。
-    let pre = alephcore::cluster::mint_node_device(&store, "GPU Box").expect("pre-enroll");
+    let (pre, minted) =
+        alephcore::cluster::enroll_node_device(&store, "GPU Box").expect("pre-enroll");
+    assert!(minted, "the first enroll of a name mints its record");
 
     // 节点用横杠小写变体拨入，且尚无 device_id。
     let node = node_connect(&url, None, "gpu-box").await;

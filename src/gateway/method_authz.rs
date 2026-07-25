@@ -43,6 +43,9 @@ const OPERATOR_TOOLS: &[&str] = &[
     "node_invoke",
     "node_invoke_many",
     "node_file",
+    // Membership is a stronger claim than execution: it decides which machines
+    // the center owns at all, and a deregister is only undone by re-enrolling.
+    "node_manage",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an

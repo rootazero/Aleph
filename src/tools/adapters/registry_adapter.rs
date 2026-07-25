@@ -372,6 +372,16 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         // concurrently (the whole point of owning a fleet) while two calls into
         // the SAME node serialize — they share its one bash session workspace.
         //
+        // The key is folded through `normalize_node_key`, the same SSOT the
+        // registry's addressing uses: without it `{"node":"worker-1"}` and
+        // `{"node":"Worker 1"}` in one batch are two *disjoint* scopes, so the
+        // scheduler runs them concurrently against the single workspace this
+        // scope exists to serialize. Residual (accepted): a call addressing the
+        // node by NAME and one addressing it by ID still look disjoint — the
+        // claim is computed from `input` alone, with no registry to resolve
+        // against. Narrowing the spelling variants is free; resolving identity
+        // here is not.
+        //
         // Deliberately NOT extended to the other two cluster tools:
         //   * `node_invoke_many` selects by TAG, so its footprint is whatever the
         //     registry currently matches — not derivable from `input` alone.
@@ -379,7 +389,9 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         // Both keep the conservative `Global` claim below.
         if name == "node_invoke" {
             if let Some(node) = input.get("node").and_then(Value::as_str) {
-                return ConcurrencyClaim::nodes(std::iter::once(node));
+                return ConcurrencyClaim::nodes(std::iter::once(
+                    crate::cluster::normalize_node_key(node),
+                ));
             }
         }
         // Safe default: read-only allowlist → `Shared`; everything else
@@ -734,6 +746,32 @@ mod tests {
         let registry = build_registry_from_tools(tool_registry, &write_tools, None);
         let bash = registry.get("bash").unwrap();
         assert!(!bash.is_concurrent_safe(&json!({})));
+    }
+
+    #[tokio::test]
+    async fn node_invoke_claim_folds_spelling_variants_onto_one_scope() {
+        use crate::tools::concurrency::{claims_conflict, ConcurrencyClaim};
+
+        let tool_registry = Arc::new(MockRegistry {
+            results: HashMap::new(),
+        });
+        let tools = vec![make_unified_tool("node_invoke", "Run on a node")];
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let t = registry.get("node_invoke").unwrap();
+
+        let claim = |node: &str| t.concurrency_claim(&json!({"node": node, "command": "bash"}));
+        // The whole point of the Nodes scope is that two calls into the SAME
+        // machine serialize — they share its one bash session workspace. Keying
+        // on the raw selector let "worker-1" and "Worker 1" look like different
+        // machines, so the scheduler ran them concurrently against that one
+        // workspace. The key now folds through `normalize_node_key`.
+        assert!(claims_conflict(&claim("worker-1"), &claim("Worker 1")));
+        assert!(claims_conflict(&claim("worker-1"), &claim("WORKER_1")));
+        // Genuinely different machines still parallelize (the reason the fleet
+        // is worth owning at all).
+        assert!(!claims_conflict(&claim("worker-1"), &claim("worker-2")));
+        // An unaddressable selector pins nothing → conservative whole-world.
+        assert_eq!(claim("---"), ConcurrencyClaim::global());
     }
 
     #[tokio::test]

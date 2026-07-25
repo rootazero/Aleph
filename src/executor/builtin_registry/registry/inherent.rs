@@ -174,6 +174,18 @@ impl BuiltinToolRegistry {
         }
     }
 
+    /// Inject the security store holding the `role=node` device records,
+    /// enabling `node_manage`.
+    ///
+    /// Separate from `set_node_registry` because the registry holds only LIVE
+    /// sessions: enrolled-but-offline nodes, and the `revoked_at` flag that
+    /// makes a deregister stick, live only in the device records.
+    pub fn set_node_security_store(&self, store: Arc<crate::gateway::security::SecurityStore>) {
+        if self.node_security_store.set(store).is_ok() {
+            info!("Cluster SecurityStore injected — `node_manage` now available");
+        }
+    }
+
     /// Get a handle to the `MemoryContextProvider` `OnceCell` for deferred
     /// injection from the server builder.
     #[must_use]

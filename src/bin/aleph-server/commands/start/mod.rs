@@ -989,6 +989,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         heartbeat_service.clone(),
         args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        auth_bundle.security_store.clone(),
         Some(wiki.clone()),
         Some(note_memory_dir.clone()),
         Some(sandbox.clone()),

@@ -117,6 +117,11 @@ pub struct BuiltinToolRegistry {
         Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
     /// Cluster node registry, injected at startup via `set_node_registry`; `node_invoke` uses it for addressing.
     pub(crate) node_registry: Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
+    /// Security store holding the `role=node` device records, injected at
+    /// startup via `set_node_security_store`; `node_manage` needs it to make an
+    /// enroll idempotent and a deregister sticky.
+    pub(crate) node_security_store:
+        Arc<tokio::sync::OnceCell<Arc<crate::gateway::security::SecurityStore>>>,
     /// Memory browse tool instance (optional - requires `memory_db`)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Memory explore tool instance (optional - requires `memory_db` + embedder)

@@ -332,6 +332,11 @@ async fn run_session(
     params.insert("device_name".into(), json!(name));
     params.insert("commands".into(), json!(declared));
     params.insert("tags".into(), json!(tags));
+    // Version handshake (observation only — the center never refuses a skewed
+    // node, see `cluster::maybe_register_node`). Without it a fleet member three
+    // releases behind is indistinguishable from a current one, and "that node
+    // behaves oddly" has no correlatable signal anywhere.
+    params.insert("version".into(), json!(env!("ALEPH_VERSION")));
     let connect = json!({
         "jsonrpc": "2.0", "id": 1, "method": "connect",
         "params": Value::Object(params)

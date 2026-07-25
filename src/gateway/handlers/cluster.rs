@@ -15,7 +15,7 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::cluster::{mint_node_device, normalize_node_key, ResolveError};
+use crate::cluster::{deregister_node, enroll_node_device, DeregisterError};
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -37,7 +37,15 @@ struct EnrollParams {
 /// connects with the **same name**, [`crate::cluster::admit_node`] merges it into
 /// this record instead of minting a second UUID ghost row. The device-record write
 /// shares the same source of truth as connect's self-service registration
-/// ([`mint_node_device`]).
+/// ([`enroll_node_device`]).
+///
+/// **Idempotent**: re-enrolling an existing name returns that node's id
+/// unchanged (`reused: true`) rather than minting a second row. It previously
+/// minted unconditionally, so a double-clicked "+ Enroll" left two same-name
+/// rows — which then made the node's own first boot mint a *third* (the
+/// by-name merge refuses to guess) and made `cluster.deregister`'s offline
+/// fallback, which needs a unique name, unable to remove any of them. See
+/// [`enroll_node_device`].
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -47,11 +55,13 @@ pub async fn handle_cluster_enroll(
         Err(resp) => return resp,
     };
 
-    match mint_node_device(&ctx.security_store, &params.node_name) {
-        Ok(node_id) => JsonRpcResponse::success(
+    match enroll_node_device(&ctx.security_store, &params.node_name) {
+        Ok((node_id, minted)) => JsonRpcResponse::success(
             request.id,
             serde_json::json!({
                 "node_id": node_id,
+                // Backward-compatible superset: older Panels ignore it.
+                "reused": !minted,
             }),
         ),
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
@@ -64,54 +74,11 @@ struct DeregisterParams {
     node: String,
 }
 
-/// Offline-fallback addressing: resolve from the `security_store`'s registered node
-/// devices (role=node, not revoked) by ① exact `device_id` ② unique normalized
-/// `device_name`. Still deliberately rejects fuzzy prefix/substring (conservative —
-/// the operator should address precisely for offline deregistration); but name
-/// equality uses the same [`normalize_node_key`] as the online `NodeRegistry::match_id`,
-/// eliminating the addressing drift of "online names are case-insensitive, offline
-/// names are sensitive" — the same "GPU Box" can be deregistered as "gpu-box" whether
-/// online or offline.
-fn resolve_enrolled_node(ctx: &AuthContext, q: &str) -> Option<String> {
-    let devices = ctx.security_store.list_devices().ok()?;
-    let nodes: Vec<_> = devices.into_iter().filter(|d| d.role == "node").collect();
-    if let Some(d) = nodes.iter().find(|d| d.device_id == q) {
-        return Some(d.device_id.clone());
-    }
-    let nq = normalize_node_key(q);
-    if nq.is_empty() {
-        return None;
-    }
-    let by_name: Vec<_> = nodes
-        .iter()
-        .filter(|d| normalize_node_key(&d.device_name) == nq)
-        .collect();
-    match by_name.as_slice() {
-        [d] => Some(d.device_id.clone()),
-        _ => None,
-    }
-}
-
-/// operator-gated: deregister a node. Two-phase takedown —
-/// ① `forget` instantly evicts the online session (immediately gone from
-///     `environments.list` and no longer addressable by `node_invoke`/`node_file`);
-/// ② `revoke_device` revokes the device record (`revoked_at` is set).
-///
-/// **Deregistration is sticky**: ② is not just bookkeeping. The node's next `connect`
-/// hits this `revoked_at` via `cluster::admit_node`, receives
-/// `NodeAdmission::Deregistered`, and is rejected — the node receives
-/// `{"node":{"status":"deregistered"}}` and exits on its own. Previously `connect`
-/// never checked the device table, so a deregistered node would self-resurrect on
-/// its next backoff-reconnect cycle — deregistration was a dead letter.
-///
-/// This call still does NOT forcibly close the node's current socket — the transport
-/// layer will disconnect it at its next ping/idle-watchdog expiry, or the node will
-/// be rejected on its own reconnect.
-///
-/// Addressing first tries online `NodeRegistry` multi-tier matching; if not online,
-/// falls back to the `security_store`'s registered node devices (exact id / unique
-/// normalized name) — offline nodes visible in environments.list must be equally
-/// deregisterable (in which case `evicted:false`).
+/// operator-gated: deregister a node. Pure I/O over
+/// [`crate::cluster::deregister_node`] (R4) — the two-phase takedown, the
+/// online-then-offline addressing, and the stickiness guarantee all live in the
+/// cluster module, shared verbatim with the `node_manage` tool so the Panel and
+/// the model cannot drift apart on what "deregister" means.
 pub async fn handle_cluster_deregister(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -121,48 +88,26 @@ pub async fn handle_cluster_deregister(
         Err(resp) => return resp,
     };
 
-    let node_id = match ctx.node_registry.resolve_id(&params.node) {
-        Ok(id) => id,
-        // Not online → fall back to the device store so an enrolled-but-offline
-        // node (now visible in environments.list) can still be deregistered.
-        Err(ResolveError::NotFound) => match resolve_enrolled_node(&ctx, &params.node) {
-            Some(id) => id,
-            None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    NODE_NOT_FOUND,
-                    format!("no online or enrolled node matches '{}'", params.node),
-                )
-            }
-        },
-        Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("node '{}' {e}", params.node),
-            )
-        }
-    };
-
-    // ① Instantly evict online session.
-    let evicted = ctx.node_registry.forget(&node_id);
-    // ② Remove device record (the symmetric undo of enroll).
-    let device_removed = ctx
-        .security_store
-        .revoke_device(&node_id)
-        .unwrap_or_else(|e| {
-            warn!(node_id = %node_id, error = %e, "failed to revoke node device on deregister");
-            false
-        });
-
-    JsonRpcResponse::success(
-        request.id,
-        serde_json::json!({
-            "node_id": node_id,
-            "evicted": evicted,
-            "device_removed": device_removed,
-        }),
-    )
+    match deregister_node(&ctx.node_registry, &ctx.security_store, &params.node) {
+        Ok(outcome) => JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({
+                "node_id": outcome.node_id,
+                "evicted": outcome.evicted,
+                "device_removed": outcome.device_removed,
+            }),
+        ),
+        Err(DeregisterError::NotFound) => JsonRpcResponse::error(
+            request.id,
+            NODE_NOT_FOUND,
+            format!("no online or enrolled node matches '{}'", params.node),
+        ),
+        Err(DeregisterError::Ambiguous(detail)) => JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("node '{}' {detail}", params.node),
+        ),
+    }
 }
 
 /// read: enumerate cluster nodes (thin rendering contract, no credentials). Online
@@ -195,6 +140,11 @@ pub async fn handle_environments_list(
                         // The device store stamps milliseconds; Environment speaks
                         // Unix seconds (same unit as connected_at).
                         last_seen_at: d.last_seen_at.map(|ms| ms / 1000),
+                        // Deliberately never remembered for offline nodes: a
+                        // stored version is a claim about a machine we cannot
+                        // currently see, and it would go stale exactly when the
+                        // operator upgrades the fleet.
+                        version: None,
                     }),
             );
         }
@@ -242,6 +192,36 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].device_id, node_id);
         assert_eq!(devices[0].role, "node");
+    }
+
+    #[tokio::test]
+    async fn enroll_twice_returns_the_same_node_id() {
+        let ctx = create_test_context();
+        let enroll = |name: &'static str, id: i32| {
+            let ctx = ctx.clone();
+            async move {
+                handle_cluster_enroll(
+                    JsonRpcRequest::with_id(
+                        "cluster.enroll",
+                        Some(serde_json::json!({ "node_name": name })),
+                        serde_json::json!(id),
+                    ),
+                    ctx,
+                )
+                .await
+                .result
+                .unwrap()
+            }
+        };
+        let first = enroll("GPU Box", 1).await;
+        // A double-clicked "+ Enroll" (or a retried RPC) must not mint a second
+        // row: the duplicate would make the node's own by-name merge ambiguous
+        // and strand BOTH rows in the fleet view, un-deregisterable by name.
+        let second = enroll("gpu-box", 2).await;
+        assert_eq!(first["node_id"], second["node_id"]);
+        assert_eq!(first["reused"], false);
+        assert_eq!(second["reused"], true);
+        assert_eq!(ctx.security_store.list_devices().unwrap().len(), 1);
     }
 
     #[tokio::test]

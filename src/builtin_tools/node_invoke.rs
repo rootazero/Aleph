@@ -130,6 +130,7 @@ mod tests {
                 })
                 .collect(),
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         (reg, rx, channel)
@@ -214,6 +215,7 @@ mod tests {
             channel: ch2,
             declared_commands: vec![],
             tags: vec![],
+            version: None,
             connected_at: 1,
         });
         let tool = NodeInvokeTool::new(reg);

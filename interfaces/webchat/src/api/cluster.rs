@@ -38,6 +38,12 @@ pub struct Environment {
     /// "enrolled but has never connected".
     #[serde(default)]
     pub last_seen_at: Option<i64>,
+    /// The `aleph-server` build this node runs. Only ever populated for ONLINE
+    /// nodes (the device store keeps no version column, and a remembered
+    /// version is a stale claim about a machine we can't see). `None` on an
+    /// online node = it predates the version handshake.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 impl Environment {
@@ -53,6 +59,12 @@ impl Environment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollResult {
     pub node_id: String,
+    /// `true` = this name was already enrolled and its id was returned
+    /// unchanged. Enroll is idempotent, so a second click is harmless — it used
+    /// to mint a duplicate row that then made the node's own by-name merge
+    /// ambiguous and stranded both rows in this very list.
+    #[serde(default)]
+    pub reused: bool,
 }
 
 pub struct ClusterApi;
@@ -116,6 +128,19 @@ mod tests {
         // The offline half of the merged view.
         assert!(!envs[1].is_online());
         assert_eq!(envs[1].last_seen_at, Some(1_700_000_000));
+        // Version is optional on the wire in both directions: absent from this
+        // (older-center) payload, and never sent for offline rows.
+        assert!(envs[0].version.is_none());
+    }
+
+    #[test]
+    fn parses_the_online_nodes_version() {
+        let payload = serde_json::json!([
+            {"id":"n1","name":"node-a","status":"online","commands":[],"tags":[],
+             "connected_at":1,"last_seen_at":null,"version":"26.7.25"}
+        ]);
+        let envs: Vec<Environment> = serde_json::from_value(payload).unwrap();
+        assert_eq!(envs[0].version.as_deref(), Some("26.7.25"));
     }
 
     #[test]

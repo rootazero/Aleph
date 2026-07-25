@@ -365,6 +365,20 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Cluster membership tool — the only cluster tool that also needs
+            // the SecurityStore (the `role=node` device records are what makes a
+            // deregister stick).
+            "node_manage" => Box::pin(async move {
+                let reg = self.node_registry.get().ok_or_else(|| {
+                    AlephError::tool("node_manage not available: NodeRegistry not injected")
+                })?;
+                let store = self.node_security_store.get().ok_or_else(|| {
+                    AlephError::tool("node_manage not available: SecurityStore not injected")
+                })?;
+                let tool = crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone());
+                tool.call_json(arguments).await
+            }),
+
             // Sessions tools for cross-session communication.
             // Caller identity is derived from session context (fallback "main")
             // so A2A policy filtering applies to the actual calling agent —

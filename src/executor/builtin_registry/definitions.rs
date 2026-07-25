@@ -282,6 +282,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     BuiltinToolDefinition {
+        name: "node_manage",
+        description: "Change cluster membership: enroll a node slot by name (idempotent, returns its node_id and the command to run on that machine), or deregister a node so it is evicted now and refused if it reconnects. Fleet management by conversation; `node_list` reads the fleet, this writes it.",
+        requires_config: true, // Requires NodeRegistry + SecurityStore (deferred via OnceCell)
+    },
+    BuiltinToolDefinition {
         name: "node_file",
         description: "Transfer a file between the center and a connected cluster node by path (push/pull). Bytes move host-to-host over the cluster channel and never enter the conversation; 8 MB cap; the node must declare file.read/file.write.",
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
@@ -960,6 +965,9 @@ pub fn create_tool_boxed(
         "node_invoke" => None,
         // node_list / node_invoke_many require the same deferred NodeRegistry.
         "node_list" | "node_invoke_many" => None,
+        // node_manage additionally needs the SecurityStore (device records);
+        // both are injected at boot, so it is built fresh per call too.
+        "node_manage" => None,
         // node_file requires the gateway NodeRegistry, injected at boot via
         // set_node_registry; built fresh per call — same pattern as node_invoke.
         "node_file" => None,
