@@ -578,10 +578,13 @@ impl From<AlephError> for TeamTemplateError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::teams::templates::types::{
         TeamTemplate, TemplateLeader, TemplateMember, TemplatePriority, TemplateTask,
     };
+    use crate::teams::templates::TemplateRegistry;
 
     fn dag_template() -> TeamTemplate {
         TeamTemplate {
@@ -648,5 +651,134 @@ mod tests {
         assert!(a_idx < b_idx);
         assert!(a_idx < c_idx);
         assert_eq!(order.len(), 3);
+    }
+
+    /// Built-ins only: pointing discovery at a directory that does not exist
+    /// skips the user-override pass.
+    fn builtins() -> TemplateRegistry {
+        TemplateRegistry::discover(Path::new("/nonexistent/aleph-builtin-only"))
+    }
+
+    /// Every built-in role must satisfy the launch-prompt contract it runs
+    /// under. A future template edit that strands a member fails here instead
+    /// of at a user's `team_from_template`.
+    #[test]
+    fn builtin_templates_satisfy_their_member_contracts() {
+        let registry = builtins();
+        let mut checked = 0;
+        for name in [
+            "software-dev",
+            "code-review",
+            "research-paper",
+            "strategy-room",
+        ] {
+            let tpl = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("built-in `{name}` missing from the registry"));
+            let leader =
+                MemberToolset::new(tpl.leader.tools.clone(), tpl.leader.tools_denied.clone());
+            if let Err(missing) = validate_toolset(&leader, MemberContract::Leader) {
+                panic!("`{name}` leader hides contracted verbs: {missing:?}");
+            }
+            checked += 1;
+            for m in &tpl.members {
+                let ts = MemberToolset::new(m.tools.clone(), m.tools_denied.clone());
+                if let Err(missing) = validate_toolset(&ts, MemberContract::Worker) {
+                    panic!(
+                        "`{name}` member `{}` hides contracted verbs: {missing:?}",
+                        m.id
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 18, "expected 4 leaders + 14 members to be checked");
+    }
+
+    /// Which built-ins narrow and which stay full is a decision, not an
+    /// accident: the two reasoning templates declare a surface, the two
+    /// build/run templates deliberately do not (their members need a broad dev
+    /// surface, and their member ids are the generic ones — `backend`, `qa`,
+    /// `writer`, `analyst` — that a declaration would pin narrow for every
+    /// later use of that global agent id).
+    #[test]
+    fn only_the_reasoning_templates_declare_a_surface() {
+        let registry = builtins();
+        for name in ["strategy-room", "code-review"] {
+            let tpl = registry.get(name).expect("built-in present");
+            assert!(
+                tpl.leader.tools.is_some(),
+                "`{name}` leader must declare a surface"
+            );
+            for m in &tpl.members {
+                assert!(
+                    m.tools.is_some(),
+                    "`{name}` member `{}` must declare a surface",
+                    m.id
+                );
+            }
+        }
+        for name in ["software-dev", "research-paper"] {
+            let tpl = registry.get(name).expect("built-in present");
+            assert!(
+                tpl.leader.tools.is_none(),
+                "`{name}` leader must keep the full surface"
+            );
+            for m in &tpl.members {
+                assert!(
+                    m.tools.is_none(),
+                    "`{name}` member `{}` must keep the full surface",
+                    m.id
+                );
+            }
+        }
+    }
+
+    /// The point of narrowing code-review: a reviewer must not have edit tools
+    /// within reach. (`bash` stays — reading a diff needs `git diff` — so this
+    /// is accident scoping, not enforcement.)
+    #[test]
+    fn code_review_roles_carry_no_edit_tools() {
+        let registry = builtins();
+        let tpl = registry.get("code-review").expect("built-in present");
+        let surfaces = std::iter::once((
+            "lead-reviewer",
+            tpl.leader.tools.as_ref().expect("declared"),
+        ))
+        .chain(
+            tpl.members
+                .iter()
+                .map(|m| (m.id.as_str(), m.tools.as_ref().expect("declared"))),
+        );
+        for (id, tools) in surfaces {
+            for banned in ["file_write", "file_edit", "file_ops", "apply_patch"] {
+                assert!(
+                    !tools.iter().any(|t| t == banned),
+                    "`{banned}` must stay out of reviewer `{id}`'s surface"
+                );
+            }
+        }
+    }
+
+    /// `team_*` must never be globbed: the family contains `team_disband`,
+    /// `team_create`, `team_from_template` and `team_member_remove`, so a glob
+    /// would let a bull-case analyst disband its own team.
+    #[test]
+    fn no_builtin_globs_the_team_family() {
+        let registry = builtins();
+        for name in ["strategy-room", "code-review"] {
+            let tpl = registry.get(name).expect("built-in present");
+            let all = std::iter::once(tpl.leader.tools.as_ref().expect("declared")).chain(
+                tpl.members
+                    .iter()
+                    .map(|m| m.tools.as_ref().expect("declared")),
+            );
+            for tools in all {
+                assert!(
+                    !tools.iter().any(|t| t == "team_*"),
+                    "`{name}` must enumerate team verbs, not glob the family"
+                );
+            }
+        }
     }
 }

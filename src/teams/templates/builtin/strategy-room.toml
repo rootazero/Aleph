@@ -1,6 +1,11 @@
 # Strategic decision war-room.
 # Three analysts argue from distinct positions (bull / bear / contrarian),
 # the moderator synthesises a recommendation with confidence bands.
+#
+# Tool surface: this template declares `tools` on every role. Note member ids
+# are GLOBAL agent ids — an agent created here keeps this surface for every
+# later use, inside a team or out. `tools` is an allowlist `retain`, not a
+# deferral: an excluded tool cannot be recovered with `tool_search`.
 
 description = "Strategic decision war-room: bull + bear + contrarian → moderator synthesis"
 default_goal = "Evaluate the decision described in the team description"
@@ -9,6 +14,7 @@ default_goal = "Evaluate the decision described in the team description"
 id = "moderator"
 name = "Strategy Moderator"
 role = "leader"
+tools = ["task_*", "team_status", "team_delegate", "message_send", "search", "web_fetch", "file_read"]
 prompt_addendum = """
 You moderate a structured debate on `{goal}`. Read each analyst's position,
 identify shared assumptions, then output: recommendation + confidence (low /
@@ -19,18 +25,21 @@ medium / high) + the two strongest counterarguments you're discounting.
 id = "bull"
 name = "Bull Case Analyst"
 role = "analyst"
+tools = ["task_*", "team_status", "message_send", "search", "web_fetch", "file_read"]
 prompt_addendum = "Argue the strongest possible case FOR `{goal}`. State your three best supporting facts."
 
 [[members]]
 id = "bear"
 name = "Bear Case Analyst"
 role = "analyst"
+tools = ["task_*", "team_status", "message_send", "search", "web_fetch", "file_read"]
 prompt_addendum = "Argue the strongest possible case AGAINST `{goal}`. State the three biggest risks."
 
 [[members]]
 id = "contrarian"
 name = "Contrarian"
 role = "analyst"
+tools = ["task_*", "team_status", "message_send", "search", "web_fetch", "file_read"]
 prompt_addendum = "Argue a third position neither bull nor bear has considered. Aim for unexpected framings."
 
 [[tasks]]
