@@ -14,6 +14,7 @@ pub mod member_provision;
 pub mod messages;
 pub mod notifier;
 pub mod plans;
+pub mod run_mode;
 pub mod sessions;
 pub mod snapshots;
 pub mod store;
