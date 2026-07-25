@@ -4,6 +4,9 @@
 //! Pure data layer (R7/R10): a declarative `WorkflowManifest` superset is the
 //! single source of truth; only the executable core maps into `WorkflowDef`.
 
+/// Bounded JS data-literal normaliser used by the bare import scan to resolve
+/// hoisted `const NAME_SCHEMA = { … }` references (R3-bounded, data-only).
+mod consts;
 pub mod export;
 pub mod import;
 pub mod manifest;
