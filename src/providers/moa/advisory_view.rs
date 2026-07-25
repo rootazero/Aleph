@@ -16,6 +16,19 @@ use crate::providers::message::{ContentBlock, UnifiedMessage};
 /// disposable advisory view.
 pub(crate) const TOOL_RESULT_BUDGET: usize = 4000;
 
+/// Whole-view character budget (round-6 G3). Per-result truncation alone
+/// leaves the view growing without bound across a long agentic run; an
+/// advisor on a smaller-context model than the aggregator then 4xx's on every
+/// later iteration and MoA silently stops working in exactly the scenario it
+/// exists for. This is a guardrail against a hard failure, not a tuning knob —
+/// hence a constant, like [`TOOL_RESULT_BUDGET`], rather than config surface.
+pub(crate) const ADVISORY_VIEW_BUDGET: usize = 120_000;
+
+/// Per-message allowance once [`ADVISORY_VIEW_BUDGET`] is exhausted. Older
+/// messages shrink to a head+tail preview at this size rather than
+/// disappearing (see [`apply_view_budget`]).
+const OVER_BUDGET_MSG_BUDGET: usize = 400;
+
 /// Synthetic trailing user turn when the view would end on an assistant turn.
 pub(crate) const ADVISORY_INSTRUCTION: &str =
     "[The conversation above is the current state of the task. Give your \
@@ -108,15 +121,21 @@ fn append_to_last_assistant(rendered: &mut Vec<UnifiedMessage>, block: String) {
 /// Build the flattened advisory view. See module docs for the rules.
 pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
     let mut rendered: Vec<UnifiedMessage> = Vec::new();
-    let mut last_user_text: Option<String> = None;
     let mut parts: Vec<String> = Vec::new();
 
     for msg in messages {
         match msg {
             UnifiedMessage::User { content } => {
                 let text = text_of(content);
-                if !text.trim().is_empty() {
-                    last_user_text = Some(text.clone());
+                // Round-6 G4: skip blank user turns, mirroring the assistant
+                // arm below. An empty text block survives
+                // `anthropic/proto_impl.rs`'s `blocks.is_empty()` fallback
+                // (that guard only catches a wholly empty content vec) and
+                // reaches the wire as `MessageContent::Text { content: "" }`,
+                // which the API rejects with 400 — failing EVERY advisor at
+                // once, not just the one turn.
+                if text.trim().is_empty() {
+                    continue;
                 }
                 rendered.push(UnifiedMessage::user(text));
             }
@@ -147,17 +166,106 @@ pub(crate) fn build_advisory_view(messages: &[UnifiedMessage]) -> Vec<UnifiedMes
     }
 
     match rendered.last() {
-        Some(UnifiedMessage::Assistant { .. }) => {
+        // Ends on an assistant turn: append the synthetic instruction rather
+        // than ask a provider to prefill. EMPTY takes the same arm (round-6
+        // G4 terminal guarantee) — an advisor call with zero messages is a
+        // 4xx on every provider, and the previous `last_user_text` refill was
+        // unreachable: the only way to render nothing is to have had no user
+        // and no tool-result message at all, in which case that stash is None.
+        Some(UnifiedMessage::Assistant { .. }) | None => {
             rendered.push(UnifiedMessage::user(ADVISORY_INSTRUCTION));
         }
         Some(_) => {}
-        None => {
-            if let Some(text) = last_user_text {
-                rendered.push(UnifiedMessage::user(text));
-            }
-        }
     }
     rendered
+}
+
+/// The content blocks of any view message, whatever its role.
+fn content_mut(msg: &mut UnifiedMessage) -> &mut Vec<ContentBlock> {
+    match msg {
+        UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
+        UnifiedMessage::ToolResult { content, .. } => content,
+    }
+}
+
+/// Total characters of text carried by one view message.
+fn text_chars(content: &[ContentBlock]) -> usize {
+    content
+        .iter()
+        .map(|b| match b {
+            ContentBlock::Text { text, .. } => text.chars().count(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Clamp the whole advisory view to `budget` characters by SHRINKING the
+/// oldest messages — never dropping them (round-6 G3).
+///
+/// [`TOOL_RESULT_BUDGET`] bounds one tool result; nothing bounded the view
+/// itself, so a long agentic run eventually overflows any advisor whose
+/// context window is smaller than the aggregator's — a hard 4xx on every
+/// remaining iteration, i.e. MoA dying silently in the long-task scenario it
+/// exists for. Shrinking rather than eliding keeps the message count, order
+/// and role sequence identical, so the "first message must be `user`" and
+/// alternation rules a drop-based scheme would have to re-establish simply
+/// cannot break.
+///
+/// Newest-first: each message keeps its full text while the budget lasts;
+/// past that, older messages are re-truncated head+tail through
+/// [`truncate_tool_result`] at a shrinking allowance (the marker line each
+/// leaves behind is the small, bounded overshoot). The newest message is
+/// exempt from the stub allowance — losing the live state is worse than a
+/// marginally larger view — and gets the whole budget instead.
+///
+/// Call BEFORE [`view_signature`], so the cache key describes what is
+/// actually sent, and before [`mark_cache_breakpoints`], which assumes the
+/// text blocks are final.
+pub(crate) fn apply_view_budget(view: &mut [UnifiedMessage], budget: usize) {
+    let newest = view.len().saturating_sub(1);
+    let mut remaining = budget;
+    for (idx, msg) in view.iter_mut().enumerate().rev() {
+        let content = content_mut(msg);
+        let chars = text_chars(content);
+        if chars <= remaining {
+            remaining -= chars;
+            continue;
+        }
+        let allowance = if idx == newest {
+            budget
+        } else {
+            OVER_BUDGET_MSG_BUDGET.min(remaining)
+        };
+        remaining = remaining.saturating_sub(allowance);
+        // Reaching here always means `chars > allowance`: for an older message
+        // `allowance = min(stub, remaining) <= remaining < chars`, and the
+        // newest only lands here when it alone exceeds the whole budget. So
+        // the fold below always shortens, and `truncate_tool_result` keeps the
+        // result non-empty even at allowance 0 (the omitted-chars marker).
+        //
+        // `build_advisory_view` renders every message as exactly one text
+        // block (images become `[image: …]` TEXT), so folding to one
+        // truncated block is shape-preserving — and `text_chars` would
+        // under-count anything else.
+        debug_assert!(
+            content
+                .iter()
+                .all(|b| matches!(b, ContentBlock::Text { .. })),
+            "advisory-view messages must be text-only before budgeting"
+        );
+        let joined = content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        *content = vec![ContentBlock::Text {
+            text: truncate_tool_result(&joined, allowance),
+            cache_control: None,
+        }];
+    }
 }
 
 /// Stable signature of the advisory view — the fan-out cache key. Uses the
@@ -204,10 +312,7 @@ pub(crate) fn view_signature(view: &[UnifiedMessage]) -> u64 {
 pub(crate) fn mark_cache_breakpoints(view: &mut [UnifiedMessage]) {
     let len = view.len();
     for msg in view.iter_mut().skip(len.saturating_sub(3)) {
-        let content = match msg {
-            UnifiedMessage::User { content } | UnifiedMessage::Assistant { content } => content,
-            UnifiedMessage::ToolResult { content, .. } => content,
-        };
+        let content = content_mut(msg);
         if let Some(ContentBlock::Text { cache_control, .. }) = content
             .iter_mut()
             .rev()
@@ -422,6 +527,110 @@ mod tests {
         // E4: advisors learn an image exists (hermes drops it silently).
         assert!(texts[0].1.contains("[image: image/png]"));
         assert!(texts[0].1.contains("{\"k\":1}"));
+    }
+
+    #[test]
+    fn empty_user_turn_is_dropped() {
+        // Round-6 G4: a blank user turn must not reach the view. An empty text
+        // block clears anthropic's `blocks.is_empty()` fallback (that only
+        // catches a wholly empty content vec) and 400s on the wire, failing
+        // every advisor at once.
+        let msgs = vec![
+            UnifiedMessage::user("real question"),
+            UnifiedMessage::User { content: vec![] },
+            UnifiedMessage::User {
+                content: vec![ContentBlock::Text {
+                    text: "   ".into(),
+                    cache_control: None,
+                }],
+            },
+        ];
+        let view = build_advisory_view(&msgs);
+        assert_eq!(
+            view_texts(&view),
+            vec![("user", "real question".to_string())]
+        );
+    }
+
+    #[test]
+    fn all_empty_input_yields_instruction_turn() {
+        // Terminal guarantee: the view is never empty and never carries an
+        // empty text block — zero-message advisor calls 4xx on every provider.
+        for msgs in [
+            vec![],
+            vec![UnifiedMessage::User { content: vec![] }],
+            vec![UnifiedMessage::Assistant { content: vec![] }],
+        ] {
+            let view = build_advisory_view(&msgs);
+            assert_eq!(
+                view_texts(&view),
+                vec![("user", ADVISORY_INSTRUCTION.to_string())]
+            );
+        }
+    }
+
+    /// `turns` alternating user/assistant messages of `chars` characters
+    /// each. Use an ODD count so the transcript ends on a user turn and
+    /// `build_advisory_view` appends no synthetic instruction — keeping the
+    /// "newest message" of the budget tests a real, large one.
+    fn long_conversation(turns: usize, chars: usize) -> Vec<UnifiedMessage> {
+        (0..turns)
+            .map(|i| {
+                let text = format!("{i}").repeat(chars);
+                if i % 2 == 0 {
+                    UnifiedMessage::user(text)
+                } else {
+                    UnifiedMessage::assistant(text)
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn view_budget_is_noop_under_budget() {
+        let mut view = build_advisory_view(&long_conversation(6, 10));
+        let before = view.clone();
+        apply_view_budget(&mut view, ADVISORY_VIEW_BUDGET);
+        assert_eq!(view_texts(&view), view_texts(&before));
+    }
+
+    #[test]
+    fn view_budget_shrinks_oldest_and_preserves_roles() {
+        // Round-6 G3: shrink, never drop — message count, order and role
+        // sequence must survive so the "first message must be user" and
+        // alternation rules cannot break.
+        let mut view = build_advisory_view(&long_conversation(9, 5000));
+        let before = view_texts(&view);
+        apply_view_budget(&mut view, 12_000);
+        let after = view_texts(&view);
+
+        assert_eq!(before.len(), after.len(), "no message may be dropped");
+        for (b, a) in before.iter().zip(after.iter()) {
+            assert_eq!(b.0, a.0, "roles must be preserved");
+            assert!(!a.1.is_empty(), "no message may shrink to an empty block");
+        }
+        // Newest keeps its full text; the oldest is elided.
+        assert_eq!(before.last().unwrap().1, after.last().unwrap().1);
+        assert!(after[0].1.contains("chars omitted"), "{}", after[0].1);
+        // Bounded: budget plus the per-message elision markers left behind.
+        let total: usize = after.iter().map(|(_, t)| t.chars().count()).sum();
+        assert!(total < 12_000 + 100 * after.len(), "total was {total}");
+    }
+
+    #[test]
+    fn view_budget_keeps_newest_when_it_alone_busts_the_budget() {
+        // The live state is the one thing worth keeping: a single oversized
+        // newest message is clamped to the whole budget, not to the stub
+        // allowance the older messages get.
+        let mut view = build_advisory_view(&long_conversation(5, 5000));
+        apply_view_budget(&mut view, 1_000);
+        let after = view_texts(&view);
+        assert!(
+            after.last().unwrap().1.chars().count() > 900,
+            "newest kept {} chars",
+            after.last().unwrap().1.chars().count()
+        );
+        assert!(after[0].1.chars().count() < 500);
     }
 
     #[test]
