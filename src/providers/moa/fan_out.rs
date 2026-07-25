@@ -11,49 +11,88 @@ use crate::providers::adapter::{RequestPayload, TokenUsage};
 use crate::providers::message::UnifiedMessage;
 use crate::sync_primitives::Arc;
 
-use super::prompts::{AdvisorOutcome, ADVISOR_SYSTEM_PROMPT};
+use super::advisor_health::CallOutcome;
+use super::prompts::AdvisorOutcome;
 use super::provider::AdvisorSlot;
 
 /// One advisor's full fan-out result: display outcome + accounting + the
 /// structural error (None on success). The error channel feeds the
-/// `MoaAdvisor.error` trace field (round-2 B2).
+/// `MoaAdvisor.error` trace field (round-2 B2); `health` feeds the run-scoped
+/// breaker (round-6 G1).
 pub(crate) struct AdvisorResult {
     pub outcome: AdvisorOutcome,
     pub usage: Option<TokenUsage>,
     pub error: Option<String>,
+    pub health: CallOutcome,
 }
 
-/// Parallel fan-out, per-advisor timeout, fail-soft. Result order is stable
-/// (preset slot order). Never fails the turn: an advisor error/timeout
-/// degrades to a labelled note in `outcome.text`.
+impl AdvisorResult {
+    /// Whether this slot was actually consulted (i.e. the breaker let it
+    /// through). Drives `MoaAdvisorSpend.advisor_count`, which is documented
+    /// as *consulted* — unlike the `i/n` display count, which stays the total
+    /// slot count so advisor numbering never shifts.
+    pub(crate) fn consulted(&self) -> bool {
+        self.health != CallOutcome::Skipped
+    }
+}
+
+/// Parallel fan-out, per-advisor timeout, fail-soft.
+///
+/// INDEX-ALIGNMENT INVARIANT: exactly one `AdvisorResult` per entry of
+/// `advisors`, in slot order. `MoaProvider::spend_event` indexes
+/// `self.advisors[idx]` off this vector's enumeration, and
+/// `AdvisorHealth::record` folds it back slot-by-slot — so a slot the breaker
+/// skipped yields a synthetic result, never a filtered-out entry.
+///
+/// Never fails the turn: an error, timeout or breaker skip degrades to a
+/// labelled note in `outcome.text`.
 pub(crate) async fn run_fan_out(
     advisors: &[AdvisorSlot],
     view: &[UnifiedMessage],
+    system_prompt: &str,
+    skip_reasons: &[Option<String>],
     timeout: Duration,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
 ) -> Vec<AdvisorResult> {
-    let futures = advisors.iter().map(|slot| async move {
-        let advisor_payload = RequestPayload::new(view)
-            .with_system(Some(ADVISOR_SYSTEM_PROMPT))
-            .with_temperature(temperature)
-            .with_max_tokens(max_tokens);
-        match tokio::time::timeout(timeout, slot.chain.process(advisor_payload)).await {
-            Ok(Ok(resp)) => {
-                let text = resp
-                    .text
-                    .as_deref()
-                    .filter(|t| !t.trim().is_empty())
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "(empty response)".to_string());
-                (text, resp.usage, None::<String>)
+    let futures = advisors.iter().enumerate().map(|(idx, slot)| {
+        let skip = skip_reasons.get(idx).and_then(Option::as_deref);
+        async move {
+            if let Some(reason) = skip {
+                return (
+                    format!("[skipped: {reason}]"),
+                    None,
+                    Some(format!("skipped: {reason}")),
+                    CallOutcome::Skipped,
+                );
             }
-            Ok(Err(e)) => (format!("[failed: {e}]"), None, Some(e.to_string())),
-            Err(_) => (
-                format!("[timeout after {}s]", timeout.as_secs()),
-                None,
-                Some(format!("timeout after {}s", timeout.as_secs())),
-            ),
+            let advisor_payload = RequestPayload::new(view)
+                .with_system(Some(system_prompt))
+                .with_temperature(temperature)
+                .with_max_tokens(max_tokens);
+            match tokio::time::timeout(timeout, slot.chain.process(advisor_payload)).await {
+                Ok(Ok(resp)) => {
+                    let text = resp
+                        .text
+                        .as_deref()
+                        .filter(|t| !t.trim().is_empty())
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "(empty response)".to_string());
+                    (text, resp.usage, None::<String>, CallOutcome::Ok)
+                }
+                Ok(Err(e)) => (
+                    format!("[failed: {e}]"),
+                    None,
+                    Some(e.to_string()),
+                    CallOutcome::failed(&e),
+                ),
+                Err(_) => (
+                    format!("[timeout after {}s]", timeout.as_secs()),
+                    None,
+                    Some(format!("timeout after {}s", timeout.as_secs())),
+                    CallOutcome::timed_out(),
+                ),
+            }
         }
     });
     let results = futures::future::join_all(futures).await;
@@ -61,7 +100,7 @@ pub(crate) async fn run_fan_out(
     results
         .into_iter()
         .enumerate()
-        .map(|(idx, (text, usage, error))| AdvisorResult {
+        .map(|(idx, (text, usage, error, health))| AdvisorResult {
             outcome: AdvisorOutcome {
                 // rust-doctor-disable-next-line excessive-clone
                 label: advisors[idx].label.clone(),
@@ -69,6 +108,7 @@ pub(crate) async fn run_fan_out(
             },
             usage,
             error,
+            health,
         })
         .collect()
 }
@@ -79,6 +119,12 @@ pub(crate) async fn run_fan_out(
 /// `cached: false` here — a HIT reusing the previous fan-out's advice emits
 /// its own lightweight `MoaAggregating { cached: true }` from `process()`
 /// directly (round-2 B4), never through this MISS-only path.
+///
+/// `count` here (the `i/n` display and `MoaAggregating.advisor_count`) is the
+/// TOTAL slot count, breaker-skipped slots included, so advisor numbering is
+/// stable across iterations. It deliberately differs from
+/// `MoaAdvisorSpend.advisor_count`, which counts only the slots actually
+/// CONSULTED — see [`AdvisorResult::consulted`]. Keep the two apart.
 pub(crate) fn emit_fanout_events(
     sink: &Option<Arc<dyn TraceSink>>,
     results: &[AdvisorResult],
