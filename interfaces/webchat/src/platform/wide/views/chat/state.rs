@@ -68,6 +68,11 @@ pub enum ChatSendErrorCode {
     UsageLimitReached,
     /// Run aborted due to a safety timeout.
     SafetyTimeout,
+    /// The composer refused the send before it left the client — the input is
+    /// not supported on this surface (e.g. attachments in team group chat).
+    /// Distinct from the server-side codes above: nothing was transmitted, and
+    /// the user can fix it and retry immediately.
+    Unsupported,
     /// Catch-all for unmapped errors. Use the message field for context.
     Unknown,
 }

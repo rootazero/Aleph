@@ -1,11 +1,11 @@
-//! Message rendering pieces — hero, list, send-error banner, single bubble.
+//! Message rendering pieces — hero, list, single bubble.
 //!
 //! Extracted from `chat/view.rs` so the top-level [`super::view::ChatView`]
 //! stays a thin mount + drop-zone shell. All components here are private to
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedPrompt};
+use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;
@@ -227,9 +227,6 @@ pub(crate) fn MessageList() -> impl IntoView {
                                  pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2"
                             )
                         }>
-                            // Inline send-error banner (G2) — shown when the last
-                            // outbound send failed; colour-coded by error code.
-                            <SendErrorBanner />
                             <For
                                 each=move || rows.get()
                                 key=timeline::row_key
@@ -363,48 +360,6 @@ fn PendingAskCard() -> impl IntoView {
         {move || pending.get().map(|ask| view! {
             <crate::components::ask_user_card::AskUserCard ask=ask />
         })}
-    }
-}
-
-/// Inline banner for the most recent `ChatSendError`. Empty when none.
-#[component]
-fn SendErrorBanner() -> impl IntoView {
-    let i18n = use_i18n();
-    let chat = expect_context::<ChatState>();
-    view! {
-        <Show when=move || chat.send_error.get().is_some()>
-            {move || {
-                let err = chat.send_error.get();
-                err.map(|e| {
-                    let is_warning = matches!(e.code, ChatSendErrorCode::PromptReview);
-                    let class_str = if is_warning {
-                        "px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
-                    } else {
-                        "px-3 py-2 rounded-lg border text-sm bg-danger-subtle border-danger/30 text-danger"
-                    };
-                    view! {
-                        <div class=class_str role="alert">
-                            <div class="flex items-start gap-2">
-                                <span class="font-mono text-[10px] uppercase tracking-wider opacity-70 shrink-0 pt-0.5">
-                                    {format!("{:?}", e.code).to_lowercase()}
-                                </span>
-                                <span class="flex-1">{e.message}</span>
-                                <button
-                                    class="opacity-60 hover:opacity-100 shrink-0"
-                                    title=move || t_string!(i18n, chat.dismiss).to_string()
-                                    on:click=move |_| {
-                                        chat.send_error.set(None);
-                                        chat.error_message.set(None);
-                                    }
-                                >
-                                    "\u{2715}"
-                                </button>
-                            </div>
-                        </div>
-                    }
-                })
-            }}
-        </Show>
     }
 }
 

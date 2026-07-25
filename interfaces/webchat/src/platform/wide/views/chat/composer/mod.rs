@@ -162,7 +162,7 @@ pub(super) fn InputArea() -> impl IntoView {
         // instead, and leave the tray intact so nothing is lost.
         if chat.team_id.get_untracked().is_some() && !files.is_empty() {
             chat.set_send_error(ChatSendError::new(
-                ChatSendErrorCode::Unknown,
+                ChatSendErrorCode::Unsupported,
                 t_string!(i18n, chat.team_attachments_unsupported).to_string(),
             ));
             return;
@@ -976,6 +976,14 @@ pub(super) fn InputArea() -> impl IntoView {
                     />
                 </Show>
 
+                // Send-error banner (G2) — the last outbound send failed or was
+                // refused before it left. It lives in the composer stack, not in
+                // the transcript: every writer of `send_error` is a composer
+                // path, and a banner parked above the scrollback is invisible in
+                // any conversation long enough to scroll (the team-attachment
+                // refusal landed ~700px off-screen).
+                <SendErrorBanner />
+
                 // Live prompt-injection guard banner (G1). Server-side
                 // remains the final authority; this is just a hint so
                 // the user can rephrase before wasting a model call.
@@ -1235,5 +1243,47 @@ pub(super) fn InputArea() -> impl IntoView {
                 </div>  // /relative floating-overlay anchor
             </div>
         </div>
+    }
+}
+
+/// Inline banner for the most recent `ChatSendError`. Empty when none.
+#[component]
+fn SendErrorBanner() -> impl IntoView {
+    let i18n = use_i18n();
+    let chat = expect_context::<ChatState>();
+    view! {
+        <Show when=move || chat.send_error.get().is_some()>
+            {move || {
+                let err = chat.send_error.get();
+                err.map(|e| {
+                    let is_warning = matches!(e.code, ChatSendErrorCode::PromptReview);
+                    let class_str = if is_warning {
+                        "mx-1 mb-1 px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
+                    } else {
+                        "mx-1 mb-1 px-3 py-2 rounded-lg border text-sm bg-danger-subtle border-danger/30 text-danger"
+                    };
+                    view! {
+                        <div class=class_str role="alert">
+                            <div class="flex items-start gap-2">
+                                <span class="font-mono text-[10px] uppercase tracking-wider opacity-70 shrink-0 pt-0.5">
+                                    {format!("{:?}", e.code).to_lowercase()}
+                                </span>
+                                <span class="flex-1">{e.message}</span>
+                                <button
+                                    class="opacity-60 hover:opacity-100 shrink-0"
+                                    title=move || t_string!(i18n, chat.dismiss).to_string()
+                                    on:click=move |_| {
+                                        chat.send_error.set(None);
+                                        chat.error_message.set(None);
+                                    }
+                                >
+                                    "\u{2715}"
+                                </button>
+                            </div>
+                        </div>
+                    }
+                })
+            }}
+        </Show>
     }
 }
