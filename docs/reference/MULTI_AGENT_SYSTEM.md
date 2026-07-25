@@ -455,6 +455,15 @@ before any directory is created. Essentials live in
 Note the glob matcher is `gateway::agent_instance::tool_allowed_by`, shared
 with the run-time gate — validation and enforcement cannot disagree.
 
+**Not exhaustive, and not a security boundary.** `get_tool_schema` and
+`subagent` are registered into the loop registry *after* the allowlist filter
+runs (`run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
+declared list never removes them. Runtime QA confirms it: a member declaring
+`["task_*", "message_send", "search", "web_fetch"]` enumerates exactly those
+plus those two. Since `subagent` spawns a differently-scoped agent, treat
+`tools` as attention/accident scoping — the enforcement boundary stays
+`src/tools/scoped/` + exec tier + the sandbox floor.
+
 **Not derived from `role`.** `role` is free text ("估值建模"); inferring a tool
 surface from it would be keyword matching, which P8 forbids. Declaration is
 explicit or absent.
