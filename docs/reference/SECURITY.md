@@ -478,6 +478,48 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
+### Signed agent ledger (2026-07-25)
+
+The session event log answers *what the run did*. It does not answer *who,
+provably*: its only actor identity is the `agent_id` inside the session key, and
+nothing stops a stored row from being edited afterwards.
+
+`src/identity/` adds the second half. Every agent holds an Ed25519 keypair
+(public half + fingerprint in `security.db`, private half in the existing
+encrypted vault), and every **mutating** tool call, every refusal and every
+approval decision is appended to that agent's own hash-chained, **signed**
+chain — from the same chokepoint, `tools::scoped::dispatch::execute_inner`, that
+already enforces every gate. `record_approval_decision` writes both trails: the
+ledger first, because it needs only the turn's agent identity and therefore
+covers surfaces the ambient `CallIdentity` cannot reach.
+
+This is the first production consumer of `gateway/security/crypto.rs`'s Ed25519
+helpers, which had none (the `devices.public_key BLOB NOT NULL` column every
+writer fills with empty bytes is the visible half of that).
+
+**Read it with `agent_identity` (tool, operator-gated) or `aleph-server
+identity` (CLI, read-only, no runtime and no instance lock — verification must
+not have to ask the process that wrote the records).** Shipping the reader in
+the same change is deliberate: the deleted store above is what happens when it
+is not.
+
+**What a clean `verify` proves**: no stored record was edited, reordered,
+transplanted between agents, prefix-deleted, tail-truncated or forged without
+the agent's private key. **What it does not prove**: anything against an
+adversary holding `~/.aleph` (vault, master key and database share a disk);
+anything about in-process impersonation (`agent_id` is still a caller-supplied
+string on `chat.send` — see AGENT_IDENTITY.md §6); and anything about records
+that were never written, which is why `failed_appends` is returned next to
+every `ok`.
+
+Revocation is a mark, not an execution gate — nothing in this subsystem stops a
+revoked agent from running, so its actions keep being recorded (under the
+retired key). Refusing to sign would delete the evidence without preventing the
+act.
+
+Full model, threat analysis and the buzz gap-analysis table:
+[AGENT_IDENTITY.md](AGENT_IDENTITY.md).
+
 ---
 
 ## IPC Security
@@ -1079,6 +1121,9 @@ from the pre-revert build:
 | Per-tool override | per-server *and* per-tool approval mode; two-tier memory | hermes: `approvals.deny` globs that survive yolo; per-rule grain | `[policies.tool_permissions]` exact + glob, 3-tier merge, most-restrictive-wins; explicit beats the tier | **gap → closed** (the tier used to *widen* a `default = "deny"`) |
 | Background inheritance | approval store lives on shared session services | hermes: background writes must stage; **cron gets its own axis** because "ask" is meaningless with no human attached | subagents inherit correctly; continuations now carry `caller_role` + channel permissions; headless producers stamp `unattended` ⇒ fail closed | **gap → closed** |
 | Audit trail | telemetry on the orchestrator path | hermes: observability hooks, everything redacted before display | live: `ToolCallApproved` / `ToolCallDenied` session events | **gap → closed** by deleting the dead SQLite trail that reported zeros |
+| Cryptographic actor identity | none — the caller is a process, not a principal | hermes / pi: none | per-agent Ed25519 keypair; vault-held private half, fingerprint + public half in `security.db` | **ahead** — no reference implementation in this set has one (buzz does; see AGENT_IDENTITY.md) |
+| Record integrity | append-only intent, no chain | none | per-agent hash chain, Ed25519-signed, anchored head, first-row genesis check | **ahead** — detects edit / reorder / mid-delete / transplant / prefix-delete / tail-truncate, each located to a `seq` |
+| Verifier | none | none | `agent_identity(action="verify")` + `aleph-server identity verify` (offline, daemon-independent) | **ahead** — shipped with the chain, not after it |
 | Floor beneath the top tier | under `Never`, dangerous commands are Forbidden — **but only when the sandbox profile is Managed**; with it off, the top tier is unbounded | hermes: `HARDLINE_PATTERNS` + a user-editable `approvals.deny` floor that survives yolo | `[sandbox.command_policy]` holds under every tier including `Full` (unit-pinned); a `deny` override also beats the tier | **aligned** — better placed than codex's |
 | What the human SEES | full argv + cwd + the model's own justification | hermes: the whole command, redacted, with all findings merged into one prompt. pi: typed per-tool event | the redacted **action summary** (the command / `operation=delete path=…`), on every surface | **gap → closed** — this was the sharpest defect of round 1 |
 

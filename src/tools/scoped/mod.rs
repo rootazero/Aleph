@@ -9,12 +9,14 @@
 //! - [`traits`] — public extension points (`ToolDefinitionRewriter`, `ToolHookDecorator`)
 //! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
 //! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
+//! - [`ledger`] — what the signed operation ledger records at this chokepoint
 //! - this module — `ScopedToolService` struct + `ToolService` trait impl
 
 mod builder;
 mod cat_guard;
 mod deferred;
 mod dispatch;
+mod ledger;
 mod progressive_disclosure;
 mod traits;
 

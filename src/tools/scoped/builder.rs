@@ -261,7 +261,10 @@ impl ScopedToolService {
     /// The tool's DECLARED facts, as the tier rules consume them. An unknown
     /// name yields the fail-closed shape (non-idempotent = mutating), which is
     /// what makes the `Ask` tier hold for tools nobody has classified.
-    fn tool_facts<'a>(&self, name: &'a str) -> crate::config::types::policies::ToolFacts<'a> {
+    pub(super) fn tool_facts<'a>(
+        &self,
+        name: &'a str,
+    ) -> crate::config::types::policies::ToolFacts<'a> {
         crate::config::types::policies::ToolFacts {
             name,
             // The declaration seam answers for every tool that reached the

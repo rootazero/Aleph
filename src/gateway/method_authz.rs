@@ -46,6 +46,10 @@ const OPERATOR_TOOLS: &[&str] = &[
     // Membership is a stronger claim than execution: it decides which machines
     // the center owns at all, and a deregister is only undone by re-enrolling.
     "node_manage",
+    // Agent signing keys and the operation ledger. Rotating or revoking an
+    // identity changes who the accountability record can attribute actions to;
+    // reading it exposes every agent's activity. Neither is chat tier.
+    "agent_identity",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -59,33 +63,45 @@ pub fn tool_requires_operator(tool: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Gates that must never be removed, whatever else changes.
+    ///
+    /// Deliberately a **subset**, not a mirror of `OPERATOR_TOOLS`. The full
+    /// duplicate this replaced had already drifted — it never learned about
+    /// `node_manage`, so the newest operator tool was the one tool the test
+    /// meant to pin did not pin. A curated tripwire catches a deletion without
+    /// pretending to be a second source of truth.
+    const MUST_STAY_GATED: &[&str] = &[
+        "self_config",
+        "self_manage",
+        "vault_store",
+        "skill_install",
+        "agent_create",
+        "agent_delete",
+        // Fleet: remote execution, file movement across the trust boundary,
+        // and membership itself.
+        "node_invoke",
+        "node_file",
+        "node_manage",
+        // Accountability: rotating a signing key changes who the record can
+        // name; reading the ledger exposes every agent's activity.
+        "agent_identity",
+    ];
+
     #[test]
     fn config_tools_require_operator() {
-        for t in [
-            "self_config",
-            "self_manage",
-            "vault_store",
-            "cron_manage",
-            "heartbeat_create",
-            "heartbeat_update",
-            "heartbeat_delete",
-            "heartbeat_toggle",
-            "skill_install",
-            "skill_manage",
-            "agent_create",
-            "agent_delete",
-            "agent_switch",
-            "channel_pairing",
-            "clawhub",
-            "hub_install_run",
-            "moa",
-            // Cluster write tools: remote exec + file transfer across the fleet.
-            "node_invoke",
-            "node_invoke_many",
-            "node_file",
-        ] {
+        for t in MUST_STAY_GATED {
             assert!(tool_requires_operator(t), "{t} must require operator");
         }
+    }
+
+    #[test]
+    fn operator_tools_has_no_duplicates() {
+        let unique: std::collections::HashSet<_> = OPERATOR_TOOLS.iter().collect();
+        assert_eq!(
+            unique.len(),
+            OPERATOR_TOOLS.len(),
+            "OPERATOR_TOOLS must not list a tool twice"
+        );
     }
 
     #[test]

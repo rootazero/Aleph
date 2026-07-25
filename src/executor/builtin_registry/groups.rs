@@ -220,12 +220,18 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "agent_switch",
             "agent_delete",
             "agent_info",
+            "agent_identity",
         ],
     },
     ToolCategory {
         id: "session_mgmt",
         name: "会话管理",
-        tools: &["session_new", "session_compact", "session_rename", "session_set_mode"],
+        tools: &[
+            "session_new",
+            "session_compact",
+            "session_rename",
+            "session_set_mode",
+        ],
     },
     ToolCategory {
         id: "automation",

@@ -132,6 +132,17 @@ impl BuiltinToolRegistry {
             SelfManageTool::DESCRIPTION,
             schema::<crate::builtin_tools::self_manage::SelfManageArgs>("self_manage"),
         );
+        // Always-on: the ledger it reads is a process global installed at boot,
+        // so this tool has no service dependency to wait for. It must be
+        // reachable even when the ledger is NOT installed — it then says so
+        // explicitly, which is the whole point (an audit reader that silently
+        // returns nothing is how the last audit surface came to lie).
+        reg(
+            tools,
+            "agent_identity",
+            crate::builtin_tools::agent_identity::AgentIdentityTool::DESCRIPTION,
+            schema::<crate::builtin_tools::agent_identity::AgentIdentityArgs>("agent_identity"),
+        );
         reg(
             tools,
             "self_config",

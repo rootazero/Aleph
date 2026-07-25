@@ -84,6 +84,7 @@ pub mod generation;
 pub mod goal;
 pub mod guardrails;
 pub mod hub;
+pub mod identity;
 mod init_unified;
 pub mod logging;
 pub mod loop_graph;

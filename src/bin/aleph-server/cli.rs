@@ -134,6 +134,12 @@ pub enum Command {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Read and verify the per-agent signed operation ledger (read-only;
+    /// key lifecycle is the `agent_identity` tool)
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
     /// Plugin management (CC-compatible)
     Plugin {
         #[command(subcommand)]
@@ -330,6 +336,32 @@ pub enum SecretAction {
     },
     /// List configured secret providers and their status
     Providers,
+}
+
+/// Agent-identity subcommands.
+///
+/// Read-only by design: minting / rotating / revoking a key mutates state the
+/// running daemon caches, so those live in the `agent_identity` tool. Reading
+/// is what has to work when the daemon is stopped — or not trusted.
+#[derive(Subcommand, Debug)]
+pub enum IdentityAction {
+    /// List agent identities: key fingerprint, chain length, revocation state
+    List,
+    /// Print recent ledger records, newest first
+    Ledger {
+        /// Only this agent (default: every agent)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Max records to print
+        #[arg(long, default_value_t = 40)]
+        limit: i64,
+    },
+    /// Recompute a chain and check every signature. Exits non-zero on a fault.
+    Verify {
+        /// Only this agent (default: verify every agent)
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 /// Plugin subcommands (unified, CC-compatible)

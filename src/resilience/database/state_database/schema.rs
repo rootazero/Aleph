@@ -122,27 +122,12 @@ impl StateDatabase {
                 last_duration_ms INTEGER
             );
 
-            -- ================================================================
-            -- Audit Log for Memory Operations (Explainability)
-            -- ================================================================
-
-            -- Audit log for memory operations (explainability)
-            CREATE TABLE IF NOT EXISTS memory_audit_log (
-                id TEXT PRIMARY KEY,
-                fact_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                reason TEXT,
-                actor TEXT NOT NULL,
-                details TEXT,
-                created_at INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_audit_fact
-                ON memory_audit_log(fact_id);
-            CREATE INDEX IF NOT EXISTS idx_audit_time
-                ON memory_audit_log(created_at);
-            CREATE INDEX IF NOT EXISTS idx_audit_action
-                ON memory_audit_log(action);
+            -- NOTE: `memory_audit_log` used to be created here. It had an
+            -- `actor` column and zero writers anywhere in the tree, so it was
+            -- an audit trail that could only ever answer "nothing happened".
+            -- Dropped by `drop_obsolete_tables`; agent accountability lives in
+            -- `crate::identity` (recorded at the tool chokepoint, with a
+            -- read/verify surface). Do not recreate it.
 
             -- ================================================================
             -- Memory Event Sourcing (append-only event log)
@@ -363,20 +348,28 @@ impl StateDatabase {
         )
     }
 
-    /// One-time migration: drop obsolete `memory_facts` / `facts_fts` / `facts_vec`
-    /// tables from existing `state_database` files. Safe to re-run (uses IF EXISTS).
+    /// One-time migration: drop tables that exist in older `state_database`
+    /// files but that nothing on HEAD reads or writes. Safe to re-run (uses
+    /// IF EXISTS).
     ///
-    /// These were a planned CQRS read model for `memory_events` but were never wired
-    /// up. After the facts→notes migration the notes layer is the actual materialized
-    /// view. The DROP order matters: virtual tables that reference `memory_facts` must
-    /// be dropped before the base table.
-    pub(super) fn drop_obsolete_state_facts_tables(
-        conn: &rusqlite::Connection,
-    ) -> rusqlite::Result<()> {
+    /// * `memory_facts` / `facts_fts` / `facts_vec` — a planned CQRS read model
+    ///   for `memory_events` that was never wired up. After the facts→notes
+    ///   migration the notes layer is the actual materialized view. The DROP
+    ///   order matters: virtual tables that reference `memory_facts` must be
+    ///   dropped before the base table.
+    /// * `memory_audit_log` — an explainability audit table with an `actor`
+    ///   column and **no `INSERT` anywhere in the tree**. An empty table that
+    ///   looks like an audit trail is worse than no table: an operator who
+    ///   queries it concludes nothing happened. (Aleph deleted an entire
+    ///   approval-audit subsystem for exactly this in 2026-07-14.) Agent
+    ///   accountability now lives in [`crate::identity`], which records from
+    ///   the tool chokepoint and ships its own read/verify surface.
+    pub(super) fn drop_obsolete_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         conn.execute_batch(
             "DROP TABLE IF EXISTS facts_vec;
              DROP TABLE IF EXISTS facts_fts;
-             DROP TABLE IF EXISTS memory_facts;",
+             DROP TABLE IF EXISTS memory_facts;
+             DROP TABLE IF EXISTS memory_audit_log;",
         )
     }
 }

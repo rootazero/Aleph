@@ -36,8 +36,10 @@ use crate::memory::context::{FactSource, NoteType};
 
 /// The actor that caused a memory event.
 ///
-/// Modeled after [`crate::memory::audit::AuditActor`] but extended with
-/// `Migration` for the one-shot CRUD-to-ES migration.
+/// Was modeled after `memory::audit::AuditActor`, which has since been deleted
+/// as an unwritten audit vocabulary (see [`crate::memory::explain`]). This enum
+/// is the surviving one — it has real producers — and adds `Migration` for the
+/// one-shot CRUD-to-ES migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventActor {

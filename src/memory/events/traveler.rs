@@ -11,8 +11,8 @@
 use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
-use crate::memory::audit::{ExplainedEvent, FactExplanation};
 use crate::memory::events::{MemoryEvent, MemoryEventEnvelope};
+use crate::memory::explain::{ExplainedEvent, FactExplanation};
 use crate::resilience::database::StateDatabase;
 
 use super::projector::EventProjector;

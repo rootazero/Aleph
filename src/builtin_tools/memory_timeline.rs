@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::memory::audit::FactExplanation;
 use crate::memory::events::traveler::MemoryTimeTraveler;
+use crate::memory::explain::FactExplanation;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 

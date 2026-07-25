@@ -287,6 +287,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires NodeRegistry + SecurityStore (deferred via OnceCell)
     },
     BuiltinToolDefinition {
+        name: "agent_identity",
+        description: "Per-agent Ed25519 signing keys and the tamper-evident record of what each agent did: list/show identities, read the signed operation ledger, verify a chain end to end (detects edited rows, broken links, forged signatures, deleted prefixes, sequence gaps and truncated tails), and keygen/rotate/revoke a key.",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "node_file",
         description: "Transfer a file between the center and a connected cluster node by path (push/pull). Bytes move host-to-host over the cluster channel and never enter the conversation; 8 MB cap; the node must declare file.read/file.write.",
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
@@ -971,6 +976,13 @@ pub fn create_tool_boxed(
         // node_file requires the gateway NodeRegistry, injected at boot via
         // set_node_registry; built fresh per call — same pattern as node_invoke.
         "node_file" => None,
+        // agent_identity reads the process-global ledger installed at boot
+        // (`identity::install_from`), the same shape as
+        // `session::service::global_session_service` — so it needs no injected
+        // handle and no deferred-dependency plumbing at all.
+        "agent_identity" => Some(Box::new(
+            crate::builtin_tools::agent_identity::AgentIdentityTool::new(),
+        )),
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
         // ask_user requires ChannelRegistry + ClarificationManager, injected

@@ -15,7 +15,6 @@
 
 // Public submodules
 pub mod assembler;
-pub mod audit;
 pub mod cli;
 pub mod compression;
 pub mod content_scanner;
@@ -28,6 +27,7 @@ pub mod embedding_provider;
 pub mod embedding_resolver;
 pub mod embedding_signature;
 pub mod events;
+pub mod explain;
 pub mod extensions;
 pub mod flush;
 pub mod ingestion;
@@ -60,10 +60,6 @@ mod loom_concurrency;
 mod proptest_enums;
 
 // Re-export commonly used types
-pub use audit::{
-    AuditAction, AuditActor, AuditDetails, AuditEntry, ExplainedEvent, FactExplanation,
-    ForgettingExplanation,
-};
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use compression::{
     CompressionScheduler, CompressionService, CompressionTrigger, SchedulerConfig,
@@ -99,6 +95,7 @@ pub use events::{
     traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope,
 };
+pub use explain::{ExplainedEvent, FactExplanation};
 pub use ingestion::MemoryIngestion;
 pub use insights::{aggregate_tool_usage, ToolBreakdown, ToolUsageReport};
 pub use namespace::NamespaceScope;

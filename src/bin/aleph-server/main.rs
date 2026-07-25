@@ -125,6 +125,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
         Some(Command::Secret { action }) => return commands::handle_secret_command(action),
+        // Read-only ledger inspection: opens security.db directly (WAL, so a
+        // live daemon is unaffected), no runtime and no instance lock — the
+        // point is that verification does not depend on the process that wrote
+        // the records. Mirrors `secret` / `bootstrap-token`.
+        Some(Command::Identity { action }) => return commands::handle_identity_command(action),
         Some(Command::Service { action }) => return commands::handle_service_command(action),
         // Print the shared Gateway token: pure read of the 0600 security.db,
         // no tokio runtime and no instance lock required (mirrors `secret`).
@@ -257,6 +262,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(
             Command::Stop
             | Command::Secret { .. }
+            | Command::Identity { .. }
             | Command::Service { .. }
             | Command::BootstrapToken
             | Command::Update { .. }
