@@ -516,6 +516,75 @@ impl GoalStore {
         }
     }
 
+    /// Pause a goal that is still being actively pursued, in one guard — the
+    /// REVERSIBLE sibling of [`Self::block_if_active`]. Same atomicity and the
+    /// same "never clobber a terminal goal" contract; the difference is intent:
+    /// `Blocked` means the pursuit hit something it cannot get past and wants
+    /// user guidance, `Paused` means a human is holding it deliberately and
+    /// will resume it. Clears the pending-continuation marker so no in-flight
+    /// continuation resurrects it, exactly as blocking does. `false` = there was
+    /// nothing active to pause.
+    pub fn pause_if_active(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
+        let conn = self.lock();
+        match Self::get_locked(&conn, session_id)? {
+            Some(live) if live.is_active() => {
+                Self::put_locked(
+                    &conn,
+                    &live
+                        .with_status(GoalStatus::Paused, now_ms)
+                        .with_note(Some(note.to_string()), now_ms)
+                        .with_pending_continuation(None),
+                )?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Kill switch: pause every actively-pursued goal across ALL sessions under
+    /// ONE lock guard, returning the session keys actually paused. The bulk
+    /// counterpart to [`Self::list_all`] and the goal-side twin of
+    /// `LoopRegistry::stop_all`: a goal set on one channel was visible from
+    /// anywhere (`goal(action='list')`) but only stoppable from its own session,
+    /// so "quiet everything" was not expressible in conversation (R6 / R8).
+    ///
+    /// Pause, not clear: incident response wants the pursuits held, not their
+    /// objectives and accumulated lessons destroyed. Each owner session resumes
+    /// its own with `goal(action='update', status='active')`.
+    pub fn pause_all_active(&self, note: &str, now_ms: u64) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT json FROM goals")
+            .map_err(|e| AlephError::other(format!("goal pause_all prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| AlephError::other(format!("goal pause_all query: {e}")))?;
+        let mut active = Vec::new();
+        for row in rows {
+            let json = row.map_err(|e| AlephError::other(format!("goal pause_all row: {e}")))?;
+            // Corrupt rows are skipped, like `get` / `list_all` (fail-safe).
+            if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
+                if goal.is_active() {
+                    active.push(goal);
+                }
+            }
+        }
+        drop(stmt);
+        let mut paused = Vec::with_capacity(active.len());
+        for goal in active {
+            let session = goal.session_id.clone();
+            Self::put_locked(
+                &conn,
+                &goal
+                    .with_status(GoalStatus::Paused, now_ms)
+                    .with_note(Some(note.to_string()), now_ms)
+                    .with_pending_continuation(None),
+            )?;
+            paused.push(session);
+        }
+        Ok(paused)
+    }
+
     /// Enroll a delegation session in the goal's shared token budget (tree
     /// budget v1), in one guard. First writer wins per member (the join-time
     /// baseline must not be re-stamped by a later delegation to the same

@@ -32,6 +32,16 @@ pub enum LoopAction {
     /// model can answer "what loops are running?" from any channel — `status`
     /// only sees the current session (R6 one-core-many-shells / R8).
     List,
+    /// Suspend the loop without losing it: caps, tick count, prompt and cadence
+    /// all survive, and no tick fires until `resume`. Use when the user wants
+    /// the watch held rather than ended.
+    Pause,
+    /// Resume a paused loop in THIS session. The next tick is claimed when this
+    /// turn completes.
+    Resume,
+    /// Kill switch: stop EVERY timer loop in every session at once. For "stop
+    /// all the loops" / incident response. Operator only.
+    StopAll,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +61,15 @@ pub struct LoopArgs {
     /// For `update` on a model-paced loop: when to wake next, human form
     /// ("8m"). Stored as an absolute deadline (now + delta).
     pub next_wake: Option<String>,
+    /// Target ANOTHER session's loop — the session key exactly as
+    /// `action='list'` prints it. Omit for this session (the normal case).
+    ///
+    /// Honored by the read verb (`status`) and the QUIETING verbs (`stop`,
+    /// `pause`) only. `start` / `resume` / `update` refuse it: arming a loop in
+    /// a session that is not currently running a turn would leave it `Active`
+    /// with nothing to claim its next tick — a dormant loop that `status`
+    /// misreports as running. Requires operator authorization.
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,12 +208,83 @@ impl LoopTool {
         }
     }
 
+    /// Is this turn allowed to reach across session boundaries?
+    ///
+    /// Loops are per-session, so before cross-session targeting existed the
+    /// blast radius of the `loop` tool was exactly the caller's own
+    /// conversation — which is why `loop` is deliberately NOT in
+    /// `method_authz::OPERATOR_TOOLS` (a chat-tier Telegram user pacing their
+    /// own watch is harmless). `session=` and `stop_all` widen that radius
+    /// across the trust boundary, so they carry their own operator gate here,
+    /// exactly as `select_model` gates its own cross-cutting arm. Absent role =
+    /// trusted local/internal run.
+    fn caller_is_operator() -> bool {
+        crate::tools::turn_context::current_turn_context()
+            .is_none_or(|ctx| ctx.caller_is_operator())
+    }
+
+    /// Resolve which session a verb acts on. `None` → this session. `Some(key)`
+    /// → that session, once the operator gate passes and the key names a loop
+    /// the registry actually knows (a typo must not silently act on nothing, or
+    /// worse, read as "no loop is running").
+    fn resolve_target(
+        &self,
+        session: &str,
+        requested: Option<&str>,
+        verb: &str,
+    ) -> std::result::Result<String, String> {
+        let Some(target) = requested.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(session.to_string());
+        };
+        if target == session {
+            return Ok(session.to_string());
+        }
+        if !Self::caller_is_operator() {
+            return Err(format!(
+                "{verb} on another session requires operator authorization; \
+                 this conversation may only manage its own loop"
+            ));
+        }
+        if self.registry.get(target).is_none() {
+            return Err(format!(
+                "no timer loop is registered for session '{target}' — call \
+                 loop(action='list') and pass a session key exactly as it prints"
+            ));
+        }
+        Ok(target.to_string())
+    }
+
+    /// Reject `session=` on the verbs that ARM a loop (`start` / `resume` /
+    /// `update` with a reschedule). A loop only ever gets its next tick from the
+    /// completion hook of a run in its own session, so arming one remotely
+    /// produces an `Active` loop with nothing to claim a tick — dormant until
+    /// that session's user happens to speak again, while `status` and `list`
+    /// both report it as running. Refusing is the honest answer; the quieting
+    /// verbs (`stop` / `pause`) need no scheduling and are allowed.
+    fn reject_remote(
+        session: &str,
+        args: &LoopArgs,
+        verb: &str,
+    ) -> std::result::Result<(), String> {
+        match args.session.as_deref().map(str::trim) {
+            Some(t) if !t.is_empty() && t != session => Err(format!(
+                "{verb} only works on the current session: a loop is re-fired by \
+                 its own session's completion hook, so one armed from elsewhere \
+                 would never tick. Run {verb} from that session, or use \
+                 loop(action='stop', session='…') / loop(action='pause', session='…') \
+                 to quiet it from here"
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// Core dispatch — public so tests call it directly without the trait.
     pub async fn run(&self, args: LoopArgs) -> std::result::Result<LoopOutput, String> {
         let session = self.session().await;
         info!(session = %session, action = ?args.action, "loop operation");
         match args.action {
             LoopAction::Start => {
+                Self::reject_remote(&session, &args, "start")?;
                 // Capture the watch prompt before `start` consumes `args` so the
                 // planner can plan over the loop's objective.
                 let objective = args.prompt.clone().unwrap_or_default();
@@ -204,9 +294,27 @@ impl LoopTool {
                 }
                 Ok(out)
             }
-            LoopAction::Stop => self.stop(&session),
-            LoopAction::Status => self.status(&session),
-            LoopAction::Update => self.update(&session, args),
+            LoopAction::Stop => {
+                let target = self.resolve_target(&session, args.session.as_deref(), "stop")?;
+                self.stop(&session, &target)
+            }
+            LoopAction::Pause => {
+                let target = self.resolve_target(&session, args.session.as_deref(), "pause")?;
+                self.pause(&session, &target)
+            }
+            LoopAction::Resume => {
+                Self::reject_remote(&session, &args, "resume")?;
+                self.resume(&session)
+            }
+            LoopAction::StopAll => self.stop_all(),
+            LoopAction::Status => {
+                let target = self.resolve_target(&session, args.session.as_deref(), "status")?;
+                self.status(&session, &target)
+            }
+            LoopAction::Update => {
+                Self::reject_remote(&session, &args, "update")?;
+                self.update(&session, args)
+            }
             LoopAction::List => self.list(&session),
         }
     }
@@ -280,11 +388,30 @@ impl LoopTool {
             ),
             _ => String::new(),
         };
+        // Collision disclosure: loops are per-session, so a watch started here
+        // knows nothing about one already watching the same thing from another
+        // channel — `<timer_loop>` only ever projects THIS session's loop. Two
+        // loops polling the same target double the token burn and can act on
+        // each other's half-finished work. State the count and stop there: what
+        // to do about it is the model's call, not the registry's (R7).
+        let elsewhere = self
+            .registry
+            .list_all()
+            .iter()
+            .filter(|l| l.session_id != session && l.status != LoopStatus::Stopped)
+            .count();
+        let collision_note = match elsewhere {
+            0 => String::new(),
+            n => format!(
+                " Note: {n} other timer loop(s) are live in other sessions — \
+                 loop(action='list') shows them if this might duplicate one."
+            ),
+        };
         Ok(LoopOutput {
             success: true,
             message: format!(
                 "{lead} It will re-run ({cadence_desc}) and will not self-stop — \
-                 call loop(action='stop') to end it.{cap_note}"
+                 call loop(action='stop') to end it.{cap_note}{collision_note}"
             ),
         })
     }
@@ -304,55 +431,185 @@ impl LoopTool {
         }
     }
 
-    fn stop(&self, session: &str) -> std::result::Result<LoopOutput, String> {
-        match self.registry.get(session) {
-            // Already stopped → report honestly rather than claiming a fresh
-            // stop. Surfaces the prior stop reason so the user understands why.
-            Some(state) if !state.is_active() => Ok(LoopOutput {
-                success: false,
-                message: match &state.stop_reason {
-                    Some(r) => format!("Loop was already stopped ({r})."),
-                    None => "Loop was already stopped.".to_string(),
-                },
-            }),
-            Some(state) => {
-                self.registry.put(
-                    state
-                        .with_status(LoopStatus::Stopped)
-                        .with_stop_reason(Some("Stopped by user request.".to_string())),
-                );
+    /// " in session 'x'" when the verb reached across sessions, "" when it acted
+    /// here. Every cross-session reply carries it so the user can never mistake
+    /// a remote effect for a local one.
+    fn scope_suffix(session: &str, target: &str) -> String {
+        if target == session {
+            String::new()
+        } else {
+            format!(" in session '{target}'")
+        }
+    }
+
+    /// The stored "why it is not ticking" note. A remote quiet says so, because
+    /// that session's own `status` is the only place its user will ever see it —
+    /// there is no channel plumbing from here to another session's origin.
+    fn quiet_note(session: &str, target: &str, verb: &str) -> String {
+        if target == session {
+            format!("{verb} by user request.")
+        } else {
+            format!("{verb} by user request from another session.")
+        }
+    }
+
+    fn stop(&self, session: &str, target: &str) -> std::result::Result<LoopOutput, String> {
+        let scope = Self::scope_suffix(session, target);
+        match self.registry.transition(
+            target,
+            LoopStatus::Stopped,
+            Some(Self::quiet_note(session, target, "Stopped")),
+        ) {
+            crate::looping::TransitionOutcome::Applied { .. } => {
                 // Clear the loop-welded Strategy in lockstep with the
                 // authoritative loop stop (spec §6 lifecycle). Best-effort; the
                 // goal-keyed Strategy (if any) is untouched.
-                Self::clear_welded_strategy(session, "tool stop");
+                Self::clear_welded_strategy(target, "tool stop");
                 Ok(LoopOutput {
                     success: true,
-                    message: "Loop stopped.".to_string(),
+                    message: format!("Loop stopped{scope}."),
                 })
             }
-            None => {
+            // Only an already-`Stopped` loop can refuse a stop — report that
+            // honestly rather than claiming a fresh stop, and surface the prior
+            // reason so the user understands why it had already ended.
+            crate::looping::TransitionOutcome::Refused { .. } => Ok(LoopOutput {
+                success: false,
+                message: match self.registry.get(target).and_then(|s| s.stop_reason) {
+                    Some(r) => format!("Loop{scope} was already stopped ({r})."),
+                    None => format!("Loop{scope} was already stopped."),
+                },
+            }),
+            crate::looping::TransitionOutcome::Missing => {
                 // No live loop — but a welded plan may have outlived one (the
                 // registry is process memory, the weld is persistent SQLite; a
                 // daemon restart orphans it). An explicit stop is the user's
                 // escape hatch: tidy the orphan row while reporting honestly.
-                Self::clear_welded_strategy(session, "tool stop (no live loop)");
+                Self::clear_welded_strategy(target, "tool stop (no live loop)");
                 Ok(LoopOutput {
                     success: false,
-                    message: "No loop in this session.".to_string(),
+                    message: format!("No loop{scope}."),
                 })
             }
         }
     }
 
-    fn status(&self, session: &str) -> std::result::Result<LoopOutput, String> {
-        match self.registry.get(session) {
+    /// Suspend without losing the loop. The registry retires the in-flight tick
+    /// as part of the transition, so `resume` takes effect at once instead of
+    /// waiting out the wake the pause interrupted.
+    fn pause(&self, session: &str, target: &str) -> std::result::Result<LoopOutput, String> {
+        let scope = Self::scope_suffix(session, target);
+        match self.registry.transition(
+            target,
+            LoopStatus::Paused,
+            Some(Self::quiet_note(session, target, "Paused")),
+        ) {
+            crate::looping::TransitionOutcome::Applied { .. } => Ok(LoopOutput {
+                success: true,
+                message: format!(
+                    "Loop paused{scope}; no ticks fire until loop(action='resume') \
+                     runs in that session. Tick count, caps, prompt and cadence are \
+                     preserved. A wall-clock `timeout_minutes` deadline keeps \
+                     running while paused — re-set it on resume if the pause was long."
+                ),
+            }),
+            crate::looping::TransitionOutcome::Refused { current } => Ok(LoopOutput {
+                success: false,
+                message: match current {
+                    LoopStatus::Paused => format!("Loop{scope} is already paused."),
+                    // Terminal: "pausing" it would imply a resume that cannot happen.
+                    _ => format!(
+                        "Loop{scope} is stopped, not running — nothing to pause. \
+                         Call loop(action='start') to begin a new one."
+                    ),
+                },
+            }),
+            crate::looping::TransitionOutcome::Missing => Ok(LoopOutput {
+                success: false,
+                message: format!("No loop{scope}."),
+            }),
+        }
+    }
+
+    /// Put a paused loop back to work. Local-only by construction (see
+    /// [`Self::reject_remote`]): the next tick is claimed by THIS turn's
+    /// completion hook, which only runs for the session that is executing.
+    fn resume(&self, session: &str) -> std::result::Result<LoopOutput, String> {
+        match self.registry.transition(session, LoopStatus::Active, None) {
+            crate::looping::TransitionOutcome::Applied { .. } => Ok(LoopOutput {
+                success: true,
+                message: "Loop resumed; the next tick is scheduled from now.".to_string(),
+            }),
+            crate::looping::TransitionOutcome::Refused { current } => Ok(LoopOutput {
+                success: false,
+                message: match current {
+                    LoopStatus::Active => "Loop is already running.".to_string(),
+                    // `Stopped` is terminal — resuming would resurrect a loop
+                    // whose caps may already be spent.
+                    _ => match self.registry.get(session).and_then(|s| s.stop_reason) {
+                        Some(r) => format!(
+                            "Loop is stopped ({r}); resume only restarts a PAUSED loop. \
+                             Call loop(action='start') to begin a new one."
+                        ),
+                        None => "Loop is stopped; call loop(action='start') to begin a new one."
+                            .to_string(),
+                    },
+                },
+            }),
+            crate::looping::TransitionOutcome::Missing => Ok(LoopOutput {
+                success: false,
+                message: "No loop in this session.".to_string(),
+            }),
+        }
+    }
+
+    /// Kill switch (operator only): quiet every loop everywhere in one call.
+    /// The incident-response counterpart to `list` — before this, a loop was
+    /// visible from any channel but stoppable only from its own session.
+    fn stop_all(&self) -> std::result::Result<LoopOutput, String> {
+        if !Self::caller_is_operator() {
+            return Err(
+                "stop_all requires operator authorization; this conversation \
+                 may only manage its own loop"
+                    .to_string(),
+            );
+        }
+        let stopped = self
+            .registry
+            .stop_all("Stopped by loop(action='stop_all').");
+        if stopped.is_empty() {
+            return Ok(LoopOutput {
+                success: true,
+                message: "No running or paused timer loops in any session.".to_string(),
+            });
+        }
+        for session in &stopped {
+            Self::clear_welded_strategy(session, "stop_all");
+        }
+        Ok(LoopOutput {
+            success: true,
+            message: format!(
+                "Stopped {} timer loop(s): {}.",
+                stopped.len(),
+                stopped.join(", ")
+            ),
+        })
+    }
+
+    fn status(&self, session: &str, target: &str) -> std::result::Result<LoopOutput, String> {
+        let scope = Self::scope_suffix(session, target);
+        match self.registry.get(target) {
             Some(s) => Ok(LoopOutput {
                 success: true,
-                message: s.human_summary(now_ms()),
+                message: if scope.is_empty() {
+                    s.human_summary(now_ms())
+                } else {
+                    format!("{target}: {}", s.human_summary(now_ms()))
+                },
             }),
             None => Ok(LoopOutput {
                 success: false,
-                message: "No loop in this session.".to_string(),
+                message: format!("No loop{scope}."),
             }),
         }
     }
@@ -390,13 +647,19 @@ impl LoopTool {
     /// One compact line per loop for `list` — mirrors `GoalTool::render_list_line`:
     /// status, the watch prompt (truncated), a `(this session)` flag, cadence,
     /// ticks/cap, and the stop reason when stopped. UTF-8-safe truncation (P7).
+    ///
+    /// The session key leads every line for loops that are NOT the current one.
+    /// It is the handle `action='stop'`/`'pause'` take in `session=`: listing a
+    /// loop the caller then has no way to name is how "visible but unstoppable"
+    /// happened in the first place. Omitted for the current session, which
+    /// needs no key and where the `(this session)` flag already says so.
     fn render_list_line(state: &LoopState, current_session: &str, now_ms: u64) -> String {
         let here = if state.session_id == current_session {
-            " (this session)"
+            " (this session)".to_string()
         } else {
-            ""
+            format!(" (session '{}')", state.session_id)
         };
-        let status = if state.is_active() { "active" } else { "stopped" };
+        let status = state.status.as_str();
         // A watch prompt can be a paragraph — keep the list line compact.
         let prompt: String = state.prompt.chars().take(60).collect();
         let ellipsis = if state.prompt.chars().count() > 60 {
@@ -440,8 +703,10 @@ impl LoopTool {
         // A stopped loop cannot be re-paced in place — `update` is for live
         // loops. Resurrecting it silently would lie ("Loop updated") while the
         // continuation hook (which only fires for Active loops) never re-runs
-        // it. Tell the user to start a fresh loop instead.
-        if !state.is_active() {
+        // it. Tell the user to start a fresh loop instead. A PAUSED loop is
+        // updatable: adjusting caps or cadence while the watch is held is what
+        // pause is for, and `resume` picks the new values up.
+        if !state.is_adjustable() {
             return Ok(LoopOutput {
                 success: false,
                 message: match &state.stop_reason {
@@ -455,6 +720,7 @@ impl LoopTool {
                 },
             });
         }
+        let paused = state.is_paused();
         // Reject "born dead" zero caps at the boundary (same guard as `start`).
         reject_zero_cap(args.max_iterations, "max_iterations")?;
         reject_zero_cap(args.timeout_minutes, "timeout_minutes")?;
@@ -528,10 +794,15 @@ impl LoopTool {
         }
         Ok(LoopOutput {
             success: true,
-            message: if reschedule {
-                "Loop updated; the next tick is rescheduled from now.".to_string()
-            } else {
-                "Loop updated.".to_string()
+            message: match (paused, reschedule) {
+                // A paused loop has no in-flight tick to reschedule; the new
+                // values simply apply when it resumes. Saying "rescheduled from
+                // now" there would promise a tick that cannot come.
+                (true, _) => "Loop updated; it stays paused until \
+                     loop(action='resume')."
+                    .to_string(),
+                (false, true) => "Loop updated; the next tick is rescheduled from now.".to_string(),
+                (false, false) => "Loop updated.".to_string(),
             },
         })
     }
@@ -577,10 +848,18 @@ impl AlephTool for LoopTool {
          tick to set the next delay). action='update' also re-paces a running \
          loop in place — pass `interval` to change a fixed cadence, or \
          `prompt`/`timeout_minutes`/`max_iterations` to re-target or re-bound it \
-         without stop/start. action='status' reports THIS session's loop; \
-         action='list' shows every timer loop across ALL sessions (use it to \
-         answer 'what loops are running?', since status only sees the current \
-         session). Optional safety caps: max_iterations, timeout_minutes. If a \
+         without stop/start. action='pause' holds the watch without losing it \
+         (tick count, caps and cadence survive; nothing fires until \
+         action='resume' in that session) — prefer it over stop when the user \
+         says 'hold off'/'pause', since stop is terminal. action='status' \
+         reports THIS session's loop; action='list' shows every timer loop \
+         across ALL sessions (use it to answer 'what loops are running?', since \
+         status only sees the current session). To act on a loop `list` shows in \
+         ANOTHER session, pass session='<key as list prints it>' — accepted by \
+         status/stop/pause only, and only for operators; start/resume/update \
+         must run in the loop's own session. action='stop_all' is the kill \
+         switch for 'stop every loop' (operator only). Optional safety caps: \
+         max_iterations, timeout_minutes. If a \
          tick finds it is blocked on slow external work (a rate-limit cooldown, a \
          long build), defer the next check instead of busy-ticking or stopping — \
          on a fixed loop update to a longer `interval`, on a model-paced loop set \
@@ -599,7 +878,11 @@ impl AlephTool for LoopTool {
             "loop(action='update', interval='10m')".into(),
             "loop(action='status')".into(),
             "loop(action='list')".into(),
+            "loop(action='pause')".into(),
+            "loop(action='resume')".into(),
             "loop(action='stop')".into(),
+            "loop(action='stop', session='agent:main:tg-42')".into(),
+            "loop(action='stop_all')".into(),
         ])
     }
 
@@ -653,6 +936,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -680,6 +964,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -703,6 +988,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: Some("2m".to_string()),
+            session: None,
         })
         .await
         .unwrap();
@@ -726,6 +1012,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: Some("2m".to_string()),
+                session: None,
             })
             .await;
         assert!(res.is_err(), "contradictory next_wake+interval must reject");
@@ -744,6 +1031,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         };
         let out = tool.run(args("watch deploy")).await.unwrap();
         assert!(out.message.contains("every 5m"), "{}", out.message);
@@ -778,6 +1066,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -804,6 +1093,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: Some("8m".to_string()),
+            session: None,
         })
         .await
         .unwrap();
@@ -831,6 +1121,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -867,6 +1158,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -884,6 +1176,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -916,6 +1209,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: Some("8m".to_string()),
+                session: None,
             })
             .await
             .unwrap();
@@ -939,6 +1233,7 @@ mod tests {
                     timeout_minutes: timeout,
                     token_budget: None,
                     next_wake: None,
+                    session: None,
                 })
                 .await;
             assert!(res.is_err(), "zero cap must be rejected");
@@ -965,6 +1260,7 @@ mod tests {
             timeout_minutes: Some(30),
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -988,6 +1284,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1024,6 +1321,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1059,6 +1357,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1096,6 +1395,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1115,6 +1415,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1138,6 +1439,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1163,6 +1465,7 @@ mod tests {
                 timeout_minutes: None,
                 token_budget: None,
                 next_wake: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1217,6 +1520,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1267,6 +1571,7 @@ mod tests {
             timeout_minutes: None,
             token_budget: None,
             next_wake: None,
+            session: None,
         }
     }
 
@@ -1325,5 +1630,279 @@ mod tests {
             "{}",
             out.message
         );
+    }
+
+    // ---- lifecycle (pause / resume) + cross-session control -----------------
+
+    fn mk(action: LoopAction) -> LoopArgs {
+        LoopArgs {
+            action,
+            interval: None,
+            prompt: None,
+            max_iterations: None,
+            timeout_minutes: None,
+            token_budget: None,
+            next_wake: None,
+            session: None,
+        }
+    }
+
+    async fn started(
+        reg: &std::sync::Arc<crate::looping::LoopRegistry>,
+        session: &str,
+    ) -> LoopTool {
+        let tool = LoopTool::new(reg.clone()).with_session_for_test(session);
+        let args = LoopArgs {
+            interval: Some("5m".to_string()),
+            prompt: Some("watch CI".to_string()),
+            ..mk(LoopAction::Start)
+        };
+        tool.run(args).await.unwrap();
+        tool
+    }
+
+    #[tokio::test]
+    async fn pause_holds_the_watch_and_resume_puts_it_back() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = started(&reg, "s").await;
+
+        let out = tool.run(mk(LoopAction::Pause)).await.unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(reg.get_active("s").is_none(), "a paused loop never fires");
+        assert!(reg.get("s").unwrap().is_paused());
+        // Pausing twice is a reported no-op, not a silent success.
+        assert!(!tool.run(mk(LoopAction::Pause)).await.unwrap().success);
+        // status still answers, and says paused.
+        let st = tool.run(mk(LoopAction::Status)).await.unwrap();
+        assert!(st.message.contains("Loop paused"), "{}", st.message);
+
+        let out = tool.run(mk(LoopAction::Resume)).await.unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(reg.get_active("s").is_some(), "resume re-arms the watch");
+        assert!(!tool.run(mk(LoopAction::Resume)).await.unwrap().success);
+    }
+
+    #[tokio::test]
+    async fn paused_loop_is_updatable_but_stopped_one_is_not() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = started(&reg, "s").await;
+        tool.run(mk(LoopAction::Pause)).await.unwrap();
+
+        let out = tool
+            .run(LoopArgs {
+                interval: Some("30m".to_string()),
+                ..mk(LoopAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(
+            out.message.contains("stays paused"),
+            "must not promise a tick it cannot fire: {}",
+            out.message
+        );
+        assert!(reg.get("s").unwrap().is_paused(), "update kept it paused");
+
+        // Stopped stays terminal for both update and resume.
+        tool.run(mk(LoopAction::Stop)).await.unwrap();
+        assert!(
+            !tool
+                .run(LoopArgs {
+                    interval: Some("1m".to_string()),
+                    ..mk(LoopAction::Update)
+                })
+                .await
+                .unwrap()
+                .success
+        );
+        let out = tool.run(mk(LoopAction::Resume)).await.unwrap();
+        assert!(!out.success);
+        assert!(out.message.contains("start"), "{}", out.message);
+    }
+
+    #[tokio::test]
+    async fn cross_session_stop_closes_the_visible_but_unstoppable_gap() {
+        // `list` has always been cross-session while `stop` was session-local:
+        // a loop on another channel could be seen and not ended. It can now.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let _remote = started(&reg, "other-session").await;
+        let here = LoopTool::new(reg.clone()).with_session_for_test("here");
+
+        // The list line must carry the key `stop` takes — otherwise the loop is
+        // still unaddressable in conversation.
+        let list = here.run(mk(LoopAction::List)).await.unwrap();
+        assert!(
+            list.message.contains("(session 'other-session')"),
+            "{}",
+            list.message
+        );
+
+        let out = here
+            .run(LoopArgs {
+                session: Some("other-session".to_string()),
+                ..mk(LoopAction::Stop)
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(
+            out.message.contains("in session 'other-session'"),
+            "a remote effect must never read as a local one: {}",
+            out.message
+        );
+        let remote = reg.get("other-session").unwrap();
+        assert!(!remote.is_active());
+        assert!(remote
+            .stop_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("from another session"));
+    }
+
+    #[tokio::test]
+    async fn unknown_session_key_is_refused_not_silently_a_no_op() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let here = LoopTool::new(reg).with_session_for_test("here");
+        let err = here
+            .run(LoopArgs {
+                session: Some("typo-session".to_string()),
+                ..mk(LoopAction::Stop)
+            })
+            .await
+            .unwrap_err();
+        assert!(err.contains("list"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn arming_verbs_refuse_a_remote_session() {
+        // A loop only gets its next tick from its OWN session's completion
+        // hook, so arming one remotely would leave a dormant Active that
+        // status/list misreport as running.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let _remote = started(&reg, "other-session").await;
+        let here = LoopTool::new(reg.clone()).with_session_for_test("here");
+        for action in [LoopAction::Resume, LoopAction::Update, LoopAction::Start] {
+            let err = here
+                .run(LoopArgs {
+                    prompt: Some("p".to_string()),
+                    interval: Some("5m".to_string()),
+                    session: Some("other-session".to_string()),
+                    ..mk(action)
+                })
+                .await
+                .unwrap_err();
+            assert!(err.contains("own session"), "{err}");
+        }
+        assert!(
+            reg.get_active("other-session").is_some(),
+            "a refused remote arm must leave the loop exactly as it was"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_session_control_requires_operator() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let _remote = started(&reg, "other-session").await;
+        let here = LoopTool::new(reg.clone()).with_session_for_test("here");
+        let guest = TurnContext {
+            session_key: SessionKey::main("a"),
+            run_id: String::new(),
+            channel_id: "telegram".to_string(),
+            conversation_id: "c".to_string(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+
+        let remote_stop = LoopArgs {
+            session: Some("other-session".to_string()),
+            ..mk(LoopAction::Stop)
+        };
+        let err = TURN_CONTEXT
+            .scope(guest.clone(), here.run(remote_stop))
+            .await
+            .unwrap_err();
+        assert!(err.contains("operator"), "{err}");
+        let err = TURN_CONTEXT
+            .scope(guest.clone(), here.run(mk(LoopAction::StopAll)))
+            .await
+            .unwrap_err();
+        assert!(err.contains("operator"), "{err}");
+        assert!(
+            reg.get_active("other-session").is_some(),
+            "a chat-tier caller must not reach across the trust boundary"
+        );
+
+        // The caller's OWN loop stays fully manageable at chat tier.
+        let own = LoopTool::new(reg.clone()).with_session_for_test("other-session");
+        assert!(
+            TURN_CONTEXT
+                .scope(guest, own.run(mk(LoopAction::Stop)))
+                .await
+                .unwrap()
+                .success
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_all_is_the_kill_switch() {
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let a = started(&reg, "a").await;
+        let _b = started(&reg, "b").await;
+        let _c = started(&reg, "c").await;
+        a.run(mk(LoopAction::Pause)).await.unwrap();
+
+        let out = a.run(mk(LoopAction::StopAll)).await.unwrap();
+        assert!(out.success, "{}", out.message);
+        assert!(out.message.contains('3'), "{}", out.message);
+        for s in ["a", "b", "c"] {
+            assert!(!reg.get(s).unwrap().is_active(), "{s} still running");
+        }
+        // Idempotent: a second sweep has nothing left to quiet.
+        let out = a.run(mk(LoopAction::StopAll)).await.unwrap();
+        assert!(
+            out.success && out.message.contains("No running"),
+            "{}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn start_discloses_loops_live_in_other_sessions() {
+        // Parallel-collision disclosure: `<timer_loop>` only ever projects THIS
+        // session's loop, so without this the model cannot know it is about to
+        // duplicate a watch running on another channel.
+        let reg = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let _other = started(&reg, "other-session").await;
+        let here = LoopTool::new(reg.clone()).with_session_for_test("here");
+        let out = here
+            .run(LoopArgs {
+                interval: Some("5m".to_string()),
+                prompt: Some("watch CI".to_string()),
+                ..mk(LoopAction::Start)
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.message.contains("1 other timer loop(s) are live"),
+            "{}",
+            out.message
+        );
+
+        // A lone loop gets no noise.
+        let solo = std::sync::Arc::new(crate::looping::LoopRegistry::default());
+        let tool = LoopTool::new(solo).with_session_for_test("only");
+        let out = tool
+            .run(LoopArgs {
+                interval: Some("5m".to_string()),
+                prompt: Some("p".to_string()),
+                ..mk(LoopAction::Start)
+            })
+            .await
+            .unwrap();
+        assert!(!out.message.contains("other timer loop"), "{}", out.message);
     }
 }

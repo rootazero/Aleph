@@ -82,16 +82,22 @@ pub fn block_abandonable_session_goal(session: &str, note: &str) -> bool {
 /// `"/new"`, `"sessions.new"`).
 pub fn terminate_session_continuations(old_session: &str, cause: &str) {
     if let Some(reg) = crate::looping::global() {
-        if let Some(state) = reg.get_active(old_session) {
-            reg.put(
-                state
-                    .with_status(crate::looping::LoopStatus::Stopped)
-                    .with_stop_reason(Some(format!("Session closed via {cause}"))),
-            );
+        // Paused loops are retired too: the epoch bump makes the old session
+        // unreachable, so a loop left quiet there could never be resumed —
+        // leaving it `Paused` would only make `loop(action='list')` advertise a
+        // loop nobody can ever restart.
+        if matches!(
+            reg.transition(
+                old_session,
+                crate::looping::LoopStatus::Stopped,
+                Some(format!("Session closed via {cause}")),
+            ),
+            crate::looping::TransitionOutcome::Applied { .. }
+        ) {
             if let Some(strat) = crate::strategy::global() {
                 let _ = strat.delete(&crate::strategy::loop_key(old_session));
             }
-            info!(session = %old_session, cause, "session retired: active loop stopped");
+            info!(session = %old_session, cause, "session retired: loop stopped");
         }
     }
     block_session_goal(

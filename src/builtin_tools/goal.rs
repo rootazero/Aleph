@@ -35,6 +35,11 @@ pub enum GoalAction {
     /// user can ask "what goals am I pursuing?" from any channel. One compact
     /// line per goal; the current session's goal is flagged.
     List,
+    /// Kill switch: pause EVERY actively-pursued goal in every session at once.
+    /// For "stop all the autonomous work" / incident response. Objectives and
+    /// lessons are kept — each session resumes its own with
+    /// `update(status='active')`. Operator only.
+    PauseAll,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -84,6 +89,17 @@ pub struct GoalArgs {
     /// goal's next step depends on a team/workflow task. Wakes on the task's
     /// settle event. Mutually exclusive with `wait_minutes`.
     pub wait_for_task: Option<String>,
+    /// Target ANOTHER session's standing goal — the session key exactly as
+    /// `action='list'` prints it. Omit for this session (the normal case).
+    ///
+    /// Honored by `get`, `clear`, and by `update` restricted to
+    /// `status='paused'` (optionally with a `note`). Everything that ARMS a
+    /// pursuit — `set`, `status='active'`, budget/cap/deadline raises, wait
+    /// barriers — refuses it: an autonomous goal is re-driven by its own
+    /// session's completion hook, so one armed from elsewhere would sit
+    /// `Active` with nothing to claim its next continuation while `get` and
+    /// `list` both report it as running. Requires operator authorization.
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +150,145 @@ impl GoalTool {
             Some(h) => h.read().await.clone(),
             None => String::new(),
         }
+    }
+
+    /// Is this turn allowed to reach across session boundaries? Goals are
+    /// per-session, so before cross-session targeting the blast radius of the
+    /// `goal` tool was the caller's own conversation — which is why `goal` is
+    /// deliberately NOT in `method_authz::OPERATOR_TOOLS`. `session=` and
+    /// `pause_all` widen it across the trust boundary and carry their own gate,
+    /// mirroring `LoopTool::caller_is_operator`. Absent role = trusted
+    /// local/internal run.
+    fn caller_is_operator() -> bool {
+        crate::tools::turn_context::current_turn_context()
+            .is_none_or(|ctx| ctx.caller_is_operator())
+    }
+
+    /// Resolve which session a verb acts on. `None` → this session. `Some(key)`
+    /// → that session, once the operator gate passes and the key names a goal
+    /// that exists (a typo must not silently act on nothing, or read back as
+    /// "no goal is set"). Loop sibling: `LoopTool::resolve_target`.
+    fn resolve_target(&self, session: &str, requested: Option<&str>, verb: &str) -> Result<String> {
+        let Some(target) = requested.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(session.to_string());
+        };
+        if target == session {
+            return Ok(session.to_string());
+        }
+        if !Self::caller_is_operator() {
+            return Err(AlephError::tool(format!(
+                "{verb} on another session requires operator authorization; this \
+                 conversation may only manage its own goal"
+            )));
+        }
+        if self.store.get(target)?.is_none() {
+            return Err(AlephError::tool(format!(
+                "no standing goal is set for session '{target}' — call \
+                 goal(action='list') and pass a session key exactly as it prints"
+            )));
+        }
+        Ok(target.to_string())
+    }
+
+    /// " in session 'x'" when the verb reached across sessions, "" when it acted
+    /// here, so a remote effect can never read as a local one.
+    fn scope_suffix(session: &str, target: &str) -> String {
+        if target == session {
+            String::new()
+        } else {
+            format!(" in session '{target}'")
+        }
+    }
+
+    /// Reject `session=` on a verb that ARMS a pursuit. See [`GoalArgs::session`]
+    /// for why remote arming is refused rather than silently producing a goal
+    /// nothing will ever drive. Loop sibling: `LoopTool::reject_remote`.
+    fn reject_remote(session: &str, args: &GoalArgs, verb: &str) -> Result<()> {
+        match args.session.as_deref().map(str::trim) {
+            Some(t) if !t.is_empty() && t != session => Err(AlephError::tool(format!(
+                "{verb} only works on the current session: an autonomous goal is \
+                 re-driven by its own session's completion hook, so one armed from \
+                 elsewhere would never continue. Run {verb} from that session, or \
+                 use goal(action='update', status='paused', session='…') / \
+                 goal(action='clear', session='…') to quiet it from here"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// The one cross-session write on `update`: hold another session's pursuit.
+    /// Every other `update` field is refused rather than silently ignored — a
+    /// caller that passed `pursuit_max_iterations` alongside the pause would
+    /// otherwise be told "Paused" while its cap change vanished.
+    ///
+    /// Deliberately does NOT delete the goal-welded Strategy: the plan is still
+    /// the plan when the owner resumes, and `goal_tier_live` already stops a
+    /// `Paused` goal's weld from steering that session's ordinary turns.
+    fn remote_pause(
+        &self,
+        session: &str,
+        target: &str,
+        args: &GoalArgs,
+        now: u64,
+    ) -> Result<GoalOutput> {
+        let target = self.resolve_target(session, Some(target), "update")?;
+        if args.status != Some(GoalStatus::Paused) {
+            return Err(AlephError::tool(
+                "a cross-session update may only pause: pass status='paused' \
+                 (optionally with a note). Resuming, re-budgeting, re-capping and \
+                 parking must run in the goal's own session, whose completion hook \
+                 is the only thing that can drive the pursuit"
+                    .to_string(),
+            ));
+        }
+        let extras = [
+            args.objective.is_some().then_some("objective"),
+            args.token_budget.is_some().then_some("token_budget"),
+            args.pursuit_max_iterations
+                .is_some()
+                .then_some("pursuit_max_iterations"),
+            args.gate_command.is_some().then_some("gate_command"),
+            args.lesson.is_some().then_some("lesson"),
+            args.timeout_minutes.is_some().then_some("timeout_minutes"),
+            args.wait_minutes.is_some().then_some("wait_minutes"),
+            args.wait_for_task.is_some().then_some("wait_for_task"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !extras.is_empty() {
+            return Err(AlephError::tool(format!(
+                "a cross-session update may only pause; drop {} and run those \
+                 changes from the goal's own session",
+                extras.join(", ")
+            )));
+        }
+        let note = args
+            .note
+            .clone()
+            .unwrap_or_else(|| "Paused by user request from another session.".to_string());
+        if self.store.pause_if_active(&target, &note, now)? {
+            return Ok(GoalOutput {
+                success: true,
+                message: format!(
+                    "Standing goal paused in session '{target}'. That session \
+                     resumes it with goal(action='update', status='active')."
+                ),
+            });
+        }
+        // Not active: paused already, or terminal (blocked/complete). Report the
+        // truth instead of a bare failure so the model can relay why.
+        let current = self
+            .store
+            .get(&target)?
+            .map_or("gone".to_string(), |g| g.status.as_str().to_string());
+        Ok(GoalOutput {
+            success: false,
+            message: format!(
+                "Standing goal in session '{target}' is not being actively pursued \
+                 (status={current}) — nothing to pause."
+            ),
+        })
     }
 
     fn render(goal: &Goal, now_ms: u64) -> String {
@@ -221,11 +376,16 @@ impl GoalTool {
     /// and the current wall-clock so an autonomous goal's pace/deadline shows.
     /// Uses `status.as_str()` so the vocabulary matches what the model types in
     /// `update`, mirroring `render`.
+    ///
+    /// The session key leads every line for goals that are NOT the current
+    /// one: it is the handle `clear` / `update(status='paused')` take in
+    /// `session=`. Listing a goal the caller then has no way to name is exactly
+    /// how "visible but unstoppable" happened.
     fn render_list_line(goal: &Goal, current_session: &str, now_ms: u64) -> String {
         let here = if goal.session_id == current_session {
-            " (this session)"
+            " (this session)".to_string()
         } else {
-            ""
+            format!(" (session '{}')", goal.session_id)
         };
         let mut s = format!("- [{}] {}{here}", goal.status.as_str(), goal.objective);
         if let PursuitMode::Active { max_iterations } = goal.pursuit {
@@ -494,7 +654,12 @@ token_budget. \
          explicitly asks to pause or resume. Remove it with action='clear'. \
          List every standing goal across ALL sessions with action='list' (use \
          this to answer 'what goals am I pursuing?' since action='get' only sees \
-         the current session). \
+         the current session). To act on a goal `list` shows in ANOTHER session, \
+         pass session='<key as list prints it>' — accepted by get, clear, and by \
+         update restricted to status='paused'; everything that arms a pursuit \
+         must run in that goal's own session. action='pause_all' is the kill \
+         switch for 'stop all the autonomous work' (operator only; objectives \
+         and lessons are kept). \
          The goal is re-surfaced into your prompt every turn while active.";
 
     type Args = GoalArgs;
@@ -512,6 +677,8 @@ token_budget. \
             "goal(action='update', wait_for_task='task-abc123', note='next step needs the research task result')".into(),
             "goal(action='list')".into(),
             "goal(action='clear')".into(),
+            "goal(action='update', status='paused', session='agent:main:tg-42')".into(),
+            "goal(action='pause_all')".into(),
         ])
     }
 
@@ -527,6 +694,7 @@ token_budget. \
 
         match args.action {
             GoalAction::Set => {
+                Self::reject_remote(&session, &args, "set")?;
                 let objective = args.objective.as_deref().ok_or_else(|| {
                     AlephError::tool("goal 'set' requires 'objective'".to_string())
                 })?;
@@ -619,17 +787,42 @@ token_budget. \
                     message: format!("Set. {}", Self::render(&goal, now)),
                 })
             }
-            GoalAction::Get => match self.store.get(&session)? {
-                Some(goal) => Ok(GoalOutput {
-                    success: true,
-                    message: Self::render(&goal, now),
-                }),
-                None => Ok(GoalOutput {
-                    success: true,
-                    message: "No standing goal set for this session.".to_string(),
-                }),
-            },
+            GoalAction::Get => {
+                let target = self.resolve_target(&session, args.session.as_deref(), "get")?;
+                let scope = Self::scope_suffix(&session, &target);
+                match self.store.get(&target)? {
+                    Some(goal) => Ok(GoalOutput {
+                        success: true,
+                        message: if scope.is_empty() {
+                            Self::render(&goal, now)
+                        } else {
+                            format!("{target}: {}", Self::render(&goal, now))
+                        },
+                    }),
+                    None => Ok(GoalOutput {
+                        success: true,
+                        message: match scope.is_empty() {
+                            true => "No standing goal set for this session.".to_string(),
+                            false => format!("No standing goal set{scope}."),
+                        },
+                    }),
+                }
+            }
             GoalAction::Update => {
+                // Cross-session `update` is QUIET-ONLY and handled entirely
+                // here, before the local path: the single remote transition is
+                // `status='paused'` (plus an optional note). Everything else in
+                // this arm — budget/cap/deadline raises, wait barriers, gate
+                // swaps, lessons — either arms the pursuit or edits state whose
+                // owner session is the only one with the context to judge it.
+                if let Some(target) = args
+                    .session
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty() && *t != session)
+                {
+                    return self.remote_pause(&session, target, &args, now);
+                }
                 let mut goal = self
                     .store
                     .get(&session)?
@@ -811,6 +1004,9 @@ token_budget. \
                 })
             }
             GoalAction::Clear => {
+                let target = self.resolve_target(&session, args.session.as_deref(), "clear")?;
+                let scope = Self::scope_suffix(&session, &target);
+                let session = target;
                 // Report what actually happened: an unconditional "Standing goal
                 // cleared." on a session that never had one told the model it had
                 // undone something, which is how a model ends up assuring the user
@@ -837,13 +1033,16 @@ token_budget. \
                 let Some(prev) = existed else {
                     return Ok(GoalOutput {
                         success: true,
-                        message: "No standing goal was set for this session — nothing to clear."
-                            .to_string(),
+                        message: match scope.is_empty() {
+                            true => "No standing goal was set for this session — nothing to clear."
+                                .to_string(),
+                            false => format!("No standing goal was set{scope} — nothing to clear."),
+                        },
                     });
                 };
                 Ok(GoalOutput {
                     success: true,
-                    message: format!("Standing goal cleared: {}", prev.objective),
+                    message: format!("Standing goal cleared{scope}: {}", prev.objective),
                 })
             }
             GoalAction::List => {
@@ -871,6 +1070,34 @@ token_budget. \
                 Ok(GoalOutput {
                     success: true,
                     message: message.trim_end().to_string(),
+                })
+            }
+            GoalAction::PauseAll => {
+                if !Self::caller_is_operator() {
+                    return Err(AlephError::tool(
+                        "pause_all requires operator authorization; this conversation \
+                         may only manage its own goal"
+                            .to_string(),
+                    ));
+                }
+                let paused = self
+                    .store
+                    .pause_all_active("Paused by goal(action='pause_all').", now)?;
+                if paused.is_empty() {
+                    return Ok(GoalOutput {
+                        success: true,
+                        message: "No actively-pursued standing goals in any session.".to_string(),
+                    });
+                }
+                Ok(GoalOutput {
+                    success: true,
+                    message: format!(
+                        "Paused {} standing goal(s): {}. Objectives and lessons are \
+                         kept — each session resumes its own with \
+                         goal(action='update', status='active').",
+                        paused.len(),
+                        paused.join(", ")
+                    ),
                 })
             }
         }
@@ -908,6 +1135,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         }
     }
 
@@ -926,6 +1154,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -943,6 +1172,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -965,6 +1195,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -981,6 +1212,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1032,6 +1264,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1048,6 +1281,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1073,6 +1307,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1096,6 +1331,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await;
         assert!(err.is_err(), "set without objective must error");
@@ -1116,6 +1352,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1131,6 +1368,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1147,6 +1385,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1168,6 +1407,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1184,6 +1424,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1205,6 +1446,7 @@ mod tests {
             timeout_minutes: None,
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1221,6 +1463,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1243,6 +1486,7 @@ mod tests {
             timeout_minutes: Some(30),
             wait_minutes: None,
             wait_for_task: None,
+            session: None,
         })
         .await
         .unwrap();
@@ -1259,6 +1503,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -1348,6 +1593,7 @@ mod tests {
                 timeout_minutes: Some(45),
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
                 ..args(GoalAction::Update)
             })
             .await
@@ -1539,6 +1785,7 @@ mod tests {
             .call(GoalArgs {
                 wait_minutes: Some(5),
                 wait_for_task: Some("t1".into()),
+                session: None,
                 ..args(GoalAction::Update)
             })
             .await
@@ -2013,6 +2260,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .expect_err("a 0-iteration pursuit is exhausted before its first step");
@@ -2037,6 +2285,7 @@ mod tests {
                 timeout_minutes: Some(0),
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .expect_err("a 0-minute deadline is already in the past");
@@ -2059,6 +2308,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .expect_err("shell metacharacters make the gate unrunnable");
@@ -2091,6 +2341,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -2126,6 +2377,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -2154,6 +2406,7 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
@@ -2178,9 +2431,238 @@ mod tests {
                 timeout_minutes: None,
                 wait_minutes: None,
                 wait_for_task: None,
+                session: None,
             })
             .await
             .unwrap();
         assert!(out.message.contains("nothing to clear"), "{}", out.message);
+    }
+
+    // ---- cross-session control (loop parity) --------------------------------
+
+    /// Two session-bound tools over ONE store — the cross-session shape the
+    /// single-session helper above cannot express.
+    fn two_sessions(a: &str, b: &str) -> (GoalTool, GoalTool, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
+        let bind = |s: &str| {
+            GoalTool::new(store.clone())
+                .with_session_key_handle(Some(Arc::new(RwLock::new(s.to_string()))))
+        };
+        (bind(a), bind(b), dir)
+    }
+
+    async fn set_autonomous(tool: &GoalTool, objective: &str) {
+        tool.call(GoalArgs {
+            objective: Some(objective.into()),
+            pursuit_max_iterations: Some(5),
+            ..args(GoalAction::Set)
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_prints_the_session_key_that_remote_verbs_take() {
+        let (here, there, _d) = two_sessions("here", "remote-sess");
+        set_autonomous(&there, "watch the fleet").await;
+        let out = here.call(args(GoalAction::List)).await.unwrap();
+        assert!(
+            out.message.contains("(session 'remote-sess')"),
+            "a goal listed without an addressable key stays unstoppable: {}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_session_update_pauses_and_clear_removes() {
+        let (here, there, _d) = two_sessions("here", "remote-sess");
+        set_autonomous(&there, "watch the fleet").await;
+
+        let out = here
+            .call(GoalArgs {
+                status: Some(GoalStatus::Paused),
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.message);
+        let remote = there.call(args(GoalAction::Get)).await.unwrap();
+        assert!(
+            remote.message.contains("status=paused"),
+            "{}",
+            remote.message
+        );
+        // Pausing an already-paused goal reports the truth rather than lying.
+        let out = here
+            .call(GoalArgs {
+                status: Some(GoalStatus::Paused),
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap();
+        assert!(
+            !out.success && out.message.contains("status=paused"),
+            "{}",
+            out.message
+        );
+
+        // `get` and `clear` reach across too, and say where they acted.
+        let out = here
+            .call(GoalArgs {
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Get)
+            })
+            .await
+            .unwrap();
+        assert!(out.message.starts_with("remote-sess:"), "{}", out.message);
+        let out = here
+            .call(GoalArgs {
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Clear)
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.success && out.message.contains("in session 'remote-sess'"),
+            "{}",
+            out.message
+        );
+        assert!(there
+            .call(args(GoalAction::Get))
+            .await
+            .unwrap()
+            .message
+            .contains("No standing goal"));
+    }
+
+    #[tokio::test]
+    async fn cross_session_update_is_quiet_only() {
+        let (here, there, _d) = two_sessions("here", "remote-sess");
+        set_autonomous(&there, "watch the fleet").await;
+
+        // Resuming remotely would leave an Active goal nothing can drive.
+        let err = here
+            .call(GoalArgs {
+                status: Some(GoalStatus::Active),
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("may only pause"), "{err}");
+
+        // A field smuggled alongside the pause is refused, not silently dropped.
+        let err = here
+            .call(GoalArgs {
+                status: Some(GoalStatus::Paused),
+                pursuit_max_iterations: Some(40),
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Update)
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pursuit_max_iterations"), "{err}");
+
+        // `set` never reaches across at all.
+        let err = here
+            .call(GoalArgs {
+                objective: Some("hijack".into()),
+                session: Some("remote-sess".into()),
+                ..args(GoalAction::Set)
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("own session"), "{err}");
+
+        // …and nothing moved.
+        assert!(there
+            .call(args(GoalAction::Get))
+            .await
+            .unwrap()
+            .message
+            .contains("status=active"));
+    }
+
+    #[tokio::test]
+    async fn cross_session_control_requires_operator() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let (here, there, _d) = two_sessions("here", "remote-sess");
+        set_autonomous(&there, "watch the fleet").await;
+        let guest = TurnContext {
+            session_key: SessionKey::main("a"),
+            run_id: String::new(),
+            channel_id: "telegram".to_string(),
+            conversation_id: "c".to_string(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+
+        let remote_clear = GoalArgs {
+            session: Some("remote-sess".into()),
+            ..args(GoalAction::Clear)
+        };
+        let err = TURN_CONTEXT
+            .scope(guest.clone(), here.call(remote_clear))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("operator"), "{err}");
+        let err = TURN_CONTEXT
+            .scope(guest, here.call(args(GoalAction::PauseAll)))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("operator"), "{err}");
+        assert!(there
+            .call(args(GoalAction::Get))
+            .await
+            .unwrap()
+            .message
+            .contains("status=active"));
+    }
+
+    #[tokio::test]
+    async fn pause_all_holds_every_pursuit_without_destroying_it() {
+        let (a, b, _d) = two_sessions("sess-a", "sess-b");
+        set_autonomous(&a, "objective A").await;
+        set_autonomous(&b, "objective B").await;
+
+        let out = a.call(args(GoalAction::PauseAll)).await.unwrap();
+        assert!(out.success && out.message.contains('2'), "{}", out.message);
+        for tool in [&a, &b] {
+            let got = tool.call(args(GoalAction::Get)).await.unwrap();
+            assert!(got.message.contains("status=paused"), "{}", got.message);
+            assert!(
+                got.message.contains("objective "),
+                "the objective must survive a pause: {}",
+                got.message
+            );
+        }
+        // Each owner session resumes its own.
+        a.call(GoalArgs {
+            status: Some(GoalStatus::Active),
+            ..args(GoalAction::Update)
+        })
+        .await
+        .unwrap();
+        assert!(a
+            .call(args(GoalAction::Get))
+            .await
+            .unwrap()
+            .message
+            .contains("status=active"));
+        // Nothing left actively pursued in b alone → the second sweep is a no-op
+        // for a but still catches b.
+        let out = b.call(args(GoalAction::PauseAll)).await.unwrap();
+        assert!(out.message.contains('1'), "{}", out.message);
     }
 }
