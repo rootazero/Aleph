@@ -8,8 +8,9 @@ Aleph 的 `workflow` 子系统(声明式静态 DAG)与 Claude Code `.workflow.js
 - **声明式 manifest (AWI) 是唯一真相**。`.workflow.js` 是它的渲染视图。
 - **执行核心零改动**:`WorkflowDef` / `compile` / dispatcher 不变;额外元数据不入执行
   schema(避免死配置,R10)。
-- **无 JS 引擎**(R3):导入裸 `.workflow.js` 用手写轻量扫描;无法映射的命令式构造经
-  `dropped[]` 透明上报,绝不静默吞掉。
+- **无 JS 引擎**(R3):导入裸 `.workflow.js` 用手写轻量扫描;schema 用 `consts.rs` 的
+  **有界数据字面量归一化器**(只认纯数据形状、遇表达式即弃权,从不求值/插值)。无法映射
+  的命令式构造与未解析 schema、动态 prompt 皆经 `dropped[]` 透明上报,绝不静默吞掉。
 - **命令式控制流故意不支持**(R7/R10):routing / 循环 / 条件 / evaluator-optimizer
   属 Think→Act 主循环的职责,不外接到这一声明式层。
 
@@ -74,6 +75,8 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
 | `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;其中 `model`/`effort` 在 `run` 时盖任务元数据成为**可执行覆盖**(见上);`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
 | `opts.{review,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据 |
+| `const NAME_SCHEMA = { … }` + `schema: NAME_SCHEMA` | → 导入解析 | 工程格式把 schema hoist 成顶层 `const` 再按名引用;裸扫描经 `interop/consts.rs` 的**有界数据字面量归一化器**解析 hoisted const(及 inline schema),把 JS-lax 写法(裸键 / 单引号 / 尾逗号)归一为 JSON;遇任何表达式值(标识符 / 函数调用 / 模板串 / 计算键)整个 schema **弃权**并记 `dropped`(R3:非 JS 引擎,只认纯数据) |
+| `agent(buildPrompt(u))` / `agent(promptVar)` 动态 prompt | → 计数入 `dropped` | 非字面量 prompt 不可静态导入(R7/R10);裸扫描计数并报 "N agent()/clarify() call(s) with dynamic prompts not imported",全动态时空步骤错误也带计数 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
 
@@ -89,13 +92,25 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 `meta.{name,description,whenToUse}` + 各 `agent()` 的 prompt 实参为步骤(线性链),
 并把识别到的命令式构造写入 `dropped`。
 
-裸扫描的三点保真处理:
+裸扫描的四点保真处理:
 
 - **多行 prompt 数组**:`agent()` 实参支持两种声明式形态——单行字面量,或
   `[ "l1","l2" ].join("sep")` 数组(工程格式的主力惯用法);后者把各字符串元素按
   `.join` 分隔符拼回。元素含标识符(如 `GROUND_TRUTH`)或拼接(`'a' + x`)即视为动态,
   整条 `agent()` 弃权不导入(R7/R10),与 `.map(...)` 一样属"故意不静态化"。导出端对
   含 `\n` 的 prompt 也按此惯用法渲染,故导出/导入即便脱去内嵌头亦完全对称。
+  **动态 prompt 不再静默丢失**:非字面量 prompt 的 `agent()`/`clarify()` 由 `scan_events`
+  记 `DynamicPrompt`,`scan_bare` 计数并入 `dropped`(全动态→空步骤时错误消息也带计数,P7)。
+- **schema 常量与 JS-lax 归一化**(2026-07-25):工程文件把 schema hoist 成顶层
+  `const NAME_SCHEMA = { … }` 再 `schema: NAME_SCHEMA` 引用,且写成 JS 对象字面量
+  (裸键 / 单引号 / 尾逗号)——非合法 JSON。`interop/consts.rs` 的**有界数据字面量
+  归一化器** `parse_js_data` 只认 `object/array/string/number/bool/null` 纯数据形状,
+  把 JS-lax 归一为 `serde_json::Value`,inline schema 与 hoisted-const 引用两路皆解析
+  (`collect_consts` 建顶层 const 符号表,字符串感知、首声明胜)。**遇任何表达式值
+  (标识符 / 函数调用 / 模板串 / 计算键)整个 schema 弃权**并记 `dropped`——是归一化器
+  不是 JS 引擎(R3):从不求值、不插值、不解析成员访问。未解析 / 非数据 schema 皆经
+  `AgentOpts::schema_dropped` 上浮 `dropped`,绝不静默丢。JSON 是被接受语法的子集,故
+  Aleph 自导出的 inline-JSON schema 在裸路径原样回读。
 - **命令式 needle 只扫代码骨架**:检测 `for`/`if`/`pipeline(`/`parallel(` 等构造前,
   先剥离所有字符串字面量内容(保留引号定界符),因此 prompt 文本里的
   "search **for** files" 不会误报成 `for` 循环。

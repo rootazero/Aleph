@@ -21,8 +21,12 @@ use crate::providers::session_moa_handle::SessionMoaPref;
 use crate::providers::{AiProvider, MeteringProvider, ModelOverrideProvider};
 use crate::sync_primitives::{Arc, Mutex};
 
-use super::advisory_view::{build_advisory_view, mark_cache_breakpoints, view_signature};
-use super::prompts::{attach_guidance, build_guidance, AdvisorOutcome};
+use super::advisor_health::AdvisorHealth;
+use super::advisory_view::{
+    apply_view_budget, build_advisory_view, mark_cache_breakpoints, view_signature,
+    ADVISORY_VIEW_BUDGET,
+};
+use super::prompts::{advisor_system_prompt, attach_guidance, build_guidance, AdvisorOutcome};
 
 /// One resolved advisor: label + provider chain + identity for pricing.
 pub(crate) struct AdvisorSlot {
@@ -61,6 +65,9 @@ pub struct MoaProvider {
     /// (duplicate advisor spend, last-writer-wins) — the check-then-act gap
     /// is deliberate, not an oversight (round-2 R3).
     cache: Mutex<Option<AdvisorCache>>,
+    /// Run-scoped per-advisor circuit breaker (round-6 G1). Same run-scoped,
+    /// strictly-sequential invariant as `cache` above.
+    health: Mutex<AdvisorHealth>,
 }
 
 /// Build a run-scoped `MoaProvider` from the session pref + live config.
@@ -143,6 +150,7 @@ pub fn try_build_for_run(
     Ok(MoaProvider {
         display_name: format!("moa:{preset_name}"),
         preset_name,
+        health: Mutex::new(AdvisorHealth::new(advisors.len())),
         advisors,
         aggregator,
         aggregator_label,
@@ -235,8 +243,11 @@ impl AiProvider for MoaProvider {
         let metadata = payload.metadata.clone();
 
         Box::pin(async move {
-            // 1. Advisory view + signature.
+            // 1. Advisory view + whole-view budget + signature. The budget
+            //    runs BEFORE the signature so the cache key describes what is
+            //    actually sent (round-6 G3).
             let mut view = build_advisory_view(&messages);
+            apply_view_budget(&mut view, ADVISORY_VIEW_BUDGET);
             let sig = view_signature(&view);
 
             // 1b. Prompt-cache breakpoints (round-2 E1) — AFTER the signature
@@ -277,15 +288,35 @@ impl AiProvider for MoaProvider {
             } else if self.advisors.is_empty() {
                 Vec::new()
             } else {
-                // 3. Parallel fan-out (extracted: fan_out.rs).
+                // 3. Parallel fan-out (extracted: fan_out.rs). The breaker
+                //    mask is read here and folded back below — both under the
+                //    same run-scoped sequential invariant as `cache`, and
+                //    never held across the fan-out `.await`.
+                let skip_reasons: Vec<Option<String>> = {
+                    let guard = self.health.lock().unwrap_or_else(|e| e.into_inner());
+                    (0..self.advisors.len())
+                        .map(|idx| guard.skip_reason(idx))
+                        .collect()
+                };
                 let results = super::fan_out::run_fan_out(
                     &self.advisors,
                     &view,
+                    // Round-6 G2: advisors see the acting agent's tool roster
+                    // so their "tool-use strategy" advice names real tools.
+                    &advisor_system_prompt(tools.as_deref()),
+                    &skip_reasons,
                     self.advisor_timeout,
                     self.advisor_temperature,
                     self.advisor_max_tokens,
                 )
                 .await;
+                {
+                    let signals: Vec<_> = results.iter().map(|r| r.health.clone()).collect();
+                    self.health
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .record(&signals);
+                }
 
                 let usages: Vec<(usize, TokenUsage)> = results
                     .iter()
@@ -301,7 +332,11 @@ impl AiProvider for MoaProvider {
                 //    per-advisor + aggregating emission lives in fan_out.rs).
                 super::fan_out::emit_fanout_events(&self.sink, &results, &self.aggregator_label);
                 if !usages.is_empty() {
-                    let spend = self.spend_event(results.len(), &usages);
+                    // `advisor_count` is documented as CONSULTED — breaker
+                    // skips don't count (the display `i/n` in
+                    // `emit_fanout_events` stays the total slot count).
+                    let consulted = results.iter().filter(|r| r.consulted()).count();
+                    let spend = self.spend_event(consulted, &usages);
                     self.emit(spend);
                 }
                 if self.save_traces {
@@ -492,19 +527,21 @@ mod tests {
         fanout: MoaFanout,
         timeout_secs: u64,
     ) -> MoaProvider {
+        let advisors: Vec<AdvisorSlot> = advisors
+            .into_iter()
+            .enumerate()
+            .map(|(i, (chain, label))| AdvisorSlot {
+                label: label.to_string(),
+                provider_key: "mock".into(),
+                model: format!("m{i}"),
+                chain,
+            })
+            .collect();
         MoaProvider {
             display_name: "moa:test".into(),
             preset_name: "test".into(),
-            advisors: advisors
-                .into_iter()
-                .enumerate()
-                .map(|(i, (chain, label))| AdvisorSlot {
-                    label: label.to_string(),
-                    provider_key: "mock".into(),
-                    model: format!("m{i}"),
-                    chain,
-                })
-                .collect(),
+            health: Mutex::new(AdvisorHealth::new(advisors.len())),
+            advisors,
             aggregator,
             aggregator_label: "mock:agg".into(),
             fanout,
@@ -554,6 +591,57 @@ mod tests {
         vec![UnifiedMessage::user(text)]
     }
 
+    /// Records the joined text of every message it is handed — used as the
+    /// aggregator to assert on the injected guidance block.
+    struct CapturingAggregator(Arc<Mutex<String>>);
+    impl AiProvider for CapturingAggregator {
+        fn process<'a>(
+            &'a self,
+            p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            let joined = p
+                .messages
+                .iter()
+                .flat_map(UnifiedMessage::content_blocks)
+                .filter_map(|b| match b {
+                    crate::providers::message::ContentBlock::Text { text, .. } => {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) = joined;
+            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
+        }
+        fn name(&self) -> &str {
+            "capture"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    /// Records the SYSTEM prompt it is handed — used as an advisor to assert
+    /// on the tool roster (round-6 G2).
+    struct SystemCapture(Arc<Mutex<String>>);
+    impl AiProvider for SystemCapture {
+        fn process<'a>(
+            &'a self,
+            p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) =
+                p.system_prompt.unwrap_or_default().to_string();
+            Box::pin(async { Ok(ProviderResponse::text_only("advice".into())) })
+        }
+        fn name(&self) -> &str {
+            "system-capture"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
     #[tokio::test]
     async fn advisors_run_in_parallel_and_aggregator_answers() {
         let start = std::time::Instant::now();
@@ -586,40 +674,10 @@ mod tests {
             Arc::new(MockProvider::new("x").with_error(MockError::Network("down".into())));
         let sleepy: Arc<dyn AiProvider> =
             Arc::new(MockProvider::new("late").with_delay(Duration::from_secs(5)));
-        // Aggregator records what it saw via the guidance in its messages —
-        // use a capturing stub.
-        struct Capture(Arc<Mutex<String>>);
-        impl AiProvider for Capture {
-            fn process<'a>(
-                &'a self,
-                p: RequestPayload<'a>,
-            ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-                let joined = p
-                    .messages
-                    .iter()
-                    .flat_map(UnifiedMessage::content_blocks)
-                    .filter_map(|b| match b {
-                        crate::providers::message::ContentBlock::Text { text, .. } => {
-                            Some(text.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                *self.0.lock().unwrap_or_else(|e| e.into_inner()) = joined;
-                Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
-            }
-            fn name(&self) -> &str {
-                "capture"
-            }
-            fn color(&self) -> &str {
-                "#000"
-            }
-        }
         let seen = Arc::new(Mutex::new(String::new()));
         let p = make_provider(
             vec![(failing, "f:1"), (sleepy, "s:2")],
-            Arc::new(Capture(seen.clone())),
+            Arc::new(CapturingAggregator(seen.clone())),
             MoaFanout::PerIteration,
             1, // 1s timeout < 5s delay
         );
@@ -928,6 +986,182 @@ aggregator = { provider = "ghost", model = "n" }
             events.last().unwrap(),
             LoopTraceEvent::MoaTurnTrace { .. }
         ));
+    }
+
+    /// Always fails, and counts how many times it was actually reached —
+    /// the breaker's whole point is that this number stops growing.
+    struct FailingCounter(Arc<AtomicUsize>);
+    impl AiProvider for FailingCounter {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Err(crate::error::AlephError::NetworkError {
+                    message: "advisor down".to_string(),
+                    suggestion: None,
+                })
+            })
+        }
+        fn name(&self) -> &str {
+            "failing"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    /// Distinct messages per iteration so every `process()` is a cache MISS —
+    /// exactly the `per_iteration` shape where a dead advisor used to re-pay
+    /// its full timeout budget on every tool step.
+    fn iteration_msgs(step: usize) -> Vec<UnifiedMessage> {
+        vec![
+            UnifiedMessage::user("go"),
+            UnifiedMessage::assistant(format!("step {step}")),
+        ]
+    }
+
+    #[tokio::test]
+    async fn dead_advisor_is_retired_after_consecutive_failures() {
+        // Round-6 G1: without the breaker this advisor is called once per
+        // iteration forever (and in production burns advisor_timeout_secs
+        // each time). It must stop being reached after the trip threshold.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dead: Arc<dyn AiProvider> = Arc::new(FailingCounter(calls.clone()));
+        let p = make_provider(
+            vec![(dead, "mock:dead")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::PerIteration,
+            30,
+        );
+        for step in 0..8 {
+            let msgs = iteration_msgs(step);
+            p.process(RequestPayload::new(&msgs)).await.unwrap();
+        }
+        let reached = calls.load(Ordering::SeqCst);
+        assert!(
+            reached <= 3,
+            "advisor was reached {reached} times across 8 iterations — breaker never tripped"
+        );
+        assert!(reached >= 1, "the breaker must not skip a healthy advisor");
+    }
+
+    #[tokio::test]
+    async fn retired_advisor_keeps_its_slot_and_says_why() {
+        // The aggregator must still see the slot: "one advisor configured" and
+        // "three configured, two down" are different situations, and advisor
+        // numbering must not shift mid-run.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let dead: Arc<dyn AiProvider> = Arc::new(FailingCounter(calls.clone()));
+        let live = Arc::new(CountingProvider::new("real advice"));
+        let seen = Arc::new(Mutex::new(String::new()));
+        let p = make_provider(
+            vec![(dead, "mock:dead"), (live, "mock:live")],
+            Arc::new(CapturingAggregator(seen.clone())),
+            MoaFanout::PerIteration,
+            30,
+        );
+        for step in 0..6 {
+            let msgs = iteration_msgs(step);
+            p.process(RequestPayload::new(&msgs)).await.unwrap();
+        }
+        let guidance = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(guidance.contains("[skipped:"), "{guidance}");
+        assert!(guidance.contains("retired for this run"), "{guidance}");
+        // Slot order intact: the dead advisor is still Advisor 1.
+        assert!(guidance.contains("Advisor 1 — mock:dead"), "{guidance}");
+        assert!(guidance.contains("Advisor 2 — mock:live"), "{guidance}");
+        assert!(guidance.contains("real advice"), "{guidance}");
+    }
+
+    #[tokio::test]
+    async fn spend_counts_consulted_slots_while_display_counts_all() {
+        // `MoaAdvisorSpend.advisor_count` is documented as CONSULTED, so a
+        // breaker skip must not inflate it; the `i/n` display count stays the
+        // total so advisor numbering is stable.
+        let sink = RecordingSink::new();
+        let dead: Arc<dyn AiProvider> = Arc::new(FailingCounter(Arc::new(AtomicUsize::new(0))));
+        let live = Arc::new(CountingProvider::new("advice"));
+        let p = make_provider_sinked(
+            vec![(dead, "mock:dead"), (live, "mock:live")],
+            Arc::new(CountingProvider::new("final")),
+            MoaFanout::PerIteration,
+            sink.clone(),
+        );
+        for step in 0..6 {
+            let msgs = iteration_msgs(step);
+            p.process(RequestPayload::new(&msgs)).await.unwrap();
+        }
+        let events = sink.events();
+        let last_spend = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaAdvisorSpend { advisor_count, .. } => Some(*advisor_count),
+                _ => None,
+            })
+            .expect("spend event");
+        assert_eq!(last_spend, 1, "skipped slot must not count as consulted");
+        let last_aggregating = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                LoopTraceEvent::MoaAggregating { advisor_count, .. } => Some(*advisor_count),
+                _ => None,
+            })
+            .expect("aggregating event");
+        assert_eq!(last_aggregating, 2, "display count stays the total slots");
+    }
+
+    #[tokio::test]
+    async fn healthy_advisors_are_never_skipped() {
+        // Guard against the breaker mis-firing on a working preset: N
+        // iterations must produce N consultations.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let live: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "advice".into(),
+            delay: None,
+            calls: calls.clone(),
+        });
+        let p = make_provider(
+            vec![(live, "mock:live")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::PerIteration,
+            30,
+        );
+        for step in 0..5 {
+            let msgs = iteration_msgs(step);
+            p.process(RequestPayload::new(&msgs)).await.unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn advisors_receive_the_acting_agents_tool_roster() {
+        // Round-6 G2: `payload.tools` was owned and dropped on the advisor
+        // path, so advisors could only learn a tool existed after it had been
+        // called — and invented names for the rest.
+        let seen = Arc::new(Mutex::new(String::new()));
+        let advisor: Arc<dyn AiProvider> = Arc::new(SystemCapture(seen.clone()));
+        let p = make_provider(
+            vec![(advisor, "mock:a")],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::PerIteration,
+            30,
+        );
+        let tools = vec![crate::tool_metadata::ToolDefinition::new(
+            "web_search",
+            "Search the web.",
+            serde_json::json!({}),
+            crate::tool_metadata::ToolCategory::Builtin,
+        )];
+        let msgs = user_msgs("go");
+        p.process(RequestPayload::new(&msgs).with_tools(Some(&tools)))
+            .await
+            .unwrap();
+        let system = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(system.contains("- web_search: Search the web"), "{system}");
     }
 
     #[tokio::test]

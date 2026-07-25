@@ -552,6 +552,69 @@ added four pieces on top of the port above:
   stays session-scoped (chat model picker + `moa` tool); the settings page
   only edits config (R4 kept it a pure config surface).
 
+**Round 6 — advisor-side resilience** (2026-07-25, spec
+`docs/superpowers/specs/2026-07-25-moa-round6-advisor-resilience-design.md`).
+Rounds 1–5 hardened activation, configuration and observability; round 6 is
+the first pass over what happens to the fan-out when an *advisor*
+misbehaves or the conversation gets long. No new config, RPCs or trace
+events.
+
+- **Run-scoped advisor circuit breaker**
+  (`src/providers/moa/advisor_health.rs`). The fan-out had no memory: under
+  `per_iteration`, a hung or mis-keyed advisor burned the full
+  `advisor_timeout_secs` (default 120 s) on **every** tool iteration — up to
+  40 minutes of dead wall-clock on a 20-step run, each wait blocking the
+  aggregator. Two consecutive failures now retire a slot for the rest of the
+  run (a recognised *permanent* error — auth failed, model not found —
+  retires on the first strike); a success resets the count, and the next run
+  starts fresh, so recovery is automatic. It reuses
+  `providers::health`'s `ProviderError` + `From<&AlephError>` classifier but
+  **not** `ProviderHealth` itself: that state machine's `Degraded` cooldown
+  suppresses the very retry a strike counter needs, so a dead advisor would
+  never trip — it would settle into probe / cool-down / probe, re-paying the
+  timeout every backoff window. Round-1's "no K-of-N racing" decision is
+  untouched: that governs how one consultation completes, this governs
+  whether a slot already proven dead this run is consulted at all.
+- **Retired slots keep their slot**: they render as
+  `Advisor N — <label>: [skipped: <reason>]` in the guidance, structurally
+  like the existing `[failed: …]` / `[timeout after Ns]` notes. The
+  aggregator can therefore tell "one advisor configured" from "three
+  configured, two down", and advisor numbering never shifts mid-run. Two
+  counts are deliberately different and must stay so:
+  `MoaAggregating.advisor_count` / the `i/n` display is the TOTAL slot count;
+  `MoaAdvisorSpend.advisor_count` counts only slots actually CONSULTED.
+- **Advisors see the acting agent's tool roster**
+  (`prompts::advisor_system_prompt`). The advisor prompt asks for "tool-use
+  strategy", but the advisory view only reveals a tool once it has already
+  been called (`[called tool: X]`) — so advisors invented names for
+  everything else. `payload.tools` was already owned by
+  `MoaProvider::process` and handed to the aggregator alone; it now also
+  renders a budget-capped roster (`name: first sentence`, 100 chars/line,
+  1800 chars total, `+N more tools` tail) appended to the advisor system
+  prompt, with the "you still cannot call any of them" framing intact. Zero
+  tools ⇒ the prompt is byte-identical to before. hermes references are
+  blind here too, so this is a surpass item.
+- **Whole-view budget** (`advisory_view::apply_view_budget`). Per-tool-result
+  truncation bounded one result; nothing bounded the view. The failure that
+  matters is not cost (providers auto-cache prefixes, and
+  `mark_cache_breakpoints` already covers Anthropic) but **overflowing the
+  advisor's context window** — an advisor on a smaller-context model than the
+  aggregator dies with a hard 4xx on every later iteration of a long run.
+  The view is now clamped to `ADVISORY_VIEW_BUDGET` chars by *shrinking* the
+  oldest messages, never dropping them, so message count, order and role
+  sequence are untouched and the "first message must be `user`" rule a
+  drop-based elision would have to re-establish simply cannot break. The
+  newest message is exempt from the stub allowance. Runs before
+  `view_signature`, so the cache key describes what is actually sent.
+- **Empty-turn guard**: `build_advisory_view`'s `User` arm pushed
+  unconditionally while the `Assistant` arm guarded — a blank user turn
+  reached the wire as `MessageContent::Text { content: "" }` (anthropic's
+  `blocks.is_empty()` fallback only catches a wholly empty content vec) and
+  400'd, failing every advisor at once. Blank user turns are now skipped and
+  the view is guaranteed non-empty. The dead `last_user_text` refill this
+  exposed (unreachable: rendering nothing implies the stash is `None`) was
+  removed.
+
 ### One-Shot Task Fan-Out (existing, previously undocumented)
 
 Independent of the port above, the `subagent` tool has always supported a
