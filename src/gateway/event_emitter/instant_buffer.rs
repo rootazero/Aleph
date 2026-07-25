@@ -172,6 +172,14 @@ pub(super) fn plan_instant(
             } else {
                 Some(buffered)
             };
+            // `RunComplete` is the run's terminal event: reset so the planner
+            // state is scoped to a run rather than to the emitter that happens
+            // to carry it. Without this, `final_emitted` latched forever — a
+            // decorator reused for a second run (the type is `pub`, and nothing
+            // in the signature says "one per run") would silently suppress that
+            // run's summary fallback, and leftover buffered text could splice
+            // into the next run's terminal chunk.
+            *state = InstantState::default();
             match flush_text {
                 Some(text) => {
                     InstantOutcome::Prepend(vec![final_chunk(run_id.clone(), next_seq(), text)])
@@ -494,6 +502,34 @@ mod tests {
             ),
             InstantOutcome::Forward
         ));
+    }
+
+    #[test]
+    fn planner_state_is_scoped_to_a_run_not_to_the_emitter() {
+        // INSTANT-3: `final_emitted` used to latch for the life of the
+        // planner state. A decorator carrying a SECOND run then swallowed that
+        // run's summary fallback (the fallback is the only delivery path when
+        // nothing streamed), and stale buffer text could splice into the next
+        // run's terminal chunk. `RunComplete` resets.
+        let mut buf = InstantState::default();
+        // Run 1: a final chunk delivers the answer, RunComplete adds nothing.
+        assert!(matches!(
+            plan_instant(&mut buf, &chunk("run-1 answer", true), seq_source()),
+            InstantOutcome::Replace(_)
+        ));
+        assert!(matches!(
+            plan_instant(&mut buf, &run_complete(Some("run-1 answer")), seq_source()),
+            InstantOutcome::Forward
+        ));
+        // Run 2 on the same planner state: nothing streamed, so the summary
+        // fallback MUST fire.
+        match plan_instant(&mut buf, &run_complete(Some("run-2 answer")), seq_source()) {
+            InstantOutcome::Prepend(events) => assert!(
+                matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
+                    if delta == "run-2 answer")
+            ),
+            other => panic!("second run's summary fallback must fire, got {other:?}"),
+        }
     }
 
     #[test]

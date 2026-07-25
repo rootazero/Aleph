@@ -40,11 +40,25 @@ pub async fn handle_gateway_metrics_run_concurrency(
 ) -> JsonRpcResponse {
     let run_concurrency = run_manager.concurrency_snapshot();
     let running_sessions = run_manager.running_sessions();
+    // Backlog waiting *behind* the run slots. Without it the gauge showed a
+    // saturated engine but not the queue depth piling up behind it, and a
+    // queued message was invisible on every surface (codex renders queued
+    // messages in its bottom pane; Aleph showed nothing at all).
+    let busy = crate::gateway::busy_queue::snapshot();
+    let per_session: Vec<_> = busy
+        .per_session
+        .iter()
+        .map(|(session_key, depth)| json!({ "session_key": session_key, "depth": depth }))
+        .collect();
     JsonRpcResponse::success(
         request.id,
         json!({
             "run_concurrency": run_concurrency,
             "running_sessions": running_sessions,
+            "busy_queue": {
+                "total_waiting": busy.total_waiting,
+                "per_session": per_session,
+            },
         }),
     )
 }

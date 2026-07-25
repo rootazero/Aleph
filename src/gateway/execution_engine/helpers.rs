@@ -318,14 +318,26 @@ pub async fn run_dispatch_and_drain_classified(
     if !complete_forwarded {
         let summary = super::event_drain::build_run_summary(&outcome);
         let seq = emitter.next_seq();
-        let _ = emitter
+        // Run-skeleton event → `warn` on send failure, matching the emit-tier
+        // policy the trait's default `emit_run_complete` applies (decorative
+        // Reasoning/Tool* events stay at `debug`). This second `RunComplete`
+        // producer used to discard the error, so the one path where the
+        // terminal frame is *most* likely to be missed failed invisibly.
+        if let Err(e) = emitter
             .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
                 run_id: run_id.to_string(),
                 seq,
                 summary,
                 total_duration_ms: outcome.duration_ms,
             })
-            .await;
+            .await
+        {
+            tracing::warn!(
+                run_id,
+                error = %e,
+                "failed to emit the drain-fallback RunComplete stream event"
+            );
+        }
     }
 
     // 5. Map `hit_limit` → i18n loop-halt message, dispatched on the rich

@@ -62,6 +62,7 @@ pub(crate) use trace_sink_adapter::GatewayTraceSink;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use unattended_redacting_sink::UnattendedRedactingSink;
 
+use crate::gateway::i18n::{Locale, Msg, ReceiptKind};
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 use std::collections::HashMap;
@@ -89,6 +90,11 @@ pub struct ExecutionEngineConfig {
     /// consumes it at the next turn boundary) instead of rejecting with
     /// `AgentBusy`. Disable to restore the legacy busy/retry behaviour.
     pub mid_turn_steering: bool,
+    /// Backpressure bound on un-consumed steering messages a single run may
+    /// accumulate (`[execution] max_pending_steering`). Past the cap an
+    /// injection is refused so the busy wait lane redelivers once the burst
+    /// drains — backpressure, never a drop.
+    pub max_pending_steering: usize,
     /// R5 progress push: when a run is bound to a user channel, mirror
     /// scratchpad progress + watchdog-boundary events to that channel so
     /// headless / background runs aren't a black box. Pure I/O side-channel
@@ -113,6 +119,7 @@ impl Default for ExecutionEngineConfig {
             default_timeout_secs: 172_800,
             enable_tracing: true,
             mid_turn_steering: true,
+            max_pending_steering: steering::MAX_PENDING_STEERING,
             scratchpad_progress_push: false,
             core_tools: crate::config::types::tools::default_core_tools(),
             truncate_tool_descriptions: false,
@@ -365,81 +372,56 @@ impl ExecutionError {
     /// (rate-limited / unreachable → yes, soon) without exposing the raw internal
     /// error chain.
     ///
-    /// **Single source of truth** for user-channel error presentation. Both the
-    /// in-engine `RunError` emit ([`execute`]) and the gateway RPC handlers
-    /// (`agent.run` / `chat.send` in the aleph-server bin) route through it, so
-    /// the flattened internal chain (e.g. `"Execution failed: flow: internal
-    /// dispatch error: harness: llm error: Rate limit error: Anthropic API rate
-    /// limited (429)..."`) never reaches the Panel. `ExecutionError` is `pub` and
-    /// this method must stay `pub` because the leak site lives in the bin crate,
-    /// which cannot reach the (private) presentation helpers. The typed error is
-    /// unchanged for internal callers; only the presentation string is derived.
+    /// **Single source of truth** for user-facing error presentation. The
+    /// in-engine `RunError` emit ([`execute`]), the gateway RPC handlers
+    /// (`agent.run` / `chat.send` in the aleph-server bin) and the inbound
+    /// router's channel error reply all route through it, so the flattened
+    /// internal chain (e.g. `"Execution failed: flow: internal dispatch error:
+    /// harness: llm error: Rate limit error: Anthropic API rate limited
+    /// (429)..."`) never reaches a user surface. `ExecutionError` is `pub` and
+    /// this method must stay `pub` because one call site lives in the bin
+    /// crate. The typed error is unchanged for internal callers; only the
+    /// presentation string is derived.
+    ///
+    /// Classification and wording both live in [`crate::gateway::i18n`]
+    /// ([`ReceiptKind`] + [`Msg::ErrReceipt`]) so the text is localized — this
+    /// method previously hardcoded Chinese and carried a *second*, subtly
+    /// different classifier next to `i18n::format_execution_error`.
     #[must_use]
-    pub fn user_receipt(&self) -> (&'static str, String) {
+    pub fn user_receipt(&self, locale: Locale) -> (&'static str, String) {
+        let kind = self.receipt_kind();
+        (
+            kind.code(),
+            crate::gateway::i18n::t(Msg::ErrReceipt(kind), locale),
+        )
+    }
+
+    /// The user-facing bucket this error falls into. Split out from
+    /// [`Self::user_receipt`] so callers that only need the machine code (or
+    /// want to branch on the bucket) don't render a string.
+    #[must_use]
+    pub fn receipt_kind(&self) -> ReceiptKind {
         match self {
-            Self::Timeout => (
-                "TIMEOUT",
-                "任务超时未完成。请重试，或把任务拆小一些再发给我。".to_string(),
-            ),
-            Self::Cancelled => ("CANCELLED", "任务已取消。".to_string()),
-            Self::AgentBusy(_) => ("AGENT_BUSY", "当前 Agent 正忙，请稍后再试。".to_string()),
+            Self::Timeout => ReceiptKind::Timeout,
+            Self::Cancelled => ReceiptKind::Cancelled,
+            Self::AgentBusy(_) => ReceiptKind::AgentBusy,
             // The only string-carrying variant; classify by signature so a
-            // provider rate-limit / network outage reads as transient.
-            Self::Failed(msg) => classify_failed(msg),
+            // provider rate-limit / auth failure / network outage is reported
+            // as such instead of a useless "please retry".
+            Self::Failed(msg) => crate::gateway::i18n::classify_error_text(msg),
             // Routing / lookup errors the user cannot act on — keep generic and
             // never echo the raw internal string.
             Self::RunNotFound(_)
             | Self::RunNotActive(_)
             | Self::Fallthrough { .. }
-            | Self::Orchestrator(_) => ("FAILED", "任务执行失败，请重试。".to_string()),
+            | Self::Orchestrator(_) => ReceiptKind::Failed,
         }
     }
 }
 
-/// Classify a [`ExecutionError::Failed`] payload. The message originates from the
-/// gateway dispatch loop after failover/retries are exhausted, so a rate-limit or
-/// network signature here means *every* provider/model in the chain was tried and
-/// the failure is genuinely transient — worth telling the user to retry.
-fn classify_failed(msg: &str) -> (&'static str, String) {
-    if is_rate_limited(msg) {
-        (
-            "RATE_LIMITED",
-            "模型服务商当前限流（请求过于频繁），且备用通道也已用尽。稍等片刻后重试即可。"
-                .to_string(),
-        )
-    } else if is_unreachable(msg) {
-        (
-            "PROVIDERS_UNREACHABLE",
-            "无法连接到模型 / 搜索服务（网络不可达或服务暂时中断），所有可用通道均已尝试。请检查网络后重试。"
-                .to_string(),
-        )
-    } else {
-        ("FAILED", "任务执行失败，请重试。".to_string())
-    }
-}
-
-fn is_rate_limited(msg: &str) -> bool {
-    msg.contains("429")
-        || msg.contains("rate limit")
-        || msg.contains("Rate limit")
-        || msg.contains("rate_limit")
-        || msg.contains("receiving too many requests")
-}
-
-fn is_unreachable(msg: &str) -> bool {
-    msg.contains("Network error")
-        || msg.contains("error sending request")
-        || msg.contains("connection")
-        || msg.contains("Connection")
-        || msg.contains("dns")
-        || msg.contains("timed out")
-        || msg.contains("502")
-        || msg.contains("503")
-}
-
 #[cfg(test)]
 mod user_receipt_tests {
-    use super::ExecutionError;
+    use super::{ExecutionError, Locale};
 
     #[test]
     fn rate_limit_failure_reads_as_retryable() {
@@ -448,7 +430,7 @@ mod user_receipt_tests {
              Anthropic API rate limited (429): receiving too many requests"
                 .to_string(),
         );
-        let (code, message) = e.user_receipt();
+        let (code, message) = e.user_receipt(Locale::Zh);
         assert_eq!(code, "RATE_LIMITED");
         assert!(message.contains("限流"));
         // The raw internal chain must not leak to the user.
@@ -462,7 +444,7 @@ mod user_receipt_tests {
              for url (https://api.kimi.com/coding/v1/messages)"
                 .to_string(),
         );
-        let (code, message) = e.user_receipt();
+        let (code, message) = e.user_receipt(Locale::Zh);
         assert_eq!(code, "PROVIDERS_UNREACHABLE");
         assert!(message.contains("网络"));
     }
@@ -473,19 +455,25 @@ mod user_receipt_tests {
         let e = ExecutionError::Failed(
             "429 rate limit on error sending request for url (x)".to_string(),
         );
-        assert_eq!(e.user_receipt().0, "RATE_LIMITED");
+        assert_eq!(e.user_receipt(Locale::Zh).0, "RATE_LIMITED");
     }
 
     #[test]
     fn unclassified_failed_stays_generic() {
         let e = ExecutionError::Failed("some opaque internal failure".to_string());
-        assert_eq!(e.user_receipt().0, "FAILED");
+        assert_eq!(e.user_receipt(Locale::Zh).0, "FAILED");
     }
 
     #[test]
     fn timeout_and_cancel_keep_their_codes() {
-        assert_eq!(ExecutionError::Timeout.user_receipt().0, "TIMEOUT");
-        assert_eq!(ExecutionError::Cancelled.user_receipt().0, "CANCELLED");
+        assert_eq!(
+            ExecutionError::Timeout.user_receipt(Locale::Zh).0,
+            "TIMEOUT"
+        );
+        assert_eq!(
+            ExecutionError::Cancelled.user_receipt(Locale::Zh).0,
+            "CANCELLED"
+        );
     }
 
     #[test]
@@ -493,13 +481,36 @@ mod user_receipt_tests {
         // AgentBusy is the admit_run early-return path surfaced by the bin-crate
         // RPC handlers; routing errors carry internal ids. Neither may echo raw.
         let busy = ExecutionError::AgentBusy("run 7f3a already active".to_string());
-        let (code, message) = busy.user_receipt();
+        let (code, message) = busy.user_receipt(Locale::Zh);
         assert_eq!(code, "AGENT_BUSY");
         assert!(!message.contains("7f3a"));
 
         let routing = ExecutionError::RunNotFound("internal-run-id-42".to_string());
-        let (code, message) = routing.user_receipt();
+        let (code, message) = routing.user_receipt(Locale::Zh);
         assert_eq!(code, "FAILED");
         assert!(!message.contains("internal-run-id-42"));
+    }
+
+    /// An expired API key used to be reported as a bare "please retry" — the
+    /// engine's own classifier had no auth bucket at all, while the i18n one
+    /// did. Unifying them gave this path actionable advice.
+    #[test]
+    fn auth_failure_says_check_the_key_not_just_retry() {
+        let e = ExecutionError::Failed(
+            "flow: llm error: 401 Unauthorized: invalid api key".to_string(),
+        );
+        let (code, message) = e.user_receipt(Locale::Zh);
+        assert_eq!(code, "AUTH");
+        assert!(message.contains("API Key"), "{message}");
+    }
+
+    /// The receipt follows the deployment's locale. It used to be hardcoded
+    /// Chinese, so an `[general] language = "en"` Panel showed Chinese errors.
+    #[test]
+    fn receipt_follows_the_locale() {
+        let (_, zh) = ExecutionError::Timeout.user_receipt(Locale::Zh);
+        let (_, en) = ExecutionError::Timeout.user_receipt(Locale::En);
+        assert_ne!(zh, en);
+        assert!(!en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
     }
 }

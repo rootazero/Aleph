@@ -205,6 +205,18 @@ impl InboundMessageRouter {
         }
     }
 
+    /// Resolve the busy wait-lane knobs from `[execution]`. Read per message so
+    /// a config hot-reload takes effect without a restart, mirroring how the
+    /// locale above is resolved.
+    pub(super) async fn busy_queue_config(&self) -> crate::gateway::busy_queue::BusyQueueConfig {
+        match self.app_config {
+            Some(ref cfg) => crate::gateway::busy_queue::BusyQueueConfig::from_execution(
+                &cfg.read().await.execution,
+            ),
+            None => crate::gateway::busy_queue::BusyQueueConfig::default(),
+        }
+    }
+
     /// Send a "Unknown command — did you mean?" reply with up to 3 close
     /// matches from the unified tool registry. Returns `true` when a reply
     /// was sent (caller should NOT fall through to the agent), `false` when
@@ -386,8 +398,24 @@ impl InboundMessageRouter {
             );
         }
 
+        // An explicit stop means "I do not want this work" — a queued backlog
+        // firing one message at a time right after the stop is the opposite of
+        // that (codex clears pending input on `Op::Interrupt` for the same
+        // reason). Scoped to this handler on purpose: the `Interrupt`
+        // busy-input mode *depends* on the lane to restart its own message
+        // after cancelling the sibling, so `cancel_session` itself must not
+        // purge.
+        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string());
+        if dropped > 0 {
+            info!(
+                session = %ctx.session_key.to_key_string(),
+                dropped,
+                "[Router] /stop: dropped queued messages waiting on this session"
+            );
+        }
+
         let locale = self.resolve_locale().await;
-        let reply_text = crate::gateway::i18n::t(
+        let mut reply_text = crate::gateway::i18n::t(
             if cancelled.is_some() {
                 crate::gateway::i18n::Msg::RunStopped
             } else {
@@ -395,6 +423,15 @@ impl InboundMessageRouter {
             },
             locale,
         );
+        if dropped > 0 {
+            // One receipt for the whole batch — the individual waiters exit
+            // silently rather than each announcing its own cancellation.
+            reply_text.push(' ');
+            reply_text.push_str(&crate::gateway::i18n::t(
+                crate::gateway::i18n::Msg::QueuedMessagesDropped { count: dropped },
+                locale,
+            ));
+        }
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
             error!("[Router] Failed to send /stop reply: {}", e);

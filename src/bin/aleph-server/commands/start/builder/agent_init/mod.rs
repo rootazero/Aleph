@@ -747,6 +747,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             default_timeout_secs: app_config.execution.default_timeout_secs,
             scratchpad_progress_push: app_config.execution.progress_push,
             mid_turn_steering: app_config.execution.mid_turn_steering,
+            // Zero would mean "reject every steering injection"; fall back to
+            // the default rather than let a typo disable mid-loop steering
+            // wholesale (P7, same posture as the concurrency caps below).
+            max_pending_steering: if app_config.execution.max_pending_steering == 0 {
+                ExecutionEngineConfig::default().max_pending_steering
+            } else {
+                app_config.execution.max_pending_steering
+            },
             core_tools: app_config.tools.core.clone(),
             truncate_tool_descriptions: app_config.tools.truncate_tool_descriptions,
             defer_mcp_tools: app_config.tools.defer_mcp_tools,

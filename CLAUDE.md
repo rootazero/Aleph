@@ -246,6 +246,8 @@
 
 > **会话模式 (Session Mode)**: 与执行档位正交的第三根会话旋钮——`chat` / `work`（默认）/ `code`，Panel composer 模式 pill 选（随第一条消息生效）或 `session_set_mode` 工具对话式切。模式只做**工具呈现面**的静态分区（schema 常驻核 × 整族延迟，`tool_search` 永远可发现+晋升——R10 渐进披露例外的形状），不授予不拒绝任何权限；审批仍归 exec tier。单一源 `src/config/types/policies/session_mode.rs`（族表 `_` 词边界匹配；MCP 限定名 `{server}__{tool}` 整体豁免内建表；子代理继承父分区并获短版 mode line）。详见 [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) 与 FEATURE_LOCATOR §5.16。
 
+> **繁忙输入与消息车道 (Busy Input & Wait Lane)**: 会话已有在跑的 run 时，新消息按通道声明的 `BusyInputMode` 分流——`Steer`（默认，注入 live 日志让循环下一轮接住）/ `Interrupt`（真取消同会话 run 及其委派子运行）/ `Queue`（不打扰，排队）。**投递不了的一律进 `src/gateway/busy_queue/` 的 per-session FIFO 车道**，channel 与 Panel/CLI 三个 surface 共用同一条车道、同一套到达序与溢出策略（ticket **必须在到达路径同步取**，进 spawn 就把到达序换成调度序）。等待端**不轮询**：靠 `SessionRunRegistry::release` 的放槽信号唤醒（codex `InputQueue` 对位），`wake_fallback_secs` 只是漏发兜底。停止有两个粒度——`/stop` 清整条车道，`chat.abort` 按 `run_id` 停单条排队消息（排队中的 run 不在 `active_runs`，引擎的 cancel 够不到它）。旋钮在 `[execution] busy_queue_*` / `max_pending_steering`。详见 FEATURE_LOCATOR §4.8。
+
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
 ### Windows 构建

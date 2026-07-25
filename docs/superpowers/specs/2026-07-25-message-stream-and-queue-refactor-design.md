@@ -67,6 +67,12 @@ Telegram / Slack 一次慢投递把 Panel 的 `RunComplete` 帧连同其后所�
 3. `is_unreachable` 用 `msg.contains("connection")`，正是 `contains_phrase` 的 doc comment 明写要避免的
    foot-gun（`disconnection_policy` 误命中）。
 
+**F6 · 同一次失败报两遍**
+执行阶段失败时，用户收到**两条**消息：一条来自 run 自己的 emitter
+（`RunError` → `ReplyEmitter::send_error` / Panel 气泡），一条来自等待循环收尾的错误回执
+（`executor.rs` 的 `final_err`、`server_init.rs` 的 `Err(e)` 分支）。
+两个 surface 都中招。
+
 ### §4.8
 
 **Q1 · FIFO 到达序不成立**
@@ -106,7 +112,7 @@ execution_engine（放槽信号）。留在 `inbound_router/` 下会让 Panel �
 ```
 src/gateway/busy_queue/
 ├── mod.rs      车道原语：FIFO + TicketGuard(RAII) + per-session Notify + purge
-├── deliver.rs  共享等待循环 deliver_when_free()（inbound_router 与 server_init 同走）
+├── deliver.rs  共享等待循环 deliver_with_ticket()（inbound_router 与 server_init 同走）
 └── config.rs   BusyQueueConfig ← [execution]
 ```
 
@@ -114,23 +120,35 @@ src/gateway/busy_queue/
 
 ### 3.2 唤醒改事件驱动（codex `watch::Sender<InputQueueActivity>` 对位）
 
-- `busy_queue::lane_notify(session_key) -> Arc<Notify>`（按 session 惰性建、随车道消亡回收）；
+- 每个 `Lane` 自带一个 `Arc<Notify>`（按 session 惰性建、随车道消亡回收）；
 - `SessionRunRegistry::release()` 已是**唯一权威放槽点**（且已带 seq 广播）→ 增一行
   `busy_queue::notify_slot_free(&key)`；
-- `TicketGuard::drop` 同样 notify（队首离队 → 晋升次位）；
-- 等待端 `select! { notified, sleep(wake_fallback) }` —— **保留有界兜底 tick**（默认 30 s，
-  原 2 s 的 15× 稀释）。漏发信号仍 fail-open，「车道永不 wedge」的不变式不动。
+- `TicketGuard::drop` 同样 notify（队首离队 → 晋升次位），`purge` / `cancel_queued_run` 亦然；
+- 等待端 `timeout_at(wake_by, notified)` —— 关键是 **`Notified::enable()` 先注册、再检查车道
+  状态、再 attempt**：注册早于 attempt，故 attempt 期间到达的放槽信号不会掉进缝里。
+  **保留有界兜底 tick**（默认 30 s，原 2 s 轮询的 15× 稀释）只兜「我们根本无从观察到的」
+  漏发；漏发信号仍 fail-open，「车道永不 wedge」的不变式不动。
 
 > R10 合规：纯机械的到达序簿记 + 放槽信号，不做意图 / 完成度 / 相关性判断。
 > 模型变强不会让这段脚手架变得不必要（Future-Proof ✓）。
 
-### 3.3 purge 语义（Q3）
+### 3.3 停止语义（Q3）
 
-`busy_queue::purge(session_key) -> usize` 把该车道所有票标记为 `Purged` 并唤醒。
-等待者观察到 `Purged` → 返回 `DeliveryOutcome::Purged`，调用方回执
-「已随 /stop 取消 N 条排队消息」，**走正常回执路径而非错误路径**。
+取消标记落在 **ticket** 上（不是车道上），所以停止之后到达的消息不会继承它。两个粒度：
 
-调用点**只有** `handle_stop`（显式用户停止意图）。`gate.rs` 的 `Interrupt` 分支不调用。
+| 粒度 | API | 调用点 | 语义 |
+|---|---|---|---|
+| 会话级 | `purge(session_key) -> usize` | `command_handler::handle_stop`（`/stop`） | 丢弃该会话全部排队消息，条数追加进 `/stop` 回执 |
+| run 级 | `cancel_queued_run(run_id) -> bool` | `AgentRunManager::cancel_run`（Panel `chat.abort`） | 丢弃指定的那一条 |
+
+等待者观察到取消 → 返回 `DeliveryOutcome::Purged`，**走正常回执路径而非错误路径**
+（会话级由 `/stop` 一次说清整批；run 级由客户端自己的 abort 响应交代）。
+
+`gate.rs` 的 `Interrupt` 分支**不**调用任一者 —— 它依赖车道重启自己那条消息。
+
+> run 级这条是 Q5（Panel 补车道）带出来的必然配套：排队消息已经把 `run_id` 回给了客户端，
+> 却还没进引擎 `active_runs`，`ExecutionEngine::cancel` 看不见它 —— 不接这条，Panel 就会有一个
+> 停不掉的 pending 气泡。
 
 ### 3.4 错误呈递真·单一源（F5）
 
@@ -139,11 +157,14 @@ ExecutionError::receipt_kind()       typed  ─┐
 i18n::classify_error_text(&str)      string ─┴→ ReceiptKind ─→ i18n::Msg（双语文案）
 ```
 
-- `ReceiptKind` 落在 `i18n.rs`（文案目录旁），含 `Timeout / Cancelled / AgentBusy /
-  RateLimited / Auth / Unreachable / ServiceUnavailable / Generic`；
-- `ExecutionError::user_receipt(locale) -> (&'static str, String)` —— code 不变（wire 兼容），
-  文案改由 `i18n::t` 出；
-- `i18n::format_execution_error(text, locale)` 收缩为 `classify_error_text` + `t` 两行；
+- `ReceiptKind` 落在 `i18n.rs`（文案目录旁），7 桶：`Timeout / Cancelled / AgentBusy /
+  RateLimited / Auth / Unreachable / Failed`。`ReceiptKind::code()` 是 wire code 的唯一源；
+  除**新增**的 `AUTH` 外拼写全部不变（客户端可 switch，属 API）；
+- `ExecutionError::user_receipt(locale) -> (&'static str, String)` 与
+  `receipt_kind() -> ReceiptKind` 是仅有的两个出口，文案由 `i18n::t(Msg::ErrReceipt(kind))` 出；
+- `i18n::format_execution_error` 的唯一消费方（`inbound_router/executor.rs`）改走 typed
+  `user_receipt`，该函数与其专用的 `truncate_error` 随即**整体删除**——它在把 typed 错误
+  `to_string()` 之后重新按字符串分类，还回显最多 200 字原始内部链；
 - **删除** `execution_engine/mod.rs` 的 `classify_failed` / `is_rate_limited` / `is_unreachable`。
 
 locale 来源：`execute.rs` 从 `request.metadata["locale"]`（inbound_router 已 stamp）取，
@@ -160,7 +181,7 @@ locale 来源：`execute.rs` 从 `request.metadata["locale"]`（inbound_router �
 | `busy_queue_wake_fallback_secs` | 30 | `BUSY_POLL_MS`（2 s 轮询） |
 | `max_pending_steering` | 16 | `MAX_PENDING_STEERING` |
 
-前三项经 `BusyQueueConfig` 流入 `deliver_when_free`；`max_pending_steering` 走既有
+前三项经 `BusyQueueConfig` 流入 `deliver_with_ticket`；`max_pending_steering` 走既有
 `ExecutionEngineConfig` → `gate.rs` → `try_inject_steering` 通路。
 
 ### 3.6 可观测性（Q4）
@@ -173,23 +194,28 @@ locale 来源：`execute.rs` 从 `request.metadata["locale"]`（inbound_router �
 
 ```
 inbound / Panel 消息到达
-  → busy_queue::register(session, cfg)      ← 同步、在 spawn 之前（修 Q1 到达序）
-  → spawn { deliver_when_free(guard, cfg, attempt_fn) }
-       ├ is_front → attempt → Ok            → Delivered
-       ├ 车道满                              → Rejected（立即回执，语义不变）
-       ├ 超 max_wait                         → TimedOut（回执，非静默丢弃，语义不变）
-       ├ purge                               → Purged（/stop 回执）
-       └ 否则 await lane_notify ⟵ SessionRunRegistry::release / TicketGuard::drop
-/stop → busy_queue::purge(session)
-metrics → gateway.metrics.run_concurrency.busy_queue → Panel RunSlotsCard
+  → busy_queue::register(session, cap, run_id)  ← 同步、在 spawn 之前（修 Q1 到达序）
+  │    └ None（车道满）                          → Rejected（立即回执，语义不变）
+  → spawn { deliver_with_ticket(guard, cfg, attempt_fn) }
+       ├ 已被取消                                → Purged
+       ├ is_front → attempt → 跑过了              → Executed(_)（emitter 已报，调用方不再报）
+       ├ 超 max_wait                             → TimedOut（回执，非静默丢弃，语义不变）
+       └ 否则 park on Notify ⟵ SessionRunRegistry::release / TicketGuard::drop
+                                                 / purge / cancel_queued_run
+/stop        → busy_queue::purge(session)          → 整批一条回执
+chat.abort   → busy_queue::cancel_queued_run(run)  → Panel 收 RunError{CANCELLED} 关气泡
+metrics      → gateway.metrics.run_concurrency.busy_queue → Panel RunSlotsCard
 ```
 
 ---
 
 ## 4. 错误处理
 
+- **谁报错**：`DeliveryOutcome` 是单一源 —— `Executed(_)` 已由 run 的 emitter 报过，
+  调用方只记日志；`Rejected` / `TimedOut` 归调用方。
 - **车道满 / 超时**：行为与现状一致（用户可见回执，非静默丢弃），只是阈值改为可配。
-- **purge**：独立 `Purged` 出口，回执而非错误。
+- **purge / abort**：独立 `Purged` 出口，回执而非错误。channel 侧静默（`/stop` 整批一条回执），
+  Panel 侧额外发一帧 `RunError{CANCELLED}` —— 它的气泡按 `run_id` 记账，没有终局帧就一直转。
 - **Notify 漏发**：兜底 tick 兜住；`is_front` 的 fail-open 语义不变（未知票 → 允许投递）。
 - **panic**：`TicketGuard::Drop` 保持唯一出口，尸票不可能留在车道（既有回归测试保留）。
 - **locale 缺失**：回退 Zh，与现状字节一致。
@@ -203,6 +229,7 @@ metrics → gateway.metrics.run_concurrency.busy_queue → Panel RunSlotsCard
 | `register` 先于 spawn → 到达序 | Q1 |
 | notify 唤醒（不等兜底 tick） | Q2 |
 | `purge` 清空车道并唤醒全部等待者 | Q3 |
+| `cancel_queued_run` 只命中目标 ticket，siblings 不动 | Q3 |
 | `panic_while_holding_ticket_releases_the_lane`（保留） | 回归 |
 | cap 拒最新 / 释放后重新准入（保留，改用配置值） | 3.5 |
 | `busy_queue` 深度快照 | Q4 |
@@ -211,15 +238,22 @@ metrics → gateway.metrics.run_concurrency.busy_queue → Panel RunSlotsCard
 | `plan_instant` 在 `RunComplete` 后复位（第二个 run 兜底可用） | F2 |
 | origin fan-out：inner 先收到 `RunComplete` | F1 |
 | `user_receipt`：401 → AUTH / En locale / `disconnection_policy` 不误命中 | F5 |
+| `DeliveryOutcome::user_error`：只有 never-ran 的出口欠用户回执 | F6 |
 
 ---
 
-## 6. 熵减清单（必须同步删除）
+## 6. 熵减清单（已同步删除）
 
-- `src/gateway/inbound_router/busy_queue.rs`（整文件，上提后原地删）
+- `src/gateway/inbound_router/busy_queue.rs`（整文件，上提后原地删，不留 re-export 影子）
 - `execution_engine/mod.rs`：`classify_failed` / `is_rate_limited` / `is_unreachable`
-- `executor.rs`：`BUSY_POLL_MS` / `BUSY_QUEUE_MAX_WAIT_SECS` 常量与轮询循环
-- `busy_queue` 中被 `TicketGuard` 完全取代的自由函数（若无剩余调用方）
+  （含 `msg.contains("connection")` 的 `disconnection_policy` 误命中坑）
+- `i18n.rs`：`format_execution_error`（typed 错误被 `to_string()` 后重新按字符串分类的
+  第二套分类器，唯一消费方已改走 `user_receipt`）+ 其专用的 `truncate_error`
+  （它把最多 200 字原始内部链回显给 channel）
+- `i18n::Msg` 的 `ErrRateLimit` / `ErrAuth` / `ErrTimeout` / `ErrNetwork` /
+  `ErrServiceUnavailable` / `ErrGeneric{detail}` 六个变体 → 收敛为单个
+  `ErrReceipt(ReceiptKind)`
+- `executor.rs`：`BUSY_POLL_MS` / `BUSY_QUEUE_MAX_WAIT_SECS` 常量与整个轮询循环
 
 ---
 

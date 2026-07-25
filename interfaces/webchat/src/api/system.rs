@@ -63,6 +63,27 @@ pub struct RunConcurrencyMetrics {
     /// Backend session keys with a run currently in flight.
     #[serde(default)]
     pub running_sessions: Vec<String>,
+    /// Messages parked in the per-session busy wait lanes — the backlog
+    /// *behind* the run slots. Absent on servers predating the field.
+    #[serde(default)]
+    pub busy_queue: BusyQueue,
+}
+
+/// Mirror of the server-side `busy_queue::BusyQueueSnapshot`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BusyQueue {
+    #[serde(default)]
+    pub total_waiting: usize,
+    /// Deepest lane first; idle sessions omitted.
+    #[serde(default)]
+    pub per_session: Vec<SessionQueueDepth>,
+}
+
+/// One session's queued-message backlog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionQueueDepth {
+    pub session_key: String,
+    pub depth: usize,
 }
 
 /// Mirror of server-side `ConcurrencySnapshot` (`execution_engine/concurrency.rs`).

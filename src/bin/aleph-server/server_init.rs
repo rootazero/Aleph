@@ -14,6 +14,103 @@ use alephcore::gateway::{
     AgentRegistry, EventEmitter, ExecutionEngine, GatewayEventEmitter, StreamEvent,
 };
 
+/// Spawn a Panel / CLI run onto the shared per-session busy wait lane.
+///
+/// Both RPC entry points (`agent.run` and `chat.send`) route through here so
+/// the local surfaces get the same follow-up queue the inbound router gives
+/// external channels. Before this, a Panel message that could not be delivered
+/// mid-run — an attachment-bearing steer (which `try_inject_steering`
+/// deliberately defers, because a steering event has no media seam) or a
+/// steering burst at `max_pending_steering` — surfaced as an `AgentBusy` error
+/// bubble and the message was simply lost. Now it waits its turn like every
+/// other queued message.
+///
+/// Error reporting is split by whether the attempt actually ran: the engine
+/// already emits `RunError` for anything that fails *inside* `execute`, so
+/// re-emitting here would show the Panel two error bubbles for one failure.
+/// Only the queue-stage outcomes (lane full, waited out the window) are this
+/// function's to report; a purge (`/stop`) is announced once by the stop
+/// handler for the whole batch.
+fn spawn_queued_run<P, R>(
+    engine: Arc<ExecutionEngine<P, R>>,
+    run_request: alephcore::gateway::RunRequest,
+    agent: Arc<alephcore::gateway::agent_instance::AgentInstance>,
+    emitter: Arc<GatewayEventEmitter>,
+    busy_cfg: alephcore::gateway::busy_queue::BusyQueueConfig,
+    locale: alephcore::gateway::i18n::Locale,
+    label: &'static str,
+) where
+    P: alephcore::thinker::ProviderRegistry + 'static,
+    R: alephcore::executor::ToolRegistry + 'static,
+{
+    use alephcore::gateway::busy_queue::{deliver_with_ticket, register, DeliveryOutcome};
+
+    let run_id = run_request.run_id.clone();
+    let session_key = run_request.session_key.to_key_string();
+    let agent_id = run_request.session_key.agent_id().to_string();
+    // Take the FIFO ticket synchronously on the arrival path so lane order
+    // matches arrival order rather than task-scheduling order.
+    let ticket = register(&session_key, busy_cfg.max_per_session, &run_id);
+
+    tokio::spawn(async move {
+        let outcome = match ticket {
+            None => DeliveryOutcome::Rejected,
+            Some(ticket) => {
+                let mut attempt =
+                    || engine.execute(run_request.clone(), agent.clone(), emitter.clone());
+                deliver_with_ticket(ticket, busy_cfg, &mut attempt).await
+            }
+        };
+
+        // Which failure (if any) this surface still owes a terminal frame for.
+        // `DeliveryOutcome::user_error` covers the two never-ran outcomes; the
+        // extra `Purged` arm is surface-specific: a channel hears about a purge
+        // once, in the `/stop` reply, but the Panel has an in-flight bubble
+        // keyed to this `run_id` and nothing else will ever close it — without a
+        // terminal frame the user is left with a spinner they just stopped.
+        let pending_error = match outcome {
+            DeliveryOutcome::Executed(Ok(())) => {
+                tracing::info!(run_id = %run_id, "{label} completed successfully");
+                return;
+            }
+            DeliveryOutcome::Executed(Err(ref e)) => {
+                // Raw chain goes to server logs only; the engine already put a
+                // sanitized receipt on the wire (shared single source with
+                // `ExecutionError::user_receipt`).
+                tracing::error!(run_id = %run_id, error = %e, "{label} failed");
+                None
+            }
+            DeliveryOutcome::Purged => {
+                tracing::info!(run_id = %run_id, session = %session_key,
+                    "{label} dropped: an explicit stop abandoned it while it was queued");
+                Some(alephcore::gateway::execution_engine::ExecutionError::Cancelled)
+            }
+            DeliveryOutcome::Rejected | DeliveryOutcome::TimedOut => {
+                outcome.user_error(&agent_id)
+            }
+        };
+
+        let Some(e) = pending_error else {
+            return;
+        };
+        tracing::warn!(run_id = %run_id, session = %session_key, error = %e,
+            "{label} never reached the agent");
+        let (error_code, error_message) = e.user_receipt(locale);
+        let seq = emitter.next_seq();
+        if let Err(emit_err) = emitter
+            .emit(StreamEvent::RunError {
+                run_id: run_id.clone(),
+                seq,
+                error: error_message,
+                error_code: Some(error_code.to_string()),
+            })
+            .await
+        {
+            tracing::warn!("Failed to emit run error event: {}", emit_err);
+        }
+    });
+}
+
 /// Serve `WebChat` static files
 pub async fn serve_webchat(
     addr: SocketAddr,
@@ -153,11 +250,15 @@ where
     };
 
     // Create emitter for streaming events, respecting output_mode config
-    let output_mode = {
+    let (output_mode, locale, busy_cfg) = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
         let mode_str = behavior.map_or("typewriter", |b| b.output_mode.as_str());
-        alephcore::gateway::OutputMode::from_config(mode_str)
+        (
+            alephcore::gateway::OutputMode::from_config(mode_str),
+            alephcore::gateway::i18n::Locale::from_config(cfg.general.language.as_deref()),
+            alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(&cfg.execution),
+        )
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
         event_bus.clone(),
@@ -176,38 +277,17 @@ where
             }
         };
 
-    // Spawn execution task
-    let engine_clone = engine.clone();
-    let emitter_clone = emitter;
-    let run_id_clone = run_id.clone();
-    tokio::spawn(async move {
-        match engine_clone
-            .execute(run_request, agent, emitter_clone.clone())
-            .await
-        {
-            Ok(()) => {
-                tracing::info!(run_id = %run_id_clone, "Agent run completed successfully");
-            }
-            Err(e) => {
-                // Raw chain goes to server logs only; the wire gets the sanitized
-                // receipt (shared single source with ExecutionEngine::execute), so
-                // the Panel never sees the flattened internal error chain.
-                tracing::error!(run_id = %run_id_clone, error = %e, "Agent run failed");
-                let (error_code, error_message) = e.user_receipt();
-                if let Err(emit_err) = emitter_clone
-                    .emit(StreamEvent::RunError {
-                        run_id: run_id_clone.clone(),
-                        seq: 0,
-                        error: error_message,
-                        error_code: Some(error_code.to_string()),
-                    })
-                    .await
-                {
-                    tracing::warn!("Failed to emit run error event: {}", emit_err);
-                }
-            }
-        }
-    });
+    // Spawn onto the shared per-session busy wait lane (same queue the inbound
+    // router uses for channel messages).
+    spawn_queued_run(
+        engine.clone(),
+        run_request,
+        agent,
+        emitter,
+        busy_cfg,
+        locale,
+        "Agent run",
+    );
 
     // Return immediate response
     let result = AgentRunResult {
@@ -316,11 +396,15 @@ where
     };
 
     // Create emitter for streaming events, respecting output_mode config
-    let output_mode = {
+    let (output_mode, locale, busy_cfg) = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
         let mode_str = behavior.map_or("typewriter", |b| b.output_mode.as_str());
-        alephcore::gateway::OutputMode::from_config(mode_str)
+        (
+            alephcore::gateway::OutputMode::from_config(mode_str),
+            alephcore::gateway::i18n::Locale::from_config(cfg.general.language.as_deref()),
+            alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(&cfg.execution),
+        )
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
         event_bus.clone(),
@@ -389,38 +473,17 @@ where
         }
     }
 
-    // Spawn execution task
-    let engine_clone = engine.clone();
-    let emitter_clone = emitter.clone();
-    let run_id_clone = run_id.clone();
-    tokio::spawn(async move {
-        match engine_clone
-            .execute(run_request, agent, emitter_clone.clone())
-            .await
-        {
-            Ok(()) => {
-                tracing::info!(run_id = %run_id_clone, "Chat run completed successfully");
-            }
-            Err(e) => {
-                // Raw chain goes to server logs only; the wire gets the sanitized
-                // receipt (shared single source with ExecutionEngine::execute), so
-                // the Panel never sees the flattened internal error chain.
-                tracing::error!(run_id = %run_id_clone, error = %e, "Chat run failed");
-                let (error_code, error_message) = e.user_receipt();
-                if let Err(emit_err) = emitter_clone
-                    .emit(StreamEvent::RunError {
-                        run_id: run_id_clone.clone(),
-                        seq: 0,
-                        error: error_message,
-                        error_code: Some(error_code.to_string()),
-                    })
-                    .await
-                {
-                    tracing::warn!("Failed to emit chat run error event: {}", emit_err);
-                }
-            }
-        }
-    });
+    // Spawn onto the shared per-session busy wait lane (same queue the inbound
+    // router uses for channel messages).
+    spawn_queued_run(
+        engine.clone(),
+        run_request,
+        agent,
+        emitter,
+        busy_cfg,
+        locale,
+        "Chat run",
+    );
 
     // Auto-topic generation is now handled by ExecutionEngine on first message
 

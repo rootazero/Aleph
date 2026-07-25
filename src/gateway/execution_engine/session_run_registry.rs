@@ -89,6 +89,13 @@ impl SessionRunRegistry {
             }
         };
         if changed {
+            // Release is the ONE place a session's claim is actually given up,
+            // so it is the authoritative "a queued message may try now" edge.
+            // Signalling here is what lets the busy wait lane park on a wake
+            // instead of re-attempting on a 2-second timer (codex
+            // `InputQueueActivity` parity). Cheap: a session with no waiters
+            // does nothing.
+            crate::gateway::busy_queue::notify_slot_free(&key);
             self.broadcast_change();
         }
     }

@@ -21,6 +21,14 @@ impl Locale {
             _ => Self::Zh, // default to Chinese (matches current behavior)
         }
     }
+
+    /// Resolve from a run's `metadata["locale"]` stamp (written by the inbound
+    /// router from `[general] language`). Absent on Panel / CLI / cron runs →
+    /// `Zh`, byte-identical to the prior hardcoded behaviour.
+    #[must_use]
+    pub fn from_run_metadata(metadata: &std::collections::HashMap<String, String>) -> Self {
+        Self::from_config(metadata.get("locale").map(String::as_str))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -36,16 +44,117 @@ pub enum Msg<'a> {
     RunStopped,
     NoActiveRun,
 
-    // --- execution errors ---
-    ErrRateLimit,
-    ErrAuth,
-    ErrTimeout,
-    ErrNetwork,
-    ErrServiceUnavailable,
-    ErrGeneric { detail: &'a str },
+    // --- execution errors (single bucket set, see `ReceiptKind`) ---
+    ErrReceipt(ReceiptKind),
+
+    // --- busy queue (§4.8) ---
+    QueuedMessagesDropped { count: usize },
 
     // --- topic generation prompt (sent to LLM, not shown to user) ---
     TopicGenerationPrompt { conversation: &'a str },
+}
+
+/// The user-facing classification of a failed run — the **single** bucket set
+/// behind every error the gateway shows a human.
+///
+/// Two producers feed it and they must never drift again:
+/// * [`crate::gateway::execution_engine::ExecutionError::receipt_kind`] maps the
+///   typed variant directly, and
+/// * [`classify_error_text`] recovers a bucket from the one string-carrying
+///   variant (`ExecutionError::Failed`), whose payload comes from the dispatch
+///   loop *after* failover is exhausted.
+///
+/// Before this existed the engine carried its own hardcoded-Chinese classifier
+/// (`classify_failed` / `is_rate_limited` / `is_unreachable`) while this module
+/// carried a second, localized one — so the Panel showed Chinese under
+/// `language = "en"`, an expired API key was reported as "just retry" (the
+/// engine had no auth bucket), and the engine's naive `contains("connection")`
+/// matched `disconnection_policy` (exactly the foot-gun [`contains_phrase`]
+/// was written to avoid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptKind {
+    /// The run exceeded its wall-clock budget.
+    Timeout,
+    /// The user (or an `Interrupt`-mode message) stopped the run.
+    Cancelled,
+    /// The session already has an in-flight run and the message could not be
+    /// steered or queued.
+    AgentBusy,
+    /// Every provider in the chain reported rate limiting.
+    RateLimited,
+    /// Credential rejected (401 / invalid API key) — retrying will not help.
+    Auth,
+    /// Network / upstream outage across the whole provider chain.
+    Unreachable,
+    /// Anything else. Deliberately opaque: the raw chain goes to the server
+    /// log, never onto the wire (hermes GAP-5).
+    Failed,
+}
+
+impl ReceiptKind {
+    /// Stable wire code carried on `StreamEvent::RunError.error_code`.
+    /// Clients may switch on it, so these strings are API — do not rename.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Timeout => "TIMEOUT",
+            Self::Cancelled => "CANCELLED",
+            Self::AgentBusy => "AGENT_BUSY",
+            Self::RateLimited => "RATE_LIMITED",
+            Self::Auth => "AUTH",
+            Self::Unreachable => "PROVIDERS_UNREACHABLE",
+            Self::Failed => "FAILED",
+        }
+    }
+}
+
+/// Recover a [`ReceiptKind`] from a failure string.
+///
+/// Used for `ExecutionError::Failed`, whose payload originates in the gateway
+/// dispatch loop *after* failover and retries are exhausted — so a rate-limit
+/// or network signature here means every provider/model in the chain was tried
+/// and the failure is genuinely transient.
+///
+/// Matching is whole-token via [`contains_phrase`]; substring matching would
+/// let `disconnection_policy` read as a network outage.
+#[must_use]
+pub fn classify_error_text(error: &str) -> ReceiptKind {
+    let lower = error.to_lowercase();
+    if contains_phrase(
+        &lower,
+        &[
+            "429",
+            "too many requests",
+            "rate limit",
+            "rate_limit",
+            "usage_limit",
+            "receiving too many requests",
+        ],
+    ) {
+        ReceiptKind::RateLimited
+    } else if contains_phrase(&lower, &["401", "403", "unauthorized", "invalid api key"]) {
+        ReceiptKind::Auth
+    } else if contains_phrase(&lower, &["timeout", "timed out"]) {
+        ReceiptKind::Timeout
+    } else if contains_phrase(
+        &lower,
+        &[
+            "network error",
+            "error sending request",
+            "connection",
+            "connection refused",
+            "dns",
+            "500",
+            "502",
+            "503",
+            "internal server error",
+            "service unavailable",
+        ],
+    ) {
+        ReceiptKind::Unreachable
+    } else {
+        ReceiptKind::Failed
+    }
 }
 
 /// Translate a message key to the target locale.
@@ -73,34 +182,62 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // ============================================================
         // Execution errors
         // ============================================================
-        (Msg::ErrRateLimit, Locale::Zh) => "⚠️ AI 服务调用配额已用尽，请稍后再试。".into(),
-        (Msg::ErrRateLimit, Locale::En) => {
-            "⚠️ AI service rate limit reached. Please try again later.".into()
+        (Msg::ErrReceipt(ReceiptKind::Timeout), Locale::Zh) => {
+            "任务超时未完成。请重试，或把任务拆小一些再发给我。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::Timeout), Locale::En) => {
+            "The task timed out. Retry, or break it into smaller pieces.".into()
         }
 
-        (Msg::ErrAuth, Locale::Zh) => "⚠️ AI 服务认证失败，请检查 API Key 配置。".into(),
-        (Msg::ErrAuth, Locale::En) => {
-            "⚠️ AI service authentication failed. Please check your API key.".into()
+        (Msg::ErrReceipt(ReceiptKind::Cancelled), Locale::Zh) => "任务已取消。".into(),
+        (Msg::ErrReceipt(ReceiptKind::Cancelled), Locale::En) => "Task cancelled.".into(),
+
+        (Msg::ErrReceipt(ReceiptKind::AgentBusy), Locale::Zh) => {
+            "当前 Agent 正忙，请稍后再试。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::AgentBusy), Locale::En) => {
+            "The agent is busy right now. Please try again shortly.".into()
         }
 
-        (Msg::ErrTimeout, Locale::Zh) => "⚠️ AI 服务响应超时，请稍后重试。".into(),
-        (Msg::ErrTimeout, Locale::En) => "⚠️ AI service timed out. Please try again.".into(),
-
-        (Msg::ErrNetwork, Locale::Zh) => "⚠️ 网络连接异常，请检查网络后重试。".into(),
-        (Msg::ErrNetwork, Locale::En) => {
-            "⚠️ Network error. Please check your connection and try again.".into()
+        (Msg::ErrReceipt(ReceiptKind::RateLimited), Locale::Zh) => {
+            "模型服务商当前限流（请求过于频繁），且备用通道也已用尽。稍等片刻后重试即可。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::RateLimited), Locale::En) => {
+            "The model provider is rate limiting and every fallback channel is exhausted. \
+             Wait a moment and retry."
+                .into()
         }
 
-        (Msg::ErrServiceUnavailable, Locale::Zh) => "⚠️ AI 服务暂时不可用，请稍后重试。".into(),
-        (Msg::ErrServiceUnavailable, Locale::En) => {
-            "⚠️ AI service temporarily unavailable. Please try again later.".into()
+        (Msg::ErrReceipt(ReceiptKind::Auth), Locale::Zh) => {
+            "模型服务认证失败（API Key 无效或已过期），重试不会有帮助。请检查 API Key 配置。".into()
+        }
+        (Msg::ErrReceipt(ReceiptKind::Auth), Locale::En) => {
+            "Model service authentication failed (invalid or expired API key) — retrying \
+             will not help. Please check your API key."
+                .into()
         }
 
-        (Msg::ErrGeneric { detail }, Locale::Zh) => {
-            format!("⚠️ 处理消息时出错：{detail}")
+        (Msg::ErrReceipt(ReceiptKind::Unreachable), Locale::Zh) => {
+            "无法连接到模型 / 搜索服务（网络不可达或服务暂时中断），所有可用通道均已尝试。\
+             请检查网络后重试。"
+                .into()
         }
-        (Msg::ErrGeneric { detail }, Locale::En) => {
-            format!("⚠️ Error processing message: {detail}")
+        (Msg::ErrReceipt(ReceiptKind::Unreachable), Locale::En) => {
+            "Could not reach the model / search service (network unreachable or upstream \
+             outage); every available channel was tried. Check your connection and retry."
+                .into()
+        }
+
+        (Msg::ErrReceipt(ReceiptKind::Failed), Locale::Zh) => "任务执行失败，请重试。".into(),
+        (Msg::ErrReceipt(ReceiptKind::Failed), Locale::En) => {
+            "The task failed. Please try again.".into()
+        }
+
+        (Msg::QueuedMessagesDropped { count }, Locale::Zh) => {
+            format!("已随本次停止取消 {count} 条排队中的消息。")
+        }
+        (Msg::QueuedMessagesDropped { count }, Locale::En) => {
+            format!("Also dropped {count} queued message(s) waiting on this session.")
         }
 
         // ============================================================
@@ -272,46 +409,6 @@ pub fn render_loop_halt(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Convenience: classify execution errors
-// ---------------------------------------------------------------------------
-
-/// Classify a raw execution error string into the appropriate i18n message key,
-/// then translate it.
-///
-/// Substring matches use word boundaries (`\b…\b`) or whole-token equality so a
-/// stray occurrence inside another word (e.g. an HTTP `429` echoing out of a
-/// request id, or "connection" inside "disconnection_policy") does not
-/// misclassify the error. This is the kind of regex/keyword classifier R8
-/// flags — it is intentionally narrow (HTTP-status + a few provider
-/// idioms) and the fallback is `ErrGeneric`, so any unmodelled error
-/// degrades to the safe "show the raw message" path instead of a wrong label.
-#[must_use]
-pub fn format_execution_error(error: &str, locale: Locale) -> String {
-    let lower = error.to_lowercase();
-
-    let msg = if contains_phrase(&lower, &["429", "too many requests", "rate limit", "usage_limit"])
-    {
-        Msg::ErrRateLimit
-    } else if contains_phrase(&lower, &["401", "unauthorized", "invalid api key"]) {
-        Msg::ErrAuth
-    } else if contains_phrase(&lower, &["timeout", "timed out"]) {
-        Msg::ErrTimeout
-    } else if contains_phrase(&lower, &["connection refused", "network", "dns "]) {
-        Msg::ErrNetwork
-    } else if contains_phrase(
-        &lower,
-        &["500", "internal server error", "503", "service unavailable"],
-    ) {
-        Msg::ErrServiceUnavailable
-    } else {
-        let detail = truncate_error(error, 200);
-        return t(Msg::ErrGeneric { detail }, locale);
-    };
-
-    t(msg, locale)
-}
-
 /// True if `lower` contains ANY of the supplied phrases as a whole-token
 /// substring — i.e. preceded by a non-alphanumeric (or start of string) AND
 /// followed by a non-alphanumeric (or end of string). This avoids the
@@ -338,15 +435,6 @@ fn contains_phrase(lower: &str, phrases: &[&str]) -> bool {
         }
         false
     })
-}
-
-/// Truncate error message at a char boundary for display.
-fn truncate_error(s: &str, max_chars: usize) -> &str {
-    if s.chars().count() <= max_chars {
-        return s;
-    }
-    let end = s.char_indices().nth(max_chars).map_or(s.len(), |(i, _)| i);
-    &s[..end]
 }
 
 #[cfg(test)]
@@ -497,14 +585,79 @@ mod tests {
     }
 
     #[test]
-    fn test_error_classification() {
-        let msg = format_execution_error("429 Too Many Requests", Locale::En);
-        assert!(msg.contains("rate limit"));
+    fn classify_buckets_common_failure_signatures() {
+        assert_eq!(
+            classify_error_text("429 Too Many Requests"),
+            ReceiptKind::RateLimited
+        );
+        assert_eq!(
+            classify_error_text("llm error: 401 Unauthorized"),
+            ReceiptKind::Auth
+        );
+        assert_eq!(
+            classify_error_text("connection refused"),
+            ReceiptKind::Unreachable
+        );
+        assert_eq!(
+            classify_error_text("request timed out"),
+            ReceiptKind::Timeout
+        );
+        assert_eq!(
+            classify_error_text("something nobody modelled"),
+            ReceiptKind::Failed
+        );
+    }
 
-        let msg = format_execution_error("429 Too Many Requests", Locale::Zh);
-        assert!(msg.contains("配额"));
+    /// Regression: the engine's old `msg.contains("connection")` classifier
+    /// read `disconnection_policy` as a network outage. Whole-token matching
+    /// is the whole reason `contains_phrase` exists.
+    #[test]
+    fn classify_does_not_match_inside_longer_words() {
+        assert_eq!(
+            classify_error_text("disconnection_policy rejected the plan"),
+            ReceiptKind::Failed
+        );
+        assert_eq!(
+            classify_error_text("run 4291 aborted"),
+            ReceiptKind::Failed,
+            "a request id containing 429 must not read as rate limiting"
+        );
+    }
 
-        let msg = format_execution_error("connection refused", Locale::En);
-        assert!(msg.contains("Network"));
+    /// Every bucket renders in both locales, and the wire codes stay stable.
+    #[test]
+    fn receipts_render_in_both_locales_with_stable_codes() {
+        for kind in [
+            ReceiptKind::Timeout,
+            ReceiptKind::Cancelled,
+            ReceiptKind::AgentBusy,
+            ReceiptKind::RateLimited,
+            ReceiptKind::Auth,
+            ReceiptKind::Unreachable,
+            ReceiptKind::Failed,
+        ] {
+            for locale in [Locale::Zh, Locale::En] {
+                assert!(
+                    !t(Msg::ErrReceipt(kind), locale).trim().is_empty(),
+                    "{kind:?}/{locale:?} has no message"
+                );
+            }
+            assert!(!kind.code().is_empty());
+        }
+        assert_eq!(ReceiptKind::Auth.code(), "AUTH");
+        assert_eq!(
+            ReceiptKind::Unreachable.code(),
+            "PROVIDERS_UNREACHABLE",
+            "wire code is client-visible API"
+        );
+    }
+
+    /// An English-locale deployment must not receive Chinese error text — the
+    /// exact regression the pre-unification `user_receipt` had (hardcoded zh).
+    #[test]
+    fn english_locale_receipts_are_english() {
+        let msg = t(Msg::ErrReceipt(ReceiptKind::Auth), Locale::En);
+        assert!(msg.contains("API key"), "{msg}");
+        assert!(!msg.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
     }
 }

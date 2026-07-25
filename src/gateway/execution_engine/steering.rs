@@ -134,13 +134,17 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
     format!("{RECONCILE_PREAMBLE}{text}")
 }
 
-/// Upper bound on un-consumed steering messages a single run may accumulate
-/// before the gateway applies backpressure (`OpenSquilla` `max_pending_per_session`
-/// / `OpenClaw` FIFO-cap parity). A flooding channel that keeps sending while the
-/// agent is mid-loop would otherwise append unbounded `UserMessage` events to the
-/// live log, bloating the very next prompt. Past the cap the injection is
-/// rejected so the inbound router's FIFO busy queue redelivers the message once
-/// the burst drains — backpressure, never a drop.
+/// Default upper bound on un-consumed steering messages a single run may
+/// accumulate before the gateway applies backpressure (`OpenSquilla`
+/// `max_pending_per_session` / `OpenClaw` FIFO-cap parity). A flooding channel
+/// that keeps sending while the agent is mid-loop would otherwise append
+/// unbounded `UserMessage` events to the live log, bloating the very next
+/// prompt. Past the cap the injection is rejected so the busy wait lane
+/// redelivers the message once the burst drains — backpressure, never a drop.
+///
+/// This constant is the single source for the `[execution] max_pending_steering`
+/// default (see `ExecutionEngineConfig::max_pending_steering`); the effective
+/// bound is the configured one.
 pub(super) const MAX_PENDING_STEERING: usize = 16;
 
 /// Count the non-synthetic user messages sitting *after* the last assistant
@@ -300,6 +304,7 @@ pub(super) async fn build_steering_rescue_request(
 /// is never dropped.
 pub(super) async fn try_inject_steering(
     enabled: bool,
+    max_pending: usize,
     active_runs: &RwLock<HashMap<String, ActiveRun>>,
     orchestrator: &OnceLock<Arc<Orchestrator>>,
     request: &RunRequest,
@@ -359,12 +364,13 @@ pub(super) async fn try_inject_steering(
     };
 
     // Bound: cap the un-consumed steering burst. Past the cap, reject so the
-    // inbound router's FIFO busy queue redelivers once the loop drains the
-    // burst or goes idle — backpressure against a flooding channel, not a drop.
-    if pending >= MAX_PENDING_STEERING {
+    // busy wait lane redelivers once the loop drains the burst or goes idle —
+    // backpressure against a flooding channel, not a drop.
+    if pending >= max_pending {
         tracing::warn!(
             session = %request.session_key.to_key_string(),
             pending,
+            cap = max_pending,
             "mid-loop steering: pending burst at cap; deferring to busy-queue backpressure",
         );
         return false;
@@ -705,5 +711,20 @@ mod tests {
         }
         assert_eq!(count_pending_steering(&events), MAX_PENDING_STEERING);
         assert!(count_pending_steering(&events) >= MAX_PENDING_STEERING);
+    }
+
+    /// The `[execution] max_pending_steering` TOML default and the engine's own
+    /// default must agree — they live in different layers (config crate vs
+    /// gateway) and a silent drift would make the documented default a lie.
+    #[test]
+    fn config_default_matches_the_engine_default() {
+        assert_eq!(
+            crate::config::types::execution::ExecutionConfig::default().max_pending_steering,
+            MAX_PENDING_STEERING
+        );
+        assert_eq!(
+            super::super::ExecutionEngineConfig::default().max_pending_steering,
+            MAX_PENDING_STEERING
+        );
     }
 }

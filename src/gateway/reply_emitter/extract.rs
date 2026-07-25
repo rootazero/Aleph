@@ -47,9 +47,13 @@ pub(crate) fn sanitize_final_response(text: &str) -> Option<String> {
 /// Resolution order:
 /// 1. The newest `RunComplete` whose `summary.final_response` sanitizes to
 ///    non-empty text — the authoritative terminal answer.
-/// 2. Fallback: the concatenation of every `ResponseChunk` delta, sanitized —
-///    covers runs whose terminal turn carried text only as stream chunks with
-///    no summary `final_response` (e.g. a provider that never set it).
+/// 2. Fallback: the concatenation of every **answer** `ResponseChunk` delta,
+///    sanitized — covers runs whose terminal turn carried text only as stream
+///    chunks with no summary `final_response` (e.g. a provider that never set
+///    it). `is_intermediate` chunks are excluded: those are standalone
+///    progress messages (approval prompts, scratchpad ticks) that were already
+///    delivered on their own, and folding them into the answer put e.g. an
+///    approval prompt at the head of the group-chat transcript row.
 ///
 /// Returns `None` when neither path yields non-empty text after sanitization
 /// (e.g. the last turn was a pure completion-protocol confirmation).
@@ -66,10 +70,15 @@ pub(crate) fn extract_final_response(events: &[StreamEvent]) -> Option<String> {
         }
     }
 
-    // Fallback: stitch the visible stream deltas back together in emit order.
+    // Fallback: stitch the visible answer deltas back together in emit order.
     let mut full_text = String::new();
     for event in events {
-        if let StreamEvent::ResponseChunk { delta, .. } = event {
+        if let StreamEvent::ResponseChunk {
+            delta,
+            is_intermediate: false,
+            ..
+        } = event
+        {
             full_text.push_str(delta);
         }
     }
@@ -130,6 +139,33 @@ mod tests {
         assert_eq!(
             extract_final_response(&events).as_deref(),
             Some("hello world")
+        );
+    }
+
+    /// Standalone progress messages (approval prompts, scratchpad ticks —
+    /// `approval::operator_requester` is a live producer) were already
+    /// delivered on their own. Folding them into the stitched fallback put
+    /// the approval prompt at the head of the transcript row / cron result.
+    #[test]
+    fn fallback_skips_intermediate_progress_chunks() {
+        let intermediate = StreamEvent::ResponseChunk {
+            run_id: "r".into(),
+            seq: 0,
+            delta: "[approval needed] run bash?".into(),
+            full_text: String::new(),
+            chunk_index: 0,
+            is_final: false,
+            is_intermediate: true,
+        };
+        let events = vec![
+            intermediate,
+            chunk("the "),
+            chunk("answer"),
+            run_complete(None),
+        ];
+        assert_eq!(
+            extract_final_response(&events).as_deref(),
+            Some("the answer")
         );
     }
 

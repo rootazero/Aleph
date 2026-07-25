@@ -357,6 +357,13 @@ impl AgentRunManager {
         // task, which is why the chat-window Stop button used to do nothing.
         let signalled = self.execution_adapter.cancel(run_id).await.is_ok();
 
+        // A run can also be waiting in its session's busy lane — the client has
+        // its `run_id` (both RPC handlers return one up front) but the engine
+        // has never admitted it, so `cancel` above is a miss and Stop would do
+        // nothing at all. Reaching it here is the only way to abandon a queued
+        // message by run id (`/stop` covers the whole session instead).
+        let dequeued = crate::gateway::busy_queue::cancel_queued_run(run_id);
+
         // Reflect the request in our local bookkeeping so status queries
         // report Cancelled even if the run finished between the signal and now.
         let mut runs = self.active_runs.write().await;
@@ -370,7 +377,7 @@ impl AgentRunManager {
             }
         }
 
-        signalled || was_running
+        signalled || dequeued || was_running
     }
 
     /// List active runs

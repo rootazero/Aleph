@@ -190,6 +190,7 @@ where
                     // loop picks it up at its next turn boundary (codex parity).
                     let injected = super::steering::try_inject_steering(
                         self.config.mid_turn_steering,
+                        self.config.max_pending_steering,
                         &self.active_runs,
                         self.orchestrator.as_ref(),
                         request,

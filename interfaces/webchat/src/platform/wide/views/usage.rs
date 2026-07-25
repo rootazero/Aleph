@@ -8,7 +8,7 @@
 //! (lane gauge is eventually consistent so a slow tick is safe and avoids
 //! event-bus chatter for a low-priority dashboard).
 
-use crate::api::system::{LaneOccupancy, RunConcurrency, SystemApi};
+use crate::api::system::{BusyQueue, LaneOccupancy, RunConcurrency, SystemApi};
 use crate::api::teams::{TeamSummary, TeamUsageDto, TeamsApi};
 use crate::components::ui::Card;
 use crate::context::DashboardState;
@@ -41,6 +41,8 @@ pub fn UsageView() -> impl IntoView {
     let lanes = RwSignal::new(None::<Vec<LaneOccupancy>>);
     // Run-slot concurrency gauge — global N/M + per-agent + queue depth.
     let run_slots = RwSignal::new(None::<RunConcurrency>);
+    // Backlog waiting behind the run slots (per-session busy wait lanes).
+    let busy_queue = RwSignal::new(BusyQueue::default());
 
     // Teams list + selected team + that team's usage rollup.
     let teams = RwSignal::new(Vec::<TeamSummary>::new());
@@ -53,6 +55,7 @@ pub fn UsageView() -> impl IntoView {
         if !state.is_connected.get() {
             lanes.set(None);
             run_slots.set(None);
+            busy_queue.set(BusyQueue::default());
             teams.set(Vec::new());
             team_usage.set(None);
             usage_error.set(None);
@@ -65,6 +68,7 @@ pub fn UsageView() -> impl IntoView {
             }
             if let Ok(m) = SystemApi::run_concurrency(&state).await {
                 run_slots.set(Some(m.run_concurrency));
+                busy_queue.set(m.busy_queue);
             }
             if let Ok(list) = TeamsApi::list(&state).await {
                 // Default-select the first team so the per-team panel has
@@ -111,6 +115,7 @@ pub fn UsageView() -> impl IntoView {
         leptos::task::spawn_local(async move {
             if let Ok(m) = SystemApi::run_concurrency(&state_inner).await {
                 run_slots.set(Some(m.run_concurrency));
+                busy_queue.set(m.busy_queue);
             }
         });
     });
@@ -170,7 +175,7 @@ pub fn UsageView() -> impl IntoView {
                             </Card>
                         }.into_any()
                     } else if let Some(rc) = run_slots.get() {
-                        view! { <RunSlotsCard rc=rc /> }.into_any()
+                        view! { <RunSlotsCard rc=rc bq=busy_queue.get() /> }.into_any()
                     } else {
                         view! {
                             <Card class="p-6">
@@ -268,7 +273,7 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
 }
 
 #[component]
-fn RunSlotsCard(rc: RunConcurrency) -> impl IntoView {
+fn RunSlotsCard(rc: RunConcurrency, bq: BusyQueue) -> impl IntoView {
     let i18n = use_i18n();
     let used = rc.global_in_use;
     let total_label = rc.global_total;
@@ -305,6 +310,37 @@ fn RunSlotsCard(rc: RunConcurrency) -> impl IntoView {
                     view! { <div></div> }.into_any()
                 }}
             </div>
+
+            // Busy-lane backlog: messages parked BEHIND the run slots waiting
+            // for their session to go idle. `rc.waiting` above counts runs
+            // blocked on a concurrency permit; this counts messages that have
+            // not become runs at all. Omitted entirely when nothing is queued.
+            {if bq.total_waiting == 0 {
+                view! { <div></div> }.into_any()
+            } else {
+                let rows = bq.per_session.clone();
+                view! {
+                    <div class="border-t border-border pt-3 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] uppercase tracking-wider text-text-tertiary font-bold">
+                                {t!(i18n, usage.busy_queue_backlog)}
+                            </span>
+                            <span class="text-xs font-mono text-warning">{bq.total_waiting}</span>
+                        </div>
+                        <div class="text-[10px] uppercase tracking-wider text-text-tertiary font-bold">
+                            {t!(i18n, usage.busy_queue_per_session)}
+                        </div>
+                        {rows.into_iter().map(|s| {
+                            view! {
+                                <div class="flex items-center justify-between text-xs">
+                                    <span class="font-mono text-text-primary truncate mr-2">{s.session_key}</span>
+                                    <span class="text-text-tertiary font-mono">{s.depth}</span>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                }.into_any()
+            }}
 
             // Per-agent breakdown (the memory/storage isolation boundary).
             {if per_agent.is_empty() {

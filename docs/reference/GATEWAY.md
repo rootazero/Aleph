@@ -243,6 +243,57 @@ pub trait Interface: Send + Sync {
 
 ---
 
+## Busy Input & Wait Lane
+
+**Location**: `src/gateway/busy_queue/` (lane + delivery loop + config)
+
+Exactly one run may be in flight per session (`execution_engine::SessionRunRegistry`).
+A message that arrives while its session is busy is routed by the originating
+channel's declared `BusyInputMode`:
+
+| Mode | Behaviour |
+|---|---|
+| `Steer` (default) | Injected into the live event log; the running loop consumes it at its next turn boundary. |
+| `Interrupt` | Cancels the session's run **and its delegated child runs**, then the message restarts as a fresh run via the lane. |
+| `Queue` | Leaves the running task alone; the message waits in the lane. |
+
+Anything that cannot be delivered inline joins its session's **FIFO wait lane**.
+All three surfaces share the one lane — the inbound router (channels) and both
+`aleph-server` RPC handlers (`agent.run`, `chat.send`) call
+`busy_queue::register` on the arrival path and `busy_queue::deliver_with_ticket`
+inside the spawned delivery task.
+
+Invariants worth preserving:
+
+- **Ticket is taken synchronously on the arrival path**, before the delivery task
+  is spawned. Registering inside the task makes lane order follow task
+  scheduling instead of arrival order.
+- **Waiters do not poll.** They park on a per-session `Notify` fired by
+  `SessionRunRegistry::release` (the authoritative slot-free edge) and by ticket
+  departures. `busy_queue_wake_fallback_secs` is a missed-signal safety net, not
+  the delivery latency.
+- **`TicketGuard` is the only way in or out.** Its `Drop` is load-bearing: a
+  panic while holding the front ticket would otherwise wedge the lane until
+  daemon restart.
+- **A stale or unknown ticket fails open** — the engine's gate is the real
+  authority, so the worst case is one redundant delivery attempt.
+- **Report a failure once.** `DeliveryOutcome::Executed(_)` means the run's own
+  emitter already sent a `RunError`; only the never-ran outcomes are the
+  caller's to report.
+
+Stopping has two granularities: `/stop` purges the whole session lane
+(`busy_queue::purge`, wired only in `command_handler::handle_stop` — the
+`Interrupt` mode depends on the lane to restart its own message, so
+`cancel_session` must not purge), while `chat.abort` reaches a single queued
+message by `run_id` (`busy_queue::cancel_queued_run`, wired in
+`AgentRunManager::cancel_run` — a queued run has no `active_runs` entry, so the
+engine's own cancel cannot see it).
+
+Knobs live in `[execution]`: `busy_queue_max_per_session` (32),
+`busy_queue_max_wait_secs` (1800), `busy_queue_wake_fallback_secs` (30),
+`max_pending_steering` (16). Backlog is observable via
+`gateway.metrics.run_concurrency` → `busy_queue`.
+
 ## Session Routing
 
 **Location**: `src/routing/session_key.rs`

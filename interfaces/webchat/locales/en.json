@@ -1796,6 +1796,8 @@
     "run_slots_waiting": "Queued (waiting for a slot)",
     "run_slots_per_agent": "Per-agent (memory-isolation boundary)",
     "run_slots_idle": "No runs in flight.",
+    "busy_queue_backlog": "Messages queued behind a busy session",
+    "busy_queue_per_session": "Per-session backlog",
     "connect_to_view_run_slots": "Connect to view run slots.",
     "per_team_token_usage": "Per-Team Token Usage",
     "per_team_hint": "Aggregated from execution traces. Cost intentionally not computed — multiply by your provider rate card.",

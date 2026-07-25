@@ -895,7 +895,9 @@ where
                 // internal callers; only the channel presentation changes.
                 // `ExecutionError::user_receipt` is the single source of truth,
                 // shared with the bin-crate RPC handlers (agent.run / chat.send).
-                let (error_code, error_message) = e.user_receipt();
+                let (error_code, error_message) = e.user_receipt(
+                    crate::gateway::i18n::Locale::from_run_metadata(&request.metadata),
+                );
                 if let Err(emit_err) = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),

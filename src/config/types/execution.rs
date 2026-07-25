@@ -64,6 +64,44 @@ pub struct ExecutionConfig {
     /// `SessionRunRegistry`.
     #[serde(default = "default_max_runs_per_agent")]
     pub max_runs_per_agent: usize,
+
+    /// Messages that may wait in one session's busy FIFO lane (default: 32).
+    ///
+    /// Past this the newest arrival is refused up front (`REJECT_NEWEST`), so
+    /// a flooding channel hears back immediately instead of building a deep
+    /// silent backlog. Raise it for chatty group channels; lower it to push
+    /// back sooner.
+    #[serde(default = "default_busy_queue_max_per_session")]
+    pub busy_queue_max_per_session: usize,
+
+    /// How long a queued message may wait before the sender is told delivery
+    /// failed (default: 1800 = 30 min).
+    ///
+    /// Queued channel messages are an async medium (R5), so silently dropping
+    /// a "user changed their mind" message minutes into a long run is the
+    /// worst outcome — but the wait is bounded so a wedged run can't strand
+    /// waiters forever.
+    #[serde(default = "default_busy_queue_max_wait_secs")]
+    pub busy_queue_max_wait_secs: u64,
+
+    /// Safety net between wake signals for a queued message (default: 30s).
+    ///
+    /// Waiters are woken by the engine's session-slot release, so this tick
+    /// only exists so a missed signal degrades to a slightly later delivery
+    /// instead of a wedged lane. It is NOT the delivery latency — that is
+    /// governed by the wake signal. Lower it only when debugging.
+    #[serde(default = "default_busy_queue_wake_fallback_secs")]
+    pub busy_queue_wake_fallback_secs: u64,
+
+    /// Un-consumed mid-loop steering messages one run may accumulate before
+    /// the gateway applies backpressure (default: 16).
+    ///
+    /// Past the cap an injection is refused so the busy FIFO lane redelivers
+    /// once the burst drains — backpressure, never a drop. Each pending
+    /// message lands in the running loop's next prompt, so this bounds how
+    /// much a flooding channel can inflate that prompt.
+    #[serde(default = "default_max_pending_steering")]
+    pub max_pending_steering: usize,
 }
 
 const fn default_timeout_secs() -> u64 {
@@ -86,6 +124,22 @@ const fn default_max_runs_per_agent() -> usize {
     3
 }
 
+const fn default_busy_queue_max_per_session() -> usize {
+    32
+}
+
+const fn default_busy_queue_max_wait_secs() -> u64 {
+    1800
+}
+
+const fn default_busy_queue_wake_fallback_secs() -> u64 {
+    30
+}
+
+const fn default_max_pending_steering() -> usize {
+    16
+}
+
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
@@ -96,6 +150,10 @@ impl Default for ExecutionConfig {
             mid_turn_steering: default_mid_turn_steering(),
             max_runs_global: default_max_runs_global(),
             max_runs_per_agent: default_max_runs_per_agent(),
+            busy_queue_max_per_session: default_busy_queue_max_per_session(),
+            busy_queue_max_wait_secs: default_busy_queue_max_wait_secs(),
+            busy_queue_wake_fallback_secs: default_busy_queue_wake_fallback_secs(),
+            max_pending_steering: default_max_pending_steering(),
         }
     }
 }
@@ -134,6 +192,27 @@ mod tests {
         // backward-compatible with TOML files predating these knobs.
         assert_eq!(parsed.max_runs_global, 8);
         assert_eq!(parsed.max_runs_per_agent, 3);
+        // Absent busy-queue / steering knobs keep the values that used to be
+        // hardcoded constants — zero drift for TOML files predating them.
+        assert_eq!(parsed.busy_queue_max_per_session, 32);
+        assert_eq!(parsed.busy_queue_max_wait_secs, 1800);
+        assert_eq!(parsed.busy_queue_wake_fallback_secs, 30);
+        assert_eq!(parsed.max_pending_steering, 16);
+    }
+
+    #[test]
+    fn busy_queue_knobs_are_operator_overridable() {
+        let parsed: ExecutionConfig = toml::from_str(
+            "busy_queue_max_per_session = 8\n\
+             busy_queue_max_wait_secs = 120\n\
+             max_pending_steering = 4\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.busy_queue_max_per_session, 8);
+        assert_eq!(parsed.busy_queue_max_wait_secs, 120);
+        assert_eq!(parsed.max_pending_steering, 4);
+        // Unset sibling still falls back to its default.
+        assert_eq!(parsed.busy_queue_wake_fallback_secs, 30);
     }
 
     #[test]

@@ -92,6 +92,7 @@ pub mod reply_emitter;
 pub mod routing_config;
 
 pub mod agent_env;
+pub mod busy_queue;
 pub mod caller_identity;
 pub mod context;
 pub mod event_scope;

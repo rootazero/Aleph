@@ -390,116 +390,89 @@ impl InboundMessageRouter {
             run_id
         );
 
-        // Spawn the execution task (non-blocking)
-        // When the session is busy, hold a per-session FIFO ticket and poll until
-        // the slot frees instead of surfacing the error to the user. The FIFO
-        // gate (see `busy_queue`) keeps bursts delivering in arrival order —
-        // the old per-message exponential back-off let a later message wake
-        // first and grab the freed slot, and dropped the message entirely
-        // after ~76 s even though the run it was waiting on was still going.
+        // Busy lane is keyed by SESSION (matches the engine's per-session
+        // `SessionRunRegistry` gate). Two sessions of the same agent get
+        // independent lanes and run in parallel; only same-session messages
+        // serialize FIFO.
+        let session_key = request.session_key.to_key_string();
+        let agent_id_for_busy = request.session_key.agent_id().to_string();
+        let busy_cfg = self.busy_queue_config().await;
+
+        // Take the FIFO ticket HERE — synchronously, on the arrival path —
+        // rather than inside the spawned task. Registering after the spawn made
+        // lane order depend on task scheduling, so two messages sent a
+        // millisecond apart could enqueue inverted, defeating the arrival-order
+        // guarantee the lane exists to provide.
+        let ticket = crate::gateway::busy_queue::register(
+            &session_key,
+            busy_cfg.max_per_session,
+            &request.run_id,
+        );
+
+        // Spawn the delivery task (non-blocking). While the session is busy the
+        // waiter parks on the lane's wake signal — fired by the engine when the
+        // session's run slot frees — instead of polling, and only the front
+        // ticket attempts delivery, so bursts deliver in arrival order.
         let error_channel_registry = self.channel_registry.clone();
         let error_reply_route = ctx.reply_route.clone();
         let error_app_config = self.app_config.clone();
         tokio::spawn(async move {
-            // How often a waiting message re-checks the busy agent.
-            const BUSY_POLL_MS: u64 = 2000;
-            // How long a message may wait in the FIFO lane before the user is
-            // told delivery failed. Generous on purpose: queued channel
-            // messages are an async medium (R5), and silently dropping a
-            // "user changed their mind" message minutes into a long run is
-            // the worst outcome. Bounded so a wedged run can't strand
-            // waiters forever.
-            const BUSY_QUEUE_MAX_WAIT_SECS: u64 = 1800;
+            use crate::gateway::busy_queue::{deliver_with_ticket, DeliveryOutcome};
 
-            use crate::gateway::execution_engine::ExecutionError;
-
-            // Busy lane is keyed by SESSION (matches the engine's per-session
-            // SessionRunRegistry gate). Two sessions of the same agent get
-            // independent lanes and run in parallel; only same-session messages
-            // serialize FIFO. The AgentBusy error still reports the agent id.
-            let session_key = request.session_key.to_key_string();
-            let agent_id = request.session_key.agent_id().to_string();
-            let deadline = tokio::time::Instant::now()
-                + tokio::time::Duration::from_secs(BUSY_QUEUE_MAX_WAIT_SECS);
-
-            // Join the per-session FIFO lane *before* the first attempt — not on
-            // first busy — so a brand-new message can never jump ahead of
-            // already-waiting siblings in the window between the slot freeing
-            // and the front waiter's next poll. With no contention the lane is
-            // just [self] and the first attempt runs immediately.
-            let final_err = match super::busy_queue::register(&session_key) {
+            let outcome = match ticket {
                 // Lane full — reject newest immediately so the sender hears
-                // back now, not after the 30-minute deadline.
-                None => Some(ExecutionError::AgentBusy(agent_id.clone())),
-                // The guard is RAII: dropped on every exit from this arm —
-                // including a panic inside the adapter — so a dead waiter can
-                // never leave a corpse ticket wedging the lane (mirrors the
-                // engine's `RunSlot` session claim).
+                // back now, not after the whole wait window.
+                None => DeliveryOutcome::Rejected,
+                // The guard is RAII: dropped on every exit — including a panic
+                // inside the adapter — so a dead waiter can never leave a
+                // corpse ticket wedging the lane (mirrors the engine's
+                // `RunSlot` session claim).
                 Some(ticket) => {
-                    let mut last_busy: Option<ExecutionError> = None;
-                    loop {
-                        // FIFO gate: only the front ticket attempts delivery;
-                        // the rest poll cheaply behind it so arrival order is
-                        // preserved when the slot frees.
-                        if ticket.is_front() {
-                            match execution_adapter
-                                .execute(request.clone(), agent.clone(), emitter.clone())
-                                .await
-                            {
-                                Ok(()) => break None,
-                                Err(e @ ExecutionError::AgentBusy(_)) => {
-                                    if last_busy.is_none() {
-                                        tracing::info!(
-                                            run_id = %run_id,
-                                            session = %session_key,
-                                            ticket = ticket.id(),
-                                            "Agent busy; message queued for FIFO delivery"
-                                        );
-                                    }
-                                    last_busy = Some(e);
-                                }
-                                Err(e) => break Some(e),
-                            }
-                        }
-
-                        if tokio::time::Instant::now() >= deadline {
-                            // Waited out the whole window — surface the last
-                            // busy error through the normal feedback path. A
-                            // gated waiter may never have executed at all, so
-                            // synthesize the busy error in that case.
-                            break Some(
-                                last_busy
-                                    .unwrap_or_else(|| ExecutionError::AgentBusy(agent_id.clone())),
-                            );
-                        }
-                        tokio::time::sleep(tokio::time::Duration::from_millis(BUSY_POLL_MS)).await;
-                    }
+                    let mut attempt = || {
+                        execution_adapter.execute(request.clone(), agent.clone(), emitter.clone())
+                    };
+                    deliver_with_ticket(ticket, busy_cfg, &mut attempt).await
                 }
             };
 
-            if let Some(e) = final_err {
+            // An attempt that actually ran already reported its own failure to
+            // this channel through the run's `ReplyEmitter` (`RunError` →
+            // `send_error`). Reporting again here sent the user TWO messages
+            // for one failure, so only queue-stage outcomes are ours to voice.
+            if let DeliveryOutcome::Executed(Err(ref e)) = outcome {
                 error!("Agent execution failed (run_id: {}): {}", run_id, e);
+            }
+            let Some(e) = outcome.user_error(&agent_id_for_busy) else {
+                return;
+            };
+            error!(
+                "Message never reached the agent (run_id: {}): {}",
+                run_id, e
+            );
 
-                // Resolve user locale from config
-                let locale = if let Some(ref cfg) = error_app_config {
-                    let cfg = cfg.read().await;
-                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
-                } else {
-                    crate::gateway::i18n::Locale::Zh
-                };
+            // Resolve user locale from config
+            let locale = if let Some(ref cfg) = error_app_config {
+                let cfg = cfg.read().await;
+                crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
+            } else {
+                crate::gateway::i18n::Locale::Zh
+            };
 
-                // Send error feedback to user so they know what happened
-                let user_msg = crate::gateway::i18n::format_execution_error(&e.to_string(), locale);
-                let reply = crate::gateway::channel::OutboundMessage::text(
-                    error_reply_route.conversation_id.as_str(),
-                    &user_msg,
-                );
-                if let Err(send_err) = error_channel_registry
-                    .send(&error_reply_route.channel_id, reply)
-                    .await
-                {
-                    error!("Failed to send error reply: {}", send_err);
-                }
+            // Routes through the SAME typed receipt the Panel/engine paths use
+            // (`ExecutionError::user_receipt`) — this site used to stringify the
+            // typed error and re-classify it with a second, subtly different
+            // keyword table, which also echoed up to 200 chars of the raw
+            // internal chain back to the channel.
+            let (_code, user_msg) = e.user_receipt(locale);
+            let reply = crate::gateway::channel::OutboundMessage::text(
+                error_reply_route.conversation_id.as_str(),
+                &user_msg,
+            );
+            if let Err(send_err) = error_channel_registry
+                .send(&error_reply_route.channel_id, reply)
+                .await
+            {
+                error!("Failed to send error reply: {}", send_err);
             }
         });
 

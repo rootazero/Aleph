@@ -98,22 +98,30 @@ impl OriginFanoutEmitter {
 #[async_trait]
 impl EventEmitter for OriginFanoutEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
-        if let StreamEvent::RunComplete { ref summary, .. } = event {
-            // Mirror the *deliverable* text — same single-source sanitizer the
-            // inbound `ReplyEmitter` and the persisted-transcript path use — so
-            // the origin channel never receives raw `<think>`/completion markers
-            // (which `summary.final_response` still carries verbatim) and a
-            // pure-thinking turn delivers nothing instead of leaking noise.
-            if let Some(text) = summary
+        // Mirror the *deliverable* text — same single-source sanitizer the
+        // inbound `ReplyEmitter` and the persisted-transcript path use — so the
+        // origin channel never receives raw `<think>`/completion markers (which
+        // `summary.final_response` still carries verbatim) and a pure-thinking
+        // turn delivers nothing instead of leaking noise.
+        let mirror = match event {
+            StreamEvent::RunComplete { ref summary, .. } => summary
                 .final_response
                 .as_deref()
-                .and_then(crate::gateway::reply_emitter::sanitize_final_response)
-            {
-                self.deliver_final(&text).await;
-            }
+                .and_then(crate::gateway::reply_emitter::sanitize_final_response),
+            _ => None,
+        };
+
+        // Primary emitter FIRST (Panel sees the full stream). `emit` is
+        // serialized per run, so awaiting a cross-surface channel send before
+        // forwarding made one slow Telegram/Slack API call hold up the Panel's
+        // terminal frame — and every event behind it — for the duration of the
+        // remote round-trip. The mirror is best-effort by contract; the primary
+        // stream is not, so it goes first.
+        let forwarded = self.inner.emit(event).await;
+        if let Some(text) = mirror {
+            self.deliver_final(&text).await;
         }
-        // Always forward to the primary emitter (Panel sees the full stream).
-        self.inner.emit(event).await
+        forwarded
     }
 
     fn next_seq(&self) -> u64 {
