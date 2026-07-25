@@ -37,6 +37,20 @@ const TTS_MAX_ATTEMPTS: u32 = 2;
 /// multi-second synth itself.
 const TTS_RETRY_BACKOFF: Duration = Duration::from_millis(300);
 
+/// Distinct speech providers tried for one reply.
+///
+/// The inbound STT path has degraded local→cloud on a request failure since the
+/// BYO endpoint landed ([`SttSource::Local { fallback }`](super::inbound::SttSource));
+/// speech was the asymmetric half — one provider, then caption-only for the rest
+/// of the session. That hurts most in the common case the STT fallback was built
+/// for: the BYO local voice server isn't running, while a cloud speech provider
+/// sits configured and idle.
+///
+/// Bounded at 2 so this stays a *fallback*, not a sweep: worst-case reply
+/// latency is (per-attempt deadline × [`TTS_MAX_ATTEMPTS`]) × 2, and openclaw's
+/// lesson — attempt, then fall back, never hammer — holds at both levels.
+const TTS_MAX_PROVIDERS: usize = 2;
+
 /// Run one TTS `attempt` under a per-attempt deadline, retrying *transient*
 /// failures up to `max_attempts`.
 ///
@@ -85,57 +99,65 @@ where
     None
 }
 
+/// Ordered speech-provider candidates for one synthesis: the resolved primary
+/// first, then a single fallback hop.
+///
+/// Primary resolution is unchanged — per-channel override → global
+/// `default_speech_provider` → first registered speech provider. The fallback is
+/// the first *other* registered speech provider; `names_for_type` sorts, so the
+/// choice is deterministic rather than hash order.
+///
+/// A primary that resolves from config but isn't in the registry still occupies
+/// its slot (the caller logs the miss and moves on) — that is exactly the
+/// "configured provider failed to construct" case the hop exists for.
+fn tts_candidates(
+    voice_state: &VoiceState,
+    generation_registry: &GenerationProviderRegistry,
+    generation_config: &GenerationConfig,
+) -> Vec<String> {
+    let primary = voice_state
+        .provider
+        .clone()
+        .or_else(|| generation_config.default_speech_provider.clone())
+        .or_else(|| {
+            generation_registry
+                .first_for_type(GenerationType::Speech)
+                .map(|(name, _)| name)
+        });
+    let mut out: Vec<String> = primary.into_iter().collect();
+    for name in generation_registry.names_for_type(GenerationType::Speech) {
+        if out.len() >= TTS_MAX_PROVIDERS {
+            break;
+        }
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// Generate TTS audio for the given text, returning an `Attachment` on success.
 ///
 /// Provider resolution order:
 /// 1. `voice_state.provider` (per-channel override)
 /// 2. `generation_config.default_speech_provider` (global default)
+/// 3. First registered speech provider
 ///
-/// Returns `None` if no provider is configured or generation fails.
+/// If the resolved provider yields no audio, one fallback hop to another
+/// registered speech provider is attempted ([`TTS_MAX_PROVIDERS`]).
+///
+/// Returns `None` if no provider is configured or every candidate fails.
 pub async fn generate_tts(
     text: &str,
     voice_state: &VoiceState,
     generation_registry: &GenerationProviderRegistry,
     generation_config: &GenerationConfig,
 ) -> Option<Attachment> {
-    // Resolve provider ID:
-    // 1. Per-channel override from VoiceState
-    // 2. Global default_speech_provider from config
-    // 3. Fallback: first provider that supports Speech
-    let provider_id_owned: Option<String>;
-    let provider_id = if let Some(ref p) = voice_state.provider {
-        debug!(provider = %p, "TTS: using per-channel provider override");
-        p.as_str()
-    } else if let Some(ref p) = generation_config.default_speech_provider {
-        debug!(provider = %p, "TTS: using default_speech_provider from config");
-        p.as_str()
-    } else {
-        // Auto-detect: find first provider that supports Speech
-        provider_id_owned = generation_registry
-            .first_for_type(GenerationType::Speech)
-            .map(|(name, _)| name);
-        match &provider_id_owned {
-            Some(p) => {
-                debug!(provider = %p, "TTS: auto-detected speech provider (no default configured)");
-                p.as_str()
-            }
-            None => {
-                warn!(
-                    "TTS: no speech provider available — no override, no default, no auto-detect"
-                );
-                return None;
-            }
-        }
-    };
-
-    // Look up provider in registry
-    let provider = match generation_registry.get(provider_id) {
-        Some(p) => p,
-        None => {
-            warn!(provider = %provider_id, "TTS: provider not found in registry");
-            return None;
-        }
-    };
+    let candidates = tts_candidates(voice_state, generation_registry, generation_config);
+    if candidates.is_empty() {
+        warn!("TTS: no speech provider available — no override, no default, no auto-detect");
+        return None;
+    }
 
     // Defensively strip speech-hostile markdown/code/URLs and clamp to the
     // provider's character ceiling. The VoiceModeLayer *asks* the model to
@@ -148,31 +170,52 @@ pub async fn generate_tts(
         return None;
     }
 
-    // Build request params once. `with_params` consumes them, so each attempt
-    // rebuilds the request from a cheap clone (the prompt stays borrowed).
-    let mut params = GenerationParams::default();
-    if let Some(ref voice) = voice_state.voice {
-        params.voice = Some(voice.clone());
-    }
-
     // Execute TTS under a length-aware per-attempt deadline so a wedged provider
     // can't hang the reply path (the provider's own timeout may be minutes), and
     // retry transient cold-start failures so a flaky endpoint doesn't silently
     // eat the leading sentences. `synth_with_retry` logs each failed attempt.
     let timeout = Duration::from_millis(tts_timeout_ms(&spoken));
-    let output = synth_with_retry(
-        timeout,
-        TTS_MAX_ATTEMPTS,
-        TTS_RETRY_BACKOFF,
-        provider_id,
-        || {
-            let request =
-                GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params.clone());
-            provider.generate(request)
-        },
-    )
-    .await;
-    let output = output?;
+    let mut generated = None;
+    for (hop, provider_id) in candidates.iter().enumerate() {
+        let Some(provider) = generation_registry.get(provider_id) else {
+            warn!(provider = %provider_id, "TTS: provider not found in registry");
+            continue;
+        };
+        if hop == 0 {
+            debug!(provider = %provider_id, "TTS: synthesizing with resolved provider");
+        } else {
+            warn!(provider = %provider_id, "TTS: falling back to another speech provider");
+        }
+        // Build request params per candidate. `with_params` consumes them, so
+        // each attempt rebuilds the request from a cheap clone (the prompt stays
+        // borrowed). The configured voice id belongs to the PRIMARY provider's
+        // catalog — carrying "alloy"/"rachel" to a different vendor is a
+        // guaranteed invalid-parameter error, so a fallback hop drops it and
+        // lets that provider use its own default voice.
+        let mut params = GenerationParams::default();
+        if hop == 0 {
+            if let Some(ref voice) = voice_state.voice {
+                params.voice = Some(voice.clone());
+            }
+        }
+        let output = synth_with_retry(
+            timeout,
+            TTS_MAX_ATTEMPTS,
+            TTS_RETRY_BACKOFF,
+            provider_id,
+            || {
+                let request = GenerationRequest::new(GenerationType::Speech, &spoken)
+                    .with_params(params.clone());
+                provider.generate(request)
+            },
+        )
+        .await;
+        if let Some(output) = output {
+            generated = Some(output);
+            break;
+        }
+    }
+    let output = generated?;
 
     // Convert GenerationData → Attachment
     let id = uuid::Uuid::new_v4().to_string();
@@ -385,5 +428,211 @@ mod tests {
         let ms = tts_timeout_ms(&text);
         // 100/100 = 1 → 10s + 5s = 15s
         assert_eq!(ms, 15_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Provider fallback (the symmetric half of the STT local→cloud degradation)
+    // -----------------------------------------------------------------------
+
+    use crate::generation::MockGenerationProvider;
+    use crate::sync_primitives::Arc;
+
+    /// Fails whenever a `voice` param is present — stands in for the real 400 a
+    /// vendor returns when handed another vendor's voice id.
+    struct VoiceStrictProvider;
+
+    impl crate::generation::GenerationProvider for VoiceStrictProvider {
+        fn generate(
+            &self,
+            request: GenerationRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = GenerationResult<GenerationOutput>> + Send + '_>,
+        > {
+            let has_voice = request.params.voice.is_some();
+            Box::pin(async move {
+                if has_voice {
+                    Err(GenerationError::invalid_parameters(
+                        "unknown voice for this provider",
+                        Some("voice".to_string()),
+                    ))
+                } else {
+                    Ok(GenerationOutput::new(
+                        GenerationType::Speech,
+                        GenerationData::bytes(vec![9]),
+                    ))
+                }
+            })
+        }
+        fn name(&self) -> &str {
+            "strict"
+        }
+        fn supported_types(&self) -> Vec<GenerationType> {
+            vec![GenerationType::Speech]
+        }
+    }
+
+    fn speech_registry(
+        entries: Vec<(&str, Arc<dyn crate::generation::GenerationProvider>)>,
+    ) -> GenerationProviderRegistry {
+        let mut reg = GenerationProviderRegistry::new();
+        for (name, p) in entries {
+            reg.register(name.to_string(), p).unwrap();
+        }
+        reg
+    }
+
+    fn state_with_provider(provider: Option<&str>, voice: Option<&str>) -> VoiceState {
+        VoiceState {
+            enabled: true,
+            provider: provider.map(str::to_string),
+            voice: voice.map(str::to_string),
+            consecutive_failures: 0,
+        }
+    }
+
+    #[test]
+    fn candidates_put_the_override_first_then_one_fallback() {
+        let reg = speech_registry(vec![
+            ("a_cloud", Arc::new(MockGenerationProvider::new("a_cloud"))),
+            ("z_local", Arc::new(MockGenerationProvider::new("z_local"))),
+        ]);
+        let cands = tts_candidates(
+            &state_with_provider(Some("z_local"), None),
+            &reg,
+            &GenerationConfig::default(),
+        );
+        assert_eq!(cands, vec!["z_local".to_string(), "a_cloud".to_string()]);
+    }
+
+    #[test]
+    fn candidates_never_repeat_the_primary_and_respect_the_cap() {
+        let reg = speech_registry(vec![
+            ("a", Arc::new(MockGenerationProvider::new("a"))),
+            ("b", Arc::new(MockGenerationProvider::new("b"))),
+            ("c", Arc::new(MockGenerationProvider::new("c"))),
+        ]);
+        // Primary "b" is itself registered: it must not appear twice, and the
+        // chain stays a single hop rather than sweeping every provider.
+        let cands = tts_candidates(
+            &state_with_provider(Some("b"), None),
+            &reg,
+            &GenerationConfig::default(),
+        );
+        assert_eq!(cands, vec!["b".to_string(), "a".to_string()]);
+        assert_eq!(cands.len(), TTS_MAX_PROVIDERS);
+    }
+
+    #[test]
+    fn candidates_ignore_non_speech_providers() {
+        let reg = speech_registry(vec![
+            ("img", Arc::new(MockGenerationProvider::image_only("img"))),
+            ("tts", Arc::new(MockGenerationProvider::new("tts"))),
+        ]);
+        let cands = tts_candidates(
+            &state_with_provider(None, None),
+            &reg,
+            &GenerationConfig::default(),
+        );
+        assert_eq!(cands, vec!["tts".to_string()]);
+    }
+
+    #[test]
+    fn candidates_empty_without_any_speech_provider() {
+        let reg = speech_registry(vec![(
+            "img",
+            Arc::new(MockGenerationProvider::image_only("img")),
+        )]);
+        assert!(tts_candidates(
+            &state_with_provider(None, None),
+            &reg,
+            &GenerationConfig::default()
+        )
+        .is_empty());
+    }
+
+    // The asymmetry this closes: STT already retried local→cloud, TTS gave up
+    // after one provider and left the whole session caption-only — exactly when
+    // the BYO local voice server is down and a cloud provider sits idle.
+    #[tokio::test]
+    async fn dead_primary_falls_back_to_a_working_provider() {
+        let reg = speech_registry(vec![
+            (
+                "a_dead",
+                Arc::new(MockGenerationProvider::new("a_dead").with_failure("connection refused")),
+            ),
+            ("b_alive", Arc::new(MockGenerationProvider::new("b_alive"))),
+        ]);
+        let att = generate_tts(
+            "你好，这是一句回复。",
+            &state_with_provider(Some("a_dead"), None),
+            &reg,
+            &GenerationConfig::default(),
+        )
+        .await
+        .expect("fallback must produce audio");
+        // The mock encodes its own name in the URL it returns.
+        assert!(att.url.as_deref().unwrap_or_default().contains("b_alive"));
+    }
+
+    #[tokio::test]
+    async fn fallback_drops_the_primary_voice_id() {
+        // "alloy" belongs to the primary's catalog. Carrying it to a different
+        // vendor is a guaranteed invalid-parameter error, so the hop must drop
+        // it and let the fallback use its own default voice.
+        let reg = speech_registry(vec![
+            (
+                "a_dead",
+                Arc::new(MockGenerationProvider::new("a_dead").with_failure("boom")),
+            ),
+            ("b_strict", Arc::new(VoiceStrictProvider)),
+        ]);
+        let att = generate_tts(
+            "一句回复。",
+            &state_with_provider(Some("a_dead"), Some("alloy")),
+            &reg,
+            &GenerationConfig::default(),
+        )
+        .await;
+        assert!(
+            att.is_some(),
+            "the fallback hop must not forward the primary's voice id"
+        );
+    }
+
+    #[tokio::test]
+    async fn primary_keeps_its_configured_voice() {
+        // The mirror of the test above: on hop 0 the configured voice IS sent,
+        // so a provider that rejects unknown voices still gets to see it.
+        let reg = speech_registry(vec![("only", Arc::new(VoiceStrictProvider))]);
+        let att = generate_tts(
+            "一句回复。",
+            &state_with_provider(Some("only"), Some("alloy")),
+            &reg,
+            &GenerationConfig::default(),
+        )
+        .await;
+        assert!(att.is_none(), "hop 0 must carry the configured voice");
+    }
+
+    #[tokio::test]
+    async fn every_candidate_failing_degrades_to_no_audio() {
+        let reg = speech_registry(vec![
+            (
+                "a",
+                Arc::new(MockGenerationProvider::new("a").with_failure("down")),
+            ),
+            (
+                "b",
+                Arc::new(MockGenerationProvider::new("b").with_failure("down")),
+            ),
+        ]);
+        assert!(generate_tts(
+            "一句回复。",
+            &state_with_provider(None, None),
+            &reg,
+            &GenerationConfig::default()
+        )
+        .await
+        .is_none());
     }
 }

@@ -434,6 +434,12 @@ pub async fn handle_stream_start(
     }
 }
 
+/// Upper bound on one streaming PCM frame. The Panel emits ~200 ms of 16 kHz
+/// mono s16le (≈6.4 KB); 64 KB is over 2 s of audio — well past any legitimate
+/// frame, and small enough that a malformed or hostile client cannot push
+/// megabytes per call into the relay.
+const MAX_PCM_FRAME_BYTES: usize = 64 * 1024;
+
 /// `voice.stream.audio` — params `{ stream_id: String, pcm_base64: String }` → `{}`.
 ///
 /// Pushes one s16le PCM frame into the backend session. An unknown or already
@@ -462,8 +468,27 @@ pub async fn handle_stream_audio(
             )
         }
     };
+    if bytes.len() > MAX_PCM_FRAME_BYTES {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "PCM frame exceeds the 64KB streaming limit",
+        );
+    }
     if let Some(tx) = registry.audio_sender(&params.stream_id).await {
-        let _ = tx.send(bytes).await; // Ignore send error: backend channel closed (Panel will stop the stream).
+        // `try_send`, never `send().await`: this is realtime audio. A backend
+        // that stops draining (wedged ASR server, TCP backpressure) would
+        // otherwise park this RPC — and pile up every later frame behind it —
+        // while the channel already holds seconds of stale audio. Dropping the
+        // newest frame is the correct realtime degradation: the utterance loses
+        // a slice, the session survives. A closed channel stays a silent no-op
+        // (the Panel is about to stop the stream anyway).
+        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(bytes) {
+            tracing::debug!(
+                stream_id = %params.stream_id,
+                "voice stream backend is not draining — dropped a PCM frame"
+            );
+        }
     }
     JsonRpcResponse::success(request.id, serde_json::json!({}))
 }
@@ -536,6 +561,35 @@ mod tests {
         // The no-device case must NOT be confused with the browser-fallback path.
         assert!(!wrapped.contains(NATIVE_AUDIO_UNAVAILABLE));
         assert!(!NO_MICROPHONE_MESSAGE.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stream_audio_rejects_an_oversized_frame() {
+        // Bound the relay's input: a legitimate frame is ~6.4 KB.
+        let oversized = BASE64.encode(vec![0u8; MAX_PCM_FRAME_BYTES + 1]);
+        let req = JsonRpcRequest::with_id(
+            "voice.stream.audio",
+            Some(serde_json::json!({ "stream_id": "s1", "pcm_base64": oversized })),
+            serde_json::json!(1),
+        );
+        let resp = handle_stream_audio(req, Arc::new(StreamRegistry::default())).await;
+        let err = resp.error.expect("oversized frame must be rejected");
+        assert!(err.message.contains("64KB"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn stream_audio_for_an_unknown_stream_is_a_silent_no_op() {
+        // The Panel races stop-then-flush; a late frame must never error.
+        let req = JsonRpcRequest::with_id(
+            "voice.stream.audio",
+            Some(serde_json::json!({
+                "stream_id": "gone",
+                "pcm_base64": BASE64.encode([0u8; 64]),
+            })),
+            serde_json::json!(1),
+        );
+        let resp = handle_stream_audio(req, Arc::new(StreamRegistry::default())).await;
+        assert!(resp.error.is_none());
     }
 
     #[tokio::test]

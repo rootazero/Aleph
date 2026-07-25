@@ -42,11 +42,13 @@ pub mod providers;
 pub mod registry;
 pub mod response_parser;
 pub mod types;
+pub mod voice_catalog;
 
 // Re-exports
 pub use error::{GenerationError, GenerationResult};
 pub use probe::{probe_generation_provider, GenerationProbeOutcome};
 pub use registry::GenerationProviderRegistry;
+pub use voice_catalog::static_voices_for_provider_type;
 
 /// Information about a voice supported by a generation provider
 #[derive(Debug, Clone, Serialize, Deserialize)]

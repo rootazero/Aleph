@@ -80,6 +80,47 @@ pub struct SpeechGenerateTool {
     registry: Arc<RwLock<GenerationProviderRegistry>>,
 }
 
+/// Voice ids echoed back when synthesis fails on an unpublished voice. Azure
+/// ships hundreds; a truncated list plus the remaining count is enough for the
+/// model to self-correct without flooding the turn.
+const MAX_LISTED_VOICES: usize = 24;
+
+/// Render a provider's voice catalog as a hint appended to a failed synthesis.
+///
+/// A2 (compress errors into context, don't pick a recovery): the harness does
+/// **not** gate on the voice id up front — `openai_tts` deliberately allows
+/// unknown ids so newly-released voices and third-party proxies keep working, and
+/// pre-rejecting would regress that. But once synthesis has actually failed with
+/// a voice the provider does not publish, that catalog is precisely what the
+/// model needs to fix its next call, so it rides along on the error.
+fn unpublished_voice_hint(
+    provider_name: &str,
+    voice: Option<&str>,
+    catalog: &[crate::generation::VoiceInfo],
+) -> Option<String> {
+    // An empty catalog means "unknown", not "none valid" (BYO `local`, or an
+    // OpenAI-compatible proxy fronting some other engine) — say nothing.
+    let voice = voice?;
+    if catalog.is_empty() || catalog.iter().any(|v| v.id.eq_ignore_ascii_case(voice)) {
+        return None;
+    }
+    let listed: Vec<&str> = catalog
+        .iter()
+        .take(MAX_LISTED_VOICES)
+        .map(|v| v.id.as_str())
+        .collect();
+    let more = catalog.len().saturating_sub(listed.len());
+    let tail = if more > 0 {
+        format!(" (+{more} more)")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        " Voice '{voice}' is not in the catalog published by '{provider_name}': {}{tail}",
+        listed.join(", ")
+    ))
+}
+
 impl SpeechGenerateTool {
     /// Tool identifier
     pub const NAME: &'static str = "speech_generate";
@@ -128,11 +169,13 @@ impl SpeechGenerateTool {
             "Starting speech generation"
         );
 
-        // Find provider — lock must be dropped before any .await call
-        let (provider_name, provider) = {
+        // Find provider — lock must be dropped before any .await call. The voice
+        // catalog is snapshotted under the same lock (it is a sync trait call)
+        // so a failed synthesis can name the valid ids without re-locking.
+        let (provider_name, provider, voice_catalog) = {
             let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
-            if let Some(name) = &args.provider {
+            let (name, provider) = if let Some(name) = &args.provider {
                 let provider = reg.get(name).ok_or_else(|| {
                     ToolError::InvalidArgs(format!("Provider '{name}' not found"))
                 })?;
@@ -150,7 +193,9 @@ impl SpeechGenerateTool {
                 reg.first_for_type(GenerationType::Speech).ok_or_else(|| {
                     ToolError::InvalidArgs("No speech generation provider available".to_string())
                 })?
-            }
+            };
+            let catalog = reg.get_voices_for_provider(&name);
+            (name, provider, catalog)
         };
 
         debug!(provider = %provider_name, "Using provider for speech generation");
@@ -170,8 +215,16 @@ impl SpeechGenerateTool {
         // Create generation request
         let request = GenerationRequest::speech(&args.text).with_params(params);
 
-        // Execute generation
-        let output = provider.generate(request).await.map_err(ToolError::from)?;
+        // Execute generation. A failure carrying a voice the provider does not
+        // publish gets the catalog attached so the model can self-correct.
+        let output =
+            provider.generate(request).await.map_err(|e| {
+                match unpublished_voice_hint(&provider_name, args.voice.as_deref(), &voice_catalog)
+                {
+                    Some(hint) => ToolError::Execution(format!("{e}.{hint}")),
+                    None => ToolError::from(e),
+                }
+            })?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -555,6 +608,54 @@ mod tests {
 
         let result = AlephTool::call(&tool, args).await;
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Voice-catalog hint (connects `registry.get_voices_for_provider`, which had
+    // no consumer at all, to the failed-synthesis path)
+    // -----------------------------------------------------------------------
+
+    fn catalog(ids: &[&str]) -> Vec<crate::generation::VoiceInfo> {
+        ids.iter()
+            .map(|id| crate::generation::VoiceInfo {
+                id: (*id).to_string(),
+                name: (*id).to_string(),
+                gender: "neutral".into(),
+                description: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hint_names_the_valid_voices_for_an_unpublished_id() {
+        let hint =
+            unpublished_voice_hint("openai_tts", Some("rachel"), &catalog(&["alloy", "nova"]))
+                .expect("an unpublished voice must produce a hint");
+        assert!(hint.contains("rachel"));
+        assert!(hint.contains("alloy"));
+        assert!(hint.contains("nova"));
+    }
+
+    #[test]
+    fn hint_is_silent_for_a_published_voice() {
+        // Case-insensitive: the failure was something else entirely (network,
+        // auth) and must not be mislabelled as a voice problem.
+        assert!(unpublished_voice_hint("p", Some("Alloy"), &catalog(&["alloy"])).is_none());
+    }
+
+    #[test]
+    fn hint_is_silent_without_a_catalog_or_a_voice() {
+        // Empty catalog = "unknown", not "none valid" (BYO local, compat proxies).
+        assert!(unpublished_voice_hint("local", Some("zf_088"), &[]).is_none());
+        assert!(unpublished_voice_hint("p", None, &catalog(&["alloy"])).is_none());
+    }
+
+    #[test]
+    fn hint_truncates_a_huge_catalog() {
+        let ids: Vec<String> = (0..200).map(|i| format!("v{i}")).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let hint = unpublished_voice_hint("azure_speech", Some("nope"), &catalog(&refs)).unwrap();
+        assert!(hint.contains("+176 more"), "hint was: {hint}");
     }
 
     #[test]

@@ -30,6 +30,20 @@ pub struct WhisperLiveDecoder {
     last_locked_text: String,
 }
 
+/// A segment's `start` time, accepting both wire shapes.
+///
+/// WhisperLive's faster-whisper backend serializes it as a formatted **string**
+/// (`"1.230"`), but the TensorRT backend and community forks emit a plain JSON
+/// **number**. Reading only the string form silently yielded `None` for those
+/// servers, which degraded dedup to text identity — and text identity then
+/// discards a legitimately *repeated* segment (a speaker saying "嗯 … 嗯" locks
+/// the first and drops the second).
+fn segment_start(seg: &serde_json::Value) -> Option<f64> {
+    let v = seg.get("start")?;
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+}
+
 impl WhisperLiveDecoder {
     /// Lock `text` into `committed` if it is a segment we have not seen.
     fn lock_segment(&mut self, start: Option<f64>, text: &str) {
@@ -99,11 +113,7 @@ impl WhisperLiveDecoder {
                 .unwrap_or(false);
             if completed {
                 any_completed = true;
-                let start = s
-                    .get("start")
-                    .and_then(|v| v.as_str())
-                    .and_then(|v| v.parse::<f64>().ok());
-                self.lock_segment(start, &text);
+                self.lock_segment(segment_start(s), &text);
             } else {
                 // Last interim wins; hold back replacement-glyph noise from a
                 // decode that split a multibyte char (committed text is final
@@ -353,6 +363,26 @@ mod tests {
         // …while different text still locks.
         let d = dec.push(&msg(vec![seg("世界", true)])).unwrap();
         assert_eq!(d.committed, "你好世界");
+    }
+
+    /// Numeric `start` (TensorRT backend / forks) must be read as a timestamp,
+    /// not fall through to text identity — which would drop the second of two
+    /// segments that happen to carry the same words.
+    #[test]
+    fn numeric_start_is_a_valid_timestamp() {
+        let numeric = |start: f64, text: &str| serde_json::json!({ "start": start, "end": start + 1.0, "text": text, "completed": true });
+        assert_eq!(segment_start(&numeric(1.5, "x")), Some(1.5));
+        assert_eq!(segment_start(&seg_at(2.25, "x", true)), Some(2.25));
+        assert_eq!(segment_start(&seg("x", true)), None);
+
+        let mut dec = WhisperLiveDecoder::default();
+        let _ = dec.push(&msg(vec![numeric(0.0, "嗯")]));
+        // Same words, later timestamp: a genuine repetition, must lock again.
+        let d = dec.push(&msg(vec![numeric(3.0, "嗯")])).unwrap();
+        assert_eq!(d.committed, "嗯嗯");
+        // Window resend of an already-locked segment still dedups.
+        let d = dec.push(&msg(vec![numeric(3.0, "嗯")])).unwrap();
+        assert_eq!(d.committed, "嗯嗯");
     }
 
     #[test]

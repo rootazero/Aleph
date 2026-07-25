@@ -3,7 +3,7 @@ use crate::gateway::handlers::generation_providers::resolve_api_key;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::security::SharedTokenManager;
-use crate::generation::providers::{ElevenLabsProvider, OpenAiTtsProvider, VolcengineTtsProvider};
+use crate::generation::voice_catalog::static_voices_for_provider_type;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -12,7 +12,8 @@ use tokio::sync::RwLock;
 /// Resolution order:
 /// 1. Try dynamic fetch from provider API (`{base_url}/v1/audio/voices`)
 /// 2. Detect model family (`MiniMax`, `OpenAI`, etc.) and return known voices
-/// 3. Fall back to static list by `provider_type`
+/// 3. Fall back to the provider's own static catalog
+///    ([`static_voices_for_provider_type`])
 pub async fn handle_voices(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -42,11 +43,21 @@ pub async fn handle_voices(
         None => (params.provider_id.to_lowercase(), vec![]),
     };
 
-    // Resolve API key from vault
-    let api_key = resolve_api_key(&params.provider_id, &vault);
+    // Resolve the key from the in-memory entry FIRST, then the vault. The entry
+    // is where it lives for the BYO `local` provider — `normalize_voice_local`
+    // writes the (commonly empty) key onto the synthetic entry and never into
+    // the vault. A vault-only lookup therefore returned `None` for it, which
+    // *skipped the dynamic fetch entirely*: the default local voice setup showed
+    // an empty picker even though its server serves `/audio/voices`.
+    let api_key = provider_info
+        .as_ref()
+        .and_then(|(_, pcfg, _)| pcfg.api_key.clone())
+        .filter(|k| !k.is_empty())
+        .or_else(|| resolve_api_key(&params.provider_id, &vault));
 
-    // Step 1: Try dynamic fetch from provider API
-    if let (Some(ref key), Some((_, pcfg, _))) = (&api_key, &provider_info) {
+    // Step 1: Try dynamic fetch from provider API. Gated on having a URL, NOT on
+    // having a key — unauthenticated BYO endpoints are the common local case.
+    if let Some((_, pcfg, _)) = &provider_info {
         // Use explicit voices_url if configured, otherwise derive from base_url
         let voices_url = if let Some(ref explicit_url) = pcfg.voices_url {
             explicit_url.clone()
@@ -62,7 +73,7 @@ pub async fn handle_voices(
         };
 
         if !voices_url.is_empty() {
-            match fetch_voices_from_api(&voices_url, key).await {
+            match fetch_voices_from_api(&voices_url, api_key.as_deref().unwrap_or_default()).await {
                 Ok(voices) if !voices.is_empty() => {
                     return JsonRpcResponse::success(
                         request.id,
@@ -83,16 +94,19 @@ pub async fn handle_voices(
     JsonRpcResponse::success(request.id, serde_json::to_value(voices).unwrap_or_default())
 }
 
-/// Try to fetch voices from a provider's API endpoint.
+/// Try to fetch voices from a provider's API endpoint. An empty `api_key` means
+/// an unauthenticated endpoint — send no `Authorization` header at all rather
+/// than an empty bearer, which some servers reject outright.
 async fn fetch_voices_from_api(
     url: &str,
     api_key: &str,
 ) -> Result<Vec<crate::generation::VoiceInfo>, String> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(url)
-        .bearer_auth(api_key)
-        .timeout(std::time::Duration::from_secs(5))
+    let mut req = client.get(url).timeout(std::time::Duration::from_secs(5));
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("GET {url} failed: {e}"))?;
@@ -177,16 +191,12 @@ fn detect_voices_by_model(
         return siliconflow_voice_list(model);
     }
 
-    // Fall back to static list by provider_type
-    match provider_type {
-        "openai" | "openai-tts" | "openai_tts" | "openai_compat" | "openai-compat" => {
-            OpenAiTtsProvider::static_voice_list()
-        }
-        "elevenlabs" => ElevenLabsProvider::static_voice_list(),
-        "minimax_tts" => minimax_voice_list(),
-        "volcengine_tts" => VolcengineTtsProvider::static_voice_list(),
-        _ => vec![],
-    }
+    // Fall back to the provider's OWN static catalog, via the single
+    // provider_type → voices join point. The hand-maintained match this
+    // replaced covered only 4 of the 7 speech provider types, so `cartesia`,
+    // `azure_speech` and `deepgram_tts` returned an empty picker despite each
+    // shipping a full `static_voice_list()`.
+    static_voices_for_provider_type(provider_type)
 }
 
 /// True when the model id is a SiliconFlow TTS model family.
@@ -345,5 +355,25 @@ mod tests {
         let models = vec!["tts-1".to_string()];
         let voices = super::detect_voices_by_model(&models, "openai_tts");
         assert!(voices.iter().any(|v| v.id == "alloy"));
+    }
+
+    #[test]
+    fn previously_empty_provider_types_now_resolve() {
+        // Regression: the old hand-maintained match had no arm for these three,
+        // so the Settings voice picker was empty even though each provider ships
+        // a full static catalog. They now route through the single join point.
+        for t in ["cartesia", "azure_speech", "deepgram_tts"] {
+            assert!(
+                !super::detect_voices_by_model(&[], t).is_empty(),
+                "{t} must resolve voices"
+            );
+        }
+    }
+
+    #[test]
+    fn local_provider_has_no_static_guess() {
+        // A BYO server's voices are whatever IT serves — discovered live from
+        // `{endpoint}/audio/voices`, never guessed from a table.
+        assert!(super::detect_voices_by_model(&[], "local").is_empty());
     }
 }
