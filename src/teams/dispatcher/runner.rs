@@ -105,6 +105,52 @@ pub struct MemberRunOutcome {
     pub error: Option<String>,
 }
 
+/// Build the request metadata for one dispatched member task.
+///
+/// Named (rather than inline) so the pinned usage mode is assertable: this and
+/// `broadcast::member_run_metadata` are the only two team run producers, and
+/// both must stamp it — see `teams::run_mode`.
+///
+/// Deliberately carries no `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
+/// goal continuations: a member run has no channel, so a confirm-gated tool
+/// resolves through `OperatorApprovalRequester` to a Panel card that the user
+/// who dispatched the team can answer. The marker would auto-deny that working
+/// human-in-the-loop path.
+fn task_run_metadata(
+    team_id: &str,
+    task_id: &str,
+    think_level: Option<&str>,
+    worktree: Option<&WorktreeHandle>,
+) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("team_id".to_string(), team_id.to_string());
+    m.insert("task_id".to_string(), task_id.to_string());
+    crate::teams::run_mode::stamp(&mut m);
+    // Per-step effort override (workflow `effort`): the execution engine's
+    // `resolve_turn_think_level` reads this request-carried key first, so the
+    // member run thinks at the step's declared depth.
+    if let Some(level) = think_level {
+        m.insert(
+            crate::agents::thinking::THINK_LEVEL_SESSION_KEY.to_string(),
+            level.to_string(),
+        );
+    }
+    if let Some(handle) = worktree {
+        m.insert(
+            "team_worktree_path".to_string(),
+            handle.path().display().to_string(),
+        );
+        // Lets `run_agent_loop` build a rebasing `FsScope::worktree` so
+        // parent-repo absolute paths are redirected into the checkout,
+        // matching the subagent spawner's isolation semantics.
+        m.insert(
+            "team_worktree_repo_root".to_string(),
+            handle.repo_root().display().to_string(),
+        );
+    }
+    m
+}
+
 /// Execute `task_text` as the resolved [`MemberDispatchTarget`] (within
 /// `team_id`), scoped to a task-specific session, bounded by `timeout_secs`.
 /// `isolate_workspace` requests a per-task git worktree (best-effort —
@@ -201,39 +247,12 @@ pub async fn execute_member_task(
         .map(|h| Arc::new(WorktreeSandbox::new(h.path().to_path_buf())) as Arc<dyn Sandbox>);
 
     let session_key = SessionKey::task(agent_id, "team", task_id);
-    // Deliberately carries no `UNATTENDED_KEY`, unlike cron / heartbeat / A2A /
-    // goal continuations: a member run has no channel, so a confirm-gated tool
-    // resolves through `OperatorApprovalRequester` to a Panel card that the user
-    // who dispatched the team can answer. The marker would auto-deny that
-    // working human-in-the-loop path.
-    let metadata = {
-        let mut m = HashMap::new();
-        m.insert("team_id".to_string(), team_id.to_string());
-        m.insert("task_id".to_string(), task_id.to_string());
-        // Per-step effort override (workflow `effort`): the execution engine's
-        // `resolve_turn_think_level` reads this request-carried key first, so
-        // the member run thinks at the step's declared depth.
-        if let Some(level) = think_level {
-            m.insert(
-                crate::agents::thinking::THINK_LEVEL_SESSION_KEY.to_string(),
-                level,
-            );
-        }
-        if let Some(handle) = worktree_handle.as_ref() {
-            m.insert(
-                "team_worktree_path".to_string(),
-                handle.path().display().to_string(),
-            );
-            // Lets `run_agent_loop` build a rebasing `FsScope::worktree` so
-            // parent-repo absolute paths are redirected into the checkout,
-            // matching the subagent spawner's isolation semantics.
-            m.insert(
-                "team_worktree_repo_root".to_string(),
-                handle.repo_root().display().to_string(),
-            );
-        }
-        m
-    };
+    let metadata = task_run_metadata(
+        team_id,
+        task_id,
+        think_level.as_deref(),
+        worktree_handle.as_ref(),
+    );
 
     // Workspace for the member run. With a provisioned worktree the member's
     // ENTIRE run is rooted there — `run_agent_loop` derives its `FsScope`,
@@ -596,6 +615,33 @@ mod tests {
         assert!(
             result.is_none(),
             "non-git cwd must fall back to no isolation, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn task_run_metadata_pins_the_team_run_mode() {
+        let m = task_run_metadata("t1", "task-9", None, None);
+        assert_eq!(
+            m.get(crate::config::types::policies::MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("work")
+        );
+        assert_eq!(m.get("team_id").map(String::as_str), Some("t1"));
+        assert_eq!(m.get("task_id").map(String::as_str), Some("task-9"));
+        assert!(
+            !m.contains_key(crate::agents::thinking::THINK_LEVEL_SESSION_KEY),
+            "an undeclared effort must not write a think-level key"
+        );
+    }
+
+    /// The per-step `effort` override still rides the same metadata map.
+    #[test]
+    fn task_run_metadata_carries_a_declared_think_level() {
+        let m = task_run_metadata("t1", "task-9", Some("high"), None);
+        assert_eq!(
+            m.get(crate::agents::thinking::THINK_LEVEL_SESSION_KEY)
+                .map(String::as_str),
+            Some("high")
         );
     }
 }

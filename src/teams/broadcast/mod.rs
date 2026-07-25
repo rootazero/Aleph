@@ -126,6 +126,10 @@ pub fn over_depth(chain_depth: u32, max: u32) -> bool {
 /// through `OperatorApprovalRequester` to a Panel card — and the user who is
 /// talking to the team in team chat is the operator watching that Panel. Marking
 /// it would auto-deny a human-in-the-loop path that works.
+///
+/// Also carries the pinned usage mode (`teams::run_mode`). Without it the run
+/// falls through to the global `[policies] mode`, and a chat-mode install
+/// defers the `task`/`team` families this member's prompt tells it to call.
 #[must_use]
 fn member_run_metadata(
     team_id: &str,
@@ -135,6 +139,7 @@ fn member_run_metadata(
     metadata.insert("team_id".to_string(), team_id.to_string());
     metadata.insert("chain_depth".to_string(), chain_depth.to_string());
     metadata.insert("platform".to_string(), "webchat".to_string());
+    crate::teams::run_mode::stamp(&mut metadata);
     metadata
 }
 
@@ -834,6 +839,20 @@ mod tests {
         assert_eq!(m.get("platform").map(String::as_str), Some("webchat"));
         assert_eq!(m.get("team_id").map(String::as_str), Some("team-x"));
         assert_eq!(m.get("chain_depth").map(String::as_str), Some("2"));
+    }
+
+    /// A member run must declare its mode rather than inherit the global
+    /// `[policies] mode` — chat defers the `task`/`team` families the member
+    /// and leader prompts contract these agents to call.
+    #[test]
+    fn member_metadata_pins_the_team_run_mode() {
+        let metadata = member_run_metadata("team-1", 0);
+        assert_eq!(
+            metadata
+                .get(crate::config::types::policies::MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("work")
+        );
     }
 
     #[test]
