@@ -251,6 +251,8 @@
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
+> **⚠️ `agent_trace` 流是有意有损的镜像**: `AgentTraceEmitSink` 用 bounded `mpsc(256)` + `try_send` 把 harness trace 镜像到 WS（满即丢，注释明写 best-effort），这是**刻意的**——绝不能让慢消费者背压 agent 循环。推论：**任何消费方都不得把逐事件流当作终态真源**。工具调用的权威终态在 `run_complete` 的 `summary.tool_summaries[]`（core 由 harness `tool_timeline` 构建，`tool_id` 与流事件同源 `call.id`），失败原因在 `summary.errors[]`。新写消费者（Panel / channel / 外部 bridge）必须在流末对账，否则丢一帧就留下永久"进行中"的幽灵状态。Panel 侧参考实现见 FEATURE_LOCATOR §6.1（`reconcile_tools` + `settle_orphan_tools`）。
+
 ### Windows 构建
 
 `just shell-build` / `just shell-dev` 在 Windows 同样适用（justfile 已守卫 macOS 专属步骤、自动追加 `.exe`），产物为 NSIS `.exe` + `.msi`。一次性前置依赖（MSVC / WebView2 / protoc / wasm 目标 / `wasm-bindgen-cli` 版本对齐 / `cargo-tauri` / Git for Windows `usr\bin` 入 PATH）与全量构建步骤详见 [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)。

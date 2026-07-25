@@ -1967,6 +1967,21 @@
     "cat_run": "执行",
     "cat_search": "搜索",
     "cat_tool": "工具",
-    "to_detail": "详情栏"
+    "to_detail": "详情栏",
+    "status_unknown": "结果未知 —— 本次运行在该调用回报之前就结束了"
+  },
+  "narration": {
+    "compaction_ok": "⚠️ 上下文超长：已压缩历史并成功重试",
+    "compaction_failed": "⚠️ 上下文超长：压缩后重试仍失败",
+    "verifier_veto": "收尾被拦截（清单仍有未完成项）",
+    "moa_inactive": "MoA 未生效",
+    "moa_advisor": "顾问",
+    "moa_advisors": "位顾问",
+    "moa_cached_advisors": "沿用缓存顾问意见",
+    "moa_aggregating": "MoA 聚合中",
+    "moa_aggregator": "聚合器",
+    "moa_spend": "顾问开销",
+    "moa_billed": "位计费",
+    "moa_turn_trace_preset": "MoA 单轮追踪 — 预设"
   }
 }

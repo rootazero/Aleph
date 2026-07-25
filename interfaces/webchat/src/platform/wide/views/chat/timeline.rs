@@ -246,6 +246,28 @@ pub fn row_key(row: &TimelineRow) -> String {
     }
 }
 
+/// Identity of a bubble for the typewriter reveal cursor
+/// ([`crate::state::typewriter::TypewriterClock`]).
+///
+/// **Not** just the message id: `ChatState::begin_step` finalizes the trailing
+/// bubble by *renaming* it to `intermediate-{run}-{n}` and then pushes a brand
+/// new bubble that **re-uses the id `assistant-{run}`**. A cursor keyed on the
+/// bare id therefore leaks from step N onto step N+1 — and since the sweep is
+/// only pruned on the "finished and caught up" path (which a renamed bubble
+/// never reaches), step N+1 inherited a cursor whose `revealed` was already
+/// step N's length. `advance_reveal` then saw `revealed >= total` and revealed
+/// everything at once: **only the first step of a run ever animated**.
+///
+/// Folding the iteration in makes the id re-use visible, so each step gets its
+/// own cursor. Non-step bubbles (user rows, the final answer) carry no
+/// iteration and fold in `0`, which is stable across the
+/// streaming → `finalize_answer` transition so the answer's sweep is not
+/// restarted at the finish line.
+#[must_use]
+pub fn reveal_key(message: &ChatMessage) -> String {
+    format!("{}@{}", message.id, message.iteration.unwrap_or(0))
+}
+
 /// Convenience wrapper used by the render path: derive rows straight from
 /// `messages`, resolving day ordinals / labels / clocks against the local
 /// timezone via `js_sys::Date`. `today_label` / `yesterday_label` come from
@@ -803,6 +825,55 @@ mod tests {
         assert!(matches!(rows[0], TimelineRow::Message { .. }));
         assert!(matches!(rows[1], TimelineRow::DaySeparator { .. }));
         assert!(matches!(rows[2], TimelineRow::Message { .. }));
+    }
+
+    /// Regression for the "only the first step animates" bug: `begin_step`
+    /// renames the finished bubble and re-uses `assistant-{run}` for the next
+    /// one, so a reveal cursor keyed on the bare id leaked across steps and the
+    /// inherited `revealed` immediately satisfied `revealed >= total`.
+    #[test]
+    fn reveal_key_separates_two_steps_that_share_the_assistant_id() {
+        let step1 = msg_step("assistant-r1", 1, "first step narration", true);
+        let step2 = msg_step("assistant-r1", 2, "second", true);
+        assert_eq!(step1.id, step2.id, "precondition: the id really is re-used");
+        assert_ne!(reveal_key(&step1), reveal_key(&step2));
+    }
+
+    /// The same bubble streaming then being promoted by `finalize_answer` keeps
+    /// one key, so the answer's sweep is not restarted at the finish line.
+    #[test]
+    fn reveal_key_is_stable_across_finalize() {
+        let mut m = msg_step("assistant-r1", 3, "partial", true);
+        let before = reveal_key(&m);
+        m.content = "the whole authoritative answer".into();
+        m.is_streaming = false;
+        m.is_final = true;
+        m.is_intermediate = false;
+        assert_eq!(reveal_key(&m), before);
+    }
+
+    /// A tool settled to `unknown` (its outcome frame was dropped and the run
+    /// ended) is terminal: the explore block must collapse instead of pulsing
+    /// "Exploring…" for the rest of the session.
+    #[test]
+    fn settled_unknown_tool_completes_its_explore_group() {
+        let msgs = vec![msg_step_tools(
+            "intermediate-r1-1",
+            1,
+            "",
+            false,
+            vec![tool(
+                "t1",
+                "file_read",
+                crate::views::chat::state::TOOL_STATUS_UNKNOWN,
+            )],
+        )];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        let completed = rows.iter().find_map(|r| match r {
+            TimelineRow::ExploreGroup { completed, .. } => Some(*completed),
+            _ => None,
+        });
+        assert_eq!(completed, Some(true));
     }
 
     #[test]

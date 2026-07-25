@@ -1,7 +1,10 @@
 //! Maps Gateway streaming events (run.*) to `ChatState` mutations.
 
-use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost};
+use super::state::{
+    ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, ToolSettlement,
+};
 use crate::context::{DashboardState, GatewayEvent};
+use crate::i18n::{td_string, I18nCtx, Locale};
 use crate::state::layout::WorkspaceState;
 use crate::state::notifications::PendingAskView;
 use crate::state::sessions::SessionMap;
@@ -26,6 +29,7 @@ pub(crate) fn apply_trace_event(
     run_id: &str,
     trace_event: &serde_json::Value,
     is_foreground: bool,
+    locale: Locale,
 ) {
     // The harness serializes `LoopTraceEvent` with `#[serde(tag =
     // "type")]`, so the discriminator arrives as `type`. The
@@ -199,11 +203,11 @@ pub(crate) fn apply_trace_event(
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let note = if succeeded {
-                "⚠️ 上下文超长：已压缩历史并成功重试"
+                td_string!(locale, narration.compaction_ok).to_string()
             } else {
-                "⚠️ 上下文超长：压缩后重试仍失败"
+                td_string!(locale, narration.compaction_failed).to_string()
             };
-            append_reasoning(chat, note);
+            append_reasoning(chat, &note);
             workspace.note_activity();
         }
         // Watchdog: the model tried to finish but its scratchpad checklist
@@ -216,7 +220,10 @@ pub(crate) fn apply_trace_event(
                 .unwrap_or("");
             append_reasoning(
                 chat,
-                &format!("🔁 收尾被拦截（清单仍有未完成项）：{reason}"),
+                &format!(
+                    "🔁 {}: {reason}",
+                    td_string!(locale, narration.verifier_veto)
+                ),
             );
             workspace.note_activity();
         }
@@ -242,16 +249,27 @@ pub(crate) fn apply_trace_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let error = trace_event.get("error").and_then(|v| v.as_str());
+            let advisor = td_string!(locale, narration.moa_advisor);
             if count == 0 {
                 // Activation failure (runner build error): MoA didn't engage.
                 append_reasoning(
                     chat,
-                    &format!("⚠ MoA 未生效：{}", error.unwrap_or("unknown")),
+                    &format!(
+                        "⚠ {}: {}",
+                        td_string!(locale, narration.moa_inactive),
+                        error.unwrap_or("unknown")
+                    ),
                 );
             } else if let Some(err) = error {
-                append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n⚠ {err}"));
+                append_reasoning(
+                    chat,
+                    &format!("◇ {advisor} {index}/{count} — {label}\n⚠ {err}"),
+                );
             } else {
-                append_reasoning(chat, &format!("◇ 顾问 {index}/{count} — {label}\n{text}"));
+                append_reasoning(
+                    chat,
+                    &format!("◇ {advisor} {index}/{count} — {label}\n{text}"),
+                );
             }
             workspace.note_activity();
         }
@@ -269,13 +287,23 @@ pub(crate) fn apply_trace_event(
                 .get("cached")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
+            let aggregating = td_string!(locale, narration.moa_aggregating);
             if cached {
                 append_reasoning(
                     chat,
-                    &format!("◆ MoA 聚合中（{aggregator}，沿用缓存顾问意见）"),
+                    &format!(
+                        "◆ {aggregating} ({aggregator}, {})",
+                        td_string!(locale, narration.moa_cached_advisors)
+                    ),
                 );
             } else {
-                append_reasoning(chat, &format!("◆ MoA 聚合中（{aggregator}，{n} 位顾问）"));
+                append_reasoning(
+                    chat,
+                    &format!(
+                        "◆ {aggregating} ({aggregator}, {n} {})",
+                        td_string!(locale, narration.moa_advisors)
+                    ),
+                );
             }
         }
         // Summed advisor spend for one fan-out (priced separately from the
@@ -300,10 +328,14 @@ pub(crate) fn apply_trace_event(
             let cost = trace_event
                 .get("cost_usd")
                 .and_then(serde_json::Value::as_f64);
-            let cost_str = cost.map_or(String::new(), |c| format!("，约 ${c:.4}"));
+            let cost_str = cost.map_or(String::new(), |c| format!(" ≈ ${c:.4}"));
             append_reasoning(
                 chat,
-                &format!("▫ 顾问开销：{input}+{output} tokens（{billed}/{n} 位计费）{cost_str}"),
+                &format!(
+                    "▫ {}: {input}+{output} tokens ({billed}/{n} {}){cost_str}",
+                    td_string!(locale, narration.moa_spend),
+                    td_string!(locale, narration.moa_billed)
+                ),
             );
         }
         // Heavy audit record — arrives only via trace.by_runs REPLAY (never
@@ -315,15 +347,22 @@ pub(crate) fn apply_trace_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let payload = trace_event.get("payload").cloned().unwrap_or_default();
-            let mut block = format!("📋 MoA turn trace — preset {preset}");
+            let mut block = format!(
+                "📋 {} {preset}",
+                td_string!(locale, narration.moa_turn_trace_preset)
+            );
             if let Some(advisors) = payload
                 .get("advisors")
                 .and_then(serde_json::Value::as_array)
             {
+                let advisor = td_string!(locale, narration.moa_advisor);
                 for (i, a) in advisors.iter().enumerate() {
                     let label = a.get("label").and_then(|v| v.as_str()).unwrap_or("");
                     let output = a.get("output").and_then(|v| v.as_str()).unwrap_or("");
-                    block.push_str(&format!("\n─── 顾问 {} — {label} ───\n{output}", i + 1));
+                    block.push_str(&format!(
+                        "\n─── {advisor} {} — {label} ───\n{output}",
+                        i + 1
+                    ));
                 }
             }
             if let Some(out) = payload.get("aggregator_output").and_then(|v| v.as_str()) {
@@ -331,7 +370,10 @@ pub(crate) fn apply_trace_event(
                     .get("aggregator_status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("ok");
-                block.push_str(&format!("\n─── 聚合器（{status}）───\n{out}"));
+                block.push_str(&format!(
+                    "\n─── {} ({status}) ───\n{out}",
+                    td_string!(locale, narration.moa_aggregator)
+                ));
             }
             append_reasoning(chat, &block);
         }
@@ -352,14 +394,19 @@ pub(crate) fn replay_run(
     run_id: &str,
     events: &[serde_json::Value],
     final_content: &str,
+    locale: Locale,
 ) {
     chat.start_assistant_message(run_id);
     for ev in events {
         // Replay always reconstructs the conversation being viewed — treat
         // it as foreground so live-follow behaves the same as it did live.
-        apply_trace_event(chat, workspace, run_id, ev, true);
+        apply_trace_event(chat, workspace, run_id, ev, true, locale);
     }
     chat.complete_run(run_id);
+    // A persisted trace that ends mid-tool (run killed / process died between
+    // `ToolCallStarted` and `ToolCallCompleted`) would otherwise replay a row
+    // that pulses `running` forever in a conversation that ended days ago.
+    chat.settle_orphan_tools(run_id);
     // Same authoritative promotion as the live `run_complete` path: overwrite
     // the trailing bubble with the history-authoritative answer and flag it
     // `is_final` so a turn that ended with text + a tool call still renders the
@@ -450,6 +497,81 @@ fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
     );
 }
 
+/// Project `run_complete`'s authoritative `summary.tool_summaries[]` into the
+/// panel's settlement shape. Pure so the wire-shape contract is host-testable.
+///
+/// Entries without a `tool_id` are skipped: a settlement addresses a row by id,
+/// and an id-less one could only ever create an unaddressable orphan.
+fn parse_tool_settlements(summary: &serde_json::Value) -> Vec<ToolSettlement> {
+    let Some(items) = summary
+        .get("tool_summaries")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let tool_id = item.get("tool_id").and_then(|v| v.as_str())?;
+            if tool_id.is_empty() {
+                return None;
+            }
+            Some(ToolSettlement {
+                tool_id: tool_id.to_string(),
+                tool_name: item
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                duration_ms: item
+                    .get("duration_ms")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                success: item
+                    .get("success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true),
+            })
+        })
+        .collect()
+}
+
+/// Back-fill tool *result* payloads for the run's failures from
+/// `summary.errors[]`, so a failed call whose `tool_call_completed` mirror was
+/// dropped still renders its error text in the card body / detail pane instead
+/// of an empty "…".
+///
+/// Written in the same `{"Error":{"error":…}}` envelope the live path records,
+/// so `tool_card::error_message` picks it up with no new branch. Never
+/// overwrites a payload the live stream already captured — that one is richer.
+fn backfill_tool_errors(workspace: WorkspaceState, run_id: &str, summary: &serde_json::Value) {
+    let Some(items) = summary.get("errors").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for item in items {
+        let (Some(tool_id), Some(error)) = (
+            item.get("tool_id").and_then(|v| v.as_str()),
+            item.get("error").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if tool_id.is_empty() {
+            continue;
+        }
+        let already_captured = workspace
+            .get_tool_payload(run_id, tool_id)
+            .is_some_and(|p| p.result.is_some());
+        if already_captured {
+            continue;
+        }
+        workspace.record_tool_result(
+            run_id,
+            tool_id,
+            serde_json::json!({ "Error": { "error": error } }),
+        );
+    }
+}
+
 /// Resolve which conversation's `ChatState` one run event should land on, and
 /// maintain running/route bookkeeping. Returns the target `ChatState` plus
 /// whether the resolved conversation is the active (foreground) one — callers
@@ -502,6 +624,7 @@ pub fn subscribe_run_events(
     sessions: SessionMap,
     singleton: ChatState,
     workspace: WorkspaceState,
+    i18n: I18nCtx,
 ) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
     // Owned Copy captured into the 'static event closure — used to drive
@@ -612,7 +735,17 @@ pub fn subscribe_run_events(
                 let Some(trace_event) = data.get("event") else {
                     return;
                 };
-                apply_trace_event(chat, workspace, run_id, trace_event, is_foreground);
+                // Resolve the live locale per event (untracked — this closure
+                // is outside any reactive scope), so a mid-session language
+                // switch is honoured by subsequent narration.
+                apply_trace_event(
+                    chat,
+                    workspace,
+                    run_id,
+                    trace_event,
+                    is_foreground,
+                    i18n.get_locale_untracked(),
+                );
             }
             "tool_start" => {
                 if trace_enabled {
@@ -726,10 +859,17 @@ pub fn subscribe_run_events(
                 // run-cumulative `total_tokens` rides along for the tooltip.
                 if let Some(summary) = data.get("summary") {
                     apply_context_gauge(chat, summary);
-                    // Cost + token split for the bubble's meta line — the same
-                    // summary already carries them, nothing else reads them yet.
+                    // Cost + token split for the bubble's meta line, and the
+                    // right pane's `RunMetaInspector` breakdown behind it.
                     apply_run_cost(chat, run_id, summary);
+                    // Authoritative tool outcomes: repair whatever the lossy
+                    // `agent_trace` mirror dropped (see `reconcile_tools`).
+                    chat.reconcile_tools(run_id, &parse_tool_settlements(summary));
+                    backfill_tool_errors(workspace, run_id, summary);
                 }
+                // Anything the summary did not name (older core, a run with no
+                // timeline) still has to leave `running` — the run is over.
+                chat.settle_orphan_tools(run_id);
                 // Voice loop: if the mic button registered this run, speak the
                 // final reply via the core TTS path → endpoint playback.
                 if chat.take_speak_run(run_id) {
@@ -745,6 +885,10 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
+                // `RunError` carries no summary, so there is nothing to
+                // reconcile against — but the run is over, so any row still
+                // `running` must stop pulsing (and stop ticking).
+                chat.settle_orphan_tools(run_id);
                 if is_foreground {
                     workspace.end_follow();
                 }
@@ -781,7 +925,14 @@ mod projection_tests {
             json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "raw final" }),
         ];
 
-        replay_run(chat, ws, "run-1", &events, "AUTHORITATIVE ANSWER");
+        replay_run(
+            chat,
+            ws,
+            "run-1",
+            &events,
+            "AUTHORITATIVE ANSWER",
+            Locale::default(),
+        );
 
         let msgs = chat.messages.get_untracked();
         assert!(
@@ -821,7 +972,7 @@ mod projection_tests {
             json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "done" }),
         ];
         for ev in &events {
-            apply_trace_event(chat, ws, "run-1", ev, true);
+            apply_trace_event(chat, ws, "run-1", ev, true, Locale::default());
         }
 
         let payload = ws.get_tool_payload("run-1", "t1").expect("payload");
@@ -853,7 +1004,7 @@ mod projection_tests {
                 "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "x" } } });
 
         // Background conversation: must not touch the shared detail pane.
-        apply_trace_event(chat, ws, "run-1", &started, false);
+        apply_trace_event(chat, ws, "run-1", &started, false, Locale::default());
         assert_eq!(
             ws.selected.get_untracked(),
             None,
@@ -861,7 +1012,7 @@ mod projection_tests {
         );
 
         // Foreground conversation: live-follow still applies.
-        apply_trace_event(chat, ws, "run-1", &started, true);
+        apply_trace_event(chat, ws, "run-1", &started, true, Locale::default());
         assert_eq!(
             ws.selected.get_untracked(),
             Some(crate::state::inspector::InspectorTarget::Tool {
@@ -897,7 +1048,7 @@ mod projection_tests {
                       "input": { "action": "set_plan" } },
             "result": { "Success": { "output": output_str } }
         });
-        apply_trace_event(chat, ws, "run-1", &ev, true);
+        apply_trace_event(chat, ws, "run-1", &ev, true, Locale::default());
 
         let plan = chat
             .plan
@@ -948,6 +1099,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("in_progress", "a")]),
             true,
+            Locale::default(),
         );
         apply_trace_event(
             chat,
@@ -955,6 +1107,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
             true,
+            Locale::default(),
         );
         assert_eq!(archive_count(&chat), 1, "worked prior plan A sinks");
         let plan = chat.plan.get_untracked().expect("new plan B shown");
@@ -975,6 +1128,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a")]),
             true,
+            Locale::default(),
         );
         apply_trace_event(
             chat,
@@ -982,6 +1136,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
             true,
+            Locale::default(),
         );
         assert_eq!(
             archive_count(&chat),
@@ -1004,8 +1159,16 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
             true,
+            Locale::default(),
         );
-        apply_trace_event(chat, ws, "r1", &scratchpad_event("clear", &[]), true);
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &scratchpad_event("clear", &[]),
+            true,
+            Locale::default(),
+        );
         assert_eq!(archive_count(&chat), 1, "completed plan sinks on clear");
         assert!(
             chat.plan.get_untracked().is_none(),
@@ -1026,6 +1189,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]),
             true,
+            Locale::default(),
         );
         // a same-plan update (start_item) must NOT sink a capsule
         apply_trace_event(
@@ -1034,6 +1198,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]),
             true,
+            Locale::default(),
         );
         assert_eq!(
             archive_count(&chat),
@@ -1056,6 +1221,7 @@ mod projection_tests {
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
             true,
+            Locale::default(),
         );
         live.start_assistant_message("r2"); // next-turn sink of completed A
         let live_caps = live.messages.with(|m| {
@@ -1073,8 +1239,9 @@ mod projection_tests {
             "r1",
             &[scratchpad_event("set_plan", &[("completed", "a")])],
             "done",
+            Locale::default(),
         );
-        replay_run(rep, ws2, "r2", &[], "next");
+        replay_run(rep, ws2, "r2", &[], "next", Locale::default());
         let rep_caps = rep.messages.with(|m| {
             m.iter()
                 .filter_map(|x| x.plan_archive.clone())
@@ -1186,6 +1353,177 @@ mod projection_tests {
         assert!(
             !sessions.is_running(a),
             "one settle clears it → bound exactly once"
+        );
+    }
+
+    // ---- end-of-run tool reconciliation ---------------------------------
+    //
+    // The `agent_trace` mirror is best-effort by construction
+    // (`AgentTraceEmitSink` = bounded mpsc + `try_send`, drops on overflow), so
+    // these cover what the panel must repair from the authoritative
+    // `run_complete` summary.
+
+    fn status_of(chat: &ChatState, tool_id: &str) -> Option<(String, Option<u64>)> {
+        chat.messages.with_untracked(|msgs| {
+            msgs.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .find(|t| t.tool_id == tool_id)
+                .map(|t| (t.status.clone(), t.duration_ms))
+        })
+    }
+
+    fn tool_rows(chat: &ChatState) -> usize {
+        chat.messages
+            .with_untracked(|msgs| msgs.iter().map(|m| m.tool_calls.len()).sum())
+    }
+
+    #[test]
+    fn parse_tool_settlements_reads_the_wire_shape_and_skips_idless() {
+        let summary = json!({ "tool_summaries": [
+            { "tool_id": "t1", "tool_name": "bash", "emoji": "❯", "duration_ms": 120, "success": true },
+            { "tool_id": "t2", "tool_name": "web_search", "emoji": "🔍", "duration_ms": 7, "success": false },
+            { "tool_id": "", "tool_name": "ghost", "duration_ms": 1, "success": true },
+            { "tool_name": "no_id_at_all", "duration_ms": 1, "success": true },
+        ]});
+        let out = parse_tool_settlements(&summary);
+        assert_eq!(out.len(), 2, "id-less entries are unaddressable → skipped");
+        assert_eq!(out[0].tool_id, "t1");
+        assert_eq!(out[0].duration_ms, 120);
+        assert!(out[0].success);
+        assert!(!out[1].success);
+        // No summary / wrong shape degrades to empty rather than panicking.
+        assert!(parse_tool_settlements(&json!({})).is_empty());
+        assert!(parse_tool_settlements(&json!({ "tool_summaries": 3 })).is_empty());
+    }
+
+    /// The headline repair: the tool's `tool_call_completed` mirror frame was
+    /// dropped, so the row is stuck `running` with a live elapsed timer — until
+    /// `run_complete`'s authoritative summary settles it.
+    #[test]
+    fn run_complete_summary_settles_a_dropped_completion() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &json!({ "kind": "tool_call_started", "iteration": 1,
+                     "call": { "tool_id": "t1", "tool_name": "bash", "input": { "cmd": "ls" } } }),
+            true,
+            Locale::default(),
+        );
+        assert_eq!(status_of(&chat, "t1").unwrap().0, "running");
+
+        // ...`tool_call_completed` never arrives (dropped by the bounded mirror).
+        let summary = json!({ "tool_summaries": [
+            { "tool_id": "t1", "tool_name": "bash", "duration_ms": 4200, "success": true }
+        ]});
+        chat.reconcile_tools("r1", &parse_tool_settlements(&summary));
+        chat.settle_orphan_tools("r1");
+
+        assert_eq!(
+            status_of(&chat, "t1"),
+            Some(("completed".to_string(), Some(4200))),
+            "authoritative summary settles the row and supplies its duration"
+        );
+        assert_eq!(tool_rows(&chat), 1, "repair must not duplicate the row");
+    }
+
+    /// The mirror can just as easily drop the *start* frame, in which case the
+    /// call was never visible at all — the summary is the only evidence it ran.
+    #[test]
+    fn run_complete_summary_creates_a_row_whose_start_was_dropped() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+
+        let summary = json!({ "tool_summaries": [
+            { "tool_id": "ghost", "tool_name": "file_read", "duration_ms": 12, "success": false }
+        ]});
+        chat.reconcile_tools("r1", &parse_tool_settlements(&summary));
+
+        assert_eq!(
+            status_of(&chat, "ghost"),
+            Some(("failed".to_string(), Some(12)))
+        );
+        assert_eq!(tool_rows(&chat), 1);
+    }
+
+    /// `run_error` carries no summary at all, so there is nothing to reconcile
+    /// against — but the run is over, so the row must stop pulsing.
+    #[test]
+    fn a_run_that_errors_settles_survivors_to_unknown() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        chat.start_assistant_message("r1");
+        apply_trace_event(
+            chat,
+            ws,
+            "r1",
+            &json!({ "kind": "tool_call_started", "iteration": 1,
+                     "call": { "tool_id": "t1", "tool_name": "bash", "input": {} } }),
+            true,
+            Locale::default(),
+        );
+        chat.settle_orphan_tools("r1");
+        assert_eq!(
+            status_of(&chat, "t1").unwrap().0,
+            crate::views::chat::state::TOOL_STATUS_UNKNOWN,
+            "unknown, not a fabricated success"
+        );
+    }
+
+    #[test]
+    fn error_backfill_never_overwrites_a_captured_result() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = WorkspaceState::new();
+        // t1's real result already landed live; t2's did not.
+        ws.record_tool_result("r1", "t1", json!({ "Success": { "output": "fine" } }));
+        let summary = json!({ "errors": [
+            { "tool_id": "t1", "tool_name": "bash", "error": "late and wrong" },
+            { "tool_id": "t2", "tool_name": "file_read", "error": "no such file" },
+        ]});
+        backfill_tool_errors(ws, "r1", &summary);
+
+        assert_eq!(
+            ws.get_tool_payload("r1", "t1").and_then(|p| p.result),
+            Some(json!({ "Success": { "output": "fine" } })),
+            "the live-captured payload is richer and must win"
+        );
+        assert_eq!(
+            ws.get_tool_payload("r1", "t2")
+                .and_then(|p| p.result)
+                .and_then(|r| crate::components::tool_card::error_message(&r)),
+            Some("no such file".to_string()),
+            "the missing one is back-filled in the envelope the card already reads"
+        );
+    }
+
+    /// Replay reconstructs from the *persisted* trace, which is complete — but a
+    /// run killed between `ToolCallStarted` and `ToolCallCompleted` persists a
+    /// half-open call that would otherwise replay as forever-running.
+    #[test]
+    fn replay_settles_a_trace_that_ends_mid_tool() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+        let events = vec![
+            json!({ "kind": "turn_started", "iteration": 1 }),
+            json!({ "kind": "tool_call_started", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "bash", "input": {} } }),
+        ];
+        replay_run(chat, ws, "r1", &events, "killed", Locale::default());
+        assert_eq!(
+            status_of(&chat, "t1").unwrap().0,
+            crate::views::chat::state::TOOL_STATUS_UNKNOWN
         );
     }
 }

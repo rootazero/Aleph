@@ -52,6 +52,9 @@ pub fn PhoneChatHistory() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let workspace = expect_context::<WorkspaceState>();
+    // Carried into the history replay so trace-derived narration (MoA turn
+    // trace, compaction / veto notes) is localised off the component tree.
+    let i18n = crate::i18n::use_i18n();
     let navigate = use_navigate();
 
     // loading | loaded(rows) | error(msg)
@@ -112,6 +115,7 @@ pub fn PhoneChatHistory() -> impl IntoView {
             chat,
             Some(workspace),
             row.key.clone(),
+            i18n.get_locale_untracked(),
         ));
         navigate("/", NavigateOptions::default());
     };

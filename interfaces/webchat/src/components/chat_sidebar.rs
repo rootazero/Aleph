@@ -133,6 +133,7 @@ pub(crate) async fn hydrate_session_history(
     chat: ChatState,
     workspace: Option<WorkspaceState>,
     key: String,
+    locale: crate::i18n::Locale,
 ) {
     match ChatApi::history(&dash, &key, Some(50)).await {
         Ok(history) => {
@@ -180,7 +181,9 @@ pub(crate) async fn hydrate_session_history(
                 let replayed = if traced {
                     if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
                         let evs = traces.get(run).cloned().unwrap_or_default();
-                        crate::views::chat::events::replay_run(chat, ws, run, &evs, &m.content);
+                        crate::views::chat::events::replay_run(
+                            chat, ws, run, &evs, &m.content, locale,
+                        );
                         // Stamp the final bubble's timestamp from history
                         // so day separators stay correct.
                         let target = format!("assistant-{run}");
@@ -516,6 +519,7 @@ pub fn ChatSidebar() -> impl IntoView {
             chat,
             workspace,
             sk.to_string(),
+            i18n.get_locale_untracked(),
         ));
     });
 
@@ -631,7 +635,13 @@ pub fn ChatSidebar() -> impl IntoView {
                 .and_then(|s| s.mode.clone()),
         );
 
-        leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
+        leptos::task::spawn_local(hydrate_session_history(
+            dash,
+            chat,
+            workspace,
+            key,
+            i18n.get_locale_untracked(),
+        ));
     };
 
     // Enter team chat mode: fetch detail, build roster, replay history.

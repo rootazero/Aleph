@@ -369,18 +369,15 @@ pub fn ToolCard(
 
     let tid_for_status = tool_id.clone();
     let tid_for_expand = tool_id.clone();
-    let status = Memo::new(move |_| {
-        chat.messages
-            .get()
-            .iter()
-            .flat_map(|m| m.tool_calls.iter())
-            .find_map(|t| {
-                if t.tool_id == tid_for_status {
-                    Some((t.status.clone(), t.duration_ms, t.started_at_ms))
-                } else {
-                    None
-                }
-            })
+    // Read the shared `tool_id → status` index rather than rescanning the whole
+    // transcript per card per streamed token (see `ToolIndex`). Absent context
+    // (storybook) falls back to the same lookup done directly.
+    let tool_index = use_context::<crate::views::chat::state::ToolIndex>();
+    let status = Memo::new(move |_| match tool_index {
+        Some(idx) => idx.status_of(&tid_for_status),
+        None => chat
+            .messages
+            .with(|msgs| crate::views::chat::state::find_tool_status(msgs, &tid_for_status)),
     });
 
     let run_for_overflow = run_id.clone();
@@ -470,6 +467,10 @@ pub fn ToolCard(
     let running = move || matches!(status.get(), Some((s, _, _)) if s == "running");
     let failed = move || matches!(status.get(), Some((s, _, _)) if s == "failed");
     let succeeded = move || matches!(status.get(), Some((s, _, _)) if s == "completed");
+    // Fourth state: the run settled while this row was still running and the
+    // authoritative summary never named it (see `state::TOOL_STATUS_UNKNOWN`).
+    // Rendered as a muted dash — neither a lie about success nor a false alarm.
+    let unknown = move || matches!(status.get(), Some((s, _, _)) if s == crate::views::chat::state::TOOL_STATUS_UNKNOWN);
 
     // Shared 1s clock for the live elapsed timer on long-running rows. Only
     // read inside the `running` branch below, so done/failed rows never
@@ -526,6 +527,12 @@ pub fn ToolCard(
                 </Show>
                 <Show when=failed>
                     <span class="shrink-0 text-[11px] text-danger">"✗"</span>
+                </Show>
+                <Show when=unknown>
+                    <span
+                        class="shrink-0 text-[11px] text-text-tertiary"
+                        title=move || t_string!(i18n, tool_card.status_unknown).to_string()
+                    >"–"</span>
                 </Show>
                 {move || match diff_stat() {
                     Some((a, r)) => view! {

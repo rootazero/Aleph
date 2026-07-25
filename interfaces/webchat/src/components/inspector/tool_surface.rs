@@ -21,20 +21,32 @@ pub fn ToolInspector(run_id: String, tool_id: String) -> impl IntoView {
 
     // Reactive: the followed tool's status/duration land after selection, and
     // its result payload arrives on `tool_call_completed`.
+    //
+    // Status comes from the shared `ToolIndex` so the pane does not add its own
+    // O(transcript) rescan on every streamed token; the *name* still needs the
+    // transcript (the index is keyed by id and carries no name), but that read
+    // is one lookup on one pane, not one per card.
+    let tool_index = use_context::<crate::views::chat::state::ToolIndex>();
     move || {
         // Name/status reverse-looked up from transcript; payload fetched from capture table.
-        let entry = chat.messages.with(|msgs| {
+        let tool_name = chat.messages.with(|msgs| {
             msgs.iter()
                 .flat_map(|m| m.tool_calls.iter())
                 .find(|t| t.tool_id == tool_id)
-                .cloned()
+                .map(|t| t.tool_name.clone())
+                .unwrap_or_default()
         });
-        let tool_name = entry
+        let entry = match tool_index {
+            Some(idx) => idx.status_of(&tool_id),
+            None => chat
+                .messages
+                .with(|msgs| crate::views::chat::state::find_tool_status(msgs, &tool_id)),
+        };
+        let status = entry
             .as_ref()
-            .map(|t| t.tool_name.clone())
+            .map(|(s, _, _)| s.clone())
             .unwrap_or_default();
-        let status = entry.as_ref().map(|t| t.status.clone()).unwrap_or_default();
-        let duration = entry.as_ref().and_then(|t| t.duration_ms);
+        let duration = entry.as_ref().and_then(|(_, d, _)| *d);
         let kind = ToolKind::from_name(&tool_name);
         let payload = workspace.get_tool_payload(&run_id, &tool_id);
         let headline = tool_headline(kind, &payload).unwrap_or_else(|| tool_name.clone());
@@ -45,6 +57,11 @@ pub fn ToolInspector(run_id: String, tool_id: String) -> impl IntoView {
             }
             .into_any(),
             "failed" => view! { <span class="text-danger text-xs">"✗"</span> }.into_any(),
+            // The run settled without an outcome for this call — must not be
+            // painted as success (see `state::TOOL_STATUS_UNKNOWN`).
+            crate::views::chat::state::TOOL_STATUS_UNKNOWN => {
+                view! { <span class="text-text-tertiary text-xs">"–"</span> }.into_any()
+            }
             _ => view! { <span class="text-success text-xs">"✓"</span> }.into_any(),
         };
         view! {

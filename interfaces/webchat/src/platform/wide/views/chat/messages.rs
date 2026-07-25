@@ -157,13 +157,33 @@ pub(crate) fn MessageList() -> impl IntoView {
         }
     };
 
-    // Reactive auto-scroll — only when the user is already at the bottom.
+    // Reactive auto-scroll — only when the user is already at the bottom, with
+    // one exception: the user posting their OWN message re-arms stickiness.
+    //
+    // Without that exception, scrolling up to re-read something and then
+    // sending left the reply off-screen behind the "new messages" pill — the
+    // user had asked for it and then had to go hunt for it. Sending is an
+    // unambiguous "I'm done reading back" signal (hermes-desktop's
+    // `useChatScroll` force-scrolls on the same trigger).
+    //
+    // Detected by growth of the trailing-user-message count rather than by
+    // hooking the send path, so every producer (composer, queued-prompt flush,
+    // retry, voice, slash command) is covered by construction.
+    let last_user_seq = RwSignal::new(0usize);
     Effect::new(move |_| {
         // Subscribe to message/phase changes (read both untracked-style for re-runs)
-        let _msgs = chat.messages.get();
+        let user_seq = chat
+            .messages
+            .with(|msgs| msgs.iter().filter(|m| m.role == "user").count());
         let _phase = chat.phase.get();
+        let user_just_sent = user_seq > last_user_seq.get_untracked();
+        last_user_seq.set(user_seq);
+        if user_just_sent {
+            stuck_to_bottom.set(true);
+            unseen_below.set(false);
+        }
         if let Some(el) = scroll_ref.get() {
-            if stuck_to_bottom.get_untracked() {
+            if user_just_sent || stuck_to_bottom.get_untracked() {
                 let el: &web_sys::HtmlElement = &el;
                 el.set_scroll_top(el.scroll_height());
             } else {
@@ -609,8 +629,10 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
 
     let content = message.content.clone();
     // Stable key for the typewriter reveal clock — survives the per-token
-    // remount of a streaming bubble so the reveal sweep stays continuous.
-    let message_id = message.id.clone();
+    // remount of a streaming bubble so the reveal sweep stays continuous, while
+    // still distinguishing two steps that share the id `assistant-{run}`
+    // (see `timeline::reveal_key`).
+    let message_id = timeline::reveal_key(&message);
     let is_streaming = message.is_streaming;
     let error = message.error.clone();
     let model_info = message.model_info.clone();
@@ -957,7 +979,9 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
 #[component]
 fn NarrationRow(message: ChatMessage) -> impl IntoView {
     let content = message.content.clone();
-    let message_id = message.id.clone();
+    // Per-step reveal identity, NOT the bare id — consecutive steps of one run
+    // share the id `assistant-{run}` (see `timeline::reveal_key`).
+    let message_id = timeline::reveal_key(&message);
     let is_streaming = message.is_streaming;
     view! {
         <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">

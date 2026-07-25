@@ -120,18 +120,27 @@ impl TypewriterClock {
     /// than jumping). Uses untracked read/write: the cursor map is bookkeeping,
     /// not a render input — re-render is driven by [`tick`](Self::tick), so
     /// touching it reactively would be a spurious self-dependency.
+    ///
+    /// Creating a cursor also sweeps stale ones out (see [`STALE_CURSOR_MS`]).
     #[must_use]
     pub fn advance_for(&self, id: &str, total: usize, now: f64, cps: u32, instant: bool) -> usize {
-        let prev = self
-            .reveals
-            .with_untracked(|m| m.get(id).copied())
-            .unwrap_or(Reveal {
+        let prev = self.reveals.with_untracked(|m| m.get(id).copied());
+        let is_new = prev.is_none();
+        let next = advance_reveal(
+            prev.unwrap_or(Reveal {
                 revealed: 0,
                 frac: 0.0,
                 last_ms: now,
-            });
-        let next = advance_reveal(prev, total, now, cps, instant);
+            }),
+            total,
+            now,
+            cps,
+            instant,
+        );
         self.reveals.update_untracked(|m| {
+            if is_new {
+                prune_stale(m, now);
+            }
             m.insert(id.to_string(), next);
         });
         next.revealed
@@ -148,6 +157,29 @@ impl TypewriterClock {
             m.remove(id);
         });
     }
+}
+
+/// How long a cursor may sit un-advanced before it is treated as abandoned.
+///
+/// A cursor is normally pruned by [`TypewriterClock::finish`] when its bubble
+/// finishes revealing. Two paths never reach that: a step bubble that
+/// `ChatState::begin_step` *renames* out from under its cursor, and a
+/// conversation switch that replaces the whole transcript. Both leave a cursor
+/// nothing will ever advance again, so anything untouched for this long is
+/// swept on the next cursor creation. Generous enough that a live bubble
+/// stalled behind a slow tool call is never mistaken for an orphan (a live
+/// bubble heartbeats `last_ms` every animation frame regardless).
+const STALE_CURSOR_MS: f64 = 60_000.0;
+
+/// Drop cursors nothing has advanced for [`STALE_CURSOR_MS`]. Pure so the
+/// bound is host-testable. `now` going backwards (clock adjustment) yields a
+/// negative age and prunes nothing, which is the safe direction.
+fn prune_stale(map: &mut HashMap<String, Reveal>, now: f64) {
+    map.retain(|_, r| {
+        // Spelled through `partial_cmp` because the age can be NaN on a
+        // degenerate clock: only a definite `Greater` prunes, so NaN keeps.
+        (now - r.last_ms).partial_cmp(&STALE_CURSOR_MS) != Some(std::cmp::Ordering::Greater)
+    });
 }
 
 /// Advance a [`Reveal`] by the real elapsed wall-clock at `cps`, clamped to
@@ -203,7 +235,8 @@ pub fn advance_reveal(prev: Reveal, total: usize, now: f64, cps: u32, instant: b
 
 #[cfg(test)]
 mod tests {
-    use super::{advance_reveal, Reveal};
+    use super::{advance_reveal, prune_stale, Reveal, STALE_CURSOR_MS};
+    use std::collections::HashMap;
 
     /// Cursor anchored at `t=0` with nothing revealed — the first-sight state.
     fn fresh() -> Reveal {
@@ -295,6 +328,42 @@ mod tests {
             grown.revealed
         );
         assert!(grown.revealed >= 10);
+    }
+
+    #[test]
+    fn prune_stale_drops_only_abandoned_cursors() {
+        let cursor = |last_ms: f64| Reveal {
+            revealed: 3,
+            frac: 0.0,
+            last_ms,
+        };
+        let now = 1_000_000.0;
+        let mut map = HashMap::from([
+            // Advanced this frame — a live bubble.
+            ("live".to_string(), cursor(now)),
+            // Stalled behind a slow tool call, but still heartbeating.
+            ("slow".to_string(), cursor(now - STALE_CURSOR_MS + 1.0)),
+            // Renamed out from under its cursor, or a switched-away session.
+            ("orphan".to_string(), cursor(now - STALE_CURSOR_MS - 1.0)),
+        ]);
+        prune_stale(&mut map, now);
+        assert!(map.contains_key("live"));
+        assert!(map.contains_key("slow"));
+        assert!(!map.contains_key("orphan"));
+    }
+
+    #[test]
+    fn prune_stale_is_a_no_op_when_the_clock_goes_backwards() {
+        let mut map = HashMap::from([(
+            "a".to_string(),
+            Reveal {
+                revealed: 1,
+                frac: 0.0,
+                last_ms: 5_000.0,
+            },
+        )]);
+        prune_stale(&mut map, 0.0);
+        assert_eq!(map.len(), 1, "a negative age must never prune");
     }
 
     #[test]

@@ -84,6 +84,12 @@ fn AppContent() -> impl IntoView {
     let chat_state = ChatState::new();
     provide_context(chat_state);
 
+    // Shared `tool_id → status` index over the foreground transcript. Provided
+    // here (not inside the message list) because the right-pane tool inspector
+    // is a sibling subtree, and both must read the same memo — otherwise every
+    // mounted tool row re-scans the whole transcript on every streamed token.
+    provide_context(crate::views::chat::state::ToolIndex::new(chat_state));
+
     // Immersive voice mode switch. Provided at the shell root so the composer
     // mini-orb (which flips it on) and the full-screen overlay (mounted at the
     // shell root, below) both read the same signal. The overlay reuses this
@@ -114,7 +120,9 @@ fn AppContent() -> impl IntoView {
     // sessions no longer freeze while another tab is in view.
     {
         let ws = expect_context::<WorkspaceState>();
-        let _root_run_sub = subscribe_run_events(&state, session_map, chat_state, ws);
+        // The dispatcher outlives every component, so it cannot look the i18n
+        // context up on demand — hand it the (Copy) handle once here.
+        let _root_run_sub = subscribe_run_events(&state, session_map, chat_state, ws, use_i18n());
         // Root-level subscription is app-lifetime; no on_cleanup needed.
     }
 

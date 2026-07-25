@@ -1967,6 +1967,21 @@
     "cat_run": "run",
     "cat_search": "search",
     "cat_tool": "tool",
-    "to_detail": "detail panel"
+    "to_detail": "detail panel",
+    "status_unknown": "Outcome unknown — the run ended before this call reported back"
+  },
+  "narration": {
+    "compaction_ok": "⚠️ Context window overflowed: history compacted, retry succeeded",
+    "compaction_failed": "⚠️ Context window overflowed: retry after compaction still failed",
+    "verifier_veto": "Wrap-up intercepted (checklist still has open items)",
+    "moa_inactive": "MoA did not engage",
+    "moa_advisor": "Advisor",
+    "moa_advisors": "advisors",
+    "moa_cached_advisors": "reusing cached advisor opinions",
+    "moa_aggregating": "MoA aggregating",
+    "moa_aggregator": "Aggregator",
+    "moa_spend": "Advisor spend",
+    "moa_billed": "billed",
+    "moa_turn_trace_preset": "MoA turn trace — preset"
   }
 }

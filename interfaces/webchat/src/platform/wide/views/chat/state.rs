@@ -298,18 +298,111 @@ pub struct ChatMessage {
     pub plan_archive: Option<super::plan::PlanView>,
 }
 
+/// Terminal status for a tool row whose outcome never reached the panel: the
+/// run settled while the row was still `running` and the authoritative
+/// end-of-run `tool_summaries` did not name it either.
+///
+/// It exists because the `agent_trace` mirror is explicitly lossy —
+/// `AgentTraceEmitSink` pushes through a bounded `mpsc(256)` with `try_send`
+/// and drops on overflow. Without a fourth state a dropped
+/// `tool_call_completed` left the row pulsing `running` forever (permanent 1s
+/// tick subscription, and its `ExploreGroup` stuck on "Exploring…"). Settling
+/// to `unknown` is honest: we know the run is over, we do not know how the
+/// call ended. See [`ChatState::settle_orphan_tools`].
+pub const TOOL_STATUS_UNKNOWN: &str = "unknown";
+
 /// Minimal tool call record for display.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallEntry {
     pub tool_id: String,
     pub tool_name: String,
-    pub status: String, // "running" | "completed" | "failed"
+    /// `"running" | "completed" | "failed" | "unknown"` — see
+    /// [`TOOL_STATUS_UNKNOWN`] for the fourth state's rationale.
+    pub status: String,
     #[serde(default)]
     pub duration_ms: Option<u64>,
     /// Epoch-ms when the tool first went "running" — drives the live
     /// elapsed timer on long-running tool rows. Stamped panel-side.
     #[serde(default)]
     pub started_at_ms: Option<i64>,
+}
+
+/// A tool row's render-relevant status triple: `(status, duration_ms,
+/// started_at_ms)`.
+pub type ToolStatusEntry = (String, Option<u64>, Option<i64>);
+
+/// `tool_id → status triple` for every tool row in the transcript.
+pub type ToolStatusMap = std::collections::HashMap<String, ToolStatusEntry>;
+
+/// Look one tool row's status up by scanning the transcript. The single
+/// implementation behind both [`ToolIndex`] and its no-context fallback.
+#[must_use]
+pub fn find_tool_status(messages: &[ChatMessage], tool_id: &str) -> Option<ToolStatusEntry> {
+    messages
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .find(|t| t.tool_id == tool_id)
+        .map(|t| (t.status.clone(), t.duration_ms, t.started_at_ms))
+}
+
+/// Shared, memoized `tool_id → status` index over the foreground transcript.
+///
+/// Every mounted `ToolCard` (and the right-pane `ToolInspector`) needs one
+/// tool's live status. Doing that as a per-card `Memo` that scans
+/// `messages × tool_calls` meant a single streamed token — which invalidates
+/// `messages` — re-ran an O(transcript) scan **once per mounted card**: a long
+/// agentic run with dozens of tool rows paid O(cards × tool_calls) per token,
+/// in WASM, at token rate.
+///
+/// One shared `Memo` collapses that to O(tool_calls) per token, and — because
+/// `Memo` only notifies dependents when the computed value actually differs —
+/// pure text streaming (the overwhelmingly common case: no tool row changed)
+/// recomputes an *equal* map and wakes **no** card at all.
+#[derive(Clone, Copy)]
+pub struct ToolIndex(pub Memo<ToolStatusMap>);
+
+impl ToolIndex {
+    /// Build the index over `chat`'s transcript. Provided once at the app root.
+    #[must_use]
+    pub fn new(chat: ChatState) -> Self {
+        Self(Memo::new(move |_| {
+            chat.messages.with(|msgs| {
+                msgs.iter()
+                    .flat_map(|m| m.tool_calls.iter())
+                    .map(|t| {
+                        (
+                            t.tool_id.clone(),
+                            (t.status.clone(), t.duration_ms, t.started_at_ms),
+                        )
+                    })
+                    .collect()
+            })
+        }))
+    }
+
+    /// Reactive lookup of one tool row's status.
+    #[must_use]
+    pub fn status_of(&self, tool_id: &str) -> Option<ToolStatusEntry> {
+        self.0.with(|m| m.get(tool_id).cloned())
+    }
+}
+
+/// One authoritative tool outcome from `run_complete`'s
+/// `summary.tool_summaries[]`, projected onto the transcript by
+/// [`ChatState::reconcile_tools`].
+///
+/// Core builds this from the harness's `tool_timeline` (`build_run_summary` in
+/// `gateway/execution_engine/event_drain.rs`), keyed by the same `call.id` the
+/// live `tool_call_started` / `tool_call_completed` trace events carry — so a
+/// settlement always addresses the row the stream already created, and can
+/// safely *create* the row when the `tool_call_started` mirror was the frame
+/// that got dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSettlement {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub duration_ms: u64,
+    pub success: bool,
 }
 
 /// Panel-side team member view (roster rail rendering + attribution coloring).
@@ -895,6 +988,18 @@ impl ChatState {
     }
 
     /// Record a tool call event.
+    ///
+    /// The update half searches **every bubble of the run** (the trailing
+    /// `assistant-{run}` one *and* the already-finalized
+    /// `intermediate-{run}-{n}` ones), mirroring what `set_step_text` and
+    /// `finalize_answer` already do. Searching only the trailing bubble made a
+    /// late `tool_call_completed` — one that lands after the next
+    /// `turn_started` renamed its bubble — miss its own row and *append a
+    /// phantom duplicate* to the fresh step, leaving the original row pinned
+    /// on `running` forever.
+    ///
+    /// A first sighting still appends to the trailing bubble, so a tool call
+    /// always joins the step it was issued from.
     pub fn update_tool(
         &self,
         run_id: &str,
@@ -904,19 +1009,96 @@ impl ChatState {
         duration_ms: Option<u64>,
     ) {
         let target_id = format!("assistant-{run_id}");
+        let intermediate_prefix = format!("intermediate-{run_id}-");
         self.messages.update(|msgs| {
+            let existing = msgs
+                .iter_mut()
+                .rev()
+                .filter(|m| m.id == target_id || m.id.starts_with(&intermediate_prefix))
+                .find_map(|m| m.tool_calls.iter_mut().find(|t| t.tool_id == tool_id));
+            if let Some(tc) = existing {
+                tc.status = status.to_string();
+                tc.duration_ms = duration_ms;
+                return;
+            }
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
-                if let Some(tc) = msg.tool_calls.iter_mut().find(|t| t.tool_id == tool_id) {
+                msg.tool_calls.push(ToolCallEntry {
+                    tool_id: tool_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    status: status.to_string(),
+                    duration_ms,
+                    started_at_ms: (status == "running").then(super::timeline::now_millis),
+                });
+            }
+        });
+    }
+
+    /// Project the run's authoritative end-of-run tool outcomes
+    /// (`run_complete` → `summary.tool_summaries[]`) onto its rows.
+    ///
+    /// This is the repair pass for the deliberately lossy `agent_trace` mirror
+    /// (see [`TOOL_STATUS_UNKNOWN`]): whichever `tool_call_started` /
+    /// `tool_call_completed` frames were dropped, the terminal truth for every
+    /// call of the run rides along in the very same `run_complete` frame the
+    /// panel already parses for cost and occupancy. Core is authoritative and
+    /// the panel is a pure renderer (R4), so a settlement always wins over the
+    /// streamed status.
+    ///
+    /// A settlement whose row does not exist creates it on the trailing bubble
+    /// — the case where the *start* frame was the one that got dropped, so the
+    /// call was never visible at all.
+    pub fn reconcile_tools(&self, run_id: &str, settlements: &[ToolSettlement]) {
+        if settlements.is_empty() {
+            return;
+        }
+        let target_id = format!("assistant-{run_id}");
+        let intermediate_prefix = format!("intermediate-{run_id}-");
+        self.messages.update(|msgs| {
+            for s in settlements {
+                let status = if s.success { "completed" } else { "failed" };
+                let existing = msgs
+                    .iter_mut()
+                    .rev()
+                    .filter(|m| m.id == target_id || m.id.starts_with(&intermediate_prefix))
+                    .find_map(|m| m.tool_calls.iter_mut().find(|t| t.tool_id == s.tool_id));
+                if let Some(tc) = existing {
                     tc.status = status.to_string();
-                    tc.duration_ms = duration_ms;
-                } else {
+                    tc.duration_ms = Some(s.duration_ms);
+                    if tc.tool_name.is_empty() {
+                        tc.tool_name.clone_from(&s.tool_name);
+                    }
+                } else if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
                     msg.tool_calls.push(ToolCallEntry {
-                        tool_id: tool_id.to_string(),
-                        tool_name: tool_name.to_string(),
+                        tool_id: s.tool_id.clone(),
+                        tool_name: s.tool_name.clone(),
                         status: status.to_string(),
-                        duration_ms,
-                        started_at_ms: (status == "running").then(super::timeline::now_millis),
+                        duration_ms: Some(s.duration_ms),
+                        started_at_ms: None,
                     });
+                }
+            }
+        });
+    }
+
+    /// Settle every row of `run_id` still marked `running` to
+    /// [`TOOL_STATUS_UNKNOWN`].
+    ///
+    /// Runs after [`Self::reconcile_tools`] on `run_complete`, and alone on
+    /// `run_error` (whose frame carries no summary at all). Without it a row
+    /// whose completion frame was dropped keeps a pulsing dot and an
+    /// ever-growing elapsed timer — a permanent 1s-tick subscription — and its
+    /// `ExploreGroup` never reaches `completed`, so the block stays expanded
+    /// under an "Exploring…" header for the rest of the session.
+    pub fn settle_orphan_tools(&self, run_id: &str) {
+        let target_id = format!("assistant-{run_id}");
+        let intermediate_prefix = format!("intermediate-{run_id}-");
+        self.messages.update(|msgs| {
+            for m in msgs
+                .iter_mut()
+                .filter(|m| m.id == target_id || m.id.starts_with(&intermediate_prefix))
+            {
+                for tc in m.tool_calls.iter_mut().filter(|t| t.status == "running") {
+                    tc.status = TOOL_STATUS_UNKNOWN.to_string();
                 }
             }
         });
@@ -1590,6 +1772,91 @@ mod step_tests {
         assert!(
             chat.context_usage.get_untracked().is_none(),
             "restoring an empty snapshot must leave the gauge hidden"
+        );
+    }
+
+    /// Every tool row of `run`, flattened across its step bubbles.
+    fn rows(chat: &ChatState) -> Vec<(String, String, Option<u64>)> {
+        chat.messages.with_untracked(|msgs| {
+            msgs.iter()
+                .flat_map(|m| m.tool_calls.iter())
+                .map(|t| (t.tool_id.clone(), t.status.clone(), t.duration_ms))
+                .collect()
+        })
+    }
+
+    /// Regression: a `tool_call_completed` that lands *after* the next
+    /// `turn_started` renamed its bubble used to miss its own row (the search
+    /// covered only the trailing `assistant-{run}` bubble) and append a phantom
+    /// duplicate to the fresh step, leaving the original pinned on `running`.
+    #[test]
+    fn update_tool_reaches_a_row_in_an_earlier_step_bubble() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.update_tool("r1", "t1", "bash", "running", None);
+        // Next turn opens: the step-1 bubble is renamed, a fresh
+        // `assistant-r1` is pushed. Only then does t1's completion arrive.
+        chat.begin_step("r1", 2);
+        chat.update_tool("r1", "t1", "bash", "completed", Some(90));
+
+        assert_eq!(
+            rows(&chat),
+            vec![("t1".to_string(), "completed".to_string(), Some(90))],
+            "one row, settled in place — not a stuck row plus a phantom copy"
+        );
+    }
+
+    #[test]
+    fn reconcile_tools_is_authoritative_over_the_streamed_status() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.update_tool("r1", "t1", "bash", "running", None);
+
+        chat.reconcile_tools(
+            "r1",
+            &[ToolSettlement {
+                tool_id: "t1".into(),
+                tool_name: "bash".into(),
+                duration_ms: 33,
+                success: false,
+            }],
+        );
+        assert_eq!(
+            rows(&chat),
+            vec![("t1".to_string(), "failed".to_string(), Some(33))]
+        );
+        // Empty settlement list is a no-op, not a wipe.
+        chat.reconcile_tools("r1", &[]);
+        assert_eq!(rows(&chat).len(), 1);
+    }
+
+    #[test]
+    fn settle_orphan_tools_touches_only_running_rows_of_that_run() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.update_tool("r1", "done", "bash", "completed", Some(5));
+        chat.update_tool("r1", "stuck", "bash", "running", None);
+        chat.start_assistant_message("r2");
+        chat.update_tool("r2", "other", "bash", "running", None);
+
+        chat.settle_orphan_tools("r1");
+
+        let by_id: std::collections::HashMap<_, _> = rows(&chat)
+            .into_iter()
+            .map(|(id, status, _)| (id, status))
+            .collect();
+        assert_eq!(by_id["done"], "completed", "terminal rows are left alone");
+        assert_eq!(by_id["stuck"], TOOL_STATUS_UNKNOWN);
+        assert_eq!(
+            by_id["other"], "running",
+            "another run's live tool must keep running"
         );
     }
 }
