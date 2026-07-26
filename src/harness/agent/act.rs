@@ -309,9 +309,10 @@ impl AgentHarness {
     ///
     /// `canonical` / `claims` carry the per-call canonical arg signatures and
     /// concurrency claims pre-computed by `act()` (aligned by index with
-    /// `tool_calls`) so admission does not recompute them; `None` recomputes
-    /// on demand (the single-call / parallelism-disabled fast path, which
-    /// exits admission before either is needed).
+    /// `tool_calls`) so admission does not recompute them. They are `None`
+    /// only on `act()`'s single-call / parallelism-disabled fast path, which
+    /// by construction cannot be admitted to the parallel route — so absence
+    /// short-circuits straight to the serial loop.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_group(
         &self,
@@ -335,23 +336,30 @@ impl AgentHarness {
         let mut tool_call_cache: HashMap<(String, String), ToolOutput> = HashMap::new();
 
         // opencode-parity parallel fast path. Falls through to the serial loop
-        // below when any precondition fails (see module docs).
-        if self
-            .can_parallel_dispatch(&tool_calls, canonical, claims)
-            .await
-        {
-            return self
-                .act_parallel(
-                    session_id,
-                    turn_id,
-                    tool_calls,
-                    callback,
-                    iteration,
-                    budget_turn_id,
-                    run_cancel,
-                    canonical,
-                )
-                .await;
+        // below when any precondition fails (see module docs). Missing
+        // pre-computed batch data is one such precondition, and not a special
+        // case: it happens only on `act()`'s fast path, whose entry condition
+        // (`!parallel_enabled || tool_calls.len() < 2`) is the same condition
+        // `can_parallel_dispatch` rejects on. Recomputing it here would be a
+        // branch with no caller.
+        if let (Some(canonical), Some(claims)) = (canonical, claims) {
+            if self
+                .can_parallel_dispatch(&tool_calls, canonical, claims)
+                .await
+            {
+                return self
+                    .act_parallel(
+                        session_id,
+                        turn_id,
+                        tool_calls,
+                        callback,
+                        iteration,
+                        budget_turn_id,
+                        run_cancel,
+                        canonical,
+                    )
+                    .await;
+            }
         }
 
         // Offered-tool snapshot for tool-name repair, taken once per batch (the
@@ -645,13 +653,13 @@ impl AgentHarness {
     /// the parallel fast path instead of paying a full-serial penalty.
     ///
     /// `canonical` / `claims` are the per-call canonical arg signatures and
-    /// concurrency claims pre-computed by `act()` (aligned by index with
-    /// `tool_calls`); when `None` they are computed here on demand.
+    /// concurrency claims pre-computed by `act()`, aligned by index with
+    /// `tool_calls`.
     async fn can_parallel_dispatch(
         &self,
         tool_calls: &[NativeToolCall],
-        canonical: Option<&[String]>,
-        claims: Option<&[crate::tools::concurrency::ConcurrencyClaim]>,
+        canonical: &[String],
+        claims: &[crate::tools::concurrency::ConcurrencyClaim],
     ) -> bool {
         let Some(par_n) = self.deps.parallel_tool_concurrency else {
             return false;
@@ -662,17 +670,6 @@ impl AgentHarness {
         // Reject batches with within-batch duplicates so the serial dedup
         // memo continues to own that semantics. (Duplicates are rare; the
         // common LLM pattern is N distinct read-only calls.)
-        let owned_canonical: Vec<String>;
-        let canonical: &[String] = match canonical {
-            Some(canonical) => canonical,
-            None => {
-                owned_canonical = tool_calls
-                    .iter()
-                    .map(|call| super::canonical_json_string(&call.arguments))
-                    .collect();
-                &owned_canonical
-            }
-        };
         let mut seen = std::collections::HashSet::new();
         for (call, canon) in tool_calls.iter().zip(canonical) {
             if !seen.insert((call.name.as_str(), canon.as_str())) {
@@ -685,23 +682,6 @@ impl AgentHarness {
         // concurrent-safe" check — a batch of disjoint-path file mutations now
         // parallelizes, while same-path or whole-world mutations still fall
         // back to the serial loop. See `crate::tools::concurrency`.
-        let owned_claims;
-        let claims = match claims {
-            Some(claims) => claims,
-            None => {
-                let mut computed = Vec::with_capacity(tool_calls.len());
-                for call in tool_calls {
-                    computed.push(
-                        self.deps
-                            .tools
-                            .call_concurrency_claim(&call.name, &call.arguments)
-                            .await,
-                    );
-                }
-                owned_claims = computed;
-                &owned_claims
-            }
-        };
         crate::tools::concurrency::batch_parallelizable(claims)
     }
 
@@ -716,8 +696,7 @@ impl AgentHarness {
     ///
     /// `canonical` carries the per-call canonical arg signatures pre-computed
     /// by `act()` (aligned by index with `tool_calls`, pre-guardrail — PASS 0
-    /// re-canonicalizes any guardrail-sanitised call); when `None` they are
-    /// computed here on demand.
+    /// re-canonicalizes any guardrail-sanitised call).
     #[allow(clippy::too_many_arguments)]
     async fn act_parallel(
         &self,
@@ -728,7 +707,7 @@ impl AgentHarness {
         iteration: usize,
         budget_turn_id: &crate::tools::turn_budget::TurnId,
         run_cancel: &CancellationToken,
-        canonical: Option<&[String]>,
+        canonical: &[String],
     ) -> Result<usize, HarnessError> {
         let mut executed_count: usize = 0;
 
@@ -747,13 +726,7 @@ impl AgentHarness {
         // serial path: a guardrail-rewritten call whose original matched a past
         // failure would be wrongly skipped, and one whose sanitised form
         // matches a past failure would be wrongly run.
-        let mut canonical_args: Vec<String> = match canonical {
-            Some(canonical) => canonical.to_vec(),
-            None => tool_calls
-                .iter()
-                .map(|c| super::canonical_json_string(&c.arguments))
-                .collect(),
-        };
+        let mut canonical_args: Vec<String> = canonical.to_vec();
         let mut skip: Vec<bool> = vec![false; tool_calls.len()];
 
         // Per-index guardrail outcome, populated in PASS 0 (mirrors the serial
