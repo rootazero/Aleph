@@ -148,6 +148,17 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// "N entries" summary for the Memory Vault stat card.
+///
+/// Deliberately excludes `total_graph_nodes`: graph nodes ARE the notes (one
+/// row per note — `get_graph_data` selects straight from `notes_index`), so
+/// adding it to `total_facts` would double-count every note. It also used to
+/// fold a real `None` ("could not count") into a fake `0`, which is the exact
+/// dishonesty the dedicated Graph Nodes card avoids by rendering "—".
+fn memory_vault_summary(stats: &MemoryStats) -> String {
+    format!("{} entries", stats.total_facts + stats.total_memories)
+}
+
 #[component]
 #[must_use]
 pub fn Home() -> impl IntoView {
@@ -538,7 +549,7 @@ pub fn Home() -> impl IntoView {
                 </StatCard>
                 <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.memory_vault).to_string()) value=Signal::derive(move || {
                     match memory_stats.get() {
-                        Some(Some(ref stats)) => format!("{} entries", stats.total_facts + stats.total_memories + stats.total_graph_nodes.unwrap_or(0)),
+                        Some(Some(ref stats)) => memory_vault_summary(stats),
                         Some(None) => "\u{2014}".to_string(),
                         None => "\u{2014}".to_string(),
                     }
@@ -885,5 +896,41 @@ fn ResourceMetric(
                 <div class="mt-1.5 text-[9px] text-text-tertiary font-medium uppercase tracking-wider">{sub}</div>
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_vault_summary_excludes_graph_nodes() {
+        // total_graph_nodes counts the same rows as total_facts (one row per
+        // note); if it were re-added to the sum this assertion would fail
+        // (would compute "25 entries" instead of "15 entries").
+        let stats = MemoryStats {
+            total_facts: 10,
+            total_memories: 5,
+            valid_facts: 10,
+            total_graph_nodes: Some(10),
+            total_graph_edges: Some(3),
+            scope: "agent".to_string(),
+        };
+        assert_eq!(memory_vault_summary(&stats), "15 entries");
+    }
+
+    #[test]
+    fn memory_vault_summary_handles_unknown_graph_count() {
+        // A None graph count (store-wide scope) must not panic or need
+        // unwrapping — the summary never touches that field at all.
+        let stats = MemoryStats {
+            total_facts: 3,
+            total_memories: 7,
+            valid_facts: 3,
+            total_graph_nodes: None,
+            total_graph_edges: None,
+            scope: "global".to_string(),
+        };
+        assert_eq!(memory_vault_summary(&stats), "10 entries");
     }
 }
