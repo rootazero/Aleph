@@ -8,7 +8,6 @@ use leptos_router::hooks::use_location;
 use crate::api::agents::AgentsApi;
 use crate::api::graph::GraphApi;
 use crate::api::{CompressedFact, MemoryApi, MemoryStats};
-use crate::components::ui::Card;
 use crate::context::{strip_params, DashboardState};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::memory::{MemoryState, MemoryView};
@@ -20,6 +19,7 @@ mod drawer;
 mod facets;
 mod loader;
 mod pager;
+mod stats;
 mod toast;
 
 use batch_bar::BatchBar;
@@ -33,6 +33,7 @@ use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
 use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow};
 use pager::Pager;
+use stats::{MemoryHeader, StatCards};
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
 
 /// Debounce before the search box filters the loaded window. Long enough that a
@@ -167,6 +168,26 @@ pub fn Memory() -> impl IntoView {
         load_search_hits(state, agent, q, SEARCH_HITS_LIMIT, hits);
     });
 
+    // `hits`'s own invalidation. `stats`/`notes`/`raws` all refetch on
+    // `refresh_nonce` (header Refresh, and after every delete); `hits` used to
+    // sit outside that cycle entirely, subscribed only to `search_nonce`. A
+    // note deleted or exported while `SearchHits` was the active facet bumped
+    // `refresh_nonce`, correctly refreshed everything else, and left the
+    // just-deleted note sitting in the hit list with a stale chip count until
+    // the user re-ran the search by hand. This effect closes that gap without
+    // touching `facet`/`page`: unlike the Track 2 effect above (which owns
+    // "should Enter switch us into SearchHits"), a background refresh must
+    // never yank the user back into a facet they've since navigated away from.
+    Effect::new(move || {
+        refresh_nonce.get();
+        if !search_live.get_untracked() {
+            return;
+        }
+        let q = mem.search_query.get_untracked();
+        let agent = mem.agent_id.get_untracked();
+        load_search_hits(state, agent, q, SEARCH_HITS_LIMIT, hits);
+    });
+
     // The raw layer filters server-side (LIKE over content), so it needs the
     // committed query rather than the local one.
     Effect::new(move || {
@@ -183,18 +204,46 @@ pub fn Memory() -> impl IntoView {
 
     // ── Deep link: ?note=<path> ─────────────────────────────────────────────
     // `?view=` stays owned by memory_hub; this Effect owns `?note=` only, so the
-    // two never overwrite each other. The param is scrubbed after consumption or
-    // a reload would force the drawer open again.
+    // two never overwrite each other.
+    //
+    // `note_param_consumed` guards a one-shot: `scrub_note_param` below rewrites
+    // the address bar with raw `web_sys` `history.replaceState`, which does NOT
+    // touch leptos_router's own `BrowserUrl` signal — only `navigate()` /
+    // `complete_navigation()` or a `popstate` event update that, and browsers
+    // never fire `popstate` for `replaceState`. So `location.search` would keep
+    // reporting the same stale `note=<path>` for the rest of the session, and
+    // since this Effect also has to track `notes.get()` (to wait for the window
+    // on first load), it would silently reopen the same note on every Refresh
+    // click, every delete, and every agent switch — each one bumps `notes`.
+    // Reading the URL untracked and gating on this flag makes the whole thing
+    // fire at most once per mount, which is all a deep link ever needs: by the
+    // time a *different* `?note=` should apply, the browser has done a real
+    // navigation and freshly mounted a new `Memory` instance anyway.
     let location = use_location();
+    let note_param_consumed = RwSignal::new(false);
     Effect::new(move || {
-        let search = location.search.get();
-        let Some(path) = parse_note_param(&search) else {
+        notes.get(); // re-run when the window lands; the value itself is read untracked below
+        if note_param_consumed.get_untracked() {
+            // Short-circuit before touching `notes` again: past this point the
+            // window can hold up to `NOTE_WINDOW` (1000) facts, and every future
+            // `notes` update (every delete, refresh, agent switch) would
+            // otherwise clone the whole thing forever for a decision that's
+            // already been made.
             return;
-        };
-        let Some(window) = notes.get().as_ready().cloned() else {
-            return; // wait for the window; this re-runs when it lands
-        };
-        match locate_note(&window.facts, &path, page_size.get()) {
+        }
+        let search = location.search.get_untracked();
+        let path = parse_note_param(&search);
+        let window = notes.get_untracked().as_ready().cloned();
+        let (should_process, mark_consumed) = note_param_decision(path.is_some(), window.is_some());
+        if mark_consumed {
+            note_param_consumed.set(true);
+        }
+        if !should_process {
+            return;
+        }
+        let path = path.expect("note_param_decision only processes when has_path was true");
+        let window = window.expect("note_param_decision only processes when window_ready was true");
+        match locate_note(&window.facts, &path, page_size.get_untracked()) {
             Some((f, pg)) => {
                 facet.set(f);
                 page.set(pg);
@@ -211,6 +260,9 @@ pub fn Memory() -> impl IntoView {
                 ))));
             }
         }
+        // Still worth scrubbing the DOM: a genuine F5 reload reads the real
+        // window.location fresh (no router signal involved), so this is what
+        // stops a reload from reopening the drawer.
         scrub_note_param();
     });
 
@@ -338,16 +390,25 @@ pub fn Memory() -> impl IntoView {
                             }
                             write_clipboard(&notes_to_markdown(&staged));
                             exporting.set(None);
-                            let msg = if failures > 0 {
-                                format!(
-                                    "{} — {}",
-                                    t_string!(i18n, memory.toast_copied),
-                                    t_string!(i18n, memory.batch_export_partial)
+                            // A green success tone under-signals a partial failure at a
+                            // glance even with accurate text next to it, so the tone
+                            // itself carries the "something didn't fully work" signal.
+                            let (msg, kind) = if failures > 0 {
+                                (
+                                    format!(
+                                        "{} — {}",
+                                        t_string!(i18n, memory.toast_copied),
+                                        t_string!(i18n, memory.batch_export_partial)
+                                    ),
+                                    ToastKind::Error,
                                 )
                             } else {
-                                t_string!(i18n, memory.toast_copied).to_string()
+                                (
+                                    t_string!(i18n, memory.toast_copied).to_string(),
+                                    ToastKind::Success,
+                                )
                             };
-                            push_toast(toast_slot, msg, ToastKind::Success);
+                            push_toast(toast_slot, msg, kind);
                         });
                     } else {
                         let staged: Vec<RawExport> = raw_rows
@@ -562,6 +623,34 @@ pub(crate) fn parse_note_param(search: &str) -> Option<String> {
     (!decoded.is_empty()).then_some(decoded)
 }
 
+/// One-shot decision for the `?note=` deep-link Effect, for the case where it
+/// has NOT already been consumed this mount (the Effect itself short-circuits
+/// on that flag before ever calling this, so callers never pass a stale
+/// decision back in). Split out so the consume-once state machine is
+/// unit-testable without a browser `Location` — the Effect only ever reads
+/// this through `bool`/`Option::is_some()` probes, never the values
+/// themselves.
+///
+/// Returns `(should_process, mark_consumed)`:
+/// - No `note=` param: nothing to do, and nothing will ever change that for
+///   this mount (the URL only changes via a real navigation, which mounts a
+///   fresh `Memory` with its own fresh flag) — mark consumed so future
+///   `notes` updates skip the parse instead of repeating it forever.
+/// - A `note=` param exists but the window isn't loaded yet: wait. Don't mark
+///   consumed, so the next `notes` update (the window landing) retries.
+/// - A `note=` param exists and the window is ready: process it now, exactly
+///   once.
+#[must_use]
+fn note_param_decision(has_path: bool, window_ready: bool) -> (bool, bool) {
+    if !has_path {
+        return (false, true);
+    }
+    if !window_ready {
+        return (false, false);
+    }
+    (true, true)
+}
+
 /// Drop `note=` from the address bar after consuming it, so a reload does not
 /// force the drawer open again. Reuses `context::strip_params` (the same
 /// rebuild-the-query-string logic already covers `?token=`/`?bt=` there) and
@@ -605,115 +694,6 @@ fn copy_note_link(path: &str) {
     write_clipboard(&format!("{origin}/memory?view=table&note={encoded}"));
 }
 
-#[component]
-fn MemoryHeader(on_refresh: impl Fn() + Clone + Send + 'static) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <header class="flex items-start justify-between gap-4">
-            <div>
-                <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
-                    <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24"
-                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <ellipse cx="12" cy="5" rx="9" ry="3" />
-                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                    </svg>
-                    {t!(i18n, memory.title)}
-                </h2>
-                <p class="text-text-secondary">{t!(i18n, memory.description)}</p>
-            </div>
-            <button
-                class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border \
-                       text-text-secondary hover:text-text-primary transition-colors flex-shrink-0"
-                on:click=move |_| on_refresh()
-            >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 12a9 9 0 1 1-3-6.7" /><polyline points="21 3 21 9 15 9" />
-                </svg>
-                {t!(i18n, memory.refresh)}
-            </button>
-        </header>
-    }
-}
-
-#[component]
-fn StatCards(stats: Signal<Loadable<MemoryStats>>) -> impl IntoView {
-    let i18n = use_i18n();
-    // "—" for both Loading and Failed: the header's Retry and the list's error
-    // card already carry the failure; four red boxes would be noise.
-    let num = move |pick: fn(&MemoryStats) -> Option<u64>| {
-        Signal::derive(move || {
-            stats
-                .get()
-                .as_ready()
-                .and_then(pick)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "\u{2014}".to_string())
-        })
-    };
-    // Graph node/edge counts are `None` specifically when the server answered
-    // store-wide (`MemoryStats::total_graph_nodes` doc comment: the note graph
-    // is per-agent, so there is no honest single number). A bare "—" there
-    // reads the same as a load failure; say why instead of leaving it silent.
-    let graph_num = move |pick: fn(&MemoryStats) -> Option<u64>| {
-        Signal::derive(move || match stats.get().as_ready().cloned() {
-            None => "\u{2014}".to_string(),
-            Some(s) => match pick(&s) {
-                Some(n) => n.to_string(),
-                None if s.scope == "global" => {
-                    t_string!(i18n, memory.graph_scope_unavailable).to_string()
-                }
-                None => "\u{2014}".to_string(),
-            },
-        })
-    };
-    let scope_label =
-        Signal::derive(
-            move || match stats.get().as_ready().map(|s| s.scope.as_str()) {
-                Some("global") => t_string!(i18n, memory.scope_global).to_string(),
-                Some(_) => t_string!(i18n, memory.scope_agent).to_string(),
-                None => String::new(),
-            },
-        );
-
-    let facts = num(|s| Some(s.total_facts));
-    let raws = num(|s| Some(s.total_memories));
-    let nodes = graph_num(|s| s.total_graph_nodes);
-    let edges = graph_num(|s| s.total_graph_edges);
-
-    view! {
-        <div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-                <StatCard tone="primary" label=t_string!(i18n, memory.compressed_facts).to_string() value=facts />
-                <StatCard tone="success" label=t_string!(i18n, memory.raw_memories).to_string() value=raws />
-                <StatCard tone="primary" label=t_string!(i18n, memory.graph_nodes).to_string() value=nodes />
-                <StatCard tone="success" label=t_string!(i18n, memory.graph_edges).to_string() value=edges />
-            </div>
-            // Say which population the numbers describe — they used to be a
-            // cross-agent mix presented next to an agent-scoped list.
-            <p class="text-[10px] text-text-tertiary mt-1.5 uppercase tracking-widest">
-                {move || scope_label.get()}
-            </p>
-        </div>
-    }
-}
-
-#[component]
-fn StatCard(tone: &'static str, label: String, value: Signal<String>) -> impl IntoView {
-    let (bg, fg) = if tone == "success" {
-        ("bg-success-subtle border-success/10", "text-success")
-    } else {
-        ("bg-primary-subtle border-primary/10", "text-primary")
-    };
-    view! {
-        <Card class=format!("{bg} p-6 flex flex-col items-start")>
-            <span class=format!("text-[10px] font-bold {fg} uppercase tracking-widest mb-1.5")>{label}</span>
-            <span class="text-3xl font-bold font-mono">{move || value.get()}</span>
-        </Card>
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,5 +729,32 @@ mod tests {
         // An empty `note=` must not open the drawer on a stub path.
         assert_eq!(raw_note_param("?note="), None);
         assert_eq!(raw_note_param("?note=&view=table"), None);
+    }
+
+    // ── note_param_decision ──────────────────────────────────────────────────
+    //
+    // The "already consumed" case is NOT exercised through this function: the
+    // Effect short-circuits on that flag before ever calling it (see the
+    // comment at the call site), so there is no `already_consumed` input left
+    // for this function to branch on.
+
+    #[test]
+    fn no_path_marks_consumed_with_nothing_to_process() {
+        // Nothing will ever make a `note=`-less URL grow one on this mount, so
+        // there is no reason to keep re-parsing on every future `notes` update.
+        assert_eq!(note_param_decision(false, true), (false, true));
+        assert_eq!(note_param_decision(false, false), (false, true));
+    }
+
+    #[test]
+    fn path_present_but_window_not_ready_waits_without_consuming() {
+        // Must NOT mark consumed here -- the whole reason this Effect tracks
+        // `notes` is to retry once the window finishes loading.
+        assert_eq!(note_param_decision(true, false), (false, false));
+    }
+
+    #[test]
+    fn path_present_and_window_ready_processes_exactly_once() {
+        assert_eq!(note_param_decision(true, true), (true, true));
     }
 }
