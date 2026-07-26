@@ -175,7 +175,7 @@ pub use crate::initialization::{
 };
 
 // Logging
-pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
+pub use crate::logging::{create_pii_scrubbing_layer, LogLevel};
 
 // =============================================================================
 // Agent System Exports

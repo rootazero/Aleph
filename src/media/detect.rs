@@ -234,7 +234,7 @@ pub async fn detect_from_path(path: &std::path::Path) -> Result<MediaType, Media
     if let Ok(mut f) = tokio::fs::File::open(path).await {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 16];
-        if let Ok(()) = f.read_exact(&mut buf).await {
+        if f.read_exact(&mut buf).await.is_ok() {
             if buf.len() >= 4 {
                 let magic_result = detect_by_magic(&buf);
                 if magic_result != MediaType::Unknown {
