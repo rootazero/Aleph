@@ -610,7 +610,11 @@ impl GroupChatBroadcaster {
         let req = RunRequest {
             run_id,
             input,
-            session_key: SessionKey::task(&agent_id, "team_chat", &team_id),
+            session_key: SessionKey::task(
+                &agent_id,
+                crate::teams::run_mode::TEAM_CHAT_TASK_TYPE,
+                &team_id,
+            ),
             // Bounded wall-clock timeout. `None` would inherit the engine's
             // 48h `default_timeout_secs` — one wedged provider call pinning a
             // member run (and its awaiting fan-out branch + activation slot)

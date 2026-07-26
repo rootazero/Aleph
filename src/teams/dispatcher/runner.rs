@@ -246,7 +246,11 @@ pub async fn execute_member_task(
         .as_ref()
         .map(|h| Arc::new(WorktreeSandbox::new(h.path().to_path_buf())) as Arc<dyn Sandbox>);
 
-    let session_key = SessionKey::task(agent_id, "team", task_id);
+    let session_key = SessionKey::task(
+        agent_id,
+        crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+        task_id,
+    );
     let metadata = task_run_metadata(
         team_id,
         task_id,

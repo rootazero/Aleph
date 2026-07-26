@@ -15,12 +15,42 @@
 use std::collections::HashMap;
 
 use crate::config::types::policies::{SessionMode, MODE_SESSION_KEY};
+use crate::routing::session_key::SessionKey;
 
 /// The mode every team-originated run executes in. `Work` is the identity
 /// partition: it defers nothing and subtracts nothing from the core set, so a
 /// team run's surface is exactly the registry minus whatever the member itself
 /// declared.
 pub const TEAM_RUN_MODE: SessionMode = SessionMode::Work;
+
+/// `task_type` of a group-chat member run's session key
+/// (`teams::broadcast`, keyed by team id).
+pub const TEAM_CHAT_TASK_TYPE: &str = "team_chat";
+
+/// `task_type` of a task-dispatch member run's session key
+/// (`teams::dispatcher`, keyed by task id).
+pub const TEAM_TASK_TASK_TYPE: &str = "team";
+
+/// True when `key` addresses a team-originated run — exactly the sessions
+/// whose mode [`stamp`] re-pins on every turn.
+///
+/// Lives here rather than on `SessionKey` because the fact it encodes is this
+/// module's: "which sessions are team runs" and "what mode team runs are
+/// pinned to" are the same fact, and a consumer that reads one without the
+/// other gets a half-truth. Both task types are used at their construction
+/// sites via the constants above so the predicate cannot drift from them.
+///
+/// Only direct `Task` keys match. A subagent spawned inside a member run
+/// carries its own key and its own explicitly-passed mode; it is not a team
+/// run and [`stamp`] never touches it.
+#[must_use]
+pub fn is_team_session(key: &SessionKey) -> bool {
+    matches!(
+        key,
+        SessionKey::Task { task_type, .. }
+            if task_type == TEAM_CHAT_TASK_TYPE || task_type == TEAM_TASK_TASK_TYPE
+    )
+}
 
 /// Stamp [`TEAM_RUN_MODE`] onto a team run's request metadata.
 ///
@@ -39,7 +69,54 @@ pub fn stamp(metadata: &mut HashMap<String, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::session_key::{DmScope, SessionKey};
     use crate::teams::member_provision::{LEADER_ESSENTIAL_TOOLS, WORKER_ESSENTIAL_TOOLS};
+
+    /// The predicate must recognise keys built exactly the way the three
+    /// production sites build them — same constructor, same constants.
+    #[test]
+    fn is_team_session_matches_both_team_run_producers() {
+        assert!(is_team_session(&SessionKey::task(
+            "alice",
+            TEAM_CHAT_TASK_TYPE,
+            "squad"
+        )));
+        assert!(is_team_session(&SessionKey::task(
+            "alice",
+            TEAM_TASK_TASK_TYPE,
+            "task-1"
+        )));
+    }
+
+    /// `SessionKey::task` normalizes `task_type`; if that ever mangled the two
+    /// constants the predicate would still match the *constructed* key above
+    /// while missing every key parsed back from storage. Pin the round trip.
+    #[test]
+    fn team_task_types_survive_key_serialization() {
+        for task_type in [TEAM_CHAT_TASK_TYPE, TEAM_TASK_TASK_TYPE] {
+            let key = SessionKey::task("alice", task_type, "id-1");
+            let parsed = SessionKey::parse(&key.to_key_string()).expect("must parse");
+            assert!(
+                is_team_session(&parsed),
+                "`{task_type}` did not survive the key round trip: {}",
+                key.to_key_string()
+            );
+        }
+    }
+
+    #[test]
+    fn is_team_session_rejects_non_team_sessions() {
+        assert!(!is_team_session(&SessionKey::main("alice")));
+        assert!(!is_team_session(&SessionKey::dm(
+            "alice",
+            "telegram",
+            "u1",
+            DmScope::PerPeer
+        )));
+        assert!(!is_team_session(&SessionKey::task(
+            "alice", "cron", "daily"
+        )));
+    }
 
     #[test]
     fn stamp_writes_the_pinned_mode() {
