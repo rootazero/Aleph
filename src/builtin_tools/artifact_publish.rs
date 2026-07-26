@@ -49,11 +49,13 @@ const MAX_FIGURES: usize = 12;
 /// Arguments for `artifact_publish`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ArtifactPublishArgs {
-    /// Title of the document, as the user should see it.
+    /// Title of the document, as the user should see it. It is rendered as the
+    /// page heading, so `content` should not repeat it.
     pub title: String,
 
     /// The deliverable itself, in Markdown. Headings, lists, tables, code and
-    /// links all render; raw HTML is escaped, not executed.
+    /// links all render; raw HTML is escaped, not executed. Start at the first
+    /// real section — the title is already on the page above this.
     pub content: String,
 
     /// Artifact ids from this session to embed as figures, in the order they
@@ -172,9 +174,15 @@ impl AlephTool for ArtifactPublishTool {
         publish_artifact_ping(&session_key);
 
         Ok(ArtifactPublishOutput {
+            // Says only what this side can know. Whether the browser actually
+            // opened the tab is the Panel's business and it can fail there —
+            // a popup blocker returns null and the pane falls back to a
+            // one-click banner. Claiming "it is open" would have the model
+            // report that to the user as fact.
             published: format!(
-                "Published \"{title}\" ({}). It is now open in the user's browser and listed in \
-                 their artifacts pane — refer to it in your reply, do not repeat its contents.",
+                "Published \"{title}\" ({}). It is pinned at the top of the user's artifacts pane \
+                 and opens in a browser tab — refer to it in your reply, do not repeat its \
+                 contents.",
                 human_size(record.size)
             ),
             artifact_id: record.id,
