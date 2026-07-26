@@ -251,7 +251,9 @@
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
-> **⚠️ `agent_trace` 流是有意有损的镜像**: `AgentTraceEmitSink` 用 bounded `mpsc(256)` + `try_send` 把 harness trace 镜像到 WS（满即丢，注释明写 best-effort），这是**刻意的**——绝不能让慢消费者背压 agent 循环。推论：**任何消费方都不得把逐事件流当作终态真源**。工具调用的权威终态在 `run_complete` 的 `summary.tool_summaries[]`（core 由 harness `tool_timeline` 构建，`tool_id` 与流事件同源 `call.id`），失败原因在 `summary.errors[]`。新写消费者（Panel / channel / 外部 bridge）必须在流末对账，否则丢一帧就留下永久"进行中"的幽灵状态。Panel 侧参考实现见 FEATURE_LOCATOR §6.1（`reconcile_tools` + `settle_orphan_tools`）。
+> **执行清单 (Execution List / Todo-Plan)**: 模型把任务分解成一条**带三态的清单**（`- [ ]` / `- [~]` / `- [x]`），落在该 agent 的 scratchpad markdown 里，同一份快照喂五个消费者——run 起点的 `<execution_plan>` prompt 块、模型（工具回显）、用户频道（progress push）、Panel Todo 条、`ScratchpadGoalVerifier` 停机守卫。**线上单一形状是 `shared/protocol/src/plan.rs::PlanSnapshot`**，唯一转换点 `builtin_tools/scratchpad.rs::plan_snapshot_dto`——加字段先动协议，别在 Panel 手抄第三份（曾并存三套 plan-step 词汇，其中两套零 producer，已 CUT）。写语义是**全量替换 + 状态保真**：裸文本项按文案继承旧状态（refinement 幂等），`{text,status}` 原样采信，单-in-progress 由代码强制。**分解本身 100% 归 LLM（R7）**——任何"判断这一步算不算完成"的代码都越线，守卫只能查模型自己的方框。**不要新建 `todo` 工具**：Panel 投影按字面工具名 `"scratchpad"` 取数，第二个工具＝第二个 store + 对现有 UI 完全隐形。详见 FEATURE_LOCATOR §3.13。
+
+> **⚠️ `agent_trace` 流是有意有损的镜像**: `AgentTraceEmitSink` 用 bounded `mpsc(256)` + `try_send` 把 harness trace 镜像到 WS（满即丢，注释明写 best-effort），这是**刻意的**——绝不能让慢消费者背压 agent 循环。推论：**任何消费方都不得把逐事件流当作终态真源**。工具调用的权威终态在 `run_complete` 的 `summary.tool_summaries[]`（core 由 harness `tool_timeline` 构建，`tool_id` 与流事件同源 `call.id`），失败原因在 `summary.errors[]`，**执行清单（todo/plan）的终态在 `summary.plan`**（`aleph_protocol::plan::PlanSnapshot`，core 在自己那条不丢帧的 `event_drain` 里闩存）。新写消费者（Panel / channel / 外部 bridge）必须在流末对账，否则丢一帧就留下永久"进行中"的幽灵状态。Panel 侧参考实现见 FEATURE_LOCATOR §6.1（工具行 `reconcile_tools` + `settle_orphan_tools`；todo 条 `settle_plan`）。
 
 ### Windows 构建
 

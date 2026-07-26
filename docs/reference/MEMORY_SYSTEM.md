@@ -120,6 +120,17 @@ Key types:
 
 Scratchpad lives at the session level (active plan, current step), whereas L0 raw memory is the session **archive** and L1 notes are cross-session knowledge. The three layers do not overlap: a scratchpad entry never becomes a note directly, and notes never flow back into the scratchpad.
 
+The scratchpad's `## Plan` section is also the agent's **execution list**
+(todo/plan): `- [ ]` / `- [~]` / `- [x]` three-state checkboxes written by the
+model through the `scratchpad` tool, projected onto the wire as
+`aleph_protocol::plan::PlanSnapshot`, and consumed by the run-start
+`<execution_plan>` prompt block, the compaction carry
+(`context::compact::plan_carry`), the `ScratchpadGoalVerifier` stop guard, the
+channel progress push, and the Panel Todo strip. That whole surface — including
+the write semantics (whole-list replace with status inheritance, single
+in-progress enforced in code, self-healing section upsert) — is documented in
+FEATURE_LOCATOR §3.13; this section covers only where the bytes live.
+
 ## 7. Memory Event Sourcing
 
 Every mutation to a note is captured as an immutable `MemoryEvent` wrapped in a `MemoryEventEnvelope`. This provides an audit trail and enables time-travel queries.

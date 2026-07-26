@@ -100,6 +100,36 @@ marker line would persist silent history loss through the fingerprint
 cache). The 5-section summary template (Primary Request / Key Decisions /
 Files & Code / Current State / Pending) is hermes-compatible.
 
+### Execution-list carry (`plan_carry`)
+
+Every compaction drain site funnels through
+`compactor.rs::splice_preserved`, which replaces the drained range with
+`[preserved user turns…, summary, execution list?]`. The trailing element is
+`src/context/compact/plan_carry.rs::plan_carry_message` — the model's own
+todo/plan checklist, re-injected below the summary because it is live state
+the model acts on next turn, not history.
+
+Why it is needed: the `scratchpad` tool echoes the updated checklist in every
+mutating result, and that echo is the model's only structural record of what
+it already finished inside a run. It is a tool-result message, so compaction
+summarizes it into prose. `<execution_plan>` does not cover the gap — that
+block is resolved **once per run** into the frozen system prompt, so after a
+mid-run compaction it still shows the turn-0 snapshot.
+
+Port of hermes-agent's `TodoStore.format_for_injection()`, with one deliberate
+divergence: hermes filters to *active* items (its flat text list made the model
+re-do finished work), while Aleph carries the **full** list. Aleph's steps are
+index-addressed by `start_item` / `complete_item`, so dropping the finished
+ones would corrupt every index the model is about to use; the explicit
+`[x]` / `[~]` / `[ ]` glyphs already do the disambiguation.
+
+Properties: pure (no I/O, no session key — everything comes from the messages
+being drained); `None` for a window with no plan or a fully-finished one, so
+calm runs pay nothing; and it recognises its own `[Execution list preserved
+across context compaction]` marker, so a plan survives repeated compaction
+passes after the originating tool result is long gone. Zero lines in
+`src/harness/`. See FEATURE_LOCATOR §3.13.
+
 ### Fingerprint cache (cross-run carry-over)
 
 The harness rebuilds the message list from the session log every turn, so an

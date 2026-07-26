@@ -223,6 +223,27 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 - 0 个，"为未来准备" → **撤回**，按 P1/P3/P4/P5/P6/P7 dissolution 同样的死代码处理原则删除
 
 ---
+### 实例：一次通过三问后仍然**不**加 harness 行的决策（2026-07-26）
+
+执行清单（todo/plan）在长 run 里会因压缩而从模型视野消失。`src/harness/agent/prompt.rs`
+恰好有四个同形的 per-turn `<system-reminder>` 生产者（`attempt_summary` /
+`no_progress` / `gather_budget` / `redundant_calls`，签名统一为
+`fn(&[SessionEventRecord]) -> Option<String>`），加第五个兄弟只要约 5 行，
+且三问都能过：是脚手架（原样回灌模型自己的清单，零判断）、模型升级也仍需要
+（压缩是物理删除字节，跟模型多强无关）、有一个真实消费者（主循环）。
+
+**仍然不加。** 因为第三问的正确读法不是"有没有消费者"，而是**"这个消费者现在
+拿不到这个信息吗"**——工具每次 mutating 调用都已把整份清单回显进对话，唯一的
+缺口是压缩把那些回显 drain 掉的那一刻。于是修复落在
+`src/context/compact/plan_carry.rs`（压缩 drain 的唯一收口），harness 行数增量为
+**0**。同批把 `execution_plan.rs` 那句"**every turn**"的 doc 谎言改成实话，而不是
+去把机制补成谎言描述的样子。
+
+**可复用的判据**：当一个"信息丢了"的 bug 有两种修法——(a) 在 harness 里每轮重算，
+(b) 在信息实际被销毁的那一处补上携带——**永远选 (b)**。(a) 每轮都为一个只在
+罕见时刻才缺失的事实付费，(b) 只在缺失发生时付费，且不动棘轮。
+
+---
 
 ## 6. 与 CLAUDE.md 红线的对应
 
