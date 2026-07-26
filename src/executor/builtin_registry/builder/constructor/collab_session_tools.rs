@@ -378,11 +378,10 @@ impl BuiltinToolRegistry {
                     || {
                         std::env::temp_dir()
                             .join("aleph")
-                            .join("data")
                             .join("memory")
                             .join("note")
                     },
-                    |p| p.join(".aleph").join("data").join("memory").join("note"),
+                    |p| p.join(".aleph").join("memory").join("note"),
                 )
             });
             let mut tool =

@@ -44,20 +44,11 @@ pub fn build_sandbox(
     // Installed BEFORE the command policy so an explicitly user-blocked command
     // is vetoed first. A malformed custom-rule regex fails *safe* (logged and
     // skipped) rather than aborting sandbox construction.
-    match crate::exec::SecurityKernel::from_config(shell_security) {
-        Ok(kernel) if shell_security.enable_custom_patterns => {
-            hooks = hooks.with_before(Arc::new(
-                crate::sandbox::security_kernel_hook::SecurityKernelHook::new(kernel),
-            ));
-        }
-        Ok(_) => { /* custom patterns disabled — no advisory hook */ }
-        Err(e) => {
-            tracing::error!(
-                target: "shell_security",
-                error = %e,
-                "custom shell-security pattern regex invalid — advisory layer disabled"
-            );
-        }
+    let kernel = crate::exec::SecurityKernel::from_config(shell_security);
+    if shell_security.enable_custom_patterns {
+        hooks = hooks.with_before(Arc::new(
+            crate::sandbox::security_kernel_hook::SecurityKernelHook::new(kernel),
+        ));
     }
 
     // Command-policy hard-filter runs FIRST so a catastrophic command is

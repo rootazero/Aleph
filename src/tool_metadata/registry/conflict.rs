@@ -226,6 +226,11 @@ impl ConflictResolver {
                     .iter()
                     .map(|a| a.to_lowercase())
                     .collect();
+                // New canonical name vs existing aliases — prevents silently
+                // overwriting a tool whose alias matches the new tool's name.
+                if existing_alias_lowers.contains(&name_lower) {
+                    return true;
+                }
                 // Alias↔alias collisions: e.g. plugin `aliases = ["x"]` vs
                 // builtin `aliases = ["x"]`. Two tools claiming the same
                 // shortcut must resolve via the priority rules, not silently

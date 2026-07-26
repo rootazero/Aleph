@@ -104,6 +104,7 @@ where
         current = canonical.clone();
     }
 
+    let stop_raw = stop.map(|p| p.to_path_buf());
     let stop = stop.map(|p| {
         if current_canonicalized.is_some() {
             p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
@@ -121,11 +122,13 @@ where
             results.push(current.clone());
         }
 
-        // Check if we've reached the stop point
-        if let Some(ref stop_path) = stop {
-            if &current == stop_path {
-                break;
-            }
+        // Check if we've reached the stop point. When `current` has been
+        // canonicalized but `stop.canonicalize()` failed, fall back to the
+        // raw (non-canonicalized) stop path for the comparison.
+        if stop.as_ref().map_or(false, |sp| &current == sp)
+            || stop_raw.as_ref().map_or(false, |sr| &current == sr)
+        {
+            break;
         }
 
         match current.parent() {

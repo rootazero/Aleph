@@ -125,7 +125,11 @@ impl CommandResolution {
     /// Create a resolution for an executable not found in PATH
     pub fn not_found(raw: impl Into<String>) -> Self {
         let raw = raw.into();
-        let name = raw.rsplit('/').next().unwrap_or(&raw).to_string();
+        let name = std::path::Path::new(&raw)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&raw)
+            .to_string();
 
         Self {
             raw_executable: raw,

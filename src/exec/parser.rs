@@ -365,7 +365,10 @@ fn resolve_executable(
     cwd: Option<&Path>,
     env: Option<&HashMap<String, String>>,
 ) -> CommandResolution {
-    // Absolute path
+    // Absolute path — resolved against the host filesystem for display
+    // purposes only. This path may NOT correspond to what is visible inside a
+    // containerised sandbox; the sandbox layer is responsible for the
+    // authoritative resolution.
     if executable.starts_with('/') {
         let path = PathBuf::from(executable);
         if path.exists() {
@@ -385,11 +388,10 @@ fn resolve_executable(
         return CommandResolution::not_found(executable);
     }
 
-    // Search PATH: prefer env map, fall back to system PATH
-    let actual_path = env
-        .and_then(|e| e.get("PATH"))
-        .cloned()
-        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    // Search PATH: only use the env map (sandbox-aware). Never fall back to
+    // host `std::env::var("PATH")` — that leaks the host filesystem view into
+    // sandbox contexts and violates the R1 architecture boundary.
+    let actual_path = env.and_then(|e| e.get("PATH")).cloned().unwrap_or_default();
 
     #[cfg(unix)]
     let path_sep = ':';

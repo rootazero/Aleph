@@ -137,7 +137,8 @@ impl From<&UnifiedTool> for UnifiedToolInfo {
         let parameters_schema = tool
             .parameters_schema
             .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_default());
+            .map(|v| serde_json::to_string(v).ok())
+            .flatten();
 
         Self {
             id: tool.id.clone(),
