@@ -121,6 +121,18 @@ main {
 .msg-body > *:first-child { margin-top: 0; }
 .msg-body > *:last-child { margin-bottom: 0; }
 
+/* Transcripts carry tokens with no break opportunity at all — `data:` URLs,
+   base64 blobs, long paths, signed links. Without this they render as one
+   unbreakable line that pushes past the container and makes the whole PAGE
+   scroll sideways, so every other message gets dragged out of view too.
+   `anywhere` (not `break-word`) is what allows a break mid-token while still
+   preferring normal word boundaries when they exist. `pre` keeps its own
+   `overflow-x: auto` below: code is the one place where a forced break would
+   change what the text means, so it scrolls in its own box instead. */
+.msg-body {
+  overflow-wrap: anywhere;
+}
+
 .msg-body h1, .msg-body h2, .msg-body h3,
 .msg-body h4, .msg-body h5, .msg-body h6 {
   margin: 1.4em 0 0.5em;
@@ -166,6 +178,9 @@ main {
   padding: 0.85rem 1rem;
   overflow-x: auto;
   margin: 0.8em 0;
+  /* Opt back out of the block-level `anywhere`: inside code a forced mid-token
+     break changes what the text says, so this scrolls in its own box instead. */
+  overflow-wrap: normal;
 }
 
 .msg-body pre code {

@@ -60,6 +60,36 @@ fn resolve_session(request: &JsonRpcRequest, raw: &str) -> Result<SessionKey, Js
     })
 }
 
+/// Any `MessageRecord.timestamp` below this is read as seconds, at or above it
+/// as milliseconds. `1e11` seconds is the year 5138 and `1e11` milliseconds is
+/// 1973-03-03, so no real conversation can be ambiguous.
+const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
+
+/// Render one message's time, tolerating the store's mixed units.
+///
+/// `SessionStore::get_history` documents `MessageRecord.timestamp` as unix
+/// seconds, but the file backend writes `Utc::now().timestamp_millis()` for a
+/// message while writing plain `timestamp()` for the session's own
+/// `created_at` / `last_active_at`. Reading a millisecond value as seconds puts
+/// the message in the year 58536 — which is what this export printed, and what
+/// `chat.rs`'s identical `from_timestamp(m.timestamp, 0)` still prints into the
+/// Panel's session list.
+///
+/// Fixing the unit at the source is the real repair, but it is a store-contract
+/// change that also touches the `before` pagination cursor and every existing
+/// on-disk session, so it does not belong in this handler. What does belong
+/// here is refusing to render a nonsense date: this is a display boundary, and
+/// a boundary that normalizes what it is handed is the one place the ambiguity
+/// costs nothing.
+fn format_message_time(raw: i64) -> String {
+    let parsed = if raw.abs() >= SECONDS_MILLIS_BOUNDARY {
+        chrono::DateTime::from_timestamp_millis(raw)
+    } else {
+        chrono::DateTime::from_timestamp(raw, 0)
+    };
+    parsed.map(|dt| dt.to_rfc3339()).unwrap_or_default()
+}
+
 /// Build the capability URL for one record.
 fn artifact_url(cap: &str, record: &ArtifactRecord) -> String {
     let filename = utf8_percent_encode(&record.filename, URL_SEGMENT_ENCODE_SET);
@@ -161,9 +191,7 @@ pub async fn handle_export_html(
         .map(|m| crate::export::ExportMessage {
             role: m.role,
             text: m.content,
-            timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default(),
+            timestamp: format_message_time(m.timestamp),
         })
         .collect();
 
@@ -288,6 +316,30 @@ async fn collect_export_artifacts(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Regression: a millisecond timestamp read as seconds dated messages to
+    /// the year 58536 in the exported transcript. Both units must land in the
+    /// same real instant.
+    #[test]
+    fn message_times_render_from_either_unit() {
+        // 2026-07-26T10:37:12Z, spelled both ways.
+        let secs = 1_785_062_232_i64;
+        let millis = 1_785_062_232_000_i64;
+        assert_eq!(format_message_time(secs), format_message_time(millis));
+        assert!(
+            format_message_time(millis).starts_with("2026-07-26T"),
+            "got {}",
+            format_message_time(millis)
+        );
+    }
+
+    #[test]
+    fn an_unrenderable_timestamp_yields_an_empty_string() {
+        // Never panic and never print a garbage date: the caption is simply
+        // omitted for a value no calendar can represent.
+        assert_eq!(format_message_time(i64::MAX), "");
+        assert_eq!(format_message_time(0), "1970-01-01T00:00:00+00:00");
+    }
 
     fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
         JsonRpcRequest {
