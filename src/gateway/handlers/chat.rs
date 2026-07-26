@@ -313,6 +313,10 @@ pub async fn handle_history(
             let chat_messages: Vec<ChatMessage> = messages
                 .into_iter()
                 .map(|m| {
+                    // Resolved before anything moves out of `m`: the accessor
+                    // needs the whole record (the stored unit is ambiguous —
+                    // see `MessageRecord::timestamp`).
+                    let timestamp = m.rfc3339();
                     // Occupancy was persisted as string-valued metadata (see
                     // `agent_instance::build_message_metadata`), so read every
                     // field as a string and parse the numeric ones back.
@@ -321,9 +325,7 @@ pub async fn handle_history(
                     ChatMessage {
                         role: m.role,
                         content: m.content,
-                        timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default(),
+                        timestamp,
                         run_id: field("run_id").map(String::from),
                         context_tokens: field("context_tokens").and_then(|s| s.parse().ok()),
                         context_window: field("context_window").and_then(|s| s.parse().ok()),

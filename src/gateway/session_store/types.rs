@@ -6,6 +6,19 @@ pub struct MessageRecord {
     pub id: String,
     pub role: String,
     pub content: String,
+    /// When the message was recorded — **in an ambiguous unit**. Read it with
+    /// [`MessageRecord::instant`], never directly.
+    ///
+    /// The store's trait documents unix seconds and the SQLite backend writes
+    /// seconds, but the file backend writes `Utc::now().timestamp_millis()` for
+    /// a message (while writing plain `timestamp()` for the session's own
+    /// `created_at` / `last_active_at` in the very same file). Both spellings
+    /// therefore exist on disk right now, including inside a single deployment.
+    ///
+    /// The unit cannot simply be corrected at the source: the value doubles as
+    /// the `before` pagination cursor, and every session already on disk would
+    /// have to be migrated with it. So the resolution lives here, at the type,
+    /// where both readers and the cursor see the same interpretation.
     pub timestamp: i64,
     pub metadata: Option<Value>,
     /// Tokens the LLM call that produced this message was billed for. Zero on
@@ -23,6 +36,41 @@ pub struct MessageRecord {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+}
+
+/// Above this a raw [`MessageRecord::timestamp`] is read as milliseconds,
+/// below it as seconds.
+///
+/// `1e11` seconds is the year 5138 and `1e11` milliseconds is 1973-03-03, so
+/// no conversation Aleph could have recorded falls in the ambiguous gap.
+/// Reading a millisecond value as seconds is what dated exported messages to
+/// the year 58536 and put "2026-03-02" beside a conversation from July.
+const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
+
+impl MessageRecord {
+    /// The instant this message was recorded, resolving the store's mixed
+    /// units. `None` for a value no calendar can represent.
+    ///
+    /// Every reader goes through this. Formatting the raw field directly is the
+    /// bug that was independently repeated at five call sites.
+    #[must_use]
+    pub fn instant(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.timestamp.abs() >= SECONDS_MILLIS_BOUNDARY {
+            chrono::DateTime::from_timestamp_millis(self.timestamp)
+        } else {
+            chrono::DateTime::from_timestamp(self.timestamp, 0)
+        }
+    }
+
+    /// The recorded instant as RFC 3339, or an empty string when the stored
+    /// value is unrepresentable.
+    ///
+    /// Empty rather than a placeholder date: a caption that is missing reads as
+    /// missing, while a fabricated one reads as fact.
+    #[must_use]
+    pub fn rfc3339(&self) -> String {
+        self.instant().map(|dt| dt.to_rfc3339()).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,6 +192,46 @@ pub const ORIGIN_CONVERSATION_KEY: &str = "origin_conversation";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record_at(timestamp: i64) -> MessageRecord {
+        MessageRecord {
+            id: "m1".to_string(),
+            role: "user".to_string(),
+            content: String::new(),
+            timestamp,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// Regression: a millisecond timestamp read as seconds dated exported
+    /// messages to the year 58536 and printed "03-02" beside a July
+    /// conversation in the Panel's session list. Both spellings on disk must
+    /// resolve to the same real instant.
+    #[test]
+    fn a_record_reads_the_same_instant_from_either_unit() {
+        // 2026-07-26T10:37:12Z, spelled both ways.
+        let secs = record_at(1_785_062_232);
+        let millis = record_at(1_785_062_232_000);
+        assert_eq!(secs.instant(), millis.instant());
+        assert!(
+            millis.rfc3339().starts_with("2026-07-26T"),
+            "got {}",
+            millis.rfc3339()
+        );
+    }
+
+    #[test]
+    fn an_unrepresentable_timestamp_yields_no_caption() {
+        // Never panic and never print a fabricated date: a missing caption
+        // reads as missing, an invented one reads as fact.
+        assert_eq!(record_at(i64::MAX).instant(), None);
+        assert_eq!(record_at(i64::MAX).rfc3339(), "");
+        assert_eq!(record_at(0).rfc3339(), "1970-01-01T00:00:00+00:00");
+    }
 
     #[test]
     fn message_record_tool_fields_default_none_and_roundtrip() {
