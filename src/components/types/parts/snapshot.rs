@@ -13,6 +13,7 @@ pub struct FileSnapshot {
 
 impl FileSnapshot {
     /// Create a new file snapshot entry
+    #[must_use]
     pub fn new(path: impl Into<String>, hash: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -34,6 +35,7 @@ pub struct SnapshotPart {
 
 impl SnapshotPart {
     /// Create a new empty snapshot
+    #[must_use]
     pub fn new(snapshot_id: impl Into<String>) -> Self {
         Self {
             snapshot_id: snapshot_id.into(),
@@ -43,6 +45,7 @@ impl SnapshotPart {
     }
 
     /// Create with files
+    #[must_use]
     pub fn with_files(snapshot_id: impl Into<String>, files: Vec<FileSnapshot>) -> Self {
         Self {
             snapshot_id: snapshot_id.into(),

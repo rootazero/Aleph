@@ -193,7 +193,6 @@ impl AgentModelRef {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct AgentDefinition {
     /// Unique agent identifier
-    #[serde(default)]
     pub id: String,
 
     /// Whether this is the default agent (at most one should be true)

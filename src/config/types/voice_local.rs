@@ -81,6 +81,7 @@ impl Default for VoiceLocalConfig {
 pub struct StreamingConfig {
     pub enabled: bool,
     /// Protocol adapter: "deepgram" (covers Deepgram cloud + WhisperLiveKit) | "whisperlive".
+    #[serde(default = "default_streaming_provider")]
     pub provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub base_url: String,
@@ -100,13 +101,17 @@ impl Default for StreamingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider: "deepgram".into(),
+            provider: default_streaming_provider(),
             base_url: String::new(),
             api_key: String::new(),
             language: None,
             model: String::new(),
         }
     }
+}
+
+fn default_streaming_provider() -> String {
+    "deepgram".into()
 }
 
 /// Post-transcription formatting pass configuration (`[voice.format]`).
@@ -117,6 +122,7 @@ impl Default for StreamingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct FormatConfig {
+    #[serde(default = "field_default_true")]
     pub enabled: bool,
     /// Fast model for the "speech refiner" pass, via ModelOverride::from_voice(provider, model).
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -137,6 +143,10 @@ impl Default for FormatConfig {
             prompt: String::new(),
         }
     }
+}
+
+fn field_default_true() -> bool {
+    true
 }
 
 /// `[voice]` config section wrapper — local BYO endpoint, streaming STT, and

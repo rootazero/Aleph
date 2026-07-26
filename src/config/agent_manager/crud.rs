@@ -92,7 +92,14 @@ impl AgentManager {
         let known_ids: std::collections::HashSet<&str> =
             config.list.iter().map(|a| a.id.as_str()).collect();
 
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("Failed to read directory entry during orphan reconciliation: {e}");
+                    continue;
+                }
+            };
             let path = entry.path();
             if !path.is_dir() {
                 continue;

@@ -27,6 +27,7 @@ pub struct FileChange {
 
 impl FileChange {
     /// Create a new file added change
+    #[must_use]
     pub fn added(path: impl Into<String>, hash: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -36,6 +37,7 @@ impl FileChange {
     }
 
     /// Create a new file modified change
+    #[must_use]
     pub fn modified(path: impl Into<String>, hash: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -45,6 +47,7 @@ impl FileChange {
     }
 
     /// Create a new file deleted change
+    #[must_use]
     pub fn deleted(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -67,6 +70,7 @@ pub struct PatchPart {
 
 impl PatchPart {
     /// Create a new empty patch
+    #[must_use]
     pub fn new(patch_id: impl Into<String>, base_snapshot_id: impl Into<String>) -> Self {
         Self {
             patch_id: patch_id.into(),
@@ -76,6 +80,7 @@ impl PatchPart {
     }
 
     /// Create with changes
+    #[must_use]
     pub fn with_changes(
         patch_id: impl Into<String>,
         base_snapshot_id: impl Into<String>,

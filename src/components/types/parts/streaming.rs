@@ -18,6 +18,7 @@ pub struct StreamingTextPart {
 
 impl StreamingTextPart {
     /// Create a new streaming text part
+    #[must_use]
     pub fn new(part_id: impl Into<String>) -> Self {
         Self {
             part_id: part_id.into(),
@@ -28,6 +29,7 @@ impl StreamingTextPart {
     }
 
     /// Create with initial content
+    #[must_use]
     pub fn with_content(part_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             part_id: part_id.into(),

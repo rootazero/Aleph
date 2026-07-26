@@ -281,13 +281,29 @@ impl Config {
         if let Some(arr) = ssrf.get("allowed_hosts").and_then(|v| v.as_array()) {
             config.ssrf.allowed_hosts = arr
                 .iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .filter_map(|v| {
+                    v.as_str().map(String::from).or_else(|| {
+                        tracing::warn!(
+                            value = tracing::field::display(v),
+                            "security.ssrf.allowed_hosts: non-string entry ignored"
+                        );
+                        None
+                    })
+                })
                 .collect();
         }
         if let Some(arr) = ssrf.get("blocked_hosts").and_then(|v| v.as_array()) {
             config.ssrf.blocked_hosts = arr
                 .iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .filter_map(|v| {
+                    v.as_str().map(String::from).or_else(|| {
+                        tracing::warn!(
+                            value = tracing::field::display(v),
+                            "security.ssrf.blocked_hosts: non-string entry ignored"
+                        );
+                        None
+                    })
+                })
                 .collect();
         }
     }

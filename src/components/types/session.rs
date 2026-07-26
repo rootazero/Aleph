@@ -84,6 +84,7 @@ impl ExecutionSession {
     }
 
     /// Set the original request (builder pattern)
+    #[must_use]
     pub fn with_original_request(mut self, request: impl Into<String>) -> Self {
         self.original_request = request.into();
         self

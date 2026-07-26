@@ -272,8 +272,7 @@ pub struct DeregisterOutcome {
 /// removable as "gpu-box" whether it is online or not.
 fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
     let devices = store.list_devices().ok()?;
-    let nodes: Vec<_> = devices.into_iter().filter(|d| d.role == "node").collect();
-    if let Some(d) = nodes.iter().find(|d| d.device_id == q) {
+    if let Some(d) = devices.iter().find(|d| d.role == "node" && d.device_id == q) {
         return Some(d.device_id.clone());
     }
     match match_by_name(store, q) {
