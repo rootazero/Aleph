@@ -10,7 +10,11 @@ use super::parse_params;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
-/// Memory entry for JSON serialization
+/// Memory entry for JSON serialization.
+///
+/// One raw conversation record. `user_input` / `ai_output` stay separate so the
+/// panel can style the two halves independently — joining them into one string
+/// server-side threw that away.
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub id: String,
@@ -18,9 +22,11 @@ pub struct MemoryEntry {
     pub window_title: String,
     pub user_input: String,
     pub ai_output: String,
-    pub timestamp: i64,
+    /// Session the row was recorded in, when known. Already selected by the
+    /// dashboard query — previously dropped on the floor here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub similarity_score: Option<f32>,
+    pub session_id: Option<String>,
+    pub timestamp: i64,
 }
 
 /// Window memory info
@@ -94,71 +100,40 @@ impl Default for SearchParams {
     }
 }
 
-/// Search memory.
+/// Search raw memory (Layer 1 conversation records).
 ///
-/// With a non-empty `query`, runs a full-text (FTS5) search over the compiled
-/// knowledge notes and returns the matches. With an empty query, returns the
-/// most recent raw memories (dashboard view).
+/// `query` filters `content` by substring; empty `query` browses. This handler
+/// is the **only** raw-memory entry point, and it returns **only** raw rows.
 ///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"memory.search","params":{"query":"rust","limit":10},"id":1}
-/// ```
+/// It used to run a note full-text search when `query` was non-empty —
+/// duplicating `graph.search`, which calls the same `search_notes_fts`. The
+/// panel wired that branch into its raw-memory table, so searching showed note
+/// filenames dressed as conversation records and the row delete button targeted
+/// `delete_raw_memory` with a note path (always `Ok(false)` → error → swallowed).
+/// Note search belongs to `graph.search`; keep it there.
 pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    use crate::memory::notes::store::NoteStore;
-
     let params: SearchParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    // A non-empty query runs a real full-text search over knowledge notes.
-    // Previously the `query` parameter was silently ignored.
-    let query = params.query.as_deref().map_or("", str::trim);
-    if !query.is_empty() {
-        let agent_id = params
-            .agent_id
-            .as_deref()
-            .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
-        return match db
-            .search_notes_fts(query, agent_id, params.limit as usize)
-            .await
-        {
-            Ok(notes) => {
-                let entries: Vec<MemoryEntry> = notes
-                    .into_iter()
-                    .map(|n| MemoryEntry {
-                        id: n.path.clone(),
-                        agent_id: n.agent_id,
-                        window_title: n.category,
-                        user_input: n.filename,
-                        ai_output: String::new(),
-                        timestamp: n.updated_at,
-                        similarity_score: None,
-                    })
-                    .collect();
-                JsonRpcResponse::success(request.id, json!({ "memories": entries }))
-            }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Note search failed: {e}"),
-            ),
-        };
-    }
-
-    // Scope to an agent namespace even when agent_id is omitted — matching the
-    // FTS branch above. Passing None drops the SQL `WHERE agent_id` clause and
-    // returns every agent's raw memories, violating workspace isolation.
+    // Scope to an agent namespace even when agent_id is omitted: passing None
+    // drops the SQL `WHERE agent_id` clause and returns every agent's raw
+    // memories, violating workspace isolation.
     let agent_id = params
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let query = params
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
+
     match db.get_raw_memories_dashboard(
         Some(agent_id),
-        None,
+        query,
         params.limit as usize,
         params.offset as usize,
     ) {
@@ -171,8 +146,8 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
                     window_title: String::new(),
                     user_input: m.content,
                     ai_output: String::new(),
+                    session_id: m.session_id,
                     timestamp: m.created_at,
-                    similarity_score: None,
                 })
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "memories": entries }))
@@ -904,29 +879,29 @@ mod tests {
             window_title: "Test Window".to_string(),
             user_input: "Hello".to_string(),
             ai_output: "Hi there".to_string(),
+            session_id: Some("s-1".to_string()),
             timestamp: 1234567890,
-            similarity_score: Some(0.5), // Use 0.5 which can be represented exactly in f32
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["id"], "test-id");
-        assert_eq!(json["similarity_score"], 0.5);
+        assert_eq!(json["session_id"], "s-1");
     }
 
     #[test]
-    fn test_memory_entry_no_score() {
+    fn test_memory_entry_no_session() {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
             window_title: "".to_string(),
             user_input: "".to_string(),
             ai_output: "".to_string(),
+            session_id: None,
             timestamp: 0,
-            similarity_score: None,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
-        assert!(json.get("similarity_score").is_none());
+        assert!(json.get("session_id").is_none());
     }
 }
 
@@ -983,5 +958,140 @@ mod trace_tests {
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
             "evidence references seeded raw raw-ev1"
         );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_search_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.search".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    async fn seed(db: &MemoryBackend) {
+        // One raw conversation row…
+        let raw = RawMemory {
+            id: "raw-1".to_string(),
+            content: "we should run smoke tests before deploy".to_string(),
+            source: RawMemorySource::Transcript,
+            agent_id: "main".to_string(),
+            session_id: Some("s-77".to_string()),
+            path: None,
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        };
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        // …and one note whose body ALSO contains the word "smoke", so an
+        // accidental note-FTS branch would be visible in the assertion.
+        let note = KnowledgeNote {
+            title: "deploy-notes".to_string(),
+            category: "facts".to_string(),
+            facts: vec!["smoke".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_500,
+            content_hash: "h1".to_string(),
+            ..Default::default()
+        };
+        db.index_note(&note, "main", "facts").await.unwrap();
+    }
+
+    /// The core regression: a query must NEVER return note rows. The old
+    /// handler ran a note FTS search here and returned note paths as if they
+    /// were conversation records, so the console's "Raw" tab showed note
+    /// filenames and its delete button targeted a table that does not hold them.
+    #[tokio::test]
+    async fn query_returns_raw_rows_never_notes() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "smoke",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        let memories = resp.result.expect("success")["memories"]
+            .as_array()
+            .expect("memories array")
+            .clone();
+        assert_eq!(memories.len(), 1, "only the raw row matches, not the note");
+        assert_eq!(memories[0]["id"], "raw-1");
+        assert_eq!(memories[0]["session_id"], "s-77");
+        assert!(
+            memories[0]["user_input"]
+                .as_str()
+                .unwrap()
+                .contains("smoke tests"),
+            "raw content must be returned verbatim, not a note filename"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_query_browses_all_raw_rows() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        assert_eq!(
+            resp.result.expect("success")["memories"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn query_with_no_match_returns_empty_not_error() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "zzz-nothing-matches",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        assert!(resp.error.is_none());
+        assert!(resp.result.expect("success")["memories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }
