@@ -206,7 +206,7 @@ fn resolve_active_strategy(
         task_type, task_id, ..
     }) = crate::routing::session_key::SessionKey::parse(session_key)
     {
-        if task_type == "team_chat" {
+        if task_type == crate::teams::run_mode::TEAM_CHAT_TASK_TYPE {
             if let Some(s) = store
                 .get(&crate::strategy::team_key(&task_id))
                 .ok()
