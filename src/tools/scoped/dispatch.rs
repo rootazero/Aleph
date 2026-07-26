@@ -1043,6 +1043,15 @@ impl ScopedToolService {
             out.metadata.images = images;
         }
 
+        // Settle any `_media` the tool declared into the durable artifact store
+        // while the value is still structured — the lines below flatten it to
+        // text and truncate it to the result budget, after which the items are
+        // gone. Read-only (the items stay in `out.value` for the existing
+        // delivery path) and best-effort by construction: it returns `()`, so a
+        // storage failure can never surface as a tool error.
+        super::artifact_harvest::harvest_outbound_media(name, &out.value, self.turn_context.as_ref())
+            .await;
+
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed
         // into Layer 2 reflects what the LLM will ultimately see.

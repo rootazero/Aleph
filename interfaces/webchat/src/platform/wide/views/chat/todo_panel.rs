@@ -10,14 +10,10 @@ use leptos::prelude::*;
 use super::plan::{PlanItemStatusView, PlanView};
 use super::state::ChatState;
 use crate::i18n::{t_string, use_i18n};
-use crate::state::inspector::InspectorTarget;
-use crate::state::layout::WorkspaceState;
 
 #[component]
 pub fn TodoPanel() -> impl IntoView {
     let chat = expect_context::<ChatState>();
-    // Optional (absent in storybook): drives the ↗ open-in-panel affordance.
-    let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
     let expanded = RwSignal::new(false);
 
@@ -65,7 +61,7 @@ pub fn TodoPanel() -> impl IntoView {
                         // work that is not happening.
                         class:settled=move || !run_active
                     >
-                        // ── header row (always visible): toggle + ↗ open-in-panel ──
+                        // ── header row (always visible): expand toggle ──
                         // Slim single line: 18px ring (same size as ContextGauge)
                         // + percentage to its right + one-line summary that
                         // ellipsis-truncates its tail. No 36px ring, no two-row meta.
@@ -84,24 +80,6 @@ pub fn TodoPanel() -> impl IntoView {
                             </span>
                             <span class="aleph-todo-chev" class:open=move || expanded.get()>"▾"</span>
                         </button>
-                        // ↗ opens the plan inspector surface in the right pane.
-                        {workspace.is_some().then(|| view! {
-                            <button
-                                style="flex:0 0 auto;padding:5px 10px;background:transparent;\
-                                       border:0;cursor:pointer;color:var(--color-text-secondary);\
-                                       font-size:13px"
-                                title=move || t_string!(i18n, common.inspector_open).to_string()
-                                on:click=move |_: web_sys::MouseEvent| {
-                                    if let Some(ws) = workspace {
-                                        let run_id = chat.active_run_id.get_untracked()
-                                            .unwrap_or_default();
-                                        ws.inspect(InspectorTarget::Plan { run_id });
-                                    }
-                                }
-                            >
-                                "\u{2197}"
-                            </button>
-                        })}
                         </div>
                         // ── checklist (expanded only) ──
                         <Show when=move || expanded.get()>

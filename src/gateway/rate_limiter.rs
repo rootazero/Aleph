@@ -444,8 +444,11 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         | "moa.savePreset" | "moa.deletePreset" | "moa.setDefault"
         | "moa.setSaveTraces" => RateLimitScope::RpcWrite,
 
-        // Resource-intensive operations
-        "agent.run" | "chat.send" => RateLimitScope::RpcHeavy,
+        // Resource-intensive operations. `session.export_html` reads the whole
+        // transcript plus every inlinable artifact byte and renders a document
+        // that is then stored — one call can move tens of megabytes, so it
+        // belongs here rather than in the generous default window.
+        "agent.run" | "chat.send" | "session.export_html" => RateLimitScope::RpcHeavy,
 
         // Realtime audio frames (one ~200 ms PCM chunk per call while a
         // streaming-STT mic is live)
@@ -636,7 +639,7 @@ mod tests {
         }
 
         // RpcHeavy methods
-        for method in &["agent.run", "chat.send"] {
+        for method in &["agent.run", "chat.send", "session.export_html"] {
             assert_eq!(
                 scope_for_method(method),
                 RateLimitScope::RpcHeavy,

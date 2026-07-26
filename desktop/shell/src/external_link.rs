@@ -69,15 +69,30 @@ pub fn route(url: &Url) -> bool {
     false
 }
 
+/// Path prefix of the daemon's artifact byte route
+/// (`GET /artifact/{cap}/{id}/{filename}`). Deliberately excluded from the
+/// internal allow-list — see [`is_internal`].
+const ARTIFACT_PATH_PREFIX: &str = "/artifact/";
+
 /// Whether `url` is part of the Panel/splash surface and may load inside the
 /// hosting webview. Trusts the Tauri asset/data schemes and any http(s) URL
 /// on a loopback host (the local daemon) or the `tauri.localhost` asset host
 /// (Windows `WebView2` serves bundled assets there).
+///
+/// Carve-out: the daemon's artifact byte route is served from that same
+/// trusted origin, but an artifact is a *document* (image, PDF, exported
+/// HTML), not Panel surface. Navigating to it would replace the shell's one
+/// webview with a file viewer and no back button — and `target="_blank"` is
+/// no escape, since [`CLICK_INTERCEPTOR_JS`] rewrites `_blank` anchors into
+/// top-level navigations. So `/artifact/...` is reported external and handed
+/// to the OS browser, which has tabs, a back button, and a downloads shelf
+/// (R5: the shell never steals the user's context).
 pub fn is_internal(url: &Url) -> bool {
     match url.scheme() {
         // Splash + bundled assets (`tauri://localhost`), and in-page schemes
         // the Panel may render documents from.
         "tauri" | "about" | "data" | "blob" => true,
+        "http" | "https" if url.path().starts_with(ARTIFACT_PATH_PREFIX) => false,
         "http" | "https" => match url.host_str() {
             Some(host) => {
                 // `host_str` brackets IPv6 literals (`[::1]`); normalise.
@@ -185,6 +200,30 @@ mod tests {
         assert!(!internal("http://10.0.0.5:18790/"));
         assert!(!internal("mailto:hi@example.com"));
         assert!(!internal("tel:+1555"));
+    }
+
+    #[test]
+    #[serial(remote_origin)]
+    fn artifact_bytes_are_external_even_on_a_trusted_origin() {
+        // The carve-out has to beat *every* trusted-origin branch, not just
+        // loopback: navigating the shell's single webview to an artifact
+        // leaves the user in a file viewer with no back button.
+        assert!(!internal(
+            "http://127.0.0.1:18790/artifact/cap/id/report.pdf"
+        ));
+        assert!(!internal(
+            "http://localhost:18790/artifact/cap/id/chart.png"
+        ));
+        assert!(!internal("https://127.0.0.1:443/artifact/cap/id/x.html"));
+        assert!(!internal("http://tauri.localhost/artifact/cap/id/x.png"));
+        set_remote_host(Some(Url::parse("http://203.0.113.9:18790").unwrap()));
+        assert!(!internal("http://203.0.113.9:18790/artifact/cap/id/x.png"));
+        set_remote_host(None);
+
+        // Panel routes that merely *mention* the word stay internal — the
+        // guard is a path prefix, not a substring match.
+        assert!(internal("http://127.0.0.1:18790/chat/artifact/id"));
+        assert!(internal("http://127.0.0.1:18790/artifacts"));
     }
 
     #[test]

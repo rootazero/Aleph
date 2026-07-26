@@ -16,6 +16,7 @@ pub mod cluster;
 
 // Split submodules
 pub mod acp;
+pub mod artifacts;
 pub mod browser;
 pub mod clarification;
 pub mod config;

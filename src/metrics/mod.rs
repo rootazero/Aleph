@@ -55,12 +55,18 @@ static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
 /// Bind the live metrics knobs from `[policies.metrics]`. Called once from
 /// `Config::load` so `StageTimer` honours user-configured thresholds instead of
 /// the compiled defaults. Idempotent: a later call (e.g. a config reload) is
-/// ignored, matching the write-once semantics of `defaults_override`. Takes the
-/// policy by reference (like `providers::retry` consumes `RetryPolicy`).
+/// ignored, matching the write-once semantics of `defaults_override`.
 pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
+    let warning_multiplier = if policy.warning_multiplier.is_finite()
+        && policy.warning_multiplier >= 0.0
+    {
+        policy.warning_multiplier
+    } else {
+        DEFAULT_WARNING_MULTIPLIER
+    };
     if METRICS_RUNTIME
         .set(MetricsRuntime {
-            warning_multiplier: policy.warning_multiplier,
+            warning_multiplier,
             enable_logging: policy.enable_logging,
             enable_warnings: policy.enable_warnings,
         })

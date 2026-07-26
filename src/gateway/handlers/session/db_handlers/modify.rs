@@ -3,6 +3,28 @@
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
 
+/// Drop every artifact a deleted session produced.
+///
+/// Best-effort, exactly like [`fire_session_end_hook`]: the transcript is
+/// already gone, so failing the RPC here would report a deletion that in fact
+/// happened. The handler only says *which* session died — where the bytes live
+/// and how they are reclaimed stays inside `crate::artifacts` (R4).
+async fn purge_session_artifacts(session_key: &str) {
+    let root = match crate::artifacts::ArtifactStore::default_root() {
+        Ok(root) => root,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot resolve the artifact root; artifacts not purged");
+            return;
+        }
+    };
+    if let Err(e) = crate::artifacts::ArtifactStore::new(root)
+        .purge_session(session_key)
+        .await
+    {
+        tracing::warn!(error = %e, session_key, "failed to purge session artifacts");
+    }
+}
+
 /// Fire the `SessionEnd` extension hook (observers) for a deleted session.
 ///
 /// Best-effort: a missing extension manager, an empty hook set, or a hook
@@ -179,6 +201,18 @@ async fn handle_delete_db_inner(
 
             match manager.delete_session(&session_key).await {
                 Ok(result) => {
+                    // The transcript is gone; the bytes it produced must go
+                    // with it. Without this the store keeps up to
+                    // `MAX_ARTIFACTS_PER_SESSION` blobs per deleted session on
+                    // disk forever, and a re-created session under the same
+                    // (stable) key would inherit the dead session's artifacts.
+                    //
+                    // Canonical spelling, not the caller's `key_str`: the
+                    // harvest points stamp `to_key_string()`, and the store
+                    // encodes the key straight into a directory name — a
+                    // legacy spelling would purge a directory that never
+                    // existed and silently leave the real one behind.
+                    purge_session_artifacts(&session_key.to_key_string()).await;
                     // SessionEnd — the session has been removed; extension
                     // observers witness the teardown.
                     fire_session_end_hook(&session_key).await;

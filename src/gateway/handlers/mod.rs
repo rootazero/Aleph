@@ -40,6 +40,7 @@ pub mod acp_config;
 pub mod activity;
 pub mod agent;
 pub mod agents;
+pub mod artifacts;
 pub mod auth;
 pub mod behavior_config;
 pub mod browser_config;

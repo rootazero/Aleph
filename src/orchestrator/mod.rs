@@ -10,7 +10,6 @@ pub mod flow_run_tool;
 pub mod flow_spec;
 pub mod harness_bridge;
 pub mod loader;
-pub mod metrics;
 pub mod presets;
 pub mod resolver;
 pub mod sandbox_factory;
@@ -43,7 +42,6 @@ pub use flow_spec::{
     SandboxKind, SessionStrategy,
 };
 pub use harness_bridge::AgentHarnessRunner;
-pub use metrics::{FlowMetrics, OrchestratorMetrics};
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
 pub use sandbox_factory::{
     build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,

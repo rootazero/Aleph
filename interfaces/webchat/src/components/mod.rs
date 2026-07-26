@@ -2,6 +2,7 @@
 
 pub mod agents_sidebar;
 pub mod approval_card;
+pub mod artifacts;
 pub mod ask_user_card;
 pub mod boot_check_gate;
 pub mod chat_sidebar;
@@ -13,7 +14,6 @@ pub mod exec_tier_labels;
 pub mod mode_labels;
 pub mod extensions;
 pub mod forms;
-pub mod inspector;
 pub mod json_schema_form;
 pub mod layout_toggle;
 pub mod layouts;

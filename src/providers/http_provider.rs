@@ -510,10 +510,31 @@ impl HttpProvider {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         // Cheap clone for body-on-rejection diagnostics (see path above).
         let diag_request = request.try_clone();
-        let response = request
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Network error: {e}"))?;
+        // TTFB watchdog — mirrors the `execute` path so a stalled upstream
+        // produces a typed Timeout instead of hanging the turn.
+        let ttfb_secs =
+            crate::providers::protocols::stream_idle::effective_idle_secs(&self.config);
+        let send_fut = request.send();
+        let send_result = if ttfb_secs == 0 {
+            send_fut.await
+        } else {
+            match tokio::time::timeout(std::time::Duration::from_secs(ttfb_secs), send_fut).await {
+                Ok(res) => res,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        provider = %self.name,
+                        ttfb_secs,
+                        "Provider produced no response headers within TTFB timeout (stream_raw)"
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Timeout: provider '{name}' sent no response for {ttfb_secs}s after \
+                         the request was dispatched (time-to-first-byte timeout)",
+                        name = self.name,
+                    ));
+                }
+            }
+        };
+        let response = send_result.map_err(|e| anyhow::anyhow!("Network error: {e}"))?;
         let stream = match self.adapter.stream_deltas(response).await {
             Ok(s) => s,
             Err(e) => {

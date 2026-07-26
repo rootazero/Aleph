@@ -106,8 +106,25 @@ where
 
 /// Injects all security headers into the provided header map.
 fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
+    // Content-Security-Policy is the one header a handler may set for itself,
+    // and its own value wins. `HeaderMap::insert` *replaces*, so applying
+    // [`CSP_VALUE`] unconditionally here — after the handler has already run —
+    // would silently downgrade a response that deliberately chose a stricter
+    // policy. The artifact byte route serves session-generated HTML and SVG
+    // under `default-src 'none'; ...; sandbox`; handing those documents the
+    // Panel policy instead (`script-src 'self' 'unsafe-inline'`, same origin)
+    // would give them script capability on the gateway's own origin.
+    //
+    // Only tightening is possible: nothing that reaches this layer without its
+    // own policy escapes [`CSP_VALUE`], and the strict policies that do set one
+    // are strict supersets of these restrictions.
+    if !headers.contains_key(http::header::CONTENT_SECURITY_POLICY) {
+        if let Ok(value) = HeaderValue::from_str(CSP_VALUE) {
+            headers.insert(http::header::CONTENT_SECURITY_POLICY, value);
+        }
+    }
+
     let entries: &[(&str, &str)] = &[
-        ("content-security-policy", CSP_VALUE),
         ("strict-transport-security", HSTS_VALUE),
         ("x-content-type-options", X_CONTENT_TYPE_OPTIONS_VALUE),
         ("x-frame-options", X_FRAME_OPTIONS_VALUE),
@@ -141,10 +158,20 @@ mod tests {
     use axum::{routing::get, Router};
     use tower::ServiceExt;
 
+    /// The strict, per-response policy the artifact byte route serves
+    /// session-generated HTML under. Duplicated here (rather than imported)
+    /// so this test keeps guarding the *behaviour* even if that route moves.
+    const STRICT_CSP: &str =
+        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+
     fn test_router() -> Router {
         Router::new()
             .route("/api/test", get(|| async { "ok" }))
             .route("/assets/app.js", get(|| async { "js" }))
+            .route(
+                "/artifact/doc.html",
+                get(|| async { ([("content-security-policy", STRICT_CSP)], "<p>hi</p>") }),
+            )
             .layer(SecurityHeadersLayer::new())
     }
 
@@ -200,6 +227,33 @@ mod tests {
                 .and_then(|v: &HeaderValue| v.to_str().ok()),
             Some("no-store"),
             "API paths should get Cache-Control: no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_supplied_csp_is_not_downgraded() {
+        let app = test_router();
+
+        let req = Request::builder()
+            .uri("/artifact/doc.html")
+            .body(Body::empty())
+            .unwrap();
+
+        let response: Response<Body> = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The artifact byte route serves HTML that a session produced — it must
+        // land under `default-src 'none'; ...; sandbox`, not the Panel policy
+        // that allows same-origin and inline script. This layer runs *after*
+        // the handler, so an unconditional `insert` here would silently hand
+        // untrusted documents script capability.
+        assert_eq!(
+            response
+                .headers()
+                .get("content-security-policy")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
+            Some(STRICT_CSP),
+            "a handler's own CSP must survive the global layer"
         );
     }
 

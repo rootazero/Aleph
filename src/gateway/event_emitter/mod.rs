@@ -3,6 +3,7 @@
 //! Provides the `EventEmitter` trait for emitting real-time streaming events
 //! from the agent loop to connected WebSocket clients.
 
+pub mod artifact_ping;
 mod impls;
 mod instant_buffer;
 pub mod origin_fanout;

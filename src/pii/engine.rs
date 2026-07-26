@@ -114,6 +114,8 @@ impl PiiEngine {
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
             guard.rules = new_rules;
             guard.config = config;
+        } else {
+            warn!("PiiEngine::reload called but engine not initialized, ignoring");
         }
     }
 
@@ -260,6 +262,7 @@ impl PiiEngine {
         for detection in &sorted {
             let action = Self::action_for_rule(config, &detection.rule_name);
             match action {
+                PiiAction::Off => {}
                 PiiAction::Block => {
                     if detection.start < detection.end
                         && detection.end <= result.len()
@@ -292,7 +295,6 @@ impl PiiEngine {
                         "PII detected in outbound message (warn mode)"
                     );
                 }
-                PiiAction::Off => {}
             }
         }
 

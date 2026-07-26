@@ -77,7 +77,7 @@ impl LogLevel {
     }
 
     /// Convert from u8
-    const fn from_u8(value: u8) -> Self {
+    fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
             1 => Self::Warn,
@@ -85,11 +85,7 @@ impl LogLevel {
             3 => Self::Debug,
             4 => Self::Trace,
             _ => {
-                // Static message only: `from_u8` is a `const fn`, and a
-                // formatted `debug_assert!` ({value}) uses non-const format
-                // machinery (E0015). The out-of-range byte is unrepresentable
-                // via the public API anyway (round-trips `to_u8`).
-                debug_assert!(false, "Invalid LogLevel u8 value");
+                tracing::warn!(value, "Invalid LogLevel u8 value, falling back to Info");
                 Self::Info
             }
         }

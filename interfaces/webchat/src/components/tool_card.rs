@@ -63,30 +63,27 @@ impl ToolKind {
     }
 }
 
-/// Card rendering surface: left chat (capped) vs right detail pane (full).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToolSurface {
-    /// Left chat: inline, flat single level, capped at `MAX_INLINE_LINES`; overflow
-    /// links to the detail pane.
-    #[default]
-    Inline,
-    /// Right "Tool · Detail" pane: full, flat, uncapped.
-    Detail,
-}
-
-/// Max visible lines for inline chat cards; the right-side detail pane is uncapped.
+/// Max visible body lines before the card offers an in-place expand.
 pub const MAX_INLINE_LINES: usize = 8;
 
-impl ToolSurface {
-    /// Max body lines for this surface: `Inline` caps at `MAX_INLINE_LINES`,
-    /// `Detail` is uncapped.
-    #[must_use]
-    const fn cap(self) -> usize {
-        match self {
-            ToolSurface::Inline => MAX_INLINE_LINES,
-            ToolSurface::Detail => usize::MAX,
-        }
+/// Effective body line cap: the inline preview, or uncapped once the user
+/// expanded the body in place.
+const fn body_cap(expanded: bool) -> usize {
+    if expanded {
+        usize::MAX
+    } else {
+        MAX_INLINE_LINES
     }
+}
+
+/// Resolved labels for the in-place expand line. Passed down (rather than
+/// resolved per body fn) because the body renderers are plain functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExpandLabels {
+    /// "Show all" — shown while the body is truncated.
+    pub more: String,
+    /// "Collapse" — shown once the body is fully expanded.
+    pub less: String,
 }
 
 use serde_json::Value;
@@ -350,18 +347,21 @@ pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<St
     }
 }
 
+/// Key under which a tool's **body** expand override lives in the shared
+/// `WorkspaceState::expanded_events` set. Distinct from the bare `tool_id`,
+/// which holds the card's own open/closed override — the two are independent
+/// (a card can be open with a truncated body, or open and fully expanded).
+fn full_body_key(tool_id: &str) -> String {
+    format!("{tool_id}\u{1}body")
+}
+
 /// Shared tool card: header (icon + single-line title + run indicator + diff stats + collapse arrow)
 /// + expandable body. The title picks the most descriptive parameter (query / command / path / URL), no longer rendering
-/// the tool name and "COMPLETED · duration". Both the left chat and right workspace panel render it. Expand state is
-/// a per-card local signal: file-mutation kinds default-open, the rest default-closed.
+/// the tool name and "COMPLETED · duration". Expand state is an override set in the shared
+/// `WorkspaceState`: file-mutation kinds default-open, the rest default-closed.
 #[component]
 #[must_use]
-pub fn ToolCard(
-    run_id: String,
-    tool_id: String,
-    tool_name: String,
-    #[prop(optional)] surface: ToolSurface,
-) -> impl IntoView {
+pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
@@ -369,6 +369,7 @@ pub fn ToolCard(
 
     let tid_for_status = tool_id.clone();
     let tid_for_expand = tool_id.clone();
+    let body_key = full_body_key(&tool_id);
     // Read the shared `tool_id → status` index rather than rescanning the whole
     // transcript per card per streamed token (see `ToolIndex`). Absent context
     // (storybook) falls back to the same lookup done directly.
@@ -379,9 +380,6 @@ pub fn ToolCard(
             .messages
             .with(|msgs| crate::views::chat::state::find_tool_status(msgs, &tid_for_status)),
     });
-
-    let run_for_overflow = run_id.clone();
-    let tid_for_overflow = tool_id.clone();
 
     let run_for_payload = run_id;
     let tid_for_payload = tool_id;
@@ -415,14 +413,28 @@ pub fn ToolCard(
         }
     };
 
-    let detail_label = t_string!(i18n, tool_card.to_detail).to_string();
-    let on_overflow = move || {
+    // Second, independent override in the SAME shared set: whether the body is
+    // shown in full instead of the 8-line preview. Shared (not card-local) for
+    // the same reason as the card's own open state — the keyed `<For>` above
+    // remounts this card on every streamed token.
+    let local_body_expanded = RwSignal::new(false);
+    let key_for_read = body_key.clone();
+    let body_expanded = Memo::new(move |_| {
+        workspace.map_or_else(
+            || local_body_expanded.get(),
+            |ws| ws.is_event_toggled(&key_for_read),
+        )
+    });
+    let on_body_toggle = move || {
         if let Some(ws) = workspace {
-            ws.inspect(crate::state::inspector::InspectorTarget::Tool {
-                run_id: run_for_overflow.clone(),
-                tool_id: tid_for_overflow.clone(),
-            });
+            ws.toggle_event(&body_key);
+        } else {
+            local_body_expanded.update(|e| *e = !*e);
         }
+    };
+    let expand_labels = ExpandLabels {
+        more: t_string!(i18n, tool_card.expand_all).to_string(),
+        less: t_string!(i18n, tool_card.collapse).to_string(),
     };
 
     // diff stats (meaningful only for FileEdit): computed from args old/new.
@@ -551,9 +563,15 @@ pub fn ToolCard(
             <Show when=move || expanded.get()>
                 <div class="pl-7 pr-2 pb-2">
                     {
-                        let oo = on_overflow.clone();
-                        let dl = detail_label.clone();
-                        move || render_body(kind, &payload.get(), surface, dl.clone(), oo.clone())
+                        let ot = on_body_toggle.clone();
+                        let labels = expand_labels.clone();
+                        move || render_body(
+                            kind,
+                            &payload.get(),
+                            body_expanded.get(),
+                            &labels,
+                            ot.clone(),
+                        )
                     }
                 </div>
             </Show>
@@ -564,32 +582,32 @@ pub fn ToolCard(
 /// Single-line monospace container style.
 const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
 
-/// Render card body by tool kind. `surface` controls capping: Inline caps at `MAX_INLINE_LINES`
-/// and shows a "-> detail panel" overflow line; Detail is full. `detail_label` is the resolved
-/// localised "detail panel" text.
-pub(crate) fn render_body(
+/// Render card body by tool kind. `expanded` is the in-place body expand: false
+/// caps at `MAX_INLINE_LINES` and appends a "… +N Show all" line, true renders
+/// the whole body and offers "Collapse".
+fn render_body(
     kind: ToolKind,
     payload: &Option<ToolPayload>,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let Some(p) = payload else {
         return view! { <span class="text-text-tertiary italic text-xs">"…"</span> }.into_any();
     };
     if let Some(res) = p.result.as_ref() {
         if let Some(err) = error_message(res) {
-            return capped_block(&err, "text-danger", surface, detail_label, on_overflow);
+            return capped_block(&err, "text-danger", expanded, labels, on_toggle);
         }
     }
     match kind {
-        ToolKind::FileEdit => edit_body(p, surface, detail_label, on_overflow),
-        ToolKind::FileWrite => write_body(p, surface, detail_label, on_overflow),
-        ToolKind::ApplyPatch => patch_body(p, surface, detail_label, on_overflow),
-        ToolKind::Bash => shell_body(p, surface, detail_label, on_overflow),
-        ToolKind::FileRead => read_body(p, surface, detail_label, on_overflow),
-        ToolKind::Search => search_body(p, surface, detail_label, on_overflow),
-        ToolKind::Default => default_body(p, surface, detail_label, on_overflow),
+        ToolKind::FileEdit => edit_body(p, expanded, labels, on_toggle),
+        ToolKind::FileWrite => write_body(p, expanded, labels, on_toggle),
+        ToolKind::ApplyPatch => patch_body(p, expanded, labels, on_toggle),
+        ToolKind::Bash => shell_body(p, expanded, labels, on_toggle),
+        ToolKind::FileRead => read_body(p, expanded, labels, on_toggle),
+        ToolKind::Search => search_body(p, expanded, labels, on_toggle),
+        ToolKind::Default => default_body(p, expanded, labels, on_toggle),
     }
 }
 
@@ -603,21 +621,21 @@ fn arg_str<'a>(p: &'a ToolPayload, key: &str) -> &'a str {
 
 fn edit_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let old = arg_str(p, "old_string");
     let new = arg_str(p, "new_string");
     let (lines, _a, _r) = diff_lines(old, new);
-    capped_diff(lines, surface, detail_label, on_overflow)
+    capped_diff(lines, expanded, labels, on_toggle)
 }
 
 fn patch_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let patch = arg_str(p, "patch");
     let lines: Vec<DiffLine> = patch
@@ -634,20 +652,19 @@ fn patch_body(
             }
         })
         .collect();
-    capped_diff(lines, surface, detail_label, on_overflow)
+    capped_diff(lines, expanded, labels, on_toggle)
 }
 
-/// Red-remove / green-add / neutral-context diff rendering, capped by surface (Inline over MAX_INLINE_LINES
-/// truncated + "-> detail panel"), flat, no nesting.
+/// Red-remove / green-add / neutral-context diff rendering, capped to the
+/// inline preview until the user expands it in place. Flat, no nesting.
 fn capped_diff(
     lines: Vec<DiffLine>,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
-    let cap = surface.cap();
+    let cap = body_cap(expanded);
     let total = lines.len();
-    let hidden = total.saturating_sub(cap);
     view! {
         <div>
             <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
@@ -661,68 +678,81 @@ fn capped_diff(
                     view! { <span class=cls>{line}</span> }
                 }).collect_view()}
             </div>
-            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+            {expand_line(total, expanded, labels, on_toggle)}
         </div>
     }
     .into_any()
 }
 
-/// Render multi-line text capped by surface. Inline over `MAX_INLINE_LINES` is truncated with
-/// an appended "… +N -> detail panel" line (click fires `on_overflow`); Detail is full.
-/// No inner collapsible sections — this is the core of the flattening.
+/// Render multi-line text capped to the inline preview, with an appended
+/// "… +N Show all" line the user can click to expand in place (and a
+/// "Collapse" line once expanded). No inner collapsible sections — this is the
+/// core of the flattening.
 fn capped_block(
     text: &str,
     extra_class: &'static str,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
-    let cap = surface.cap();
-    let (shown, hidden) = split_preview(text, cap);
+    let total = text.lines().count();
+    let (shown, _hidden) = split_preview(text, body_cap(expanded));
     view! {
         <div>
             <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{shown}</pre>
-            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+            {expand_line(total, expanded, labels, on_toggle)}
         </div>
     }
     .into_any()
 }
 
-/// Unified "… +N -> detail panel" overflow line. `detail_label` is the resolved localised
-/// text (e.g. "detail panel").
-fn overflow_line(
-    hidden: usize,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
-) -> AnyView {
-    let label = format!("\u{2026} +{hidden} \u{2192} {detail_label}");
-    view! {
-        <button
-            type="button"
-            class="mt-1 text-[10px] text-text-tertiary hover:text-primary"
-            on:click=move |ev: web_sys::MouseEvent| { ev.stop_propagation(); on_overflow(); }
-        >
-            {label}
-        </button>
+/// In-place expand / collapse affordance for a body that overflows the inline
+/// preview. `total` is the untruncated line (or row) count; a body that fits
+/// renders nothing.
+fn expand_line(
+    total: usize,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
+) -> Option<AnyView> {
+    let hidden = total.saturating_sub(MAX_INLINE_LINES);
+    if hidden == 0 {
+        return None;
     }
-    .into_any()
+    let label = if expanded {
+        labels.less.clone()
+    } else {
+        format!("\u{2026} +{hidden} \u{2192} {}", labels.more)
+    };
+    Some(
+        view! {
+            <button
+                type="button"
+                class="mt-1 text-[10px] text-text-tertiary hover:text-primary"
+                on:click=move |ev: web_sys::MouseEvent| { ev.stop_propagation(); on_toggle(); }
+            >
+                {label}
+            </button>
+        }
+        .into_any(),
+    )
 }
 
 fn write_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let content = arg_str(p, "content").to_string();
-    capped_block(&content, "", surface, detail_label, on_overflow)
+    capped_block(&content, "", expanded, labels, on_toggle)
 }
 
 fn shell_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let cmd = {
         let v = arg_str(p, "cmd");
@@ -762,14 +792,12 @@ fn shell_body(
         <div class="flex flex-col gap-1">
             <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("$ {cmd}")}</pre>
             {(!stdout.is_empty()).then({
-                let oo = on_overflow.clone();
-                let dl = detail_label.clone();
-                move || capped_block(&stdout, "text-text-secondary", surface, dl, oo)
+                let ot = on_toggle.clone();
+                move || capped_block(&stdout, "text-text-secondary", expanded, labels, ot)
             })}
             {(!stderr.is_empty()).then({
-                let oo = on_overflow.clone();
-                let dl = detail_label.clone();
-                move || capped_block(&stderr, "text-danger/80", surface, dl, oo)
+                let ot = on_toggle.clone();
+                move || capped_block(&stderr, "text-danger/80", expanded, labels, ot)
             })}
             {exit_badge}
         </div>
@@ -779,9 +807,9 @@ fn shell_body(
 
 fn read_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let out = p.result.as_ref().and_then(success_output).cloned();
     let text = match out {
@@ -794,33 +822,26 @@ fn read_body(
         None => String::new(),
     };
     if text.is_empty() {
-        return default_body(p, surface, detail_label, on_overflow);
+        return default_body(p, expanded, labels, on_toggle);
     }
-    capped_block(
-        &text,
-        "text-text-secondary",
-        surface,
-        detail_label,
-        on_overflow,
-    )
+    capped_block(&text, "text-text-secondary", expanded, labels, on_toggle)
 }
 
 fn search_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     let Some(res) = p.result.as_ref() else {
-        return default_body(p, surface, detail_label, on_overflow);
+        return default_body(p, expanded, labels, on_toggle);
     };
     let hits = search_hits(res);
     if hits.is_empty() {
-        return default_body(p, surface, detail_label, on_overflow);
+        return default_body(p, expanded, labels, on_toggle);
     }
-    let cap = surface.cap();
+    let cap = body_cap(expanded);
     let total = hits.len();
-    let hidden = total.saturating_sub(cap);
     view! {
         <div class="flex flex-col gap-1 text-xs">
             <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
@@ -834,7 +855,7 @@ fn search_body(
                     })}
                 </div>
             }).collect_view()}
-            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+            {expand_line(total, expanded, labels, on_toggle)}
         </div>
     }
     .into_any()
@@ -842,9 +863,9 @@ fn search_body(
 
 fn default_body(
     p: &ToolPayload,
-    surface: ToolSurface,
-    detail_label: String,
-    on_overflow: impl Fn() + Clone + 'static,
+    expanded: bool,
+    labels: &ExpandLabels,
+    on_toggle: impl Fn() + Clone + 'static,
 ) -> AnyView {
     // Prefer result over args; both flattened to top-level key:value rows.
     let source = p.result.clone().or_else(|| p.args.clone());
@@ -853,19 +874,12 @@ fn default_body(
     };
     let kv = flat_kv(&v);
     if kv.is_empty() {
-        // Non-object (array/scalar) -> compact pretty JSON, capped by surface.
+        // Non-object (array/scalar) -> compact pretty JSON, capped inline.
         let compact = serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string());
-        return capped_block(
-            &compact,
-            "text-text-secondary",
-            surface,
-            detail_label,
-            on_overflow,
-        );
+        return capped_block(&compact, "text-text-secondary", expanded, labels, on_toggle);
     }
-    let cap = surface.cap();
+    let cap = body_cap(expanded);
     let total = kv.len();
-    let hidden = total.saturating_sub(cap);
     view! {
         <div class="flex flex-col gap-0.5 text-xs font-mono">
             {kv.into_iter().take(cap).map(|(k, val)| view! {
@@ -874,7 +888,7 @@ fn default_body(
                     <span class="text-text-secondary truncate">{val}</span>
                 </div>
             }).collect_view()}
-            {(hidden > 0).then(|| overflow_line(hidden, detail_label.clone(), on_overflow.clone()))}
+            {expand_line(total, expanded, labels, on_toggle)}
         </div>
     }
     .into_any()
@@ -1108,8 +1122,17 @@ mod tests {
     }
 
     #[test]
-    fn tool_surface_defaults_inline() {
-        assert_eq!(ToolSurface::default(), ToolSurface::Inline);
+    fn body_cap_is_the_inline_preview_until_expanded() {
+        assert_eq!(body_cap(false), MAX_INLINE_LINES);
+        assert_eq!(body_cap(true), usize::MAX);
+    }
+
+    /// The body expand override must not collide with the card's own
+    /// open/closed override — both live in the same `expanded_events` set.
+    #[test]
+    fn full_body_key_is_distinct_from_the_tool_id() {
+        assert_ne!(full_body_key("t1"), "t1");
+        assert_ne!(full_body_key("t1"), full_body_key("t2"));
     }
 
     #[test]

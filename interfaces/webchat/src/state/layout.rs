@@ -1,8 +1,8 @@
 //! Layout mode + workspace pane state.
 //!
 //! UI-TARS-parity primitive: an optional **workspace pane** that opens to
-//! the right of the chat surface so the user can inspect a tool result,
-//! memory note, or freeform notes without losing chat context.
+//! the right of the chat surface so the user can reach what a run produced
+//! without losing chat context.
 //!
 //! Two orthogonal signals:
 //!
@@ -10,13 +10,11 @@
 //!   (`ChatOnly` keeps Aleph's existing single-column UX; `Split` splits
 //!   chat / workspace 1:2). Persists in `localStorage`.
 //! - [`WorkspaceState`] — activity-stream state: tool payloads, inline
-//!   expansions, unseen-activity badge, file drawer, and the selected-tool
-//!   pane (live-follow while streaming, pinned once the user picks one).
+//!   expansions, unseen-activity badge, and the files section toggle.
 //!
 //! State is provided once at the app root via `provide_context`; readers
 //! `expect_context::<WorkspaceState>()` from anywhere in the tree.
 
-use super::inspector::InspectorTarget;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -78,14 +76,6 @@ impl LayoutMode {
     }
 }
 
-/// A lazily-loaded file preview shown in the files drawer (Phase 2).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilePreview {
-    pub path: String,
-    pub content: String,
-    pub truncated: bool,
-}
-
 /// Reactive workspace state. Provided once via context, cloned via `Copy`.
 #[derive(Clone, Copy)]
 pub struct WorkspaceState {
@@ -104,17 +94,6 @@ pub struct WorkspaceState {
     /// Split — drives the toggle button's unseen-activity dot (R5: we
     /// surface activity without force-opening the pane).
     pub unseen_activity: RwSignal<usize>,
-    /// Whether the bottom files drawer is expanded (Phase 2).
-    pub files_drawer_open: RwSignal<bool>,
-    /// Currently previewed file (Phase 2).
-    pub selected_file: RwSignal<Option<FilePreview>>,
-    /// The currently selected target in the detail inspector. During live streaming, `follow_tool` follows the most recently started tool
-    /// (writing `InspectorTarget::Tool`); pinned after the user selects any target (`inspect`).
-    /// Generalised from bare `(run_id, tool_id)` to [`InspectorTarget`], so targets beyond tools
-    /// (run cost, reasoning, plan, future canvas/browser) can also drive the right pane.
-    pub selected: RwSignal<Option<InspectorTarget>>,
-    /// Whether the user has pinned the selection (live-follow does not overwrite while pinned). Released on run end.
-    pub pinned: RwSignal<bool>,
 }
 
 impl Default for WorkspaceState {
@@ -133,10 +112,6 @@ impl WorkspaceState {
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
             unseen_activity: RwSignal::new(0),
-            files_drawer_open: RwSignal::new(false),
-            selected_file: RwSignal::new(None),
-            selected: RwSignal::new(None),
-            pinned: RwSignal::new(false),
         }
     }
 
@@ -184,39 +159,14 @@ impl WorkspaceState {
         }
     }
 
-    /// Toggle the bottom files drawer.
-    pub fn toggle_files_drawer(&self) {
-        self.files_drawer_open.update(|o| *o = !*o);
-    }
-
-    /// Set the currently previewed file (None clears the preview pane).
-    pub fn select_file(&self, preview: Option<FilePreview>) {
-        self.selected_file.set(preview);
-    }
-
     /// Reset the pane for a new / switched chat session. Drops inline
-    /// expansions, selection, badge, drawer selection, and every captured
-    /// payload. Layout mode (the user's pane preference) is preserved.
+    /// expansions, badge, and every captured payload. Layout mode (the user's
+    /// pane preference) is preserved.
     pub fn reset(&self) {
         self.tool_payloads.update(std::collections::HashMap::clear);
         self.expanded_events
             .update(std::collections::HashSet::clear);
         self.unseen_activity.set(0);
-        self.files_drawer_open.set(false);
-        self.selected_file.set(None);
-        self.clear_selection();
-    }
-
-    /// Clear the detail-pane selection + pin. `selected`/`pinned` are global
-    /// (not per-conversation), so any conversation switch that keeps the
-    /// singleton's captured payloads intact (unlike [`Self::reset`], which
-    /// wipes them for a full session reload) must still drop the pointer left
-    /// over from the outgoing conversation — otherwise the detail pane can show
-    /// another conversation's target, and a stale pin blocks the new
-    /// foreground's live-follow.
-    pub fn clear_selection(&self) {
-        self.selected.set(None);
-        self.pinned.set(false);
     }
 
     /// Record the input/args of a tool call. Idempotent.
@@ -242,44 +192,6 @@ impl WorkspaceState {
     pub fn get_tool_payload(&self, run_id: &str, tool_id: &str) -> Option<ToolPayload> {
         let key = (run_id.to_string(), tool_id.to_string());
         self.tool_payloads.with(|m| m.get(&key).cloned())
-    }
-
-    /// Live-follow: when not pinned, switch the detail surface to the most recently started tool (R5 — workspace feel).
-    /// Only writes `InspectorTarget::Tool`, so a user-selected non-tool target (cost/reasoning/plan…)
-    /// once pinned is never stolen by a subsequent tool.
-    pub fn follow_tool(&self, run_id: &str, tool_id: &str) {
-        if !self.pinned.get_untracked() {
-            self.selected.set(Some(InspectorTarget::Tool {
-                run_id: run_id.to_string(),
-                tool_id: tool_id.to_string(),
-            }));
-        }
-    }
-
-    /// Live-follow (work-mode variant): when not pinned, switch the detail surface to the execution plan (Progress view).
-    /// In work mode, the plan/progress is the right pane's main surface (same semantics as Claude Cowork / Manus);
-    /// same rule as `follow_tool` — pinning yields, never force-opens.
-    pub fn follow_plan(&self, run_id: &str) {
-        if !self.pinned.get_untracked() {
-            self.selected.set(Some(InspectorTarget::Plan {
-                run_id: run_id.to_string(),
-            }));
-        }
-    }
-
-    /// User selects any target: switch the detail surface to it + pin + ensure Split is open.
-    /// All chat-side "-> detail" entry points (tool rows, cost rows, reasoning/plan headers…) funnel through this single path.
-    pub fn inspect(&self, target: InspectorTarget) {
-        self.selected.set(Some(target));
-        self.pinned.set(true);
-        if self.mode.get_untracked() != LayoutMode::Split {
-            self.set_layout(LayoutMode::Split);
-        }
-    }
-
-    /// Run completed / errored: release the pin (selection kept, detail surface continues showing the last tool).
-    pub fn end_follow(&self) {
-        self.pinned.set(false);
     }
 }
 
@@ -311,14 +223,6 @@ const fn persist_layout_mode(_mode: LayoutMode) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::inspector::InspectorTarget;
-
-    fn tool(run_id: &str, tool_id: &str) -> InspectorTarget {
-        InspectorTarget::Tool {
-            run_id: run_id.to_string(),
-            tool_id: tool_id.to_string(),
-        }
-    }
 
     fn test_ws(mode: LayoutMode) -> WorkspaceState {
         WorkspaceState {
@@ -326,10 +230,6 @@ mod tests {
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
             unseen_activity: RwSignal::new(0),
-            files_drawer_open: RwSignal::new(false),
-            selected_file: RwSignal::new(None),
-            selected: RwSignal::new(None),
-            pinned: RwSignal::new(false),
         }
     }
 
@@ -377,12 +277,6 @@ mod tests {
         ws.toggle_event("tool-a");
         ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
-        ws.toggle_files_drawer();
-        ws.select_file(Some(FilePreview {
-            path: "/a".into(),
-            content: "x".into(),
-            truncated: false,
-        }));
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
         assert!(ws.is_event_toggled("tool-a"));
@@ -392,29 +286,6 @@ mod tests {
         assert!(ws.get_tool_payload("run-1", "tool-a").is_none());
         assert!(!ws.is_event_toggled("tool-a"));
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
-        assert!(!ws.files_drawer_open.get_untracked());
-        assert!(ws.selected_file.get_untracked().is_none());
-    }
-
-    #[test]
-    fn toggle_files_drawer_and_select_file() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        assert!(!ws.files_drawer_open.get_untracked());
-        ws.toggle_files_drawer();
-        assert!(ws.files_drawer_open.get_untracked());
-        ws.toggle_files_drawer();
-        assert!(!ws.files_drawer_open.get_untracked());
-        assert!(ws.selected_file.get_untracked().is_none());
-        ws.select_file(Some(FilePreview {
-            path: "/p".into(),
-            content: "c".into(),
-            truncated: true,
-        }));
-        assert_eq!(ws.selected_file.get_untracked().unwrap().path, "/p");
-        ws.select_file(None);
-        assert!(ws.selected_file.get_untracked().is_none());
     }
 
     #[test]
@@ -448,112 +319,6 @@ mod tests {
         assert!(default_closed ^ ws.is_event_toggled("read-1")); // user expanded
                                                                  // Both overrides persist independently in shared state.
         assert!(ws.is_event_toggled("edit-1") && ws.is_event_toggled("read-1"));
-    }
-
-    #[test]
-    fn follow_tool_tracks_latest_unless_pinned() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.follow_tool("r1", "t1");
-        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t1")));
-        // User selects -> pinned
-        ws.inspect(tool("r1", "t2"));
-        assert!(ws.pinned.get_untracked());
-        // After pinning, live-follow no longer overwrites
-        ws.follow_tool("r1", "t3");
-        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t2")));
-        // Run ends, unpin, selection retained
-        ws.end_follow();
-        assert!(!ws.pinned.get_untracked());
-        assert!(ws.selected.get_untracked().is_some());
-        // After unpin, follow resumes
-        ws.follow_tool("r2", "t9");
-        assert_eq!(ws.selected.get_untracked(), Some(tool("r2", "t9")));
-    }
-
-    /// `follow_plan` (the work-mode live-follow variant) obeys the same
-    /// pin contract as `follow_tool`: it writes only when unpinned.
-    #[test]
-    fn follow_plan_respects_the_pin() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.follow_plan("r1");
-        assert_eq!(
-            ws.selected.get_untracked(),
-            Some(InspectorTarget::Plan {
-                run_id: "r1".to_string()
-            })
-        );
-        // A pinned target survives a later plan follow.
-        ws.inspect(tool("r1", "t1"));
-        ws.follow_plan("r1");
-        assert_eq!(ws.selected.get_untracked(), Some(tool("r1", "t1")));
-    }
-
-    #[test]
-    fn inspect_opens_split() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::ChatOnly);
-        ws.inspect(tool("r1", "t1"));
-        assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
-    }
-
-    /// The generalization guarantee: a pinned NON-tool target (a run's cost,
-    /// reasoning, plan…) is never stolen by a live tool follow — `follow_tool`
-    /// only writes when unpinned, and `inspect` always pins.
-    #[test]
-    fn inspect_non_tool_target_survives_live_follow() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.inspect(InspectorTarget::RunMeta {
-            run_id: "r1".to_string(),
-        });
-        assert!(ws.pinned.get_untracked());
-        // A tool starts mid-run — must NOT hijack the pinned RunMeta surface.
-        ws.follow_tool("r1", "t1");
-        assert_eq!(
-            ws.selected.get_untracked(),
-            Some(InspectorTarget::RunMeta {
-                run_id: "r1".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn reset_clears_selection_and_pin() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.inspect(tool("r1", "t1"));
-        ws.reset();
-        assert!(ws.selected.get_untracked().is_none());
-        assert!(!ws.pinned.get_untracked());
-    }
-
-    /// Regression for final-review F1: tab switch must clear the leftover
-    /// selection/pin without wiping captured payloads (unlike `reset()`,
-    /// which is only safe on a full session reload since payloads aren't
-    /// per-conversation).
-    #[test]
-    fn clear_selection_drops_selection_and_pin_but_keeps_payloads() {
-        let owner = Owner::new();
-        owner.set();
-        let ws = test_ws(LayoutMode::Split);
-        ws.inspect(tool("r1", "t1"));
-        ws.record_tool_args("r1", "t1", serde_json::json!({"q": "x"}));
-        assert!(ws.pinned.get_untracked());
-
-        ws.clear_selection();
-
-        assert!(ws.selected.get_untracked().is_none());
-        assert!(!ws.pinned.get_untracked());
-        // The other conversation's captured payload must survive — clearing
-        // selection on tab switch is not a full reset.
-        assert!(ws.get_tool_payload("r1", "t1").is_some());
     }
 
     #[test]

@@ -78,7 +78,15 @@ fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) ->
             edges
                 .iter()
                 .filter(|e| e.kind == EdgeKind::Watches && e.to_id == node_id)
-                .filter_map(|e| e.from_id.strip_prefix("cron:").map(str::to_string))
+                .filter_map(|e| {
+                    e.from_id.strip_prefix("cron:").map(|s| s.to_string()).or_else(|| {
+                        warn!(
+                            watcher = %e.from_id,
+                            "loop_graph: watcher id does not have 'cron:' prefix — skipping poke"
+                        );
+                        None
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default()

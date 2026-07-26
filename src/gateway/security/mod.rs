@@ -14,6 +14,7 @@
 //! crypto (HMAC / Ed25519 / pairing-code primitives — consumed by
 //!         secrets vault, Feishu webhook, WhatsApp vault store)
 //! token_readonly (read-only shared-token lookup for the admin IPC client)
+//! artifact_caps (session-scoped capabilities for the /artifact byte route)
 //! ```
 //!
 //! `SecurityStore` persists the vault master key / HMAC secret **plus**
@@ -23,6 +24,7 @@
 //! the security audit log. See `store/mod.rs` for per-table status,
 //! including the legacy tables kept only for migration compatibility.
 
+pub mod artifact_caps;
 pub mod crypto;
 pub mod device_token_manager;
 pub mod shared_token;
@@ -30,6 +32,7 @@ pub mod store;
 pub mod token_readonly;
 
 // Re-export commonly used types
+pub use artifact_caps::ArtifactCapabilities;
 pub use crypto::{
     generate_keypair, generate_secret, hmac_sign, hmac_verify, sign_message, verify_signature,
     CryptoError, DeviceFingerprint,

@@ -17,8 +17,6 @@
 
 use super::state::{ChatPhase, ChatState};
 use crate::i18n::{t_string, use_i18n};
-use crate::state::inspector::InspectorTarget;
-use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
 
 /// Number of trailing lines shown as a live preview while reasoning is active.
@@ -38,8 +36,6 @@ fn tail_lines(text: &str, n: usize) -> String {
 pub(super) fn ReasoningPanel() -> impl IntoView {
     let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
-    // Optional (absent in storybook): drives the ↗ open-in-panel affordance.
-    let workspace = use_context::<WorkspaceState>();
     // User-controlled expand toggle. Defaults collapsed; the active live-tail
     // preview gives streaming feedback without forcing a full expand.
     let expanded = RwSignal::new(false);
@@ -55,19 +51,12 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
     };
 
     let toggle = move |_: web_sys::MouseEvent| expanded.update(|e| *e = !*e);
-    // ↗ opens the persistent reasoning inspector surface in the right pane.
-    let open_inspector = move |_: web_sys::MouseEvent| {
-        if let Some(ws) = workspace {
-            let run_id = chat.active_run_id.get_untracked().unwrap_or_default();
-            ws.inspect(InspectorTarget::Reasoning { run_id });
-        }
-    };
 
     view! {
         <Show when=has_reasoning>
             <div class="max-w-5xl mx-auto w-full">
                 <div class="rounded-xl glass-inset overflow-hidden">
-                  // Header row — toggle button + ↗ open-in-panel, side by side.
+                  // Header row — expand toggle.
                   <div class="flex items-center">
                     // Header — clickable toggle. Pulse dot animates while active.
                     <button
@@ -102,17 +91,6 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
                             "\u{25B6}"
                         </span>
                     </button>
-                    // ↗ open-in-panel — only when a workspace pane exists.
-                    {workspace.is_some().then(|| view! {
-                        <button
-                            class="shrink-0 px-2.5 py-2 text-text-tertiary hover:text-primary
-                                   text-xs transition-colors"
-                            title=move || t_string!(i18n, common.inspector_open).to_string()
-                            on:click=open_inspector
-                        >
-                            "\u{2197}"
-                        </button>
-                    })}
                   </div>
 
                     // Body — full transcript when expanded; live tail while

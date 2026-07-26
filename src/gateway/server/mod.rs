@@ -3,6 +3,7 @@
 //! Handles WebSocket connections and dispatches JSON-RPC 2.0 requests
 //! to registered handlers.
 
+mod artifact_route;
 mod flood_guard;
 mod handler;
 mod metrics_endpoint;
@@ -606,6 +607,29 @@ impl GatewayServer {
         });
         let openai = openai_routes(openai_state);
 
+        // Capability-gated artifact bytes. Registered as a real route so it is
+        // matched before `control_plane`, which would otherwise answer
+        // `/artifact/...` with the Panel's SPA shell. It carries its own copy of
+        // the transport / origin / rate-limit guards — see `artifact_route`,
+        // which explains why none of `/ws`'s protections are inherited.
+        let artifacts = match crate::artifacts::ArtifactStore::default_root() {
+            Ok(root) => Some(artifact_route::artifact_routes(Arc::new(
+                artifact_route::ArtifactRouteState::new(
+                    Arc::new(crate::artifacts::ArtifactStore::new(root)),
+                    shared.origin_policy.clone(),
+                    shared.trusted_proxy_enabled,
+                    shared.trusted_proxy_ips.clone(),
+                    shared.allow_insecure_remote,
+                    shared.tls_enabled,
+                ),
+            ))),
+            Err(e) => {
+                // Not fatal: the Panel simply has no artifact bytes to show.
+                warn!(error = %e, "artifact byte route not mounted");
+                None
+            }
+        };
+
         let mut router = Router::new()
             .route("/ws", get(handler::ws_upgrade_handler))
             .route("/health", get(probe::handle_health))
@@ -614,6 +638,10 @@ impl GatewayServer {
             .fallback_service(control_plane)
             .with_state(shared)
             .merge(openai);
+
+        if let Some(artifacts) = artifacts {
+            router = router.merge(artifacts);
+        }
 
         // Merge A2A routes if the subsystem is enabled
         if let Some(a2a_state) = &self.a2a_state {

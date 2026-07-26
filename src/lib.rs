@@ -56,6 +56,7 @@
 
 pub mod agents;
 pub mod approval;
+pub mod artifacts;
 pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;
@@ -78,6 +79,7 @@ pub mod event;
 mod event_handler;
 pub mod exec;
 pub mod executor;
+pub mod export;
 pub mod extension;
 pub mod fetch;
 pub mod generation;
@@ -173,7 +175,7 @@ pub use crate::initialization::{
 };
 
 // Logging
-pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
+pub use crate::logging::{create_pii_scrubbing_layer, LogLevel};
 
 // =============================================================================
 // Agent System Exports
