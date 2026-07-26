@@ -57,6 +57,12 @@ pub struct SlackChannel {
     client: reqwest::Client,
     /// Optional custom API base URL for testing (e.g. mock server)
     api_base: Option<String>,
+    /// Workspace roster (`name → id`) backing `list_conversations`.
+    ///
+    /// Built on first use rather than in `new`, because `for_test` sets
+    /// `api_base` *after* construction — eagerly capturing it here would pin
+    /// every test's directory to the real slack.com.
+    directory: tokio::sync::OnceCell<directory::ConversationDirectory>,
 }
 
 impl SlackChannel {
@@ -78,6 +84,7 @@ impl SlackChannel {
             bot_user_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
             api_base: None,
+            directory: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -300,6 +307,23 @@ impl Channel for SlackChannel {
             message_id.as_str(),
         )
         .await
+    }
+
+    async fn list_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChannelResult<crate::gateway::channel::ConversationPage> {
+        self.directory
+            .get_or_init(|| async {
+                directory::ConversationDirectory::new(
+                    self.config.bot_token.clone(),
+                    self.api_base.clone(),
+                )
+            })
+            .await
+            .list(query, limit)
+            .await
     }
 }
 

@@ -221,6 +221,76 @@ pub trait Interface: Send + Sync {
 | iMessage | always compiled | Apple iMessage — two transports: **Local** (chat.db poll + AppleScript, macOS-only) and **BlueBubbles** (REST + webhook, any OS). See `src/gateway/interfaces/imessage/`. |
 | WebChat | `gateway` | Built-in web chat |
 
+### Factory registration is what makes a channel configurable
+
+`handlers::channel::create_channel_from_config` resolves a configured
+`[channels.<type>]` entry through the plugin table in
+`interfaces/plugin.rs`, and returns `None` for a type that is not in it —
+after which `initialize_channels` logs `Failed to create channel` and continues.
+**A `ChannelFactory` that is not registered in `interfaces::register_channel_plugins`
+is therefore unreachable, however complete it is.**
+
+The table landed 2026-04-05. Channels added after it registered themselves in the
+same commit; the ten that predate it (Slack, Discord, Matrix, Mattermost, Signal,
+IRC, Nostr, XMPP, Email, Webhook) were never back-filled and were silently
+unconfigurable until 2026-07-26. `imessage` and `cli` are deliberately absent —
+iMessage is constructed directly in `initialize_channels`, which `continue`s before
+consulting the table, and CLI is not a configurable channel type.
+
+New adapters must be added to `register_channel_plugins` by hand.
+`every_configurable_channel_type_is_registered` pins the current set against
+regression, but it cannot enumerate `impl ChannelFactory`, so it will not catch a
+*future* adapter that forgets to register — adding the name to that list is the
+same manual step as the registration.
+
+### Addressing: channel vs conversation
+
+Three different things get called "channel". Keep them apart when reading an error:
+
+| Term | Type | Example | Where it comes from |
+|------|------|---------|---------------------|
+| **channel** — the transport | `ChannelId` | `"slack"` | `[channels.*]` config, registered into `ChannelRegistry` |
+| **conversation** — the room | `ConversationId` | `"C0A1B2C3"` | opaque platform handle |
+| **capability** — what this transport can do | `ChannelCapabilities` | `reactions: true` | the adapter's own `capabilities()` |
+
+`OutboundMessage` needs a `ConversationId`, and until 2026-07-26 the only source of
+one was an *inbound* message — so the agent could only ever reply where it had been
+spoken to. `Channel::list_conversations(query, limit) -> ConversationPage` closes
+that: it is the trait's only read, and it reads **routing metadata only** (name, id,
+`is_member`), never message content. That line is deliberate — content fetched by a
+*pull* would arrive with none of the access control that `inbound_router::check_permission`
+(dm/group policy, pairing, allowlists) applies to *pushed* messages.
+
+`ConversationPage` is `{ conversations, warnings }` rather than a bare `Vec` because a
+roster lookup has a real **partial** outcome: an app granted `channels:read` but not
+`users:read` can list every channel and no people. A bare `Vec` can only say "no match",
+which would have the model report that a person does not exist when the truth is that it
+was never allowed to look. Slack therefore fails the call only when **both** sweeps fail;
+one failing degrades and names the reason. The same field carries page-cap truncation, so
+"we stopped looking" is never mistaken for "not in the roster".
+
+Model-facing, this is the read-only `channel_directory` tool feeding `channel_message`.
+They are two tools on purpose: `ToolFacts::idempotent` is keyed on the tool **name**
+(`registry_adapter::READ_ONLY_TOOLS`), so folding a lookup into non-idempotent
+`channel_message` would gate it under the `Ask` exec tier — and a tier never widens,
+so there would be no way back.
+
+Slack implements it in `interfaces/slack/directory.rs::ConversationDirectory`
+(`conversations.list` + `users.list`, cursor-paginated, 15-minute TTL cache, hard page
+cap). The cap is not cosmetic: `ChannelRegistry` holds the channel's **read guard**
+across the adapter call, so an unbounded sweep would block the write lock that
+`stop_channel` / `restart_channel` need.
+
+### Capability flags are promises
+
+Each `ChannelCapabilities` bool claims the matching optional `Channel` method works.
+An adapter that sets one **must** override that method: the default bodies now return
+`ChannelError::UnsupportedFeature` naming the adapter, where they used to return
+`Ok(())` and let the caller report a success that never happened. Six shipped adapters
+were in exactly that state — `msteams.reactions` and `whatsapp.deletion` made
+`channel_message` answer `delivered: true` for a no-op. Pinned by
+`declared_but_unimplemented_optional_methods_fail_loudly` in `channel.rs`.
+
 ### Interface Configuration
 
 ```json5

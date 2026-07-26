@@ -108,7 +108,9 @@ impl SignalChannel {
             editing: false,
             deletion: false,
             typing_indicator: true,
-            read_receipts: true,
+            // No `mark_read` override — signal-cli can send receipts, but
+            // nothing here calls it yet.
+            read_receipts: false,
             rich_text: false, // Signal is plain text
             max_message_length: 65535,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
@@ -257,7 +259,8 @@ mod tests {
         assert!(!caps.editing);
         assert!(!caps.deletion);
         assert!(caps.typing_indicator);
-        assert!(caps.read_receipts);
+        // No `mark_read` override — flip back only together with the impl.
+        assert!(!caps.read_receipts);
         assert!(!caps.rich_text);
         assert_eq!(caps.max_message_length, 65535);
         assert_eq!(caps.max_attachment_size, 100 * 1024 * 1024);

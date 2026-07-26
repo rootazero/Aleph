@@ -149,7 +149,11 @@ impl MsTeamsChannel {
             images: true,
             audio: true,
             video: true,
-            reactions: true,
+            // The Bot Framework connector this adapter speaks has no
+            // reaction-write API, and no `react` override exists. Declaring
+            // `true` made `channel_message(action="react")` answer
+            // `delivered: true` for a no-op.
+            reactions: false,
             replies: true,
             editing: true,
             deletion: true,
@@ -857,7 +861,9 @@ mod tests {
         assert!(caps.images);
         assert!(caps.audio);
         assert!(caps.video);
-        assert!(caps.reactions);
+        // No `react` override — see the capability comment. Flip back only
+        // together with the impl.
+        assert!(!caps.reactions);
         assert!(caps.replies);
         assert!(caps.editing);
         assert!(caps.deletion);

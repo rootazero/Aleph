@@ -72,7 +72,9 @@ impl MatrixChannel {
             editing: true,
             deletion: true,
             typing_indicator: true,
-            read_receipts: true,
+            // Matrix has `m.read` receipts, but no `mark_read` override sends
+            // one. Declared honestly until it does.
+            read_receipts: false,
             rich_text: true,
             max_message_length: 65535,
             max_attachment_size: 100 * 1024 * 1024,
@@ -283,7 +285,10 @@ mod tests {
         assert!(caps.editing);
         assert!(caps.deletion);
         assert!(caps.typing_indicator);
-        assert!(caps.read_receipts);
+        // A capability flag promises the matching `Channel` method works. No
+        // `mark_read` override exists here, so `true` would be a promise the
+        // trait default cannot keep. Flip this back only together with the impl.
+        assert!(!caps.read_receipts);
         assert!(caps.rich_text);
         assert_eq!(caps.max_message_length, 65535);
         assert_eq!(caps.max_attachment_size, 100 * 1024 * 1024);

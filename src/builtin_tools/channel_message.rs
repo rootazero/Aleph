@@ -100,6 +100,41 @@ impl ChannelMessageTool {
         Self { channel_registry }
     }
 
+    /// Append "what to do next" to a delivery failure (A2: compress the error
+    /// AND the way out into the tool result, so the model can self-heal instead
+    /// of retrying the same wrong id).
+    ///
+    /// Substring routing over machine-generated text — `ChannelError` displays
+    /// and platform error codes, never natural language — which is the same
+    /// exemption `builtin_tools/desktop/recovery.rs` documents (P8 does not
+    /// apply). Note `channel_not_found` (a platform code, underscored) and
+    /// `Channel not found:` (this registry's own wording, spaced) are different
+    /// failures with different fixes, and the two substrings do not collide.
+    fn with_hint(message: String) -> String {
+        let lower = message.to_lowercase();
+        let hint = if lower.contains("channel not found:") {
+            // The *transport* is not connected — no conversation id can help.
+            Some(
+                "That channel_id is not a connected channel. It is the transport \
+                 (\"slack\", \"telegram\", …), not the conversation.",
+            )
+        } else if lower.contains("channel_not_found") || lower.contains("not_in_channel") {
+            // The transport is fine; the conversation handle is wrong or
+            // unreachable. This is exactly what the directory answers.
+            Some(
+                "Resolve the destination first: channel_directory(channel_id, query=\"<name>\") \
+                 returns the real conversation_id, and an entry with is_member=false means this \
+                 account must be invited there before it can post. Do not retry unchanged.",
+            )
+        } else {
+            None
+        };
+        match hint {
+            Some(h) => format!("{message} — {h}"),
+            None => message,
+        }
+    }
+
     /// Require a field, returning a clear tool error naming the missing field.
     fn require<'a>(value: &'a Option<String>, field: &str, action: &str) -> Result<&'a str> {
         value
@@ -119,7 +154,10 @@ impl AlephTool for ChannelMessageTool {
          indicator on a specific channel conversation (Telegram, Slack, Discord, etc.). \
          Use this to reach the user on their own channel — for example to deliver a scheduled \
          notification, follow up on a task, or coordinate across channels — rather than only \
-         replying in the current turn. Requires the target channel_id and conversation_id.";
+         replying in the current turn. Requires the target channel_id and conversation_id. \
+         conversation_id is an opaque platform handle, not a name: when the user names a \
+         destination (\"#eng-releases\", \"DM Alice\"), call channel_directory first to resolve \
+         it instead of guessing.";
 
     type Args = ChannelMessageArgs;
     type Output = ChannelMessageOutput;
@@ -150,9 +188,9 @@ impl AlephTool for ChannelMessageTool {
                     .send(&channel_id, outbound)
                     .await
                     .map_err(|e| {
-                        AlephError::tool(format!(
+                        AlephError::tool(Self::with_hint(format!(
                             "Failed to send message on channel '{channel_id}': {e}"
-                        ))
+                        )))
                     })?;
 
                 info!(
@@ -184,7 +222,9 @@ impl AlephTool for ChannelMessageTool {
                     )
                     .await
                     .map_err(|e| {
-                        AlephError::tool(format!("Failed to react on channel '{channel_id}': {e}"))
+                        AlephError::tool(Self::with_hint(format!(
+                            "Failed to react on channel '{channel_id}': {e}"
+                        )))
                     })?;
 
                 info!(tool = "channel_message", channel = %channel_id, "reaction applied");
@@ -207,9 +247,9 @@ impl AlephTool for ChannelMessageTool {
                     )
                     .await
                     .map_err(|e| {
-                        AlephError::tool(format!(
+                        AlephError::tool(Self::with_hint(format!(
                             "Failed to edit message on channel '{channel_id}': {e}"
-                        ))
+                        )))
                     })?;
 
                 info!(tool = "channel_message", channel = %channel_id, "message edited");
@@ -225,9 +265,9 @@ impl AlephTool for ChannelMessageTool {
                     .send_typing(&channel_id, &conversation_id)
                     .await
                     .map_err(|e| {
-                        AlephError::tool(format!(
+                        AlephError::tool(Self::with_hint(format!(
                             "Failed to send typing indicator on channel '{channel_id}': {e}"
-                        ))
+                        )))
                     })?;
 
                 Ok(ChannelMessageOutput {
@@ -247,6 +287,38 @@ impl AlephTool for ChannelMessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two "not found" failures must route to different advice: one means
+    /// the transport is not connected, the other means the conversation handle
+    /// is wrong. Collapsing them would send the model to fix the wrong thing.
+    #[test]
+    fn hint_distinguishes_a_missing_transport_from_a_missing_conversation() {
+        let transport = ChannelMessageTool::with_hint(
+            "Failed to send message on channel 'slak': Channel not found: slak".to_string(),
+        );
+        assert!(transport.contains("not a connected channel"), "{transport}");
+        assert!(!transport.contains("channel_directory"), "{transport}");
+
+        let conversation = ChannelMessageTool::with_hint(
+            "Failed to send message on channel 'slack': Send failed: Slack chat.postMessage \
+             failed: channel_not_found"
+                .to_string(),
+        );
+        assert!(conversation.contains("channel_directory"), "{conversation}");
+
+        let not_member = ChannelMessageTool::with_hint(
+            "Send failed: Slack chat.postMessage failed: not_in_channel".to_string(),
+        );
+        assert!(not_member.contains("is_member=false"), "{not_member}");
+    }
+
+    /// An error we have no advice for must come back verbatim — a hint that
+    /// fires on everything trains the model to ignore hints.
+    #[test]
+    fn hint_leaves_unrecognized_failures_untouched() {
+        let msg = "Rate limited: retry after 30 seconds".to_string();
+        assert_eq!(ChannelMessageTool::with_hint(msg.clone()), msg);
+    }
 
     #[test]
     fn require_rejects_missing_and_blank() {

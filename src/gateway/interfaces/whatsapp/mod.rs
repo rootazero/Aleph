@@ -106,7 +106,9 @@ impl WhatsAppChannel {
             reactions: true,
             replies: true,
             editing: false,
-            deletion: true,
+            // No `delete` override. The Cloud API cannot retract a sent
+            // message, so this can never be `true` for this transport.
+            deletion: false,
             typing_indicator: true,
             read_receipts: true,
             rich_text: true,

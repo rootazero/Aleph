@@ -453,6 +453,21 @@ impl BuiltinToolRegistry {
             info!("Registered channel_message tool in BuiltinToolRegistry");
         }
 
+        // Channel directory tool — the read half of channel addressing.
+        // Same deferred-injection pattern as channel_message above.
+        {
+            use crate::builtin_tools::channel_directory::ChannelDirectoryTool;
+            reg(
+                tools,
+                "channel_directory",
+                ChannelDirectoryTool::DESCRIPTION,
+                schema::<crate::builtin_tools::channel_directory::ChannelDirectoryArgs>(
+                    "channel_directory",
+                ),
+            );
+            info!("Registered channel_directory tool in BuiltinToolRegistry");
+        }
+
         // ask_user clarification tool — always register metadata
         // (ChannelRegistry + ClarificationManager injected later via deferred
         // OnceCell wiring). Execution checks both cells at call time.
