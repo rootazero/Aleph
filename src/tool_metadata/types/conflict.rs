@@ -244,7 +244,11 @@ impl ToolSource {
             Self::Native => format!("native:{name}"),
             Self::Builtin => format!("builtin:{name}"),
             Self::Mcp { server } => format!("mcp:{server}:{name}"),
-            Self::Skill { id } => format!("skill:{id}"),
+            Self::Skill { id } => {
+                // Skills are identified by their internal id only — the tool
+                // name is a display label and not part of the identity.
+                format!("skill:{id}")
+            }
             Self::Custom { rule_index } => format!("custom:{rule_index}:{name}"),
             Self::Plugin { plugin_id } => format!("plugin:{plugin_id}:{name}"),
         }

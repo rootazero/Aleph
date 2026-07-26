@@ -72,10 +72,13 @@ impl ToolResult {
     /// Convert to JSON
     #[must_use]
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(serde_json::json!({
-            "success": false,
-            "error": "Failed to serialize result"
-        }))
+        serde_json::to_value(self).unwrap_or_else(|e| {
+            tracing::warn!("Failed to serialize ToolResult to JSON: {e}");
+            serde_json::json!({
+                "success": false,
+                "error": "Failed to serialize result"
+            })
+        })
     }
 }
 

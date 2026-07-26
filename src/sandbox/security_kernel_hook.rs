@@ -106,7 +106,7 @@ mod tests {
                 })
                 .collect(),
         };
-        SecurityKernelHook::new(SecurityKernel::from_config(&config).unwrap())
+        SecurityKernelHook::new(SecurityKernel::from_config(&config))
     }
 
     #[tokio::test]
@@ -139,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn no_custom_patterns_is_inert() {
         let hook = SecurityKernelHook::new(
-            SecurityKernel::from_config(&ShellSecurityConfig::default()).unwrap(),
+            SecurityKernel::from_config(&ShellSecurityConfig::default()),
         );
         // Even a built-in "blocked"-looking command is allowed: this hook only
         // consults custom patterns, so default configs see no behavior change.

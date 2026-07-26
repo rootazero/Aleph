@@ -44,7 +44,7 @@ impl SecurityKernel {
     /// whole kernel — one bad regex must not silently disable every other
     /// user-configured rule. The factory that wires this kernel in must also
     /// surface the skip count to operators.
-    pub fn from_config(config: &ShellSecurityConfig) -> Result<Self, regex::Error> {
+    pub fn from_config(config: &ShellSecurityConfig) -> Self {
         let mut kernel = Self::default();
 
         if config.enable_custom_patterns {
@@ -70,7 +70,7 @@ impl SecurityKernel {
             }
         }
 
-        Ok(kernel)
+        kernel
     }
 
     /// Assess a command against ONLY the configured custom patterns.
@@ -118,7 +118,7 @@ mod tests {
             custom_blocked: vec![blocked(r"^danger-cmd")],
             ..Default::default()
         };
-        let kernel = SecurityKernel::from_config(&config).expect("valid regex compiles");
+        let kernel = SecurityKernel::from_config(&config);
         assert_eq!(kernel.assess_custom("danger-cmd arg"), Some(RiskLevel::Blocked));
         assert!(kernel.assess_custom("safe-cmd arg").is_none());
     }
@@ -130,7 +130,7 @@ mod tests {
             custom_blocked: vec![blocked(r"^danger-cmd")],
             ..Default::default()
         };
-        let kernel = SecurityKernel::from_config(&config).expect("compiles");
+        let kernel = SecurityKernel::from_config(&config);
         assert!(
             kernel.assess_custom("danger-cmd arg").is_none(),
             "patterns must be ignored when the flag is off"

@@ -16,6 +16,17 @@
 use crate::error::{AlephError, Result};
 use std::path::{Path, PathBuf};
 
+/// Returns true when two paths refer to the same filesystem entry by
+/// canonicalizing both (symlink-resistant). Falls back to byte-wise
+/// comparison when canonicalization fails for either path.
+#[must_use]
+pub fn equivalent(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
+}
+
 /// Process-global environment guard for tests that mutate `ALEPH_HOME`.
 /// Acquiring this mutex serialises tests so they don't observe each other's
 /// temporary directories or leave stale values behind.

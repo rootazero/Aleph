@@ -510,6 +510,12 @@ impl From<String> for SkillContent {
     }
 }
 
+impl fmt::Display for SkillContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SkillManifest (Aggregate Root)
 // ---------------------------------------------------------------------------
@@ -707,7 +713,7 @@ impl SkillManifest {
     }
 
     /// Set the prompt scope.
-    pub const fn set_scope(&mut self, scope: PromptScope) {
+    pub fn set_scope(&mut self, scope: PromptScope) {
         self.scope = scope;
     }
 

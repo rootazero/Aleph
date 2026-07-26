@@ -129,7 +129,7 @@ impl DirectoryScanner {
                 // The upward walk can re-discover the global `~/.aleph` when no
                 // git root bounds it; skip it so it is not double-counted with
                 // the AlephGlobal entry added above.
-                if dir == self.aleph_home {
+                if crate::utils::paths::equivalent(&dir, &self.aleph_home) {
                     continue;
                 }
                 let priority = 40u32.saturating_add(i as u32);
