@@ -443,16 +443,16 @@ fn ChatBandChrome() -> impl IntoView {
                     class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
                     data-tauri-drag-region="false"
                 >
+                    // No sub-label. It used to read "· tool detail" / "· idle"
+                    // off `tool_payloads`, which described the contextual
+                    // inspector this band once sat beside. The pane now lists
+                    // artifacts, and "a tool ran" is not "an artifact exists" —
+                    // the two drift apart on the very first tool call that
+                    // produces nothing. The pane's own header already carries an
+                    // accurate count, and the LayoutToggle badge already carries
+                    // the unseen-activity signal, so a second, wrong indicator
+                    // here is worse than none.
                     <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
-                    <span class="text-text-tertiary/60">
-                        {move || {
-                            if workspace.tool_payloads.with(|m| !m.is_empty()) {
-                                t_string!(i18n, common.workspace_state_tool).to_string()
-                            } else {
-                                t_string!(i18n, common.workspace_state_idle).to_string()
-                            }
-                        }}
-                    </span>
                 </div>
             </Show>
             // LayoutToggle — right-edge tracks the chat / workspace

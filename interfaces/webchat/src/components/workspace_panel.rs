@@ -1,26 +1,21 @@
 //! Workspace pane — the right-side surface that opens when
 //! [`LayoutMode::Split`] is active.
 //!
-//! In single-agent mode the body is the **contextual inspector**
-//! ([`crate::components::inspector::InspectorSurface`]): it routes the current
-//! `WorkspaceState.selected` ([`crate::state::inspector::InspectorTarget`]) to
-//! a dedicated surface (tool detail, run meta, reasoning, plan, …). Selection
-//! either live-follows the most recent tool call (`follow_tool`, see
-//! `events.rs`) or is pinned by a user click on any chat key point (`inspect`).
-//! In team mode the body is the deliverables/tasks tabs instead.
+//! In team mode the body is the deliverables/tasks tabs. The single-agent body
+//! is [`crate::components::artifacts::ArtifactsSurface`] — what this session
+//! produced (images, files, exports), read from `artifacts.list`.
 
-use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
-use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
+use crate::i18n::{t, use_i18n};
+use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
 ///
-/// In team mode (`chat.team_id` is Some) shows deliverable/task tabs instead of the
-/// single-agent InspectorSurface + FilesDrawer.
+/// In team mode (`chat.team_id` is Some) shows deliverable/task tabs instead of
+/// the single-agent artifacts surface.
 #[component]
 #[must_use]
 pub fn WorkspacePanel() -> impl IntoView {
@@ -49,10 +44,7 @@ pub fn WorkspacePanel() -> impl IntoView {
             <Show
                     when=move || chat.team_id.get().is_some()
                     fallback=move || view! {
-                        <div class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top">
-                            <crate::components::inspector::InspectorSurface />
-                        </div>
-                        <FilesDrawer />
+                        <crate::components::artifacts::ArtifactsSurface />
                     }
                 >
                     // Team-mode tab header. `aleph-content-top` clears the
@@ -96,154 +88,6 @@ pub fn WorkspacePanel() -> impl IntoView {
                     </div>
                 </Show>
             </aside>
-    }
-}
-
-/// Bottom drawer: collapsible project file tree + read-only preview.
-#[component]
-fn FilesDrawer() -> impl IntoView {
-    let workspace = expect_context::<WorkspaceState>();
-    let chat = expect_context::<ChatState>();
-    let dashboard = expect_context::<DashboardState>();
-    let i18n = use_i18n();
-
-    let entries = RwSignal::new(Vec::<DirEntry>::new());
-    let cur_path = RwSignal::new(Option::<String>::None);
-
-    // Effect A — seed the path when the drawer opens. Prefer the active
-    // project root, else the first allowed root. Skips reseeding once a
-    // path is set so folder navigation isn't clobbered.
-    Effect::new(move |_| {
-        if !workspace.files_drawer_open.get() {
-            return;
-        }
-        if cur_path.get().is_some() {
-            return;
-        }
-        match chat.active_project_root.get() {
-            Some(root) => cur_path.set(Some(root)),
-            None => {
-                let dash = dashboard;
-                spawn_local(async move {
-                    if let Ok(roots) = FsApi::allowed_roots(&dash).await {
-                        if let Some(r) = roots.first() {
-                            cur_path.set(Some(r.path.clone()));
-                        }
-                    }
-                });
-            }
-        }
-    });
-
-    // Effect B — list entries whenever the path changes. Must NOT write
-    // `cur_path` (only `entries`), otherwise it would re-trigger itself
-    // and fire a redundant `list_dir`.
-    Effect::new(move |_| {
-        if !workspace.files_drawer_open.get() {
-            return;
-        }
-        let Some(path) = cur_path.get() else {
-            return;
-        };
-        let dash = dashboard;
-        spawn_local(async move {
-            if let Ok(listing) = FsApi::list_dir(&dash, &path, false).await {
-                entries.set(listing.entries);
-            }
-        });
-    });
-
-    // Reset drawer navigation when the active project changes so a session
-    // switch doesn't leave the previous project's listing behind. Reads
-    // active_project_root only; writes cur_path/entries (never reads them)
-    // → cannot self-retrigger. Effect A then reseeds from the new root.
-    Effect::new(move |_| {
-        let _ = chat.active_project_root.get();
-        cur_path.set(None);
-        entries.set(Vec::new());
-    });
-
-    view! {
-        <div class="border-t border-border bg-surface-base/60">
-            <button
-                type="button"
-                class="w-full flex items-center gap-2 px-4 py-2 text-left text-xs
-                       uppercase tracking-wider text-text-tertiary hover:text-text-secondary"
-                on:click=move |_| workspace.toggle_files_drawer()
-            >
-                <span>{move || t_string!(i18n, common.workspace_files).to_string()}</span>
-                <span class="ml-auto">
-                    {move || if workspace.files_drawer_open.get() { "▾" } else { "▸" }}
-                </span>
-            </button>
-            <Show when=move || workspace.files_drawer_open.get()>
-                <div class="flex max-h-[40vh] border-t border-border/60">
-                    <div class="w-1/3 overflow-y-auto border-r border-border/60 p-2 text-xs">
-                        <For
-                            each=move || entries.get()
-                            key=|e| e.path.clone()
-                            children=move |e: DirEntry| {
-                                let path = e.path.clone();
-                                let is_dir = e.is_dir;
-                                view! {
-                                    <button
-                                        type="button"
-                                        class="w-full text-left truncate px-1 py-0.5 rounded
-                                               hover:bg-surface-raised/50"
-                                        on:click=move |_| {
-                                            if is_dir {
-                                                cur_path.set(Some(path.clone()));
-                                            } else {
-                                                let dash = dashboard;
-                                                let p = path.clone();
-                                                spawn_local(async move {
-                                                    if let Ok(ReadFileResult { path, content, truncated }) =
-                                                        FsApi::read_file(&dash, &p).await
-                                                    {
-                                                        workspace.select_file(Some(FilePreview {
-                                                            path,
-                                                            content,
-                                                            truncated,
-                                                        }));
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    >
-                                        {if e.is_dir {
-                                            format!("📁 {}", e.name)
-                                        } else {
-                                            format!("📄 {}", e.name)
-                                        }}
-                                    </button>
-                                }
-                            }
-                        />
-                    </div>
-                    <div class="flex-1 overflow-auto p-2">
-                        {move || match workspace.selected_file.get() {
-                            Some(f) => view! {
-                                <div class="flex flex-col gap-1">
-                                    <div class="text-[11px] font-mono text-text-tertiary truncate">
-                                        {f.path.clone()}
-                                        {if f.truncated { " (truncated)" } else { "" }}
-                                    </div>
-                                    <pre class="text-xs whitespace-pre-wrap break-words font-mono
-                                                text-text-secondary">{f.content}</pre>
-                                </div>
-                            }
-                            .into_any(),
-                            None => view! {
-                                <p class="text-xs text-text-tertiary italic">
-                                    {t!(i18n, common.workspace_files_hint)}
-                                </p>
-                            }
-                            .into_any(),
-                        }}
-                    </div>
-                </div>
-            </Show>
-        </div>
     }
 }
 

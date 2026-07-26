@@ -17,18 +17,11 @@ use std::sync::{Arc, Mutex};
 /// (tool args/result payloads, current iteration). The single projection
 /// shared by the live WS stream and `trace.by_runs` replay so the two paths
 /// can never drift.
-///
-/// `is_foreground` gates the live-follow side effect only (see
-/// `tool_call_started` below): `WorkspaceState` is a single global instance,
-/// so a background conversation's tool call must not steal the detail pane
-/// away from whatever the user is actually looking at. Replay always passes
-/// `true` — it reconstructs the conversation the caller is viewing.
 pub(crate) fn apply_trace_event(
     chat: ChatState,
     workspace: WorkspaceState,
     run_id: &str,
     trace_event: &serde_json::Value,
-    is_foreground: bool,
     locale: Locale,
 ) {
     // The harness serializes `LoopTraceEvent` with `#[serde(tag =
@@ -64,39 +57,6 @@ pub(crate) fn apply_trace_event(
                     .cloned();
                 if let Some(args) = args {
                     workspace.record_tool_args(run_id, tool_id, args);
-                }
-                // Live-follow: keep the detail pane on the most recent tool
-                // call unless the user has pinned a different one. Gated to
-                // the foreground conversation — a background run must not
-                // hijack the pane the user is currently viewing.
-                //
-                // The SESSION MODE shapes what "follow" means (survey: the
-                // right panel is the mode's signature surface — chat has
-                // none, work shows progress, code shows the tool/diff view):
-                //   chat → no auto-drive at all; the badge (note_activity
-                //          above) is the only signal.
-                //   work → once a plan exists, the Plan/progress surface is
-                //          the home view; before the first plan lands, fall
-                //          back to the tool detail.
-                //   code / unknown → live-follow the tool detail
-                //          (pre-mode behavior, byte-identical default).
-                // Keyed off the EFFECTIVE mode: the session's explicit
-                // override, else the global `[policies] mode` default the
-                // pill's fetch mirrored into `chat.global_mode` — so a
-                // follow-global session gets its mode's behavior too.
-                // `None` (older core / pre-connect) keeps the default.
-                if is_foreground {
-                    let effective = chat
-                        .session_mode
-                        .get_untracked()
-                        .or_else(|| chat.global_mode.get_untracked());
-                    match effective.as_deref() {
-                        Some("chat") => {}
-                        Some("work") if chat.plan.get_untracked().is_some() => {
-                            workspace.follow_plan(run_id);
-                        }
-                        _ => workspace.follow_tool(run_id, tool_id),
-                    }
                 }
             }
         }
@@ -400,7 +360,7 @@ pub(crate) fn replay_run(
     for ev in events {
         // Replay always reconstructs the conversation being viewed — treat
         // it as foreground so live-follow behaves the same as it did live.
-        apply_trace_event(chat, workspace, run_id, ev, true, locale);
+        apply_trace_event(chat, workspace, run_id, ev, locale);
     }
     chat.complete_run(run_id);
     // A persisted trace that ends mid-tool (run killed / process died between
@@ -582,11 +542,11 @@ fn backfill_tool_errors(workspace: WorkspaceState, run_id: &str, summary: &serde
 
 /// Resolve which conversation's `ChatState` one run event should land on, and
 /// maintain running/route bookkeeping. Returns the target `ChatState` plus
-/// whether the resolved conversation is the active (foreground) one — callers
-/// use that to gate `WorkspaceState` side effects (live-follow / unpin) that
-/// must not leak from a background conversation onto the singleton detail
-/// pane. `None` = drop. Extracted so it's unit-testable without a Leptos
-/// event dependency.
+/// whether the resolved conversation is the active (foreground) one. That flag
+/// is what gates any side effect on the single global `WorkspaceState`, so a
+/// background conversation can never hijack the pane the user is looking at.
+/// `None` = drop. Extracted so it's unit-testable without a Leptos event
+/// dependency.
 fn resolve_target(
     sessions: &SessionMap,
     singleton: ChatState,
@@ -714,10 +674,12 @@ pub fn subscribe_run_events(
         }
 
         // Resolve the target conversation's ChatState (active = singleton
-        // projection / background = live[conv]), plus whether it's the
-        // foreground conversation (gates WorkspaceState live-follow/unpin).
+        // projection / background = live[conv]). `resolve_target` also reports
+        // whether that conversation is the foreground one; the workspace pane
+        // has no per-conversation surface to protect right now, so nothing
+        // consumes it — any future write to the single global pane must.
         let session_key = data.get("session_key").and_then(|s| s.as_str());
-        let Some((chat, is_foreground)) =
+        let Some((chat, _is_foreground)) =
             resolve_target(&sessions, singleton, event_type, run_id, session_key)
         else {
             return;
@@ -751,7 +713,6 @@ pub fn subscribe_run_events(
                     workspace,
                     run_id,
                     trace_event,
-                    is_foreground,
                     i18n.get_locale_untracked(),
                 );
             }
@@ -843,12 +804,6 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
-                // Unpin only affects the foreground detail pane — a
-                // background run finishing must not clear the user's
-                // manual pin on whatever they're currently viewing.
-                if is_foreground {
-                    workspace.end_follow();
-                }
                 // Promote the harness-authoritative final answer into the
                 // trailing bubble so it renders as the conversational reply —
                 // even when the terminating turn also issued a tool call (which
@@ -909,9 +864,6 @@ pub fn subscribe_run_events(
                 // unfinished one stays mounted, which is what the user needs
                 // to see after an error.
                 chat.settle_plan(None);
-                if is_foreground {
-                    workspace.end_follow();
-                }
             }
             _ => {} // Ignore unknown event types
         }
@@ -992,7 +944,7 @@ mod projection_tests {
             json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "done" }),
         ];
         for ev in &events {
-            apply_trace_event(chat, ws, "run-1", ev, true, Locale::default());
+            apply_trace_event(chat, ws, "run-1", ev, Locale::default());
         }
 
         let payload = ws.get_tool_payload("run-1", "t1").expect("payload");
@@ -1005,42 +957,6 @@ mod projection_tests {
         assert!(msgs
             .iter()
             .any(|m| m.iteration == Some(2) && m.content.contains("done")));
-    }
-
-    /// Regression for the multi-conversation live-follow leak: a background
-    /// conversation's `tool_call_started` must not steal the (single, global)
-    /// `WorkspaceState` detail pane away from whatever the user is actually
-    /// viewing. `is_foreground = false` must leave `selected` untouched;
-    /// `is_foreground = true` (the foreground conversation) must still follow.
-    #[test]
-    fn tool_call_started_follow_gated_to_foreground() {
-        let owner = Owner::new();
-        owner.set();
-        let chat = ChatState::new();
-        let ws = WorkspaceState::new();
-        chat.start_assistant_message("run-1");
-
-        let started = json!({ "kind": "tool_call_started", "iteration": 1,
-                "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "x" } } });
-
-        // Background conversation: must not touch the shared detail pane.
-        apply_trace_event(chat, ws, "run-1", &started, false, Locale::default());
-        assert_eq!(
-            ws.selected.get_untracked(),
-            None,
-            "background tool_call_started must not steal the detail pane"
-        );
-
-        // Foreground conversation: live-follow still applies.
-        apply_trace_event(chat, ws, "run-1", &started, true, Locale::default());
-        assert_eq!(
-            ws.selected.get_untracked(),
-            Some(crate::state::inspector::InspectorTarget::Tool {
-                run_id: "run-1".to_string(),
-                tool_id: "t1".to_string()
-            }),
-            "foreground tool_call_started still live-follows"
-        );
     }
 
     #[test]
@@ -1068,7 +984,7 @@ mod projection_tests {
                       "input": { "action": "set_plan" } },
             "result": { "Success": { "output": output_str } }
         });
-        apply_trace_event(chat, ws, "run-1", &ev, true, Locale::default());
+        apply_trace_event(chat, ws, "run-1", &ev, Locale::default());
 
         let plan = chat
             .plan
@@ -1118,7 +1034,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("in_progress", "a")]),
-            true,
             Locale::default(),
         );
         apply_trace_event(
@@ -1126,7 +1041,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
-            true,
             Locale::default(),
         );
         assert_eq!(archive_count(&chat), 1, "worked prior plan A sinks");
@@ -1147,7 +1061,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a")]),
-            true,
             Locale::default(),
         );
         apply_trace_event(
@@ -1155,7 +1068,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "b")]),
-            true,
             Locale::default(),
         );
         assert_eq!(
@@ -1178,7 +1090,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
-            true,
             Locale::default(),
         );
         apply_trace_event(
@@ -1186,7 +1097,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("clear", &[]),
-            true,
             Locale::default(),
         );
         assert_eq!(archive_count(&chat), 1, "completed plan sinks on clear");
@@ -1208,7 +1118,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("set_plan", &[("pending", "a"), ("pending", "b")]),
-            true,
             Locale::default(),
         );
         // a same-plan update (start_item) must NOT sink a capsule
@@ -1217,7 +1126,6 @@ mod projection_tests {
             ws,
             "r1",
             &scratchpad_event("start_item", &[("in_progress", "a"), ("pending", "b")]),
-            true,
             Locale::default(),
         );
         assert_eq!(
@@ -1240,7 +1148,6 @@ mod projection_tests {
             ws1,
             "r1",
             &scratchpad_event("set_plan", &[("completed", "a")]),
-            true,
             Locale::default(),
         );
         live.start_assistant_message("r2"); // next-turn sink of completed A
@@ -1432,7 +1339,6 @@ mod projection_tests {
             "r1",
             &json!({ "kind": "tool_call_started", "iteration": 1,
                      "call": { "tool_id": "t1", "tool_name": "bash", "input": { "cmd": "ls" } } }),
-            true,
             Locale::default(),
         );
         assert_eq!(status_of(&chat, "t1").unwrap().0, "running");
@@ -1488,7 +1394,6 @@ mod projection_tests {
             "r1",
             &json!({ "kind": "tool_call_started", "iteration": 1,
                      "call": { "tool_id": "t1", "tool_name": "bash", "input": {} } }),
-            true,
             Locale::default(),
         );
         chat.settle_orphan_tools("r1");
