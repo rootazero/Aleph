@@ -176,20 +176,24 @@ impl SecurityStore {
     /// genesis rather than accepting as a fresh chain.
     pub fn ledger_next_position(&self, agent_id: &str) -> SqliteResult<(i64, Option<Vec<u8>>)> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let anchor_seq: i64 = conn
-            .query_row(
-                "SELECT head_seq FROM agent_identities WHERE agent_id = ?1",
-                params![agent_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        let last: Option<(i64, Vec<u8>)> = conn
-            .query_row(
-                "SELECT seq, hash FROM agent_ledger WHERE agent_id = ?1 ORDER BY seq DESC LIMIT 1",
-                params![agent_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .ok();
+        let anchor_seq: i64 = match conn.query_row(
+            "SELECT head_seq FROM agent_identities WHERE agent_id = ?1",
+            params![agent_id],
+            |r| r.get(0),
+        ) {
+            Ok(seq) => seq,
+            Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+            Err(e) => return Err(e),
+        };
+        let last: Option<(i64, Vec<u8>)> = match conn.query_row(
+            "SELECT seq, hash FROM agent_ledger WHERE agent_id = ?1 ORDER BY seq DESC LIMIT 1",
+            params![agent_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e),
+        };
         let (last_seq, prev_hash) = match last {
             Some((s, h)) => (s, Some(h)),
             None => (0, None),

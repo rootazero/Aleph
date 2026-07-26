@@ -248,10 +248,14 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         };
         if resolved != *args {
             match serde_json::to_string(&resolved) {
-                Ok(text) => GuardrailDecision::Sanitize(Replacement {
-                    text,
-                    source: sources.join("; "),
-                }),
+                Ok(text) => {
+                    let mut source = sources.join("; ");
+                    if !source.is_empty() && !warnings.is_empty() {
+                        source.push_str("; ");
+                    }
+                    source.push_str(&warnings.join("; "));
+                    GuardrailDecision::Sanitize(Replacement { text, source })
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to serialize rebuilt tool args; failing closed");
                     GuardrailDecision::Block {

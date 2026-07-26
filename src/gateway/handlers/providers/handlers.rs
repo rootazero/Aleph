@@ -3,7 +3,7 @@
 use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::helpers::{
     build_provider_config_for_persistence, normalize_optional_string, resolve_api_key, save_config,
@@ -710,8 +710,15 @@ pub async fn handle_models_refresh(
                 let api_key = pc
                     .api_key
                     .clone()
-                    .or_else(|| resolve_api_key(name, &vault))?;
-                Some((name.clone(), base_url, protocol, api_key))
+                    .or_else(|| resolve_api_key(name, &vault));
+                if api_key.is_none() {
+                    tracing::warn!(
+                        provider = %name,
+                        "Skipping modelsRefresh: no API key resolvable"
+                    );
+                    return None;
+                }
+                Some((name.clone(), base_url, protocol, api_key.unwrap()))
             })
             .collect()
     };

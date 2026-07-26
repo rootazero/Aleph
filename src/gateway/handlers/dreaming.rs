@@ -130,7 +130,11 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
                     // parsed from the stored JSON; null on pre-migration rows or
                     // cycles without a gate decision.
                     "evolution": r.evolution_json.as_deref()
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                        .and_then(|s| {
+                            serde_json::from_str::<serde_json::Value>(s)
+                                .inspect_err(|e| tracing::warn!(%e, evolution_json = %s, "corrupt evolution_json in dream report"))
+                                .ok()
+                        }),
                 })
             })
             .collect::<Vec<_>>(),

@@ -276,11 +276,29 @@ impl TicketGuard {
         match map.get(&self.session_key) {
             Some(lane) => match lane.tickets.front() {
                 Some(front) => {
-                    front.id == self.ticket || !lane.tickets.iter().any(|t| t.id == self.ticket)
+                    if front.id == self.ticket {
+                        true
+                    } else if !lane.tickets.iter().any(|t| t.id == self.ticket) {
+                        tracing::debug!(
+                            session = %self.session_key,
+                            ticket = self.ticket,
+                            "stale ticket not in lane; failing open"
+                        );
+                        true
+                    } else {
+                        false
+                    }
                 }
                 None => true,
             },
-            None => true,
+            None => {
+                tracing::debug!(
+                    session = %self.session_key,
+                    ticket = self.ticket,
+                    "session lane not found; failing open"
+                );
+                true
+            },
         }
     }
 

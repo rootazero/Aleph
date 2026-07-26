@@ -25,7 +25,7 @@ use crate::gateway::agent_instance::AgentInstance;
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Outcome of [`ExecutionEngine::admit_run`] — tells `execute()` whether to
 /// proceed with the run or return immediately.
@@ -167,7 +167,13 @@ where
                         // `<system-reminder>` interruption note (covers /stop,
                         // Panel chat.abort and this Interrupt mode alike) — single
                         // source, nothing stored twice.
-                        let _ = self.cancel_session(&request.session_key).await;
+                        if let Err(e) = self.cancel_session(&request.session_key).await {
+                            warn!(
+                                session = %request.session_key.to_key_string(),
+                                error = %e,
+                                "busy-input interrupt: cancel_session failed"
+                            );
+                        }
                         info!(
                             session = %request.session_key.to_key_string(),
                             "busy-input interrupt: cancelled running sibling and any delegated children; message will restart as a fresh run via the busy queue",

@@ -390,7 +390,12 @@ const SCRATCHPAD_TOOL: &str = "scratchpad";
 /// any depth, so a future tool that happens to have a `snapshot` field cannot
 /// silently hijack the plan slot.
 fn extract_plan_snapshot(result: &serde_json::Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
-    serde_json::from_value(result.get("snapshot")?.clone()).ok()
+    let raw = result.get("snapshot")?;
+    serde_json::from_value(raw.clone())
+        .inspect_err(|e| {
+            tracing::warn!(error = %e, ?raw, "scratchpad snapshot deserialization failed");
+        })
+        .ok()
 }
 
 /// Per-tool emoji used by [`build_run_summary`] when constructing
