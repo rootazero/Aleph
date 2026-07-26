@@ -18,7 +18,6 @@ fn eligible_skills_render_into_system_prompt() {
     skill.set_scope(PromptScope::System);
 
     let config = PromptConfig {
-        native_tools_enabled: true,
         eligible_skills: Some(vec![skill]),
         ..PromptConfig::default()
     };

@@ -41,12 +41,7 @@ impl PromptLayer for MultiStepConductLayer {
     fn paths(&self) -> &'static [AssemblyPath] {
         // Ride every non-minimal path; the `inject()` guard keeps output empty
         // when no `ResolvedContext` is attached or SilentReply is active.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {

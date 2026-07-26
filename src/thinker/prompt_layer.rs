@@ -36,17 +36,25 @@ pub enum LayerStability {
 
 /// Which assembly path a layer participates in.
 ///
-/// The pipeline filters layers by the active path so that only
-/// relevant sections are injected into the final system prompt.
+/// The pipeline filters layers by the active path so that only relevant
+/// sections are injected into the final system prompt.
+///
+/// **There are exactly as many variants as there are entry points.** Phantom
+/// paths are how layers go silently missing: a layer that lists only a path no
+/// caller ever requests renders nowhere, and the omission is invisible. Three
+/// phantoms have been removed for exactly that reason — `Context`
+/// (2026-07-20), then `Hydration` and `Soul` (2026-07-26), each surviving only
+/// in the `prompt-size` debug flag long after its last real caller went away.
+/// If you add a variant, add the entry point that requests it in the same
+/// commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssemblyPath {
-    /// Minimal prompt — tools only, no hydration / soul / context.
+    /// Inline sub-agent prompt, one flat string, no cache split.
+    /// Entry point: `PromptBuilder::build_system_prompt` (`subagent_spawner`).
     Basic,
-    /// Hydration-based prompt — tools come from semantic retrieval.
-    Hydration,
-    /// Soul-enriched prompt — includes identity / personality.
-    Soul,
-    /// Pre-cached prompt — used when prompt caching is active.
+    /// Main-loop prompt, split into a cacheable stable prefix + dynamic suffix.
+    /// Entry point: `PromptBuilder::build_system_prompt_cached_with_mode`
+    /// (`harness_bridge::prompt_build`).
     Cached,
 }
 

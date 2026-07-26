@@ -26,12 +26,7 @@ impl PromptLayer for CuratedMemoryLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
@@ -54,7 +49,6 @@ mod tests {
         assert_eq!(layer.name(), "curated_memory");
         assert_eq!(layer.priority(), 60);
         assert_eq!(layer.stability(), LayerStability::Stable);
-        assert!(layer.paths().contains(&AssemblyPath::Soul));
         assert!(layer.paths().contains(&AssemblyPath::Basic));
     }
 

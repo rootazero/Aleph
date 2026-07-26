@@ -211,6 +211,17 @@ pub struct AgentHarnessRunner {
     /// history switches.
     pub estimate_overhead_cache:
         std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
+
+    /// Boot-time `[general] language`, threaded into `PromptConfig.language` so
+    /// `LanguageLayer` tells the model which language to answer in.
+    ///
+    /// This wire was missing: the setting is documented, validated, and exposed
+    /// in the config UI, and `LanguageLayer` was fully implemented — but nothing
+    /// ever wrote `PromptConfig.language`, so `[general] language` only ever
+    /// re-skinned the gateway's own UI strings (`i18n::Locale::from_config`)
+    /// while the model kept answering in whatever language it inferred.
+    /// Session-stable, so the layer (@1600, Stable) rides the cacheable prefix.
+    pub response_language: Option<String>,
 }
 
 /// Hard fallback iteration cap — used only when both the per-flow override

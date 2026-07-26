@@ -203,6 +203,7 @@ impl OrchestratorFixture {
             estimate_overhead_cache: std::sync::Arc::new(
                 alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
             ),
+            response_language: None,
         });
 
         let orchestrator = Orchestrator::new(

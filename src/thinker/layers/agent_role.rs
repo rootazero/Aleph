@@ -89,11 +89,7 @@ impl PromptLayer for AgentRoleLayer {
         // no `prompt_sections`), so this is a no-op on the main path and stays
         // cache-safe (Stable, byte-stable per agent). `Basic` is kept for the
         // inline `subagent_spawner` prompt build.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     /// Excluded from Minimal prompts — only active for Full and Compact.
@@ -223,10 +219,9 @@ mod tests {
         assert_eq!(layer.priority(), 55);
         let paths = layer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Soul));
         // Cached is the live main-loop path: a registered sub-agent running via
         // the harness-bridge runner must get its role header + protocol blocks.
         assert!(paths.contains(&AssemblyPath::Cached));
-        assert_eq!(paths.len(), 3);
+        assert_eq!(paths.len(), 2);
     }
 }

@@ -1244,7 +1244,11 @@ impl AlephTool for NoteManageTool {
          IMPORTANT: notes form a wiki — when creating a note, ALWAYS connect it to \
          related notes via the `links` parameter; linkless notes become orphan \
          islands and are archived early. The create result returns `related_notes` \
-         candidates — link the relevant ones with a follow-up append.";
+         candidates — link the relevant ones with a follow-up append. \
+         AFTER A SUCCESSFUL WRITE: treat the success response as terminal — do not repeat \
+         the write or re-echo the note into another memory tool. Acknowledge to the user in \
+         one short sentence, in the user's language, saying what was recorded and that it \
+         lives in searchable durable notes. Never quote the stored content back verbatim.";
 
     type Args = NoteManageArgs;
     type Output = NoteManageResult;

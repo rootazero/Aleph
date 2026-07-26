@@ -9,34 +9,9 @@ use super::super::*;
 
 // ========== Integration tests: public API via Pipeline ==========
 
-#[test]
-fn test_thinking_guidance_disabled_by_default() {
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let prompt = builder.build_system_prompt(&[]);
-
-    // Default is off, so no thinking transparency section
-    assert!(!prompt.contains("Thinking Transparency"));
-    assert!(!prompt.contains("Reasoning Flow"));
-}
-
-#[test]
-fn test_thinking_guidance_enabled() {
-    let config = PromptConfig {
-        thinking_transparency: true,
-        ..Default::default()
-    };
-    let builder = PromptBuilder::new(config);
-    let prompt = builder.build_system_prompt(&[]);
-
-    // Compressed under §1.1 prune-the-prompt: the Observation→Analysis→
-    // Planning→Decision framework and the confidence/alternatives sample
-    // phrasings were cut as a reasoning cage; only the directive remains.
-    assert!(prompt.contains("## Thinking Transparency"));
-    assert!(prompt.contains("reasoning visible"));
-    assert!(prompt.contains("confidence"));
-    assert!(!prompt.contains("Reasoning Flow"));
-    assert!(!prompt.contains("Acknowledging Alternatives"));
-}
+// (`test_thinking_guidance_*` removed with `ThinkingGuidanceLayer` —
+// `PromptConfig.thinking_transparency` had no production writer, so the layer
+// could never fire outside its own tests.)
 
 #[test]
 fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
@@ -444,7 +419,10 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
     );
 
     // Standard sections should still be present
-    assert!(prompt.contains("You are an AI assistant"), "Missing role section");
+    assert!(
+        prompt.contains("You are an AI assistant"),
+        "Missing role section"
+    );
 
     // Verify ordering: Environment -> Protocol -> Guidelines -> Citations -> RuntimeContext(dynamic)
     let env_pos = prompt.find("## Environment").unwrap();
@@ -476,19 +454,12 @@ fn with_strategy_appends_welded_strategy_block() {
     let agent = crate::agents::AgentDef::new("explore", crate::agents::AgentMode::SubAgent);
     let body = "Objective: ship the parser.\nGuardrails:\n- no network calls";
 
-    let builder = PromptBuilder::new(PromptConfig {
-        native_tools_enabled: true,
-        ..PromptConfig::default()
-    })
-    .with_agent(agent.clone());
+    let builder = PromptBuilder::new(PromptConfig::default()).with_agent(agent.clone());
     let without = builder.build_system_prompt(&[]);
 
-    let builder_s = PromptBuilder::new(PromptConfig {
-        native_tools_enabled: true,
-        ..PromptConfig::default()
-    })
-    .with_agent(agent)
-    .with_strategy(body.to_string());
+    let builder_s = PromptBuilder::new(PromptConfig::default())
+        .with_agent(agent)
+        .with_strategy(body.to_string());
     let with = builder_s.build_system_prompt(&[]);
 
     // The welded block is present and wrapped exactly like StrategyLayer.
@@ -506,18 +477,12 @@ fn with_strategy_appends_welded_strategy_block() {
 #[test]
 fn without_strategy_is_byte_identical() {
     let agent = crate::agents::AgentDef::new("explore", crate::agents::AgentMode::SubAgent);
-    let a = PromptBuilder::new(PromptConfig {
-        native_tools_enabled: true,
-        ..PromptConfig::default()
-    })
-    .with_agent(agent.clone())
-    .build_system_prompt(&[]);
-    let b = PromptBuilder::new(PromptConfig {
-        native_tools_enabled: true,
-        ..PromptConfig::default()
-    })
-    .with_agent(agent)
-    .build_system_prompt(&[]);
+    let a = PromptBuilder::new(PromptConfig::default())
+        .with_agent(agent.clone())
+        .build_system_prompt(&[]);
+    let b = PromptBuilder::new(PromptConfig::default())
+        .with_agent(agent)
+        .build_system_prompt(&[]);
     assert_eq!(a, b);
 }
 
@@ -601,5 +566,8 @@ fn test_interactive_prompt_minimal_token_overhead() {
     );
 
     // Standard sections should be present
-    assert!(prompt.contains("You are an AI assistant"), "Missing role section");
+    assert!(
+        prompt.contains("You are an AI assistant"),
+        "Missing role section"
+    );
 }

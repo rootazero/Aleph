@@ -26,10 +26,7 @@ impl PromptLayer for ProfileLayer {
         // which `IdentityFilesLayer` defers here via `HANDLED_ELSEWHERE` —
         // would vanish from every production prompt (same class of bug the
         // Role / Citation layers were fixed for).
-        &[
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Workspace AGENTS.md → "## Project Context" overlay. It crosses the
@@ -106,7 +103,6 @@ mod tests {
     #[test]
     fn test_profile_paths() {
         let paths = ProfileLayer.paths();
-        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(!paths.contains(&AssemblyPath::Basic));
         // Must ride the live main-loop path so AGENTS.md actually reaches the
         // production prompt.

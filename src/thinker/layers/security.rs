@@ -21,12 +21,7 @@ impl PromptLayer for SecurityLayer {
         // Participate in every non-minimal path so the layer fires on the
         // harness `Basic` / `Cached` routes, where `ResolvedContext` is
         // threaded. The inject() guard keeps output empty when it is absent.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -155,8 +150,6 @@ mod tests {
         // fires on the harness `Basic` route — graceful no-op until a
         // ResolvedContext is threaded in.
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

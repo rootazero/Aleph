@@ -5,7 +5,6 @@
 
 mod cache;
 pub mod cache_monitor;
-mod sections;
 
 #[cfg(test)]
 mod tests;
@@ -32,44 +31,26 @@ pub struct SystemPromptPart {
 }
 
 /// Configuration for prompt building
-#[derive(Debug, Clone)]
+///
+/// Every field here MUST have a production writer. Fields whose only writer was
+/// a unit test have repeatedly kept whole layers alive that could never speak in
+/// production (`persona`, `custom_instructions`, `generation_models`,
+/// `tool_index`, `thinking_transparency`, `skill_instructions`,
+/// `max_tool_description_tokens` — all removed 2026-07-26). The two production
+/// writers are `harness_bridge::prompt_build` and `subagent_spawner`; the
+/// `reachable_layers` test in `prompt_pipeline.rs` is the structural guard.
+#[derive(Debug, Clone, Default)]
 pub struct PromptConfig {
-    /// Assistant persona/name
-    pub persona: Option<String>,
-    /// Response language
+    /// Response language, sourced from `[general] language`.
+    ///
+    /// Session-stable, so `LanguageLayer` (@1600, Stable) rides the cacheable
+    /// prefix without perturbing it.
     pub language: Option<String>,
-    /// Custom instructions to append
-    pub custom_instructions: Option<String>,
-    /// Maximum tokens for tool descriptions
-    pub max_tool_description_tokens: usize,
     /// Runtime capabilities (pre-formatted prompt text)
     /// Describes available runtimes (Python, Node.js, `FFmpeg`, etc.)
     pub runtime_capabilities: Option<String>,
-    /// Generation models (pre-formatted prompt text)
-    /// Describes available image/video/audio generation models and aliases
-    pub generation_models: Option<String>,
-    /// Tool index for smart tool discovery (pre-formatted markdown)
-    /// When set, enables two-stage tool discovery mode:
-    /// - Tools passed to `build_system_prompt` get full schema
-    /// - Additional tools are listed in this index (name + summary only)
-    /// - LLM can call `get_tool_schema` to get full schema for indexed tools
-    pub tool_index: Option<String>,
-    /// Enable thinking transparency guidance
-    /// When true, adds guidance for structured reasoning output
-    /// (Observation -> Analysis -> Planning -> Decision)
-    pub thinking_transparency: bool,
-    /// Skill instructions injected from `SkillSystem` snapshot (XML format)
-    /// When set, these are appended to the system prompt to inform the LLM
-    /// about available skills from the `SkillSystem` v2
-    pub skill_instructions: Option<String>,
     /// Token budget for system prompt assembly.
     pub token_budget: TokenBudget,
-    /// Whether native `tool_use` is enabled (skip `ToolsLayer` and `ResponseFormatLayer`)
-    ///
-    /// When true, tool definitions are passed via the API's native `tool_use` mechanism
-    /// rather than injected into the system prompt. This also means the LLM will
-    /// respond with structured tool calls rather than JSON-in-text.
-    pub native_tools_enabled: bool,
     /// Eligible skills from `SkillSystem` v2 snapshot for scope-aware filtering.
     pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
     /// Budget bounding the injected `<available_skills>` index, sourced from
@@ -93,28 +74,6 @@ pub struct PromptConfig {
     pub active_tool_names: Vec<String>,
 }
 
-impl Default for PromptConfig {
-    fn default() -> Self {
-        Self {
-            persona: None,
-            language: None,
-            custom_instructions: None,
-            max_tool_description_tokens: 2000,
-            runtime_capabilities: None,
-            generation_models: None,
-            tool_index: None,
-            thinking_transparency: false,
-            skill_instructions: None,
-            token_budget: TokenBudget::default(),
-            native_tools_enabled: false,
-            eligible_skills: None,
-            skill_prompt_budget: None,
-            available_agents: None,
-            mcp_instructions: None,
-            active_tool_names: Vec::new(),
-        }
-    }
-}
 
 /// Prompt builder for Agent Loop thinking
 pub struct PromptBuilder {
@@ -346,7 +305,7 @@ impl PromptBuilder {
         let input = input
             .with_iteration_cap_opt(self.iteration_cap)
             .with_session_summaries(self.has_session_summaries);
-        maybe_trace_prompt_size(&self.pipeline, path, &input);
+        maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
         let mut prompt = self.pipeline.execute(path, &input);
         // Subagent strategy weld: appended post-pipeline because the Basic-path
         // inline prompt threads no `ResolvedContext` for `StrategyLayer` to read.
@@ -369,11 +328,6 @@ impl PromptBuilder {
     pub const fn config(&self) -> &PromptConfig {
         &self.config
     }
-
-    /// Access the underlying config mutably (for dynamic modifications).
-    pub const fn config_mut(&mut self) -> &mut PromptConfig {
-        &mut self.config
-    }
 }
 
 /// Optional prompt-size introspection (hermes `prompt_size.py` analogue).
@@ -383,11 +337,22 @@ impl PromptBuilder {
 /// prompt bloat is visible while tuning. Off by default = zero overhead on the
 /// hot path; reuses [`PromptPipeline::layer_breakdown`] so no live state is
 /// duplicated.
-fn maybe_trace_prompt_size(pipeline: &PromptPipeline, path: AssemblyPath, input: &LayerInput) {
+///
+/// Called from **both** entry points — `build_system_prompt` (Basic, sub-agent)
+/// and `build_system_prompt_cached_with_mode` (Cached, main loop). It used to
+/// hang off the Basic path only, which meant the trace never fired for the
+/// prompt that actually matters. `mode` must be the mode the caller is about to
+/// assemble with, or the breakdown reports layers the prompt won't contain.
+fn maybe_trace_prompt_size(
+    pipeline: &PromptPipeline,
+    path: AssemblyPath,
+    input: &LayerInput,
+    mode: PromptMode,
+) {
     if std::env::var_os("ALEPH_PROMPT_SIZE_TRACE").is_none() {
         return;
     }
-    let mut bd = pipeline.layer_breakdown(path, input, PromptMode::Full);
+    let mut bd = pipeline.layer_breakdown(path, input, mode);
     bd.sort_by_key(|l| std::cmp::Reverse(l.chars));
     let total_chars: usize = bd.iter().map(|l| l.chars).sum();
     let total_tokens: usize = bd.iter().map(|l| l.tokens).sum();

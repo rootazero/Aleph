@@ -22,11 +22,7 @@ impl PromptLayer for AgentCatalogLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let agents = match input.config.available_agents {

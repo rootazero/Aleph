@@ -39,11 +39,7 @@ impl PromptLayer for ToolRuntimeStateLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {

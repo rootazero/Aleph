@@ -44,12 +44,7 @@ impl PromptLayer for ExecutionPlanLayer {
         // Guide). The data lives in `ResolvedContext`; paths that carry no
         // context hit the `None` early-return and emit nothing. The live
         // cached prompt executes the `Cached` path.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn stability(&self) -> LayerStability {

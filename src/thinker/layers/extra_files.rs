@@ -31,12 +31,7 @@ impl PromptLayer for ExtraFilesLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {
@@ -86,7 +81,7 @@ mod tests {
         assert_eq!(layer.name(), "extra_files");
         assert_eq!(layer.priority(), 1735);
         assert_eq!(layer.stability(), LayerStability::Dynamic);
-        assert_eq!(layer.paths().len(), 4);
+        assert_eq!(layer.paths().len(), 2);
     }
 
     #[test]

@@ -35,6 +35,10 @@ impl PromptBuilder {
         mode: PromptMode,
     ) -> Vec<SystemPromptPart> {
         let input = self.build_cached_input(tools, mode);
+        // Prompt-size tracing lived only on the `Basic` (sub-agent) path, so
+        // `ALEPH_PROMPT_SIZE_TRACE` was silent for the main loop — the one
+        // prompt worth measuring. Same env gate, same helper, both paths.
+        super::maybe_trace_prompt_size(&self.pipeline, AssemblyPath::Cached, &input, mode);
         let stable = self
             .pipeline
             .execute_stable_with_mode(AssemblyPath::Cached, &input, mode);

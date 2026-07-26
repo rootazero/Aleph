@@ -21,10 +21,7 @@ impl PromptLayer for CitationStandardsLayer {
         // standards — which govern how the model attributes recalled memory
         // (`[Source: <path>#<id>]`) — never reached production prompts. Stable +
         // Full-only, so it rides the cacheable prefix at zero per-request cost.
-        &[
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // The `[Source: …]` token is the non-guessable protocol — keep it. The
@@ -63,8 +60,7 @@ mod tests {
     #[test]
     fn test_citation_standards_paths() {
         let paths = CitationStandardsLayer.paths();
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains(&AssemblyPath::Soul));
+        assert_eq!(paths.len(), 1);
         // Must participate in the live main-loop path so citation rules
         // actually reach production prompts.
         assert!(paths.contains(&AssemblyPath::Cached));

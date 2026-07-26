@@ -207,7 +207,11 @@ impl AlephTool for RememberTool {
         "Save durable agent-side memory to the curated MEMORY.md hot zone — a small, \
          always-loaded file auto-injected into every future system prompt. This is the \
          HOT tier: reserve it for the handful of facts worth re-reading every single \
-         session. Keep entries compact, factual, declarative.\n\n\
+         session — who the user is, stable preferences, environment quirks — not task \
+         progress, work logs, or transient TODOs.\n\n\
+         Phrase each entry as a declarative fact about the user or environment (\"User \
+         prefers X\"), never as an imperative to yourself (\"Always do X\"): an imperative \
+         is re-read next session as a standing order and can override a later request.\n\n\
          ROUTING: the authoritative destination ladder lives in the memory protocol \
          section of your system prompt. One-line map: searchable knowledge → `note_manage`; \
          transient task state → `scratchpad`; session outcomes → captured automatically.\n\n\
@@ -224,10 +228,13 @@ impl AlephTool for RememberTool {
          pair the remove with the new add). The current session's system prompt won't \
          show your write until next compression or session start, but the tool response \
          always reflects live state.\n\n\
-         AFTER A SUCCESSFUL WRITE: the write is final — do not repeat or re-verify it. \
-         Acknowledge to the user in one short sentence, in the user's language, saying \
-         what was recorded and that it lives in always-loaded hot memory. Do not quote \
-         the entry back.";
+         A soft rejection (duplicate / over-budget / no-match) comes back as \
+         `message: \"rejected: …\"`, not an error — recover by rephrasing or switching \
+         action, not by aborting the turn.\n\n\
+         AFTER A SUCCESSFUL WRITE: the write is final — do not repeat or re-verify it, and \
+         do not re-echo the entry into another memory tool. Acknowledge to the user in one \
+         short sentence, in the user's language, saying what was recorded and that it lives \
+         in always-loaded hot memory. Do not quote the entry back.";
 
     type Args = RememberArgs;
     type Output = RememberOutput;

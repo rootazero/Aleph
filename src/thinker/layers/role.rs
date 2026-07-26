@@ -20,21 +20,24 @@ impl PromptLayer for RoleLayer {
         // complements persona/identity and belongs in every prompt, including
         // the cached production one where it was previously absent. Stable, so
         // it joins the cacheable prefix.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // Lean: the "Observe → decide the SINGLE next action → execute" cycle
         // was cut (§1.1 prune-the-prompt). The harness supports parallel tool
         // dispatch (`act.rs::can_parallel_dispatch`), so "single next action"
         // was stale and limiting; a capable model runs the loop natively.
+        //
+        // The parallel-dispatch sentence is rescued from the deleted
+        // `ToolUsageGrammarLayer`, which only emitted it when some tool declared
+        // a (never-populated) `usage_hint` — so in practice it never shipped.
+        // It stays because it is a *runtime fact about this harness*, not
+        // advice: whether independent calls in one turn actually run
+        // concurrently is invisible to the model, and the answer here is yes.
         output.push_str(
             "You are an AI assistant that works through tasks using the tools available to you, \
-             continuing until the task is complete or you need the user's input.\n\n",
+             continuing until the task is complete or you need the user's input. \
+             Independent tool calls issued in the same turn are dispatched in parallel.\n\n",
         );
     }
 }
@@ -55,6 +58,9 @@ mod tests {
 
         assert!(out.contains("You are an AI assistant"));
         assert!(out.contains("tools available to you"));
+        // Rescued from ToolUsageGrammarLayer: a harness fact the model cannot
+        // observe, and the only line of that layer that was worth keeping.
+        assert!(out.contains("dispatched in parallel"));
         // The Observe/Decide-SINGLE-action/Execute manual was cut — the harness
         // supports parallel tool dispatch, so "single next action" was stale.
         assert!(!out.contains("SINGLE next action"));
@@ -70,8 +76,6 @@ mod tests {
     fn test_role_paths() {
         let paths = RoleLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Hydration));
-        assert!(paths.contains(&AssemblyPath::Soul));
         // Core role framing must reach the live cached production path.
         assert!(paths.contains(&AssemblyPath::Cached));
     }

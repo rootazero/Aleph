@@ -5,15 +5,13 @@
 
 use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
-    CuratedMemoryLayer, CustomInstructionsLayer, DoctorRepairHintLayer, EnvironmentLayer,
-    ExecutionPlanLayer, ExtraFilesLayer, GenerationModelsLayer, GraphTopologyLayer,
-    GuidelinesLayer, IdentityFilesLayer, LanguageLayer, McpInstructionsLayer,
-    MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer, ProfileLayer,
-    ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
+    CuratedMemoryLayer, DoctorRepairHintLayer, EnvironmentLayer, ExecutionPlanLayer,
+    ExtraFilesLayer, GraphTopologyLayer, GuidelinesLayer, IdentityFilesLayer, LanguageLayer,
+    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer,
+    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
     RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
     SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer,
-    StrategyPointerLayer, ThinkingGuidanceLayer, TimerLoopLayer, ToolRuntimeStateLayer,
-    ToolUsageGrammarLayer, ToolsLayer, VoiceModeLayer,
+    StrategyPointerLayer, TimerLoopLayer, ToolRuntimeStateLayer, VoiceModeLayer,
 };
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -173,6 +171,65 @@ impl PromptPipeline {
         out
     }
 
+    /// Names of registered layers that contribute **nothing** for this
+    /// `(path, mode, input)` — the complement of [`Self::layer_breakdown`].
+    ///
+    /// A layer lands here for one of two reasons, and the distinction matters:
+    /// it is filtered out by the path / mode, or it ran and its input gate was
+    /// unset. Either way the operator's question is the same ("why isn't my
+    /// section in the prompt?"), and a breakdown that only lists winners cannot
+    /// answer it. Silent-by-omission is the failure mode that has cost this
+    /// module the most (`Context` / `Hydration` / `Soul` phantom paths, four
+    /// layers whose `PromptConfig` gate had no production writer), so the
+    /// diagnostic reports the silent set explicitly.
+    pub fn silent_layers(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        let mut section = String::new();
+        for layer in &self.layers {
+            if !layer.paths().contains(&path) || !layer.supports_mode(mode) {
+                out.push(layer.name());
+                continue;
+            }
+            section.clear();
+            layer.inject(&mut section, input);
+            if section.is_empty() {
+                out.push(layer.name());
+            }
+        }
+        out
+    }
+
+    /// Per-layer rendered text for this `(path, mode, input)`, in assembly
+    /// order, skipping layers that emit nothing.
+    ///
+    /// The text twin of [`Self::layer_breakdown`], which keeps only sizes.
+    /// Used by the cross-layer duplicate-sentence guard, which needs to know
+    /// *which* layer said a thing, not just how big it was.
+    #[cfg(test)]
+    pub(crate) fn layer_sections(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
+                let mut section = String::new();
+                layer.inject(&mut section, input);
+                if !section.is_empty() {
+                    out.push((layer.name(), section));
+                }
+            }
+        }
+        out
+    }
+
     /// Create a pipeline pre-loaded with the default layer set.
     ///
     /// Each layer self-declares its `priority()` (ascending assembly order) and
@@ -201,10 +258,24 @@ impl PromptPipeline {
             Box::new(RuntimeContextLayer),
             Box::new(EnvironmentLayer),
             Box::new(RuntimeCapabilitiesLayer),
-            Box::new(ToolsLayer),
+            // ToolsLayer @500 was removed (2026-07-26): it injected tool
+            // names + JSON schemas as prompt text for providers without native
+            // `tool_use`. Both production writers force
+            // `native_tools_enabled = true`, so it always early-returned — and
+            // the other half of that protocol (the `{reasoning, action}`
+            // text-envelope parser) was deleted on 2026-05-10, so a prompt-only
+            // revival could not have worked anyway. `native_tools_enabled` went
+            // with it. (It also named a phantom tool, `search_tools`; the real
+            // discovery tool is `tool_search`.)
             Box::new(ToolRuntimeStateLayer),
             Box::new(AgentCatalogLayer),
-            Box::new(ToolUsageGrammarLayer),
+            // ToolUsageGrammarLayer @550 was removed (2026-07-26): it rendered
+            // `ToolInfo::usage_hint` preferences, and `usage_hint` had zero
+            // producers repo-wide — every production `ToolInfo` sets it to
+            // `None`. It also read `input.tools`, which the production cached
+            // path leaves empty (native tool_use delivers schemas out-of-band),
+            // so the layer was dead twice over. Its one live sentence (parallel
+            // tool calls) moved to `RoleLayer`, which always fires.
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
             Box::new(OperationalGuidelinesLayer),
@@ -212,7 +283,10 @@ impl PromptPipeline {
             Box::new(ProviderGuidanceLayer),
             Box::new(SessionBudgetLayer),
             Box::new(CitationStandardsLayer),
-            Box::new(GenerationModelsLayer),
+            // GenerationModelsLayer @910 was removed (2026-07-26):
+            // `PromptConfig.generation_models` had no production writer, so the
+            // layer only ever rendered inside its own unit test. Media-model
+            // discovery reaches the model through the `list_models` tool.
             Box::new(SkillInstructionsLayer),
             Box::new(SpecialActionsLayer),
             Box::new(DoctorRepairHintLayer),
@@ -220,8 +294,12 @@ impl PromptPipeline {
             // the legacy `{reasoning, action}` JSON envelope, which had no live
             // consumer once the harness moved to native `with_tools(...)`.
             Box::new(GuidelinesLayer),
-            Box::new(ThinkingGuidanceLayer),
-            Box::new(CustomInstructionsLayer),
+            // ThinkingGuidanceLayer @1350 was removed (2026-07-26):
+            // `PromptConfig.thinking_transparency` had no production writer.
+            // CustomInstructionsLayer @1500 went with it — its own body called
+            // itself a "legacy fallback" that yields to IDENTITY.md, and
+            // `initialize_agent_identity` always writes IDENTITY.md, so the
+            // fallback branch was unreachable even if the field were fed.
             Box::new(IdentityFilesLayer),
             Box::new(ExtraFilesLayer),
             // MemoryAugmentationLayer (@1740, Dynamic) was removed 2026-07-03:
@@ -317,11 +395,11 @@ mod tests {
     fn path_filtering() {
         let pipeline = PromptPipeline::new(vec![
             stub("basic_only", 10, &[AssemblyPath::Basic], "BASIC"),
-            stub("soul_only", 20, &[AssemblyPath::Soul], "SOUL"),
+            stub("cached_only", 20, &[AssemblyPath::Cached], "CACHED"),
             stub(
                 "both",
                 30,
-                &[AssemblyPath::Basic, AssemblyPath::Soul],
+                &[AssemblyPath::Basic, AssemblyPath::Cached],
                 "BOTH",
             ),
         ]);
@@ -333,8 +411,8 @@ mod tests {
         let basic_result = pipeline.execute(AssemblyPath::Basic, &input);
         assert_eq!(basic_result, "BASICBOTH");
 
-        let soul_result = pipeline.execute(AssemblyPath::Soul, &input);
-        assert_eq!(soul_result, "SOULBOTH");
+        let cached_result = pipeline.execute(AssemblyPath::Cached, &input);
+        assert_eq!(cached_result, "CACHEDBOTH");
     }
 
     #[test]
@@ -404,7 +482,18 @@ mod tests {
         // GraphTopologyLayer retained (41 @1753 Dynamic — tells a governed
         // session its place in the loop-graph governance topology,
         // 2026-07-19).
-        assert_eq!(pipeline.layer_count(), 40);
+        // → 36 (2026-07-26, Pi leanness round): four layers deleted because no
+        // production input can make them speak — ToolUsageGrammarLayer
+        // (`usage_hint` has zero producers), ThinkingGuidanceLayer
+        // (`thinking_transparency` never set), GenerationModelsLayer
+        // (`generation_models` never set), CustomInstructionsLayer
+        // (`custom_instructions` never set AND self-declared legacy fallback
+        // that IDENTITY.md always pre-empts). `reachable_layers` below is the
+        // structural guard that stops this class from recurring.
+        // → 35: ToolsLayer too — both writers force `native_tools_enabled =
+        // true`, and the text-envelope parser that would have consumed its
+        // prompt-injected tool listings was deleted 2026-05-10.
+        assert_eq!(pipeline.layer_count(), 35);
     }
 
     #[test]
@@ -417,7 +506,7 @@ mod tests {
     #[test]
     fn no_matching_path_returns_empty() {
         let pipeline =
-            PromptPipeline::new(vec![stub("soul_only", 10, &[AssemblyPath::Soul], "SOUL")]);
+            PromptPipeline::new(vec![stub("cached_only", 10, &[AssemblyPath::Cached], "C")]);
 
         let config = PromptConfig::default();
         let tools: Vec<crate::tools::info::ToolInfo> = vec![];
@@ -457,7 +546,6 @@ mod mode_tests {
             "provider_guidance",
             "session_budget",
             "citation_standards",
-            "generation_models",
             "skill_instructions",
             "mcp_instructions",
             "agent_catalog",
@@ -465,7 +553,6 @@ mod mode_tests {
             "special_actions",
             "multi_step_conduct",
             "guidelines",
-            "thinking_guidance",
         ];
         for layer in &pipeline.layers {
             if excluded_in_compact.contains(&layer.name()) {
@@ -491,7 +578,10 @@ mod mode_tests {
         // longer registered). `curated_memory` added to align with reality —
         // CuratedMemoryLayer (commit a89af2844) inherits the default
         // `supports_mode = true`, so it implicitly participates in Minimal.
-        let included_in_minimal = ["soul", "curated_memory", "tools", "language"];
+        // `tools` dropped 2026-07-26 with ToolsLayer. Every survivor here is
+        // input-gated (identity file / curated envelope / configured language),
+        // so a Minimal prompt built from a bare config is legitimately empty.
+        let included_in_minimal = ["soul", "curated_memory", "language"];
         for layer in &pipeline.layers {
             if included_in_minimal.contains(&layer.name()) {
                 assert!(
@@ -512,7 +602,13 @@ mod mode_tests {
     #[test]
     fn execute_with_mode_filters_layers() {
         let pipeline = PromptPipeline::default_layers();
-        let config = PromptConfig::default();
+        // Give the one always-available Minimal layer something to render, so
+        // the ordering assertion below measures mode filtering rather than the
+        // emptiness of a bare config.
+        let config = PromptConfig {
+            language: Some("zh-Hans".to_string()),
+            ..PromptConfig::default()
+        };
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
 
@@ -534,8 +630,8 @@ mod mode_tests {
             compact.len(),
             minimal.len()
         );
-        // Minimal should still have some content (response format, language)
-        assert!(!minimal.is_empty(), "Minimal should not be empty");
+        // Minimal keeps the configured response language and nothing else.
+        assert!(minimal.contains("Chinese (Simplified)"));
     }
 }
 

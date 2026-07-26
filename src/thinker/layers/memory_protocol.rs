@@ -1,19 +1,29 @@
-//! `MemoryProtocolLayer` — soft guidance for the three memory tools (priority 1745)
+//! `MemoryProtocolLayer` — cross-tool memory routing (priority 1745)
 //!
 //! Sits just before `SessionContextGuideLayer` (1750, post-compaction guide).
-//! Always-on, stable text — the LLM's view of which memory tool fits which
-//! question. (Retrieved memory itself no longer rides the system prompt: it
-//! arrives as the transient trailing `<memory-context>` message, see
+//! Always-on, stable text. (Retrieved memory itself no longer rides the system
+//! prompt: it arrives as the transient trailing `<memory-context>` message, see
 //! `HarnessDeps::recall_context`.)
 //!
-//! Spec A introduced `remember` (curated MEMORY.md hot zone). Spec B introduced
-//! `session_search` (summarized session-end facts). Without explicit guidance
-//! the model often only reaches for `memory_search`, missing the lighter and
-//! more recent layers. P3 adds nudges, not rules — the harness must keep its
-//! LLM-sovereignty stance (CLAUDE.md R8).
+//! **Scope rule — this layer carries only what no single tool can state.** That
+//! is exactly two things: the destination ladder that ranks `remember` /
+//! `flag_user_correction` / `note_manage` / scratchpad against each other, and
+//! the runtime fact that curated memory and recalled context are already in the
+//! window (so searching for them wastes a turn). Everything else about a memory
+//! tool — what it does, what its actions mean, how to recover from a soft
+//! rejection, how to acknowledge a write — belongs in that tool's own
+//! `DESCRIPTION`, which ships with its schema on every request that can call it.
+//!
+//! This layer was ~1,150 tokens on 2026-07-26 and roughly two thirds of it was a
+//! second copy of `RememberTool::DESCRIPTION` (hot-tier framing, demote-when-
+//! full, the D4 acknowledgment contract) — some of it verbatim. Restating a
+//! tool's own docs in the always-on prompt costs those tokens on every single
+//! request and creates a second place for the rule to drift. Trimmed to the
+//! cross-tool core; the displaced sentences now live once, in the tools (pi's
+//! rule: tool semantics live with the tool).
 //!
 //! Why this is a separate layer rather than text glued onto an existing one:
-//! * `SessionContextGuideLayer` only fires after compaction. Tool guidance
+//! * `SessionContextGuideLayer` only fires after compaction. Routing guidance
 //!   must apply to the first turn too.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -42,12 +52,7 @@ impl PromptLayer for MemoryProtocolLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {
@@ -57,53 +62,25 @@ impl PromptLayer for MemoryProtocolLayer {
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str(
             "\n\n## Memory Protocol\n\
-             Three memory tools — reach for the one matching the question:\n\
-             - `memory_search` — hybrid retrieval over notes/facts (cross-session). \
-             Use for prior decisions, preferences, or any fact not already in the \
-             `<CuratedMemory>` block above or the auto-recalled `<memory-context>` \
-             message in this conversation.\n\
-             - `session_search` — find a past session by topic and read its summarized \
-             facts (with evidence quotes). Use for \"last time\", \"that bug we fixed\", \
-             or any past-conversation reference.\n\
-             - `remember` — append/replace/remove the curated MEMORY.md hot zone. Use \
-             proactively for a stable preference, environment fact, or standing \
-             instruction to honor next session; not for task progress, work logs, or \
-             transient TODOs. \
-             Phrase each entry as a declarative fact about the user or environment \
-             (\"User prefers X\"), not an imperative to yourself (\"Always do X\") — \
-             imperatives get re-read next session as standing orders and can override \
-             a later request.\n\
-             \n\
-             `<CuratedMemory>` and the retrieved `<memory-context>` message are \
-             auto-injected — don't \
-             search for facts you can already read. A soft rejection from `remember` \
-             (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
-             recover by rephrasing or switching action, not by aborting the turn.\n\
+             `<CuratedMemory>` and the auto-recalled `<memory-context>` message are already \
+             in this conversation — don't search for facts you can already read.\n\
              \n\
              Where a NEW memory goes — ONE destination ladder, first matching rung wins:\n\
              1. Durable user preference / identity fact / standing instruction → `remember` \
-             (HOT tier: MEMORY.md, always in-prompt, tiny). A few identity-level facts \
-             re-read every session: who the user is, stable preferences, environment quirks.\n\
-             2. You made a mistake and the user corrected you → `flag_user_correction` \
-             (severity-tagged; flushed immediately, distilled into a `feedback/` note by \
-             the nightly dream cycle). Do NOT hand-write `feedback/` notes for corrections — \
-             the distillation gate deduplicates and strengthens them. Self-discovered \
-             lessons with no user correction go to `note_manage` as a `lesson` note.\n\
+             (HOT tier: MEMORY.md, always in-prompt, tiny).\n\
+             2. You made a mistake and the user corrected you → `flag_user_correction`. \
+             Do NOT hand-write `feedback/` notes for corrections — the distillation gate \
+             deduplicates and strengthens them. Self-discovered lessons with no user \
+             correction go to `note_manage` as a `lesson` note.\n\
              3. Reusable domain knowledge / how-to / project facts worth retrieving later → \
-             `note_manage` (DURABLE tier: searchable notes DB, recalled on relevance, \
-             organized by category).\n\
+             `note_manage` (DURABLE tier: searchable notes DB, recalled on relevance).\n\
              4. Transient task state / plan → scratchpad, never a memory tool.\n\
              Prefer UPDATE over CREATE: when an existing entry or note already covers the \
-             topic, `replace`/`append`/`update` it instead of adding a near-duplicate. When \
-             the hot zone is full, demote the least-hot entry to a note, then `remove` it \
-             from MEMORY.md — preserve the knowledge, free the hot space.\n\
+             topic, `replace`/`append`/`update` it instead of adding a near-duplicate.\n\
              \n\
-             Acknowledgment contract: after a successful memory write (`remember`, \
-             `flag_user_correction`, `note_manage`), tell the user in ONE short sentence, \
-             in their language, what was recorded and to which tier — use the destination \
-             info from the tool result. Never quote the stored content back verbatim, and \
-             treat the tool's success response as terminal: do not repeat the write or \
-             re-echo the entry into another memory tool call.\n",
+             Reading back: `memory_search` for a prior decision or fact; `session_search` \
+             when the user points at a past conversation (\"last time\", \"that bug we \
+             fixed\").\n",
         );
     }
 }
@@ -120,12 +97,7 @@ mod tests {
         assert_eq!(layer.priority(), 1745);
         // Dynamic so the priority-zone convention holds (≥1700 = dynamic).
         assert_eq!(layer.stability(), LayerStability::Dynamic);
-        for path in [
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ] {
+        for path in [AssemblyPath::Basic, AssemblyPath::Cached] {
             assert!(layer.paths().contains(&path), "missing path {path:?}");
         }
     }
@@ -139,45 +111,63 @@ mod tests {
     }
 
     #[test]
-    fn injects_three_tool_names() {
+    fn routes_between_the_read_side_tools() {
+        // Choosing *between* two read tools is cross-tool, so it stays here;
+        // what each one does is the tool's own description's job.
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let input = LayerInput::basic(&config, &[]);
         let mut out = String::new();
         layer.inject(&mut out, &input);
+        assert!(out.contains("Memory Protocol"));
         assert!(out.contains("memory_search"));
         assert!(out.contains("session_search"));
-        assert!(out.contains("remember"));
-        assert!(out.contains("Memory Protocol"));
-        // Pass-3: `remember` entries must be phrased as declarative facts, not
-        // imperatives — an imperative re-read next session becomes a standing
-        // order that can override the user's current request.
-        assert!(out.contains("declarative fact"));
-        assert!(out.contains("imperative"));
     }
 
     #[test]
     fn mentions_already_visible_blocks() {
         // Regression — if we forget to tell the LLM that CuratedMemory is
         // already in the prompt, it'll waste tool calls re-searching for it.
+        // This is a runtime fact about the window, not a tool's semantics, so
+        // it is one of the two things that belong in this layer.
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let mut out = String::new();
         layer.inject(&mut out, &LayerInput::basic(&config, &[]));
         assert!(out.contains("CuratedMemory"));
-        assert!(out.contains("auto-injected"));
+        assert!(out.contains("memory-context"));
+        assert!(out.contains("don't search for facts you can already read"));
     }
 
     #[test]
-    fn mentions_soft_rejection_recovery() {
-        // P2 + P3 connection — the LLM must know that a soft rejection from
-        // `remember` is recoverable, not a hard error.
+    fn per_tool_how_to_lives_in_the_tools_single_home() {
+        // The scope rule, enforced. Each of these sentences is about ONE tool,
+        // so it belongs in that tool's `DESCRIPTION` (shipped with its schema)
+        // and must not be duplicated into the always-on prompt. Both halves are
+        // asserted: absent here, present there.
+        use crate::tools::AlephTool;
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let mut out = String::new();
         layer.inject(&mut out, &LayerInput::basic(&config, &[]));
-        assert!(out.contains("rejected:"));
-        assert!(out.contains("rephrasing") || out.contains("recover"));
+
+        // `remember`: declarative-vs-imperative phrasing (D1), soft-rejection
+        // recovery, demote-when-full, and the acknowledgment contract (D4).
+        assert!(!out.contains("declarative fact"));
+        assert!(!out.contains("rejected:"));
+        assert!(!out.contains("demote"));
+        assert!(!out.contains("Acknowledgment contract"));
+        let remember = <crate::builtin_tools::RememberTool as AlephTool>::DESCRIPTION;
+        assert!(remember.contains("declarative fact"));
+        assert!(remember.contains("never as an imperative"));
+        assert!(remember.contains("rejected:") && remember.contains("rephrasing"));
+        assert!(remember.contains("DEMOTE the least-hot entry"));
+        assert!(remember.contains("one short sentence") && remember.contains("user's language"));
+
+        // `note_manage`: same D4 acknowledgment contract, its own copy.
+        let notes = <crate::builtin_tools::note_manage::NoteManageTool as AlephTool>::DESCRIPTION;
+        assert!(notes.contains("one short sentence") && notes.contains("user's language"));
+        assert!(notes.contains("Never quote the stored content back verbatim"));
     }
 
     #[test]
@@ -199,11 +189,12 @@ mod tests {
 
     #[test]
     fn injects_destination_ladder() {
-        // D1 — ONE authoritative destination ladder replaces the old two-tier
-        // split (and the three-way competing guidance across remember's
-        // description, special_actions and this layer). The guidance must
-        // spell out all four rungs, update-over-create, and the
-        // overflow-valve (demote-to-note) recovery.
+        // D1 — ONE authoritative destination ladder. Ranking four destinations
+        // against each other is the thing no single tool's description can say,
+        // so this is the layer's core payload: all four rungs plus
+        // update-over-create. (The overflow valve — demote the least-hot entry
+        // when MEMORY.md is full — is `remember`-only and lives in that tool's
+        // description; `remember`'s own tests pin it.)
         let layer = MemoryProtocolLayer;
         let config = PromptConfig::default();
         let mut out = String::new();
@@ -222,8 +213,6 @@ mod tests {
             out.contains("Prefer UPDATE over CREATE"),
             "must prefer update over near-duplicate adds"
         );
-        // Overflow valve: full hot zone demotes to a note rather than dropping it.
-        assert!(out.contains("demote"));
     }
 
     #[test]
@@ -247,21 +236,30 @@ mod tests {
     }
 
     #[test]
-    fn injects_acknowledgment_contract() {
-        // D4 — after a successful memory write the model owes the user one
-        // short sentence naming what was recorded and to which tier, and must
-        // treat the tool's success response as terminal (anti-thrash: models
-        // re-echoing entries have caused duplicate write storms).
-        let layer = MemoryProtocolLayer;
-        let config = PromptConfig::default();
-        let mut out = String::new();
-        layer.inject(&mut out, &LayerInput::basic(&config, &[]));
-        assert!(out.contains("Acknowledgment contract"));
-        assert!(out.contains("ONE short sentence") && out.contains("their language"));
-        assert!(
-            out.contains("terminal"),
-            "success response must be terminal"
-        );
-        assert!(out.contains("Never quote the stored content back verbatim"));
+    fn acknowledgment_contract_is_stated_once_per_writing_tool() {
+        // D4 survives the trim, but as one statement per writing tool instead
+        // of a fourth copy in the always-on prompt. All three writers must
+        // carry it — a tool that drops it silently drops the contract for its
+        // own writes, which no amount of prompt prose would restore.
+        use crate::tools::AlephTool;
+        for desc in [
+            <crate::builtin_tools::RememberTool as AlephTool>::DESCRIPTION,
+            <crate::builtin_tools::note_manage::NoteManageTool as AlephTool>::DESCRIPTION,
+            <crate::builtin_tools::FlagUserCorrectionTool as AlephTool>::DESCRIPTION,
+        ] {
+            let lower = desc.to_lowercase();
+            assert!(
+                lower.contains("one short sentence"),
+                "missing the one-sentence ack: {desc}"
+            );
+            assert!(
+                lower.contains("user's language"),
+                "ack must be in the user's language: {desc}"
+            );
+            assert!(
+                lower.contains("do not quote") || lower.contains("never quote"),
+                "ack must not echo stored content: {desc}"
+            );
+        }
     }
 }

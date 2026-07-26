@@ -97,12 +97,7 @@ impl PromptLayer for IdentityFilesLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {
@@ -173,9 +168,8 @@ mod tests {
         let layer = IdentityFilesLayer;
         assert_eq!(layer.name(), "identity_files");
         assert_eq!(layer.priority(), 1730);
-        assert_eq!(layer.paths().len(), 4);
+        assert_eq!(layer.paths().len(), 2);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
-        assert!(layer.paths().contains(&AssemblyPath::Soul));
         assert!(layer.paths().contains(&AssemblyPath::Cached));
     }
 

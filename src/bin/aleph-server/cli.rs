@@ -92,19 +92,30 @@ pub enum Command {
     },
     /// Inspect the assembled system-prompt size, broken down per layer.
     ///
-    /// Offline diagnostic (no network, no daemon): builds the prompt pipeline
-    /// with default config and reports each layer's byte / char / token
-    /// contribution so you can see where the fixed prompt budget goes.
-    /// Session-specific content (tool schemas, memory, dynamic context) is
-    /// excluded — this measures the static scaffold. hermes `prompt-size`
-    /// analogue.
+    /// Offline diagnostic (no network, no daemon). Assembles the prompt the way
+    /// the main loop does — `ResolvedContext` for the chosen paradigm, resolved
+    /// provider-behavior name, iteration cap — so the report matches what the
+    /// model actually receives. Per-session content (identity files, curated
+    /// memory, skills, MCP instructions, tool schemas) is still excluded: this
+    /// measures the fixed scaffold, which is the budget-tuning target. Silent
+    /// layers are listed by name so "why isn't my layer here?" is answerable.
+    /// hermes `prompt-size` analogue.
     PromptSize {
-        /// Assembly path: basic | hydration | soul | context | cached.
-        #[arg(long, default_value = "basic")]
+        /// Assembly path: basic (sub-agent inline) | cached (main loop).
+        #[arg(long, default_value = "cached")]
         path: String,
         /// Prompt mode: full | compact | minimal.
         #[arg(long, default_value = "full")]
         mode: String,
+        /// Interaction paradigm driving the `ResolvedContext`:
+        /// background | cli | messaging | webrich | embedded.
+        #[arg(long, default_value = "background")]
+        paradigm: String,
+        /// Assemble with a bare `PromptConfig` and no `ResolvedContext` — the
+        /// pre-2026-07-26 reporting shape. Useful only for comparing against
+        /// old numbers; it under-reports the live prompt.
+        #[arg(long)]
+        bare: bool,
         /// Emit a machine-readable JSON envelope instead of human output.
         #[arg(long)]
         json: bool,

@@ -19,7 +19,7 @@ impl PromptLayer for SoulLayer {
         // vanish from every production prompt (same class of bug the Role /
         // Citation layers were fixed for). `Soul` is kept for the legacy
         // soul-path builders still exercised by tests.
-        &[AssemblyPath::Soul, AssemblyPath::Cached]
+        &[AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // The live identity-injection source is the agent-dir SOUL.md file,
@@ -64,8 +64,7 @@ mod tests {
     #[test]
     fn test_soul_paths() {
         let paths = SoulLayer.paths();
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains(&AssemblyPath::Soul));
+        assert_eq!(paths.len(), 1);
         // Must ride the live main-loop path so SOUL.md actually reaches the
         // production prompt.
         assert!(paths.contains(&AssemblyPath::Cached));

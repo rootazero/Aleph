@@ -27,12 +27,7 @@ impl PromptLayer for SpecialActionsLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Finishing & Escalation\n");
@@ -51,31 +46,18 @@ impl PromptLayer for SpecialActionsLayer {
              what you'd do next.\n\n",
         );
 
-        // Phase 3 self-evolution path α — direct user-correction signaling.
-        // The flag_user_correction tool persists a tagged raw_memory row that
-        // FeedbackDistill later distills into a feedback/ knowledge note.
-        // Destination routing for OTHER memory kinds lives in the Memory
-        // Protocol ladder (memory_protocol.rs) — don't duplicate it here.
-        output.push_str("## Self-correction Logging\n\n");
-        output.push_str(
-            "When the user corrects a mistake you made or pushes back on your approach, call \
-             `flag_user_correction` with:\n",
-        );
-        output.push_str("- `content`: the correction in your own words (1-2 sentences)\n");
-        output.push_str(
-            "- `severity`: low (one-off) / med (project rule) / high (strong directive) / \
-             critical (absolute redline)\n",
-        );
-        output.push_str("- `suggested_rule` (optional): a one-line imperative for next time\n\n");
-        output.push_str(
-            "Log only clear, generalizable signals — skip praise, acknowledgement, and your \
-             own reasoning. Continue normally, then close your reply with ONE short sentence, \
-             in the user's language, acknowledging where the lesson was recorded — use the \
-             `destination` field from the tool result (e.g. \"Lesson recorded to long-term \
-             memory — feedback queue, distilled into a standing note by the nightly cycle.\"). \
-             Never quote the stored content back verbatim, never log the same correction \
-             twice, and never emit more than one acknowledgment sentence per turn.\n\n",
-        );
+        // A `## Self-correction Logging` block used to live here, spelling out
+        // when to call `flag_user_correction`, its three arguments, the
+        // low/med/high/critical severity ladder, and the one-sentence
+        // acknowledgment contract. Every one of those sentences is already in
+        // `FlagUserCorrectionTool::DESCRIPTION` and the `FlagUserCorrectionArgs`
+        // field docs — several verbatim — and the tool schema is delivered with
+        // every request that can call it. Restating it here bought nothing and
+        // created a second copy that could drift from the first (pi's rule:
+        // tool semantics live with the tool; the system prompt carries only what
+        // no single tool can state). Cross-tool routing — which memory
+        // destination wins — is the thing no tool can state, and it stays in
+        // `memory_protocol.rs`'s ladder.
     }
 }
 
@@ -115,55 +97,30 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_contains_self_correction_logging() {
-        // Phase 3 Task 20 + D4 inversion: prompt must instruct the model to
-        // call flag_user_correction conservatively, then acknowledge the
-        // write in one short sentence (the old silent-logging contract is
-        // reversed — the user asked to be told where lessons land).
+    fn self_correction_how_to_lives_in_the_tool_not_the_prompt() {
+        // The D4 acknowledgment contract is not gone — it is (and already was)
+        // stated in `FlagUserCorrectionTool::DESCRIPTION`, which ships with the
+        // tool schema on every request that can call the tool. This layer must
+        // not carry a second copy: two homes for one rule is how they drift.
         let layer = SpecialActionsLayer;
         let config = PromptConfig::default();
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();
         layer.inject(&mut out, &input);
+        assert!(!out.contains("## Self-correction Logging"));
+        assert!(
+            !out.contains("flag_user_correction"),
+            "tool how-to belongs to the tool, not the always-on prompt"
+        );
 
-        assert!(
-            out.contains("flag_user_correction"),
-            "prompt must mention the tool name"
-        );
-        assert!(
-            out.contains("## Self-correction Logging"),
-            "prompt must have a clearly delimited section header"
-        );
-        assert!(
-            out.contains("generalizable signals"),
-            "prompt must instruct conservative use"
-        );
-        assert!(
-            !out.contains("do not announce"),
-            "silent-logging wording must be gone (D4 inversion)"
-        );
-        assert!(
-            out.contains("ONE short sentence") && out.contains("user's language"),
-            "prompt must state the one-sentence acknowledgment contract"
-        );
-        assert!(
-            out.contains("Never quote the stored content back verbatim"),
-            "acknowledgment must not echo the stored entry"
-        );
-        assert!(
-            out.contains("never log the same correction twice"),
-            "prompt must forbid re-logging the same correction"
-        );
-        // Section ordering — Self-correction must come AFTER the finishing
-        // discipline so the model is already grounded in turn-level conduct
-        // when it reads about the meta-correction signal.
-        let finishing_pos = out
-            .find("## Finishing & Escalation")
-            .expect("finishing discipline header present");
-        let correction_pos = out
-            .find("## Self-correction Logging")
-            .expect("self-correction header present");
-        assert!(finishing_pos < correction_pos);
+        // The surviving single home still states the whole contract.
+        let desc =
+            <crate::builtin_tools::FlagUserCorrectionTool as crate::tools::AlephTool>::DESCRIPTION;
+        assert!(desc.contains("corrects a mistake you made"));
+        assert!(desc.contains("ONE") && desc.contains("user's language"));
+        assert!(desc.contains("destination"));
+        assert!(desc.contains("Never quote the stored content back verbatim"));
+        assert!(desc.contains("never log the same correction"));
     }
 }

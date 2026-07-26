@@ -52,7 +52,6 @@
 //!         name: "web_search".to_string(),
 //!         description: "Search the web".to_string(),
 //!         parameters_schema: None,
-//!         usage_hint: None,
 //!     },
 //! ];
 //!
@@ -389,7 +388,6 @@ mod tests {
             name: name.to_string(),
             description: format!("{} tool description", name),
             parameters_schema: None,
-            usage_hint: None,
         }
     }
 

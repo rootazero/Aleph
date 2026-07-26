@@ -20,12 +20,7 @@ impl PromptLayer for ProtocolTokensLayer {
         // Ride every non-minimal path; `ResolvedContext` is threaded on the
         // Basic / Cached production routes and the inject() guard keeps output
         // empty when it (or the `SilentReply` capability) is absent.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -66,8 +61,6 @@ mod tests {
     fn test_protocol_tokens_paths() {
         let paths = ProtocolTokensLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

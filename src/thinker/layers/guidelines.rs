@@ -16,12 +16,7 @@ impl PromptLayer for GuidelinesLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         // Lean rails only. The old rules 1-14 were loop-mechanics / how-to
@@ -84,7 +79,7 @@ mod tests {
     fn test_guidelines_priority_and_paths() {
         assert_eq!(GuidelinesLayer.priority(), 1300);
         let paths = GuidelinesLayer.paths();
-        assert_eq!(paths.len(), 4);
+        assert_eq!(paths.len(), 2);
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 }

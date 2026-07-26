@@ -158,8 +158,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             alephcore::sandbox::windows_init::run_init(init_args);
         }
         // Offline prompt-size introspection: no tokio, no network, no lock.
-        Some(Command::PromptSize { path, mode, json }) => {
-            return commands::prompt_size::run(&path, &mode, json);
+        Some(Command::PromptSize {
+            path,
+            mode,
+            paradigm,
+            bare,
+            json,
+        }) => {
+            return commands::prompt_size::run(&path, &mode, &paradigm, bare, json);
         }
         other => {
             args.command = other;

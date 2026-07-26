@@ -344,6 +344,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         estimate_overhead_cache: std::sync::Arc::new(
             alephcore::orchestrator::harness_bridge::context_estimate::OverheadCache::default(),
         ),
+        // Wire `[general] language` to the prompt. It already drove the gateway
+        // UI locale two lines away (`i18n::Locale::from_config`); the model half
+        // of the same setting was never connected, so `LanguageLayer` — fully
+        // implemented — had no writer and users who set `zh-Hans` still got
+        // whatever language the model guessed.
+        response_language: config.general.language.clone(),
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

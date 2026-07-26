@@ -19,28 +19,13 @@ impl PromptLayer for SkillInstructionsLayer {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // 1. Explicit /skill invocation takes priority (backward compat)
-        if let Some(ref instructions) = input.config.skill_instructions {
-            if !instructions.is_empty() {
-                let instructions = sanitize_for_prompt(instructions, SanitizeLevel::Moderate);
-                let instructions = sanitize_for_prompt(&instructions, SanitizeLevel::Light);
-                output.push_str("## Available Skills\n\n");
-                output.push_str("Invoke a skill via the `skill_read` tool to load specialized instructions for a task.\n\n");
-                output.push_str(&instructions);
-                output.push_str("\n\n");
-                return;
-            }
-        }
-
-        // 2. Auto skill list with scope filtering
+        // (A `config.skill_instructions` pre-rendered-XML override used to
+        // short-circuit here "for backward compat with /skill". It had no
+        // production writer — the live path is always the eligible-skills
+        // snapshot below — so it was removed 2026-07-26 along with the field.)
         let skills = match input.config.eligible_skills {
             Some(ref skills) if !skills.is_empty() => skills,
             _ => return,
@@ -132,32 +117,7 @@ mod tests {
             name: name.to_string(),
             description: "tool desc".to_string(),
             parameters_schema: None,
-            usage_hint: None,
         }
-    }
-
-    #[test]
-    fn explicit_skill_instructions_take_priority() {
-        let layer = SkillInstructionsLayer;
-
-        // Create eligible_skills that would produce output
-        let skills = vec![make_skill("SystemSkill", PromptScope::System)];
-
-        let config = PromptConfig {
-            skill_instructions: Some("<skill name=\"explicit\">Do X</skill>".to_string()),
-            eligible_skills: Some(skills),
-            ..Default::default()
-        };
-        let tools = vec![make_tool("some_tool")];
-        let input = LayerInput::basic(&config, &tools);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        // Explicit instructions win — should contain the explicit content
-        assert!(out.contains("Available Skills"));
-        assert!(out.contains("explicit"));
-        // Should NOT contain the auto-generated XML from eligible_skills
-        assert!(!out.contains("SystemSkill"));
     }
 
     #[test]
@@ -326,10 +286,8 @@ mod tests {
     #[test]
     fn paths_include_all_assembly_paths() {
         let paths = SkillInstructionsLayer.paths();
-        assert_eq!(paths.len(), 4);
+        assert_eq!(paths.len(), 2);
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Hydration));
-        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

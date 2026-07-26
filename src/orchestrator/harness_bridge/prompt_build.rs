@@ -488,14 +488,12 @@ impl AgentHarnessRunner {
         let eligible_skills = skill_snapshot
             .map(|s| s.eligible_manifests)
             .filter(|m| !m.is_empty());
-        // The harness path delivers tool schemas via native tool_use
-        // (`with_tools(tools_ref)` in agent.rs). When `native_tools_enabled` is
-        // false, `ToolsLayer` injects the literal string "No tools available.
-        // You can only use special actions." — which contradicts the
-        // native-tool-use API the harness actually drives. Force the flag on
-        // here so the assembled prompt matches the runtime contract. (The
-        // legacy `{reasoning, action}` JSON envelope and its ResponseFormatLayer
-        // were removed when the harness moved to native `with_tools`.)
+        // Tool schemas reach the model via native tool_use
+        // (`with_tools(tools_ref)` in agent.rs), never as prompt text — which is
+        // why the prompt is assembled with an empty tools slice. (`ToolsLayer`
+        // and its `native_tools_enabled` opt-out were removed 2026-07-26: both
+        // writers forced the flag on, and the `{reasoning, action}` text
+        // envelope the layer's listings fed was deleted 2026-05-10.)
         // Model-aware system-prompt budget (feature 1.2): when a context budget
         // is configured, size the prompt char cap off the same chain-minimum
         // window the history side uses (feature 2.2), so large-window models
@@ -534,7 +532,6 @@ impl AgentHarnessRunner {
             Vec::new()
         };
         let mut builder = PromptBuilder::new(PromptConfig {
-            native_tools_enabled: true,
             eligible_skills,
             skill_prompt_budget,
             mcp_instructions,
@@ -542,7 +539,7 @@ impl AgentHarnessRunner {
             token_budget,
             active_tool_names,
             available_agents,
-            ..PromptConfig::default()
+            language: self.response_language.clone(),
         });
         let role_present = agent_def.is_some();
         if let Some(def) = agent_def {
@@ -1004,12 +1001,9 @@ mod orientation_wiring_tests {
         let envelope = merge_stable_memory_envelopes(None, orientation_text);
         assert!(envelope.is_some(), "context mode must produce an envelope");
 
-        let prompt = PromptBuilder::new(PromptConfig {
-            native_tools_enabled: true,
-            ..PromptConfig::default()
-        })
-        .with_curated_envelope(envelope)
-        .build_system_prompt(&[]);
+        let prompt = PromptBuilder::new(PromptConfig::default())
+            .with_curated_envelope(envelope)
+            .build_system_prompt(&[]);
 
         assert!(
             prompt.contains("<NoteOrientation>"),

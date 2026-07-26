@@ -15,6 +15,11 @@ pub mod nudges;
 pub mod project_instructions;
 pub mod prompt_budget;
 pub mod prompt_builder;
+/// Cross-layer contract guards (reachability, byte ratchet, no duplicate
+/// sentences). Test-only — see the module docs for why these live outside any
+/// single layer's own tests.
+#[cfg(test)]
+mod prompt_contract;
 pub mod prompt_layer;
 pub mod prompt_mode;
 pub mod prompt_pipeline;
@@ -424,7 +429,11 @@ impl ProviderRegistry for MultiProviderRegistry {
         // Collect degraded candidates for the single-provider fallback.
         let mut degraded_candidates: Vec<(String, String)> = Vec::new();
         for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
-            let health = state.health.get(&provider_name).cloned().unwrap_or_default();
+            let health = state
+                .health
+                .get(&provider_name)
+                .cloned()
+                .unwrap_or_default();
             if !health.is_usable() {
                 if matches!(health, ProviderHealth::Degraded { .. }) {
                     degraded_candidates.push((provider_name, candidate_model));
@@ -451,7 +460,11 @@ impl ProviderRegistry for MultiProviderRegistry {
         // intervention.
         if state.providers.len() == 1 {
             for (provider_name, candidate_model) in degraded_candidates.into_iter() {
-                let health = state.health.get(&provider_name).cloned().unwrap_or_default();
+                let health = state
+                    .health
+                    .get(&provider_name)
+                    .cloned()
+                    .unwrap_or_default();
                 if matches!(health, ProviderHealth::Degraded { .. })
                     && state.providers.contains_key(&provider_name)
                 {

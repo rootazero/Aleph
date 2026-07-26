@@ -72,10 +72,7 @@ impl PromptLayer for VoiceModeLayer {
         LayerStability::Dynamic
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Cached]
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full | PromptMode::Compact)

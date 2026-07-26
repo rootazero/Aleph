@@ -27,12 +27,7 @@ impl PromptLayer for RuntimeContextLayer {
         // Ride every non-minimal path; `ResolvedContext` is threaded on the
         // Basic / Cached production routes and the inject() guard keeps output
         // empty when it (or its `runtime_context`) is absent.
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         let ctx = match input.context {
@@ -80,8 +75,6 @@ mod tests {
     fn test_runtime_context_paths() {
         let paths = RuntimeContextLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 

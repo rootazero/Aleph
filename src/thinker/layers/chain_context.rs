@@ -45,12 +45,7 @@ impl PromptLayer for ChainContextLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
@@ -108,7 +103,6 @@ mod tests {
         assert_eq!(layer.priority(), 1702);
         assert_eq!(layer.stability(), LayerStability::Dynamic);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
-        assert!(layer.paths().contains(&AssemblyPath::Soul));
     }
 
     #[test]

@@ -1,49 +1,106 @@
 //! `aleph-server prompt-size` — offline prompt-budget introspection.
 //!
-//! hermes `prompt_size.py` analogue. Builds the prompt pipeline with default
-//! config (no network, no daemon, no instance lock) and prints a per-layer
-//! byte / char / token breakdown of the static system-prompt scaffold, so the
-//! fixed prompt budget is visible without parsing a saved session by hand.
+//! hermes `prompt_size.py` analogue. Builds the prompt pipeline offline (no
+//! network, no daemon, no instance lock) and prints a per-layer byte / char /
+//! token breakdown of the fixed system-prompt scaffold, so the prompt budget is
+//! visible without parsing a saved session by hand.
 //!
-//! Session-specific layers (tool schemas, retrieved memory, dynamic runtime
-//! context) emit nothing under default input and are therefore excluded — this
-//! reports the fixed scaffold cost, which is exactly the budget tuning target.
+//! **The input is shaped like production, not like `Default::default()`.** The
+//! main loop always threads a `ResolvedContext` (paradigm + security posture +
+//! session mode), a resolved provider-behavior name, and an iteration cap; a
+//! report built without them silently omitted `security`, `protocol_tokens`,
+//! `operational_guidelines`, `session_budget` and `runtime_context` — always-
+//! present layers — while listing a `tools` section production never emitted.
+//! Numbers from that shape were not the numbers the model sees. `--bare`
+//! reproduces the old shape, for comparison only.
+//!
+//! Per-session content (identity files, curated memory, skills, MCP
+//! instructions, per-family behavior deltas) is still excluded: it is user data,
+//! not scaffold, and the scaffold is the tuning target. Every layer that
+//! contributes nothing is listed by name under "silent", so an absent section is
+//! always explainable.
 
+use alephcore::thinker::context::{ContextAggregator, ResolvedContext};
+use alephcore::thinker::interaction::{InteractionManifest, InteractionParadigm};
 use alephcore::thinker::prompt_layer::{AssemblyPath, LayerInput};
 use alephcore::thinker::prompt_mode::PromptMode;
 use alephcore::thinker::prompt_pipeline::{LayerSize, PromptPipeline};
+use alephcore::thinker::security_context::SecurityContext;
 use alephcore::thinker::PromptConfig;
 
 type CmdResult = Result<(), Box<dyn std::error::Error>>;
 
+/// Representative Think→Act cap (the shipped `[execution] max_iterations`
+/// default). `SessionBudgetLayer` renders the number, so only its digit count
+/// affects the size report.
+const SAMPLE_ITERATION_CAP: u32 = 1000;
+
+/// Representative provider family. `ProviderGuidanceLayer` gates on the name
+/// being present; the per-family `.md` delta is per-deployment content and is
+/// deliberately left unloaded (it needs disk + config).
+const SAMPLE_BEHAVIOR: &str = "anthropic";
+
 /// Entry point for the `prompt-size` subcommand.
-pub fn run(path: &str, mode: &str, json: bool) -> CmdResult {
+pub fn run(path: &str, mode: &str, paradigm: &str, bare: bool, json: bool) -> CmdResult {
     let assembly_path = parse_path(path)?;
     let prompt_mode = parse_mode(mode)?;
+    let paradigm_enum = parse_paradigm(paradigm)?;
 
     let pipeline = PromptPipeline::default_layers();
     let config = PromptConfig::default();
     let tools = Vec::new();
-    let input = LayerInput::basic(&config, &tools);
+    let context: Option<ResolvedContext> = if bare {
+        None
+    } else {
+        Some(ContextAggregator::resolve(
+            &InteractionManifest::new(paradigm_enum),
+            &SecurityContext::for_paradigm(paradigm_enum),
+            &[],
+        ))
+    };
+
+    let mut input = LayerInput::basic(&config, &tools)
+        .with_mode(prompt_mode)
+        .with_resolved_context_opt(context.as_ref());
+    if !bare {
+        input = input
+            .with_behavior_name(SAMPLE_BEHAVIOR)
+            .with_iteration_cap(SAMPLE_ITERATION_CAP);
+    }
 
     let breakdown = pipeline.layer_breakdown(assembly_path, &input, prompt_mode);
+    let silent = pipeline.silent_layers(assembly_path, &input, prompt_mode);
+    let shape = Shape {
+        path,
+        mode,
+        paradigm,
+        bare,
+    };
 
     if json {
-        println!("{}", render_json(path, mode, &breakdown));
+        println!("{}", render_json(shape, &breakdown, &silent));
     } else {
-        print!("{}", render_table(path, mode, &breakdown));
+        print!("{}", render_table(shape, &breakdown, &silent));
     }
     Ok(())
+}
+
+/// The input shape a report was produced under — echoed in the output so a
+/// pasted number always carries the assumptions that produced it.
+#[derive(Clone, Copy)]
+struct Shape<'a> {
+    path: &'a str,
+    mode: &'a str,
+    paradigm: &'a str,
+    bare: bool,
 }
 
 fn parse_path(s: &str) -> Result<AssemblyPath, String> {
     match s.to_ascii_lowercase().as_str() {
         "basic" => Ok(AssemblyPath::Basic),
-        "hydration" => Ok(AssemblyPath::Hydration),
-        "soul" => Ok(AssemblyPath::Soul),
         "cached" => Ok(AssemblyPath::Cached),
         other => Err(format!(
-            "unknown --path '{other}' (expected: basic | hydration | soul | cached)"
+            "unknown --path '{other}' (expected: basic | cached)"
         )),
     }
 }
@@ -55,6 +112,20 @@ fn parse_mode(s: &str) -> Result<PromptMode, String> {
         "minimal" => Ok(PromptMode::Minimal),
         other => Err(format!(
             "unknown --mode '{other}' (expected: full | compact | minimal)"
+        )),
+    }
+}
+
+fn parse_paradigm(s: &str) -> Result<InteractionParadigm, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "background" => Ok(InteractionParadigm::Background),
+        "cli" => Ok(InteractionParadigm::CLI),
+        "messaging" => Ok(InteractionParadigm::Messaging),
+        "webrich" => Ok(InteractionParadigm::WebRich),
+        "embedded" => Ok(InteractionParadigm::Embedded),
+        other => Err(format!(
+            "unknown --paradigm '{other}' \
+             (expected: background | cli | messaging | webrich | embedded)"
         )),
     }
 }
@@ -72,7 +143,7 @@ fn fmt_kb(bytes: usize) -> String {
 }
 
 /// Human-readable table, sorted largest-first by bytes.
-fn render_table(path: &str, mode: &str, breakdown: &[LayerSize]) -> String {
+fn render_table(shape: Shape<'_>, breakdown: &[LayerSize], silent: &[&'static str]) -> String {
     let total_bytes: usize = breakdown.iter().map(|l| l.bytes).sum();
     let total_chars: usize = breakdown.iter().map(|l| l.chars).sum();
     let total_tokens: usize = breakdown.iter().map(|l| l.tokens).sum();
@@ -86,9 +157,21 @@ fn render_table(path: &str, mode: &str, breakdown: &[LayerSize]) -> String {
     let mut sorted: Vec<&LayerSize> = breakdown.iter().collect();
     sorted.sort_by_key(|l| std::cmp::Reverse(l.bytes));
 
+    let Shape {
+        path,
+        mode,
+        paradigm,
+        bare,
+    } = shape;
+    let shape_note = if bare {
+        "bare config, no ResolvedContext — UNDER-REPORTS the live prompt"
+    } else {
+        "production-shaped input, fixed scaffold only"
+    };
+
     let mut out = String::new();
     out.push_str(&format!(
-        "Prompt-size breakdown (path={path}, mode={mode}, static scaffold only)\n\n"
+        "Prompt-size breakdown (path={path}, mode={mode}, paradigm={paradigm})\n  {shape_note}\n\n"
     ));
     out.push_str(&format!(
         "  System prompt total : {total_bytes:>8} B  ({}, {total_chars} chars, ~{total_tokens} tokens)\n",
@@ -119,14 +202,26 @@ fn render_table(path: &str, mode: &str, breakdown: &[LayerSize]) -> String {
         ));
     }
     out.push_str(&format!(
-        "\n  {} layers (static scaffold; session content excluded)\n",
-        breakdown.len()
+        "\n  {} of {} layers contributed.\n",
+        breakdown.len(),
+        breakdown.len() + silent.len()
     ));
+    if !silent.is_empty() {
+        out.push_str(&format!(
+            "  silent ({}): {}\n",
+            silent.len(),
+            silent.join(", ")
+        ));
+        out.push_str(
+            "  (filtered out by path/mode, or gated on per-session content this offline \
+             report does not load)\n",
+        );
+    }
     out
 }
 
 /// JSON envelope (in assembly order, not size-sorted, so it is stable).
-fn render_json(path: &str, mode: &str, breakdown: &[LayerSize]) -> String {
+fn render_json(shape: Shape<'_>, breakdown: &[LayerSize], silent: &[&'static str]) -> String {
     let total_bytes: usize = breakdown.iter().map(|l| l.bytes).sum();
     let total_chars: usize = breakdown.iter().map(|l| l.chars).sum();
     let total_tokens: usize = breakdown.iter().map(|l| l.tokens).sum();
@@ -148,11 +243,13 @@ fn render_json(path: &str, mode: &str, breakdown: &[LayerSize]) -> String {
     );
 
     let envelope = serde_json::json!({
-        "path": path,
-        "mode": mode,
-        "scope": "static_scaffold",
+        "path": shape.path,
+        "mode": shape.mode,
+        "paradigm": shape.paradigm,
+        "scope": if shape.bare { "bare_scaffold" } else { "static_scaffold" },
         "total": { "bytes": total_bytes, "chars": total_chars, "tokens": total_tokens },
         "layers": layers,
+        "silent": silent,
     });
     serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string())
 }

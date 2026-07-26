@@ -478,27 +478,19 @@ fn last_user_query_returns_empty_for_empty_messages() {
 // session_service, tool_service, agent registry) that the surrounding
 // file already builds via `fresh_service` for `seed_session` only.
 
-/// Regression: harness_bridge must build the system prompt with
-/// `native_tools_enabled = true`. Otherwise `ToolsLayer` injects
-/// "No tools available" (the harness still passes tools via native
-/// tool_use, so the prompt would be lying to the LLM) and
-/// `ResponseFormatLayer` mandates the legacy `{reasoning, action}` JSON
-/// envelope (which then leaks raw to clients because the harness no
-/// longer expects it).
+/// Regression: the assembled prompt must not claim "No tools available" nor
+/// mandate the legacy `{reasoning, action}` JSON envelope. Tool schemas reach
+/// the model through native `tool_use`, so either string would be a lie the
+/// model then acts on.
 ///
-/// This test exercises the exact `PromptConfig` shape used at
-/// `harness_bridge.rs::build_system_prompt`, decoupled from the
-/// `MemoryContextProvider` fixture, so a future refactor that drops the
-/// flag fails fast.
+/// Both producers are now gone — `ResponseFormatLayer` was unregistered
+/// 2026-05-10, `ToolsLayer` deleted 2026-07-26 — so this is a tripwire against
+/// re-introducing prompt-injected tool listings without the parser half.
 #[test]
 fn harness_bridge_prompt_config_skips_tools_and_response_format_layers() {
     use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
-    let prompt = PromptBuilder::new(PromptConfig {
-        native_tools_enabled: true,
-        ..PromptConfig::default()
-    })
-    .build_system_prompt(&[]);
+    let prompt = PromptBuilder::new(PromptConfig::default()).build_system_prompt(&[]);
 
     assert!(
         !prompt.contains("No tools available"),
@@ -514,15 +506,10 @@ fn harness_bridge_prompt_config_skips_tools_and_response_format_layers() {
     );
 }
 
-/// Companion check: with `native_tools_enabled = false` the ToolsLayer
-/// must still announce empty tools when called with `&[]`. The harness
-/// path opts out via `native_tools_enabled = true` (above); other paths
-/// that still rely on prompt-injected tool listings (e.g. providers
-/// without native tool_use) must keep getting that section.
-///
-/// ResponseFormatLayer is intentionally not asserted here — it was
-/// unregistered from the default pipeline on 2026-05-10 and is no longer
-/// expected on any path.
+// (A "companion check" doc comment for the `native_tools_enabled = false`
+// branch used to sit here with no test body under it — the body had already
+// been deleted. Both the flag and `ToolsLayer` are gone as of 2026-07-26.)
+
 // -- resolve_max_iterations tests (H1: cap the Think→Act loop) ----------
 //
 // The harness loop must always be capped. Before this wiring the
@@ -584,21 +571,12 @@ fn resolve_max_iterations_zero_runtime_falls_through_to_flow() {
     );
 }
 
-#[test]
-fn legacy_prompt_config_still_emits_tools_layer() {
-    use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
-
-    let prompt = PromptBuilder::new(PromptConfig::default()).build_system_prompt(&[]);
-
-    assert!(
-        prompt.contains("No tools available"),
-        "ToolsLayer should still announce empty tools on the legacy path"
-    );
-    assert!(
-        !prompt.contains("## Response Format"),
-        "ResponseFormatLayer is unregistered; no path should still emit it"
-    );
-}
+// (`legacy_prompt_config_still_emits_tools_layer` was deleted with `ToolsLayer`
+// on 2026-07-26. It pinned the "legacy path" — `native_tools_enabled = false` —
+// which no production writer ever selected, and whose consumer, the
+// `{reasoning, action}` text-envelope parser, had been gone since 2026-05-10.
+// The surviving guard is the negative one above: no prompt may claim "No tools
+// available" while schemas travel by native tool_use.)
 
 fn goal_for_summary() -> crate::goal::Goal {
     // Passive, no caps → the byte-identical baseline shape.

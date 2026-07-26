@@ -26,12 +26,7 @@ impl PromptLayer for SessionContextGuideLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn supports_mode(&self, mode: PromptMode) -> bool {
@@ -63,7 +58,6 @@ mod tests {
         assert_eq!(layer.name(), "session_context_guide");
         assert_eq!(layer.priority(), 1750);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
-        assert!(layer.paths().contains(&AssemblyPath::Soul));
         assert_eq!(layer.stability(), LayerStability::Dynamic);
     }
 

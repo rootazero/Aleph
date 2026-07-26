@@ -8,15 +8,10 @@ mod special_actions;
 
 // --- Config-gated layers ---
 mod agent_catalog;
-mod custom_instructions;
-mod generation_models;
 mod language;
 mod mcp_instructions;
 mod runtime_capabilities;
 mod skill_instructions;
-
-// --- Behavior layers ---
-mod thinking_guidance;
 
 // --- Identity layer ---
 mod soul;
@@ -29,8 +24,6 @@ pub mod profile;
 
 // --- Tool layers ---
 mod tool_runtime_state;
-mod tool_usage_grammar;
-mod tools;
 pub use tool_runtime_state::ToolRuntimeStateLayer;
 
 // --- Execution-plan layer (active scratchpad checklist, re-surfaced per turn) ---
@@ -92,21 +85,14 @@ pub use role::RoleLayer;
 pub use special_actions::SpecialActionsLayer;
 
 pub use agent_catalog::AgentCatalogLayer;
-pub use custom_instructions::CustomInstructionsLayer;
-pub use generation_models::GenerationModelsLayer;
 pub use language::LanguageLayer;
 pub use mcp_instructions::McpInstructionsLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
-pub use thinking_guidance::ThinkingGuidanceLayer;
-
 pub use agent_role::AgentRoleLayer;
 pub use profile::ProfileLayer;
 pub use soul::SoulLayer;
-
-pub use tool_usage_grammar::ToolUsageGrammarLayer;
-pub use tools::ToolsLayer;
 
 pub use chain_context::ChainContextLayer;
 pub use curated_memory::CuratedMemoryLayer;

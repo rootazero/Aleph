@@ -15,12 +15,7 @@ use crate::thinker::prompt_mode::PromptMode;
 /// benefits from knowing the date/OS — even the `Basic` harness path used
 /// to omit this entirely, which left the LLM unable to answer "what day
 /// is it?" without a tool round-trip.
-const ENVIRONMENT_PATHS: &[AssemblyPath] = &[
-    AssemblyPath::Basic,
-    AssemblyPath::Hydration,
-    AssemblyPath::Soul,
-    AssemblyPath::Cached,
-];
+const ENVIRONMENT_PATHS: &[AssemblyPath] = &[AssemblyPath::Basic, AssemblyPath::Cached];
 
 pub struct EnvironmentLayer;
 
@@ -139,8 +134,6 @@ mod tests {
     fn participates_in_harness_paths() {
         let paths = EnvironmentLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Soul));
-        assert!(paths.contains(&AssemblyPath::Hydration));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 }

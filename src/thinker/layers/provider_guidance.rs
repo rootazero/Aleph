@@ -42,12 +42,7 @@ impl PromptLayer for ProviderGuidanceLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[
-            AssemblyPath::Basic,
-            AssemblyPath::Hydration,
-            AssemblyPath::Soul,
-            AssemblyPath::Cached,
-        ]
+        &[AssemblyPath::Basic, AssemblyPath::Cached]
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
@@ -94,8 +89,6 @@ mod tests {
     fn participates_in_every_non_minimal_path() {
         let paths = ProviderGuidanceLayer.paths();
         assert!(paths.contains(&AssemblyPath::Basic));
-        assert!(paths.contains(&AssemblyPath::Hydration));
-        assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Cached));
     }
 
