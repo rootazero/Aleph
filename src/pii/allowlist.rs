@@ -36,7 +36,7 @@ fn test_phones() -> HashSet<String> {
 
 fn local_ips() -> HashSet<String> {
     [
-         "127.0.0.1",
+        "127.0.0.1",
         "0.0.0.0",
         "192.168.0.1",
         "192.168.1.1",
