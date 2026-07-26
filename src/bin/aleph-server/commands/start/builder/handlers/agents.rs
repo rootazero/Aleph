@@ -579,16 +579,6 @@ pub(in crate::commands::start) fn register_graph_handlers(
         let db = ::std::sync::Arc::clone(memory_db);
         server
             .handlers_mut()
-            .register("graph.neighbors", move |req| {
-                let db = ::std::sync::Arc::clone(&db);
-                async move { graph::handle_neighbors_impl(req, db).await }
-            });
-    }
-
-    {
-        let db = ::std::sync::Arc::clone(memory_db);
-        server
-            .handlers_mut()
             .register("graph.node_detail", move |req| {
                 let db = ::std::sync::Arc::clone(&db);
                 async move { graph::handle_node_detail_impl(req, db).await }

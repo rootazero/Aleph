@@ -12,24 +12,6 @@ const fn default_limit() -> usize {
     100
 }
 
-// === graph.neighbors ===
-#[derive(Debug, Deserialize)]
-pub struct GraphNeighborsParams {
-    pub node_id: String,
-    #[serde(default = "default_depth")]
-    pub depth: u8,
-    #[serde(default = "default_neighbor_limit")]
-    pub limit: usize,
-    #[serde(default)]
-    pub agent_id: Option<String>,
-}
-const fn default_depth() -> u8 {
-    2
-}
-const fn default_neighbor_limit() -> usize {
-    200
-}
-
 // === graph.node_detail ===
 #[derive(Debug, Deserialize)]
 pub struct GraphNodeDetailParams {
@@ -192,17 +174,4 @@ pub struct SearchResultDto {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GraphSearchResponse {
     pub results: Vec<SearchResultDto>,
-}
-
-// === graph.neighbors response (radial navigation) ===
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GraphNeighborsResponse {
-    /// The node that was queried — pinned at world origin in the radial layout.
-    pub center: NoteNodeDto,
-    /// Neighbor nodes (excludes the center node itself).
-    pub nodes: Vec<NoteNodeDto>,
-    /// Edges between all returned nodes (including center).
-    pub edges: Vec<NoteLinkDto>,
-    /// Hop distance from center for each neighbor node: 1 = direct, 2 = two hops.
-    pub hop_depth: std::collections::HashMap<String, u8>,
 }

@@ -7,13 +7,11 @@ use crate::gateway::handlers::graph_types::NoteNodeDto;
 use crate::memory::notes::store::NoteIndexEntry;
 
 mod manage;
-mod neighbors;
 mod node_detail;
 mod query;
 mod search;
 
 pub use manage::{handle_delete_note_impl, handle_rename_note_impl, handle_update_note_impl};
-pub use neighbors::handle_neighbors_impl;
 pub use node_detail::handle_node_detail_impl;
 pub use query::handle_query_impl;
 pub use search::handle_search_impl;
