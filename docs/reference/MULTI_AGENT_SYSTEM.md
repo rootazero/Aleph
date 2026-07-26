@@ -495,6 +495,10 @@ a `self` leader is the caller's own agent. Both cases are reported:
 omitted from the output when empty. Guards live in `templates/materialize.rs`
 tests: every built-in role satisfies its contract, only the two reasoning
 templates declare, no reviewer carries an edit tool, nothing globs `team_*`.
+The report does not yet reach every caller: `interfaces/webchat/src/api/teams.rs`
+extracts only `team_id` from the `team_from_template` tool output and discards
+the rest, so a Panel user creating a team from the "create from template"
+dialog does not see `tools_ignored_for` — only the LLM tool-call path does.
 
 #### Live surface: the `team.<id>.*` topic family
 

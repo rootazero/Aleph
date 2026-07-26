@@ -210,6 +210,14 @@ item 1's per-member `tools`. A session mode is a *user session* knob and a membe
 run is not a user session — the Panel already hides `ModePicker` in team chat for
 exactly that reason (`composer/mod.rs:1114`).
 
+Takes away: an operator running `[policies] mode = "code"` no longer gets
+`CODE_CORE_ADD` (`apply_patch`, `ctx_search`) schema-resident in member runs —
+pinning to `Work` overrides that global the same way it overrides `chat`. The
+cost is bounded: those tools stay callable, just behind a `get_tool_schema`
+round-trip instead of arriving in the initial tool list, so the trade still
+favors the fix, but it is a real trade and not a pure win for every operator
+mode.
+
 ### 4.5 Noted, out of scope
 
 The same Panel `Show when=team_id.is_none()` also hides `ExecTierPicker`, so team

@@ -115,6 +115,10 @@ mode/exec_tier 覆盖值回写 `chat.session_mode`/`session_exec_tier`（`sessio
 任务派发/workflow step）都显式写入 `teams::run_mode::TEAM_RUN_MODE`。
 不变量测试从 `member_provision` 的 `WORKER_ESSENTIAL_TOOLS` /
 `LEADER_ESSENTIAL_TOOLS` 取数——声明侧契约与呈现侧分区因此不可能各说各话。
+钉死压得住模型自己的切换：团队 run 里调 `session_set_mode` 会成功写进会话，
+但每个团队 run 的 metadata 都重新 stamp 一次，`requested.or(stored)` 让
+request 携带的 `TEAM_RUN_MODE` 继续赢过 stored 值——工具回报"已切换"，团队 run
+的工具面却一轮都不会变。
 **团队要收窄工具面用每成员 `tools` 声明，不是用 mode。**
 
 ## 4. 刻意不做 (Deliberately NOT)
