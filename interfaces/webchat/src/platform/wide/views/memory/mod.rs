@@ -29,6 +29,7 @@ fn facet_total(counts: [usize; 4], facet: MemoryFacet) -> u64 {
         MemoryFacet::Feedback => counts[2],
         MemoryFacet::Lessons => counts[3],
         MemoryFacet::Raw => 0,
+        MemoryFacet::SearchHits => 0,
     };
     n as u64
 }

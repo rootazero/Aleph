@@ -12,17 +12,66 @@ pub const NOTE_WINDOW: usize = 1000;
 /// Fixed number of entries shown per page.
 pub const PAGE_SIZE: u32 = 50;
 
+/// The state of one fetch.
+///
+/// Replaces the `(loaded: bool, data: T)` pair the memory console used to carry
+/// alongside `if let Ok(..)` loaders. Under that shape an RPC failure produced
+/// an empty `data` with `loaded = true` — indistinguishable from an empty
+/// store, so every gateway error rendered as "no memories yet". Making failure
+/// its own variant means a renderer cannot match exhaustively without drawing
+/// the error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Loadable<T> {
+    Loading,
+    Ready(T),
+    Failed(String),
+}
+
+impl<T> Loadable<T> {
+    /// Lift an RPC result into a load state, keeping the error text so the UI
+    /// can show *what* went wrong rather than an empty list.
+    #[must_use]
+    pub fn from_rpc(res: Result<T, String>) -> Self {
+        match res {
+            Ok(v) => Self::Ready(v),
+            Err(e) => Self::Failed(e),
+        }
+    }
+
+    #[must_use]
+    pub fn as_ready(&self) -> Option<&T> {
+        match self {
+            Self::Ready(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryFacet {
     AllNotes,
     Facts,
     Feedback,
     Lessons,
+    /// Server-side full-text hits from `graph.search`.
+    ///
+    /// Note-shaped like the four buckets above, but its rows do NOT come from
+    /// the loaded window — they arrive on their own signal, so `facet_slice`
+    /// returns empty here and `bucket_counts` ignores it.
+    SearchHits,
     Raw,
 }
 
 impl MemoryFacet {
-    /// True for every facet backed by the note layer (i.e. not `Raw`).
+    /// True for every note-shaped facet (i.e. not `Raw`). Drives which table /
+    /// drawer / delete verb applies: note facets use `graph.delete_note`, `Raw`
+    /// uses `memory.delete`. Mixing those two is what made search hits
+    /// undeletable.
     #[must_use]
     pub fn is_notes(&self) -> bool {
         !matches!(self, MemoryFacet::Raw)
@@ -60,7 +109,7 @@ pub fn bucket_counts(facts: &[CompressedFact]) -> [usize; 4] {
 pub fn facet_slice(facts: &[CompressedFact], facet: MemoryFacet) -> Vec<CompressedFact> {
     match facet {
         MemoryFacet::AllNotes => facts.to_vec(),
-        MemoryFacet::Raw => Vec::new(),
+        MemoryFacet::Raw | MemoryFacet::SearchHits => Vec::new(),
         other => facts
             .iter()
             .filter(|f| fact_facet(&f.category) == other)
@@ -255,5 +304,64 @@ mod tests {
     fn filter_notes_no_match_is_empty() {
         let w = vec![fact_content("Alpha")];
         assert!(filter_notes(&w, "zzz").is_empty());
+    }
+
+    // ── Loadable ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn from_rpc_preserves_the_error_message() {
+        // This is the whole point: the old loaders mapped Err to "no data", so
+        // an RPC failure and an empty store rendered identically.
+        let failed: Loadable<Vec<u32>> = Loadable::from_rpc(Err("gateway timeout".into()));
+        assert_eq!(failed, Loadable::Failed("gateway timeout".to_string()));
+        assert!(failed.as_ready().is_none());
+    }
+
+    #[test]
+    fn from_rpc_wraps_ok_as_ready() {
+        let ready: Loadable<Vec<u32>> = Loadable::from_rpc(Ok(vec![1, 2]));
+        assert_eq!(ready.as_ready(), Some(&vec![1, 2]));
+        assert!(!ready.is_loading());
+    }
+
+    #[test]
+    fn an_empty_ok_is_ready_not_failed() {
+        // An empty store is a legitimate Ready state, distinct from Failed.
+        let empty: Loadable<Vec<u32>> = Loadable::from_rpc(Ok(vec![]));
+        assert_eq!(empty.as_ready(), Some(&vec![]));
+        assert!(matches!(empty, Loadable::Ready(_)));
+    }
+
+    #[test]
+    fn loading_is_neither_ready_nor_failed() {
+        let l: Loadable<Vec<u32>> = Loadable::Loading;
+        assert!(l.is_loading());
+        assert!(l.as_ready().is_none());
+    }
+
+    // ── SearchHits facet ────────────────────────────────────────────────────
+
+    #[test]
+    fn search_hits_is_note_shaped() {
+        // Hits are notes, so every note-shaped affordance (drawer, locate-in-
+        // graph, note delete path) applies to them.
+        assert!(MemoryFacet::SearchHits.is_notes());
+        assert!(!MemoryFacet::Raw.is_notes());
+    }
+
+    #[test]
+    fn search_hits_never_slices_the_window() {
+        // Hit rows arrive from graph.search on their own signal; slicing the
+        // loaded window for this facet would silently show stale local rows.
+        let facts = vec![fact("preference"), fact("feedback")];
+        assert!(facet_slice(&facts, MemoryFacet::SearchHits).is_empty());
+    }
+
+    #[test]
+    fn bucket_counts_ignores_search_hits() {
+        // The chip badges describe the loaded window's four note buckets; the
+        // hit count is reported separately by the hits signal.
+        let facts = vec![fact("feedback"), fact("preference")];
+        assert_eq!(bucket_counts(&facts), [2, 1, 1, 0]);
     }
 }
