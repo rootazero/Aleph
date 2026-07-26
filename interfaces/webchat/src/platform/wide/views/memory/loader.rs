@@ -32,11 +32,16 @@ pub fn load_notes(
 ) {
     slot.set(Loadable::Loading);
     spawn_local(async move {
-        let res = MemoryApi::list_facts(&state, &agent, limit, 0)
-            .await
-            .map(|(facts, total)| NotesWindow { facts, total });
-        slot.set(Loadable::from_rpc(res));
+        let res = MemoryApi::list_facts(&state, &agent, limit, 0).await;
+        slot.set(Loadable::from_rpc(to_notes_window(res)));
     });
+}
+
+/// Pure mapping step of [`load_notes`], split out so `total`'s source is
+/// unit-testable without a transport mock: it must come from the RPC's
+/// second tuple element (the agent's full count), never from `facts.len()`.
+fn to_notes_window(res: Result<(Vec<CompressedFact>, u64), String>) -> Result<NotesWindow, String> {
+    res.map(|(facts, total)| NotesWindow { facts, total })
 }
 
 /// One `memory.search` page plus the count of rows matching the same filter.
@@ -59,11 +64,18 @@ pub fn load_raw(
 ) {
     slot.set(Loadable::Loading);
     spawn_local(async move {
-        let res = MemoryApi::browse_raw(&state, &agent, query, limit, offset)
-            .await
-            .map(|(raws, total)| RawWindow { raws, total });
-        slot.set(Loadable::from_rpc(res));
+        let res = MemoryApi::browse_raw(&state, &agent, query, limit, offset).await;
+        slot.set(Loadable::from_rpc(to_raw_window(res)));
     });
+}
+
+/// Pure mapping step of [`load_raw`], split out so `total`'s source is
+/// unit-testable without a transport mock: it must come from the RPC's
+/// second tuple element (rows matching the active filter), never from
+/// `raws.len()` — conflating the two is exactly what revives the phantom
+/// trailing page under an active query.
+fn to_raw_window(res: Result<(Vec<RawMemory>, u64), String>) -> Result<RawWindow, String> {
+    res.map(|(raws, total)| RawWindow { raws, total })
 }
 
 /// Server-side note full-text search. Hits arrive as full index rows, so they
@@ -95,4 +107,81 @@ pub fn load_stats(state: DashboardState, agent: String, slot: RwSignal<Loadable<
         let res = MemoryApi::stats(&state, &agent).await;
         slot.set(Loadable::from_rpc(res));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fact(path: &str) -> CompressedFact {
+        CompressedFact {
+            id: path.into(),
+            agent_id: "main".into(),
+            content: "c".into(),
+            fact_type: "preference".into(),
+            created_at: 0,
+            updated_at: 0,
+            category: "preference".into(),
+            path: path.into(),
+            tags: Vec::new(),
+            link_count: 0,
+        }
+    }
+
+    fn raw(id: &str) -> RawMemory {
+        RawMemory {
+            id: id.into(),
+            agent_id: "main".into(),
+            user_input: "q".into(),
+            ai_output: "a".into(),
+            session_id: None,
+            created_at: None,
+        }
+    }
+
+    // ── to_notes_window ─────────────────────────────────────────────────────
+
+    #[test]
+    fn notes_window_total_comes_from_the_tuple_not_row_count() {
+        // 2 rows but a total of 7: a `facts.len() as u64` implementation
+        // would report 2 here, so this pins the real contract.
+        let res = Ok((vec![fact("a"), fact("b")], 7u64));
+        let window = to_notes_window(res).expect("Ok input stays Ok");
+        assert_eq!(window.total, 7);
+        assert_eq!(window.facts.len(), 2);
+    }
+
+    #[test]
+    fn notes_window_err_stays_err_with_its_message() {
+        let res: Result<(Vec<CompressedFact>, u64), String> = Err("gateway timeout".into());
+        assert_eq!(
+            to_notes_window(res),
+            Err("gateway timeout".to_string()),
+            "a failure must not fold into an empty window"
+        );
+    }
+
+    // ── to_raw_window ────────────────────────────────────────────────────────
+
+    #[test]
+    fn raw_window_total_comes_from_the_tuple_not_row_count() {
+        // 3 rows but a total of 41 (the filtered count from a much larger
+        // match set): a `raws.len() as u64` implementation would report 3
+        // here, which is exactly the phantom-page bug this window exists to
+        // prevent.
+        let res = Ok((vec![raw("r1"), raw("r2"), raw("r3")], 41u64));
+        let window = to_raw_window(res).expect("Ok input stays Ok");
+        assert_eq!(window.total, 41);
+        assert_eq!(window.raws.len(), 3);
+    }
+
+    #[test]
+    fn raw_window_err_stays_err_with_its_message() {
+        let res: Result<(Vec<RawMemory>, u64), String> = Err("gateway timeout".into());
+        assert_eq!(
+            to_raw_window(res),
+            Err("gateway timeout".to_string()),
+            "a failure must not fold into an empty window"
+        );
+    }
 }
