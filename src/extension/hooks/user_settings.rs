@@ -188,34 +188,9 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
             }
         };
         for g in groups {
-            let actions: Vec<HookAction> = g
-                .hooks
-                .iter()
-                .map(|a| match a {
-                    UserHookAction::Command { command, .. } => HookAction::Command {
-                        command: command.clone(),
-                    },
-                    UserHookAction::Prompt { prompt } => HookAction::Prompt {
-                        prompt: prompt.clone(),
-                    },
-                    UserHookAction::Agent { agent } => HookAction::Agent {
-                        agent: agent.clone(),
-                    },
-                    UserHookAction::Http { url, headers, .. } => HookAction::Http {
-                        url: url.clone(),
-                        headers: headers.clone(),
-                    },
-                })
-                .collect();
-            if actions.is_empty() {
+            if g.hooks.is_empty() {
                 continue;
             }
-
-            // First action's per-action timeout (or group default) wins for
-            // the whole HookConfig — multiple actions in a group already
-            // share state via the group; mixing per-action timeouts inside
-            // a single group is rare and easy to express by splitting.
-            let timeout_secs = a_or_group_timeout(&g);
 
             let kind = g.kind.as_deref().map_or_else(
                 || default_kind_for_event(event),
@@ -231,7 +206,7 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
             // Foot-gun guard: matchers test `tool_name` only, so a matcher on
             // an event whose context has no tool name silently never fires.
             // Warn at load time rather than leaving a mysteriously-dead hook.
-            if matcher.is_some() && !event_supports_matcher(event) {
+            if matcher.is_some() && !event.supports_matcher() {
                 warn!(
                     path = %path.display(),
                     event = %event_str,
@@ -244,7 +219,7 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
             // fire-sites dispatch interceptors; the global fire-and-forget
             // seams (messages / provider / gateway / subagent…) run observers
             // only, so an explicit `"kind": "interceptor"` there is dead.
-            if kind == HookKind::Interceptor && !event_supports_interceptor(event) {
+            if kind == HookKind::Interceptor && !event.supports_interceptor() {
                 warn!(
                     path = %path.display(),
                     event = %event_str,
@@ -254,30 +229,66 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                 );
             }
 
-            out.push(HookConfig {
-                event,
-                kind,
-                priority,
-                matcher,
-                actions,
-                plugin_name: source_label.to_string(),
-                plugin_root: plugin_root.clone(),
-                handler: None,
-                timeout_secs,
-            });
+            // Emit ONE `HookConfig` per action, each carrying its OWN
+            // `timeout_secs`. `HookConfig` holds a single timeout, so folding a
+            // multi-action group into one registration made the FIRST action's
+            // timeout leak onto its siblings — a group of
+            // `[{cmd: fast, timeout_secs: 5}, {cmd: slow, timeout_secs: 600}]`
+            // gave both 5s and the slow one always "timed out". The plugin
+            // `hooks.json` path (`manifest/parsers.rs`) was fixed this way
+            // already; this is the same fix on the user-config path.
+            for a in &g.hooks {
+                let (action, timeout_secs) = match a {
+                    UserHookAction::Command {
+                        command,
+                        timeout_secs,
+                    } => (
+                        HookAction::Command {
+                            command: command.clone(),
+                        },
+                        timeout_secs.or(g.timeout_secs),
+                    ),
+                    UserHookAction::Http {
+                        url,
+                        headers,
+                        timeout_secs,
+                    } => (
+                        HookAction::Http {
+                            url: url.clone(),
+                            headers: headers.clone(),
+                        },
+                        timeout_secs.or(g.timeout_secs),
+                    ),
+                    // Prompt / Agent actions resolve in-process: they never
+                    // spawn or await anything, so a timeout is meaningless.
+                    UserHookAction::Prompt { prompt } => (
+                        HookAction::Prompt {
+                            prompt: prompt.clone(),
+                        },
+                        None,
+                    ),
+                    UserHookAction::Agent { agent } => (
+                        HookAction::Agent {
+                            agent: agent.clone(),
+                        },
+                        None,
+                    ),
+                };
+
+                out.push(HookConfig {
+                    event,
+                    kind,
+                    priority,
+                    matcher: matcher.clone(),
+                    actions: vec![action],
+                    plugin_name: source_label.to_string(),
+                    plugin_root: plugin_root.clone(),
+                    handler: None,
+                    timeout_secs,
+                });
+            }
         }
     }
-}
-
-fn a_or_group_timeout(g: &UserHookGroup) -> Option<u64> {
-    g.hooks
-        .iter()
-        .find_map(|a| match a {
-            UserHookAction::Command { timeout_secs, .. } => *timeout_secs,
-            UserHookAction::Http { timeout_secs, .. } => *timeout_secs,
-            _ => None,
-        })
-        .or(g.timeout_secs)
 }
 
 /// Map both Claude Code-style (`PreToolUse`) and Aleph-style
@@ -325,45 +336,6 @@ pub(crate) const fn default_kind_for_event(event: HookEvent) -> HookKind {
     }
 }
 
-/// Whether an event's production fire-site dispatches interceptor-kind
-/// hooks. The global fire-and-forget seams (`fire_global_observer`: message
-/// / provider / gateway / subagent / permission events) run observers only —
-/// an interceptor registered there never executes. Used for a load-time
-/// foot-gun warning, mirroring `event_supports_matcher`.
-const fn event_supports_interceptor(event: HookEvent) -> bool {
-    use HookEvent::*;
-    matches!(
-        event,
-        BeforeToolCall
-            | AfterToolCall
-            | AfterToolCallFailure
-            | BeforeAgentStart
-            | UserPromptSubmit
-            | SessionStart
-            | AgentEnd
-            | BeforeCompaction
-            | Stop
-    )
-}
-
-/// Whether an event's [`HookContext`] carries a `tool_name`, so a `matcher`
-/// regex can meaningfully select among invocations. The hook executor matches
-/// the `matcher` against `tool_name` only; on any other event the matcher can
-/// never match and the hook silently never fires. Used to surface that
-/// foot-gun as a load-time warning.
-const fn event_supports_matcher(event: HookEvent) -> bool {
-    use HookEvent::*;
-    matches!(
-        event,
-        BeforeToolCall
-            | AfterToolCall
-            | AfterToolCallFailure
-            | ToolResultPersist
-            | PermissionRequest
-            | Notification
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,17 +349,17 @@ mod tests {
     #[test]
     fn event_supports_matcher_only_for_tool_name_events() {
         // Tool-name-bearing events accept a matcher.
-        assert!(event_supports_matcher(HookEvent::BeforeToolCall));
-        assert!(event_supports_matcher(HookEvent::AfterToolCall));
-        assert!(event_supports_matcher(HookEvent::AfterToolCallFailure));
-        assert!(event_supports_matcher(HookEvent::ToolResultPersist));
-        assert!(event_supports_matcher(HookEvent::PermissionRequest));
-        assert!(event_supports_matcher(HookEvent::Notification));
+        assert!(HookEvent::supports_matcher(HookEvent::BeforeToolCall));
+        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCall));
+        assert!(HookEvent::supports_matcher(HookEvent::AfterToolCallFailure));
+        assert!(HookEvent::supports_matcher(HookEvent::ToolResultPersist));
+        assert!(HookEvent::supports_matcher(HookEvent::PermissionRequest));
+        assert!(HookEvent::supports_matcher(HookEvent::Notification));
         // Lifecycle events have no tool name; a matcher there never fires.
-        assert!(!event_supports_matcher(HookEvent::SessionStart));
-        assert!(!event_supports_matcher(HookEvent::BeforeAgentStart));
-        assert!(!event_supports_matcher(HookEvent::UserPromptSubmit));
-        assert!(!event_supports_matcher(HookEvent::AgentEnd));
+        assert!(!HookEvent::supports_matcher(HookEvent::SessionStart));
+        assert!(!HookEvent::supports_matcher(HookEvent::BeforeAgentStart));
+        assert!(!HookEvent::supports_matcher(HookEvent::UserPromptSubmit));
+        assert!(!HookEvent::supports_matcher(HookEvent::AgentEnd));
     }
 
     #[test]
@@ -479,6 +451,83 @@ mod tests {
             }
             _ => panic!("expected http action"),
         }
+    }
+
+    #[test]
+    fn each_action_keeps_its_own_timeout() {
+        // Regression lock: folding a multi-action group into ONE HookConfig
+        // leaked the first action's `timeout_secs` onto its siblings, so the
+        // slow command inherited the fast one's 5s deadline and always
+        // "timed out". Each action must become its own registration.
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        { "hooks": [
+                            { "type": "command", "command": "fast", "timeout_secs": 5 },
+                            { "type": "command", "command": "slow", "timeout_secs": 600 }
+                          ]
+                        }
+                    ]
+                }
+            }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert_eq!(out.len(), 2, "one registration per action");
+        assert_eq!(out[0].timeout_secs, Some(5));
+        assert_eq!(out[1].timeout_secs, Some(600));
+        // Group-level metadata is copied onto every split registration.
+        assert!(out
+            .iter()
+            .all(|h| h.event == HookEvent::BeforeToolCall && h.kind == HookKind::Interceptor));
+    }
+
+    #[test]
+    fn action_timeout_falls_back_to_the_group_default() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        { "timeout_secs": 42,
+                          "hooks": [
+                            { "type": "command", "command": "inherits" },
+                            { "type": "command", "command": "overrides", "timeout_secs": 7 },
+                            { "type": "prompt", "prompt": "no timeout here" }
+                          ]
+                        }
+                    ]
+                }
+            }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].timeout_secs, Some(42), "inherits group default");
+        assert_eq!(out[1].timeout_secs, Some(7), "own value wins");
+        assert_eq!(
+            out[2].timeout_secs, None,
+            "prompt actions resolve in-process; a timeout is meaningless"
+        );
+    }
+
+    #[test]
+    fn group_with_no_actions_registers_nothing() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{ "hooks": { "PreToolUse": [ { "matcher": "Write", "hooks": [] } ] } }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

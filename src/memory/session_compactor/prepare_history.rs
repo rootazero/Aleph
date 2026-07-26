@@ -266,7 +266,17 @@ async fn fire_before_compaction(
         .execute_interceptors(HookEvent::BeforeCompaction, ctx)
         .await
     {
-        Ok((_ctx, hook_result)) => hook_result.additional_contexts,
+        // Pinned context survives compaction by definition, so an unbounded
+        // block here is the most expensive of all four hook-context seams —
+        // it outlives the very history the compactor is shrinking. Same
+        // budget, same spill-to-disk recovery path.
+        Ok((_ctx, hook_result)) => {
+            crate::extension::hooks::budget_hook_contexts(
+                session_id,
+                hook_result.additional_contexts,
+            )
+            .await
+        }
         Err(e) => {
             warn!(error = %e, "BeforeCompaction interceptor hooks failed; no context pinned");
             Vec::new()

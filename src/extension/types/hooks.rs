@@ -120,6 +120,86 @@ pub enum HookEvent {
     Stop,
 }
 
+impl HookEvent {
+    /// Every hook event, in rough lifecycle order.
+    ///
+    /// Single source for "what events exist" — the `hooks.events` RPC and the
+    /// `hooks_manage` tool's catalogue both project this instead of keeping
+    /// their own hand-written lists (which is how a new variant ends up
+    /// invisible to one surface and not the other).
+    pub const ALL: [Self; 23] = [
+        Self::BeforeAgentStart,
+        Self::AgentEnd,
+        Self::BeforeToolCall,
+        Self::AfterToolCall,
+        Self::AfterToolCallFailure,
+        Self::ToolResultPersist,
+        Self::MessageReceived,
+        Self::MessageSending,
+        Self::MessageSent,
+        Self::SessionStart,
+        Self::SessionEnd,
+        Self::BeforeCompaction,
+        Self::AfterCompaction,
+        Self::PreApiRequest,
+        Self::PostApiRequest,
+        Self::GatewayStart,
+        Self::GatewayStop,
+        Self::Notification,
+        Self::PermissionRequest,
+        Self::UserPromptSubmit,
+        Self::SubagentStart,
+        Self::SubagentStop,
+        Self::Stop,
+    ];
+
+    /// Whether this event's [`HookContext`](crate::extension::hooks::HookContext)
+    /// carries a `tool_name`, so a `matcher` regex can meaningfully select
+    /// among invocations.
+    ///
+    /// The executor matches `matcher` against `tool_name` ONLY. On any other
+    /// event the matcher can never match and the hook silently never fires —
+    /// a foot-gun surfaced at load time (`user_settings.rs`) and reported per
+    /// hook by the runtime inventory (`HookExecutor::inventory`). Keeping the
+    /// predicate on the event itself is what stops those two from drifting.
+    #[must_use]
+    pub const fn supports_matcher(self) -> bool {
+        use HookEvent::*;
+        matches!(
+            self,
+            BeforeToolCall
+                | AfterToolCall
+                | AfterToolCallFailure
+                | ToolResultPersist
+                | PermissionRequest
+                | Notification
+        )
+    }
+
+    /// Whether this event's production fire-site dispatches interceptor-kind
+    /// hooks.
+    ///
+    /// The global fire-and-forget seams (`fire_global_observer`: message /
+    /// provider / gateway / subagent / permission events) run observers only,
+    /// so an `"kind": "interceptor"` registered there never executes.
+    #[must_use]
+    pub const fn supports_interceptor(self) -> bool {
+        use HookEvent::*;
+        matches!(
+            self,
+            BeforeToolCall
+                | AfterToolCall
+                | AfterToolCallFailure
+                | BeforeAgentStart
+                | UserPromptSubmit
+                | SessionStart
+                | AgentEnd
+                | BeforeCompaction
+                | Stop
+        )
+    }
+}
+
 /// Hook execution kind - determines how the hook is executed
 ///
 /// (A third `Resolver` kind — first-win competition — existed on paper but

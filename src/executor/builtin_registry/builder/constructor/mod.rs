@@ -137,6 +137,9 @@ impl BuiltinToolRegistry {
         // Self-management tool (LLM-triggered entry point)
         let self_manage_tool = SelfManageTool::default();
 
+        // Hooks-manage tool (stateless: reads the process-global extension manager)
+        let hooks_manage_tool = crate::builtin_tools::HooksManageTool::new();
+
         // Self-config tool (identity files + config.toml access)
         let self_config_tool = {
             let agent_id = config
@@ -961,6 +964,7 @@ impl BuiltinToolRegistry {
             ctx_search_tool,
             recall_events_tool,
             self_manage_tool,
+            hooks_manage_tool,
             self_config_tool,
             moa_manage_tool,
             list_models_tool,

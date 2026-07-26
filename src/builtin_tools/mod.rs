@@ -42,6 +42,7 @@ pub mod config_audit;
 pub mod config_guide;
 pub mod crawl4ai;
 pub mod cron_manage;
+pub mod hooks_manage;
 pub mod ctx_search;
 pub mod desktop;
 pub mod doctor;
@@ -166,6 +167,7 @@ pub use config_guide::{
     GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool,
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
+pub use hooks_manage::{HooksAction, HooksManageArgs, HooksManageOutput, HooksManageTool};
 pub use ctx_search::{CtxSearchArgs, CtxSearchOutput, CtxSearchTool};
 pub use desktop::{
     DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,

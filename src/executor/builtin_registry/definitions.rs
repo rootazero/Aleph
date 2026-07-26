@@ -227,6 +227,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "hooks_manage",
+        description: "Inspect and edit event hooks; action='list' reports why a hook cannot fire (dead matcher, observer-only event, consent still pending)",
+        // Reads the process-global extension manager, not injected config.
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "self_config",
         description: "Read/write Aleph identity files and config.toml with validation and natural-language preview; route_status surfaces live provider health (circuit breakers, cooldowns, load)",
         requires_config: true, // Requires per-agent agent_id (injected at construction)
@@ -937,6 +943,9 @@ pub fn create_tool_boxed(
         }
         "select_model" => Some(Box::new(SelectModelTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
+        "hooks_manage" => Some(Box::new(
+            crate::builtin_tools::hooks_manage::HooksManageTool::new(),
+        )),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),
         "desktop_ax_query_tree" => Some(Box::new(DesktopAxQueryTree::new())),

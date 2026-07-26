@@ -10,8 +10,20 @@
 //! the disk-watcher doesn't trigger a redundant reload — the handler
 //! triggers the reload itself once the write succeeds.
 //!
+//! Two views, deliberately separate:
+//!
+//! - `hooks.list` is the **file** view — exactly what is on disk in
+//!   `~/.aleph/hooks.json`, which is what `hooks.add` / `hooks.remove` edit.
+//! - `hooks.registry` is the **runtime** view — every hook the running server
+//!   has actually registered, across all four layers (global / project /
+//!   project-local / plugin-shipped), with the resolved `kind`, consent state,
+//!   and a per-hook reachability verdict. This is the one that answers "why
+//!   doesn't my hook fire?"; the file view structurally cannot, because three
+//!   of the four layers never appear in it.
+//!
 //! RPCs:
 //! - `hooks.list` → `{ events: { EventName: [Group] }, path, exists }`
+//! - `hooks.registry` → `{ hooks: [HookInventoryEntry], total, unreachable }`
 //! - `hooks.add` (params: `{ event, command|prompt|agent|http, matcher?, timeout_secs? }`)
 //!   → appends one entry; returns the same shape as `hooks.list`
 //! - `hooks.remove` (params: `{ event, command? | index? }`)
@@ -109,6 +121,30 @@ pub async fn handle_hooks_list(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
+/// `hooks.registry` — the live registration inventory.
+///
+/// Snapshots the extension manager's executor (the same snapshot every
+/// fire-site takes), so the answer reflects the hooks that would run right
+/// now, including hot-reloaded ones. Returns an empty list rather than an
+/// error when no manager is registered: "no hooks" and "hooks subsystem not
+/// up" both mean nothing will fire, and a caller asking for an inventory
+/// shouldn't have to special-case boot ordering.
+pub async fn handle_hooks_registry(request: JsonRpcRequest) -> JsonRpcResponse {
+    let entries = match try_extension_manager() {
+        Some(manager) => manager.hook_executor_snapshot().await.inventory(),
+        None => Vec::new(),
+    };
+    let unreachable = entries.iter().filter(|e| !e.reachable).count();
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "total": entries.len(),
+            "unreachable": unreachable,
+            "hooks": entries,
+        }),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 struct AddParams {
     event: String,
@@ -127,52 +163,116 @@ struct AddParams {
 }
 
 /// Build a single action JSON object from the (command|prompt|agent|url)
-/// triplet. Exactly one of those four must be set.
-fn build_action(p: &AddParams) -> Result<Value, String> {
-    let mut count = 0;
-    if p.command.is_some() {
-        count += 1;
-    }
-    if p.prompt.is_some() {
-        count += 1;
-    }
-    if p.agent.is_some() {
-        count += 1;
-    }
-    if p.url.is_some() {
-        count += 1;
-    }
+/// quadruple. Exactly one of those four must be set.
+///
+/// Shared with the `hooks_manage` tool so the RPC and the conversational
+/// path write byte-identical entries and validate identically — the tool
+/// must not grow a second, subtly-different notion of a valid hook action.
+pub(crate) fn build_hook_action(
+    command: Option<&str>,
+    prompt: Option<&str>,
+    agent: Option<&str>,
+    url: Option<&str>,
+    timeout_secs: Option<u64>,
+) -> Result<Value, String> {
+    let count = [command, prompt, agent, url]
+        .iter()
+        .filter(|f| f.is_some())
+        .count();
     if count == 0 {
         return Err("must set one of: command, prompt, agent, url".into());
     }
     if count > 1 {
         return Err("only one of command/prompt/agent/url may be set".into());
     }
-    if let Some(c) = &p.command {
+    if let Some(c) = command {
         let mut obj = Map::new();
         obj.insert("type".into(), json!("command"));
         obj.insert("command".into(), json!(c));
-        if let Some(t) = p.timeout_secs {
+        if let Some(t) = timeout_secs {
             obj.insert("timeout_secs".into(), json!(t));
         }
         return Ok(Value::Object(obj));
     }
-    if let Some(pr) = &p.prompt {
+    if let Some(pr) = prompt {
         return Ok(json!({ "type": "prompt", "prompt": pr }));
     }
-    if let Some(a) = &p.agent {
+    if let Some(a) = agent {
         return Ok(json!({ "type": "agent", "agent": a }));
     }
-    if let Some(u) = &p.url {
-        let mut obj = Map::new();
-        obj.insert("type".into(), json!("http"));
-        obj.insert("url".into(), json!(u));
-        if let Some(t) = p.timeout_secs {
-            obj.insert("timeout_secs".into(), json!(t));
-        }
-        return Ok(Value::Object(obj));
+    let u = url.ok_or_else(|| "must set one of: command, prompt, agent, url".to_string())?;
+    let mut obj = Map::new();
+    obj.insert("type".into(), json!("http"));
+    obj.insert("url".into(), json!(u));
+    if let Some(t) = timeout_secs {
+        obj.insert("timeout_secs".into(), json!(t));
     }
-    unreachable!()
+    Ok(Value::Object(obj))
+}
+
+/// Read the global hooks file. Public alias for the `hooks_manage` tool's
+/// `show_file` action.
+pub(crate) fn read_user_hooks_file() -> Result<(PathBuf, bool, Map<String, Value>), String> {
+    read_hooks_file()
+}
+
+/// Append one action (optionally matcher-scoped) to `event` in the global
+/// hooks file, then trigger a reload. Extracted from `handle_hooks_add` so
+/// the RPC and the tool share one write path — including the atomic write,
+/// the self-write marker, and the reload trigger.
+pub(crate) fn append_user_hook(
+    event: &str,
+    action: Value,
+    matcher: Option<&str>,
+) -> Result<(), String> {
+    let (path, _exists, mut events) = read_hooks_file()?;
+
+    let group = {
+        let mut g = Map::new();
+        if let Some(m) = matcher.filter(|m| !m.is_empty()) {
+            g.insert("matcher".into(), Value::String(m.to_string()));
+        }
+        g.insert("hooks".into(), Value::Array(vec![action]));
+        Value::Object(g)
+    };
+
+    let entry = events
+        .entry(event.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let arr = entry
+        .as_array_mut()
+        .ok_or_else(|| format!("hooks.{event} is not an array in {}", path.display()))?;
+    arr.push(group);
+
+    write_hooks_file(&path, &events)?;
+    trigger_reload();
+    Ok(())
+}
+
+/// Drop entries from `event`. `needle` filters by substring across the
+/// group's action fields; `None` removes every entry for the event. Returns
+/// how many groups were removed.
+pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    let (path, _exists, mut events) = read_hooks_file()?;
+    let arr = events
+        .get_mut(event)
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| format!("no entries for event {event}"))?;
+
+    let before = arr.len();
+    match needle {
+        Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
+        None => arr.clear(),
+    }
+    let removed = before - arr.len();
+
+    // Don't leave empty arrays cluttering the file.
+    if arr.is_empty() {
+        events.remove(event);
+    }
+    write_hooks_file(&path, &events)?;
+    trigger_reload();
+    Ok(removed)
 }
 
 pub async fn handle_hooks_add(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -202,51 +302,27 @@ pub async fn handle_hooks_add(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    let action = match build_action(&params) {
+    let action = match build_hook_action(
+        params.command.as_deref(),
+        params.prompt.as_deref(),
+        params.agent.as_deref(),
+        params.url.as_deref(),
+        params.timeout_secs,
+    ) {
         Ok(a) => a,
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     };
 
-    let (path, _exists, mut events) = match read_hooks_file() {
-        Ok(v) => v,
-        Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
-    };
-
-    let group = {
-        let mut g = Map::new();
-        if let Some(m) = &params.matcher {
-            if !m.is_empty() {
-                g.insert("matcher".into(), Value::String(m.clone()));
-            }
-        }
-        g.insert("hooks".into(), Value::Array(vec![action]));
-        Value::Object(g)
-    };
-
-    let entry = events
-        .entry(params.event.clone())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let arr = match entry.as_array_mut() {
-        Some(a) => a,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!(
-                    "hooks.{} is not an array in {}",
-                    params.event,
-                    path.display()
-                ),
-            );
-        }
-    };
-    arr.push(group);
-
-    if let Err(e) = write_hooks_file(&path, &events) {
+    if let Err(e) = append_user_hook(&params.event, action, params.matcher.as_deref()) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
     }
-    trigger_reload();
-    JsonRpcResponse::success(request.id, list_response(path, true, events))
+
+    match read_hooks_file() {
+        Ok((path, exists, events)) => {
+            JsonRpcResponse::success(request.id, list_response(path, exists, events))
+        }
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -386,40 +462,19 @@ pub async fn handle_hooks_reload(request: JsonRpcRequest) -> JsonRpcResponse {
 
 pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
     // Round-trip each canonical name through serde so the wire surface
-    // exactly matches what user_settings.rs accepts.
-    let events: Vec<String> = [
-        HookEvent::BeforeAgentStart,
-        HookEvent::AgentEnd,
-        HookEvent::BeforeToolCall,
-        HookEvent::AfterToolCall,
-        HookEvent::AfterToolCallFailure,
-        HookEvent::ToolResultPersist,
-        HookEvent::MessageReceived,
-        HookEvent::MessageSending,
-        HookEvent::MessageSent,
-        HookEvent::SessionStart,
-        HookEvent::SessionEnd,
-        HookEvent::BeforeCompaction,
-        HookEvent::AfterCompaction,
-        HookEvent::PreApiRequest,
-        HookEvent::PostApiRequest,
-        HookEvent::GatewayStart,
-        HookEvent::GatewayStop,
-        HookEvent::Notification,
-        HookEvent::PermissionRequest,
-        HookEvent::UserPromptSubmit,
-        HookEvent::SubagentStart,
-        HookEvent::SubagentStop,
-        HookEvent::Stop,
-    ]
-    .iter()
-    .map(|e| {
-        serde_json::to_string(e)
-            .unwrap_or_default()
-            .trim_matches('"')
-            .to_string()
-    })
-    .collect();
+    // exactly matches what user_settings.rs accepts. The event list itself
+    // comes from `HookEvent::ALL` — previously this handler kept its own
+    // hand-maintained copy, which is how a new variant ends up missing from
+    // one surface but not another.
+    let events: Vec<String> = HookEvent::ALL
+        .iter()
+        .map(|e| {
+            serde_json::to_string(e)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string()
+        })
+        .collect();
     JsonRpcResponse::success(request.id, json!({ "events": events }))
 }
 
@@ -468,43 +523,39 @@ mod tests {
     #[test]
     fn build_action_requires_exactly_one() {
         // Zero set
-        let p = AddParams {
-            event: "before_tool_call".into(),
-            command: None,
-            prompt: None,
-            agent: None,
-            url: None,
-            matcher: None,
-            timeout_secs: None,
-        };
-        assert!(build_action(&p).is_err());
+        assert!(build_hook_action(None, None, None, None, None).is_err());
 
         // Two set
-        let p = AddParams {
-            event: "before_tool_call".into(),
-            command: Some("a".into()),
-            prompt: Some("b".into()),
-            agent: None,
-            url: None,
-            matcher: None,
-            timeout_secs: None,
-        };
-        assert!(build_action(&p).is_err());
+        assert!(build_hook_action(Some("a"), Some("b"), None, None, None).is_err());
 
         // Exactly one set
-        let p = AddParams {
-            event: "before_tool_call".into(),
-            command: Some("echo".into()),
-            prompt: None,
-            agent: None,
-            url: None,
-            matcher: None,
-            timeout_secs: Some(15),
-        };
-        let action = build_action(&p).unwrap();
+        let action = build_hook_action(Some("echo"), None, None, None, Some(15)).unwrap();
         assert_eq!(action["type"], "command");
         assert_eq!(action["command"], "echo");
         assert_eq!(action["timeout_secs"], 15);
+    }
+
+    #[test]
+    fn build_action_covers_every_action_kind() {
+        // Shared with the `hooks_manage` tool, so each shape the tool can
+        // emit must round-trip into the wire format `user_settings.rs` parses.
+        let prompt = build_hook_action(None, Some("note"), None, None, None).unwrap();
+        assert_eq!(prompt["type"], "prompt");
+        assert_eq!(prompt["prompt"], "note");
+
+        let agent = build_hook_action(None, None, Some("reviewer"), None, None).unwrap();
+        assert_eq!(agent["type"], "agent");
+        assert_eq!(agent["agent"], "reviewer");
+
+        let http = build_hook_action(None, None, None, Some("https://x/y"), Some(9)).unwrap();
+        assert_eq!(http["type"], "http");
+        assert_eq!(http["url"], "https://x/y");
+        assert_eq!(http["timeout_secs"], 9);
+
+        // Timeout is omitted (not null) when unset, so the loader's serde
+        // default applies rather than a literal null failing to parse.
+        let no_timeout = build_hook_action(Some("echo"), None, None, None, None).unwrap();
+        assert!(no_timeout.get("timeout_secs").is_none());
     }
 
     #[test]

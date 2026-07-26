@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::sync_primitives::Arc;
 
 use super::super::{ExecutionError, RunRequest};
-use crate::extension::hooks::HookExecutor;
+use crate::extension::hooks::{budget_hook_contexts, join_messages, HookExecutor};
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
@@ -265,14 +265,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Ok((_ctx, hr)) => {
                         // Claude-Code convention: `context:` lines / JSON
                         // additionalContext AND plain stdout lines both count
-                        // as injected context on this event. Plain stdout is
-                        // joined + capped: a chatty pre-existing hook (kind
-                        // defaults flipped Observer→Interceptor here) must
-                        // not dump its whole log into the model context.
-                        session_start_blocks.extend(hr.additional_contexts);
-                        if let Some(joined) = join_capped_messages(&hr.messages) {
-                            session_start_blocks.push(joined);
-                        }
+                        // as injected context on this event. Everything this
+                        // seam injects rides in the session context for the
+                        // REST OF THE SESSION, so it goes through the shared
+                        // hook-context budget — over-budget blocks spill to
+                        // disk and are replaced by a recoverable preview.
+                        let mut blocks = hr.additional_contexts;
+                        blocks.extend(join_messages(&hr.messages));
+                        session_start_blocks
+                            .extend(budget_hook_contexts(&hook_session_id, blocks).await);
                     }
                     Err(e) => {
                         warn!(run_id = run_id, error = %e, "SessionStart hook failed")
@@ -342,11 +343,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // stdout is injected as context, not just `context:`
                     // lines / JSON additionalContext. Without the `messages`
                     // hop a CC-ecosystem hook that simply prints
-                    // "Current sprint: 42" silently did nothing here. Plain
-                    // stdout is joined + capped so a chatty hook can't dump
-                    // its whole log into every turn's context.
-                    let joined = join_capped_messages(&hr.messages);
-                    for c in hr.additional_contexts.iter().chain(joined.iter()) {
+                    // "Current sprint: 42" silently did nothing here. Both
+                    // kinds then share one budget (`budget_hook_contexts`)
+                    // rather than the old split where only plain stdout was
+                    // capped and `context:` lines were unbounded.
+                    let mut blocks = hr.additional_contexts;
+                    blocks.extend(join_messages(&hr.messages));
+                    for c in budget_hook_contexts(&hook_session_id, blocks).await {
                         transient_blocks.push(format!(
                             "<system-reminder>\n{}\n</system-reminder>",
                             c.trim()
@@ -1321,37 +1324,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
     }
-}
-
-/// Join a hook's plain-stdout `messages` into a single context block,
-/// bounded so a chatty hook can't dump its whole log into the model context.
-///
-/// Returns `None` when there is nothing to inject. The cap is generous
-/// (`HOOK_CONTEXT_INJECT_CAP`) — legitimate context injection (sprint notes,
-/// env reminders) is short; a hook exceeding it is almost certainly leaking
-/// diagnostics, so the tail is dropped with an explicit marker rather than
-/// silently.
-fn join_capped_messages(messages: &[String]) -> Option<String> {
-    /// Max chars of plain-stdout context injected per hook fire.
-    const HOOK_CONTEXT_INJECT_CAP: usize = 4096;
-    let joined = messages
-        .iter()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if joined.is_empty() {
-        return None;
-    }
-    if joined.len() <= HOOK_CONTEXT_INJECT_CAP {
-        return Some(joined);
-    }
-    // Char-boundary-safe truncation.
-    let mut end = HOOK_CONTEXT_INJECT_CAP;
-    while end > 0 && !joined.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(format!("{}\n[hook context truncated]", &joined[..end]))
 }
 
 /// Does the model serving this turn accept inline image blocks?

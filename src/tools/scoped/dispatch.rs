@@ -4,7 +4,7 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{HookContext, PermissionDecision};
+use crate::extension::hooks::{budget_hook_contexts, HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::sandbox::exec_approval::{denial_ledger, session_memory, ApprovalAction};
@@ -944,9 +944,11 @@ impl ScopedToolService {
             _ => {
                 if !pre_contexts.is_empty() {
                     if let Ok(output) = result {
+                        let bounded =
+                            budget_hook_contexts(&self.hook_session_id, pre_contexts).await;
                         output.value = wrap_value_with_hook_contexts(
                             std::mem::take(&mut output.value),
-                            &pre_contexts,
+                            &bounded,
                         );
                     }
                 }
@@ -976,10 +978,13 @@ impl ScopedToolService {
                     all_contexts.extend(hr.additional_contexts);
                 }
                 if !all_contexts.is_empty() {
-                    output.value = wrap_value_with_hook_contexts(
-                        std::mem::take(&mut output.value),
-                        &all_contexts,
-                    );
+                    // Bound before wrapping: `context:` lines ride inside the
+                    // tool result the model reads, and an unbounded one (a
+                    // hook echoing a whole build log) crowds out the actual
+                    // result. Over-budget blocks spill to disk with a path.
+                    let bounded = budget_hook_contexts(&self.hook_session_id, all_contexts).await;
+                    output.value =
+                        wrap_value_with_hook_contexts(std::mem::take(&mut output.value), &bounded);
                 }
             }
             Err(err) => {
