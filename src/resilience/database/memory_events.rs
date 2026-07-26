@@ -221,12 +221,18 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
+        let limit_i64 = i64::try_from(limit).map_err(|_| {
+            AlephError::other(format!(
+                "Limit {limit} exceeds maximum supported SQLite value ({})",
+                i64::MAX
+            ))
+        })?;
         let rows = stmt
             .query_map(
                 params![
                     from_timestamp,
                     to_timestamp,
-                    i64::try_from(limit).unwrap_or(i64::MAX)
+                    limit_i64
                 ],
                 MemoryEventRow::from_row,
             )

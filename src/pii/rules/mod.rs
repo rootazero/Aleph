@@ -1,8 +1,8 @@
 //! PII detection rules
 //!
 //! Each rule detects a specific type of PII with precision-tuned patterns.
-//! Rules are ordered by severity (Critical first) to ensure higher-severity
-//! matches win in overlap deduplication.
+//! Rules are sorted by severity descending (via [`build_rules`]) so that
+//! higher-severity matches win in overlap deduplication.
 
 mod api_key;
 mod bank_card;

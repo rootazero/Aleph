@@ -53,7 +53,11 @@ impl BankCardRule {
         if start > 0 && text.as_bytes()[start - 1] == b'.' {
             return true;
         }
-        if end < text.len() && text.as_bytes()[end] == b'.' {
+        if end < text.len()
+            && text.as_bytes()[end] == b'.'
+            && end + 1 < text.len()
+            && text.as_bytes()[end + 1].is_ascii_digit()
+        {
             return true;
         }
         false

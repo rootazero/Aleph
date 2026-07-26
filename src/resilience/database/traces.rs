@@ -548,15 +548,28 @@ impl StateDatabase {
         if row.0 == 0 {
             return Ok(None);
         }
-        let to_u64 = |v: i64| u64::try_from(v).unwrap_or(0);
+        let to_u64 = |v: i64, col: &str| -> Result<u64, rusqlite::Error> {
+            if v < 0 {
+                Err(rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Integer,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{col} must be non-negative, got {v}"),
+                    )),
+                ))
+            } else {
+                Ok(v as u64)
+            }
+        };
         Ok(Some(AgentUsageTotal {
             agent_id: "moa-advisors".to_string(),
-            call_count: to_u64(row.0),
-            input_tokens: to_u64(row.1),
-            output_tokens: to_u64(row.2),
-            cache_read_tokens: to_u64(row.3),
-            cache_creation_tokens: to_u64(row.4),
-            reasoning_tokens: to_u64(row.5),
+            call_count: to_u64(row.0, "call_count")?,
+            input_tokens: to_u64(row.1, "input_tokens")?,
+            output_tokens: to_u64(row.2, "output_tokens")?,
+            cache_read_tokens: to_u64(row.3, "cache_read_tokens")?,
+            cache_creation_tokens: to_u64(row.4, "cache_creation_tokens")?,
+            reasoning_tokens: to_u64(row.5, "reasoning_tokens")?,
         }))
     }
 }

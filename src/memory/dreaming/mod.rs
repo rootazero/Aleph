@@ -978,7 +978,10 @@ impl DreamDaemon {
             .database
             .list_notes(DEFAULT_AGENT_ID)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to list notes for base agent, proceeding with empty index");
+                Vec::new()
+            });
 
         // --- Phase 1: Collect signals ---
         // The prior cycle's report carries the LLM-produced rot counts
@@ -1088,7 +1091,10 @@ impl DreamDaemon {
                         )
                         .retain_project_stages();
                         for ns in &scoped {
-                            let ns_index = self.database.list_notes(ns).await.unwrap_or_default();
+                            let ns_index = self.database.list_notes(ns).await.unwrap_or_else(|e| {
+                                warn!(agent = %ns, error = %e, "failed to list notes for project namespace, proceeding with empty index");
+                                Vec::new()
+                            });
                             let ns_notes: Vec<NoteEntry> =
                                 ns_index.iter().map(NoteEntry::from_index_entry).collect();
                             let mut ns_indexer =
@@ -1179,7 +1185,10 @@ impl DreamDaemon {
             .database
             .list_notes(DEFAULT_AGENT_ID)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to list notes for post-cycle health check, proceeding with empty index");
+                Vec::new()
+            });
 
         // --- Phase 5: Validation (L2 consistency, deterministic) ---
         // L2 (duplicate content-hash) runs cheaply from the index — no file

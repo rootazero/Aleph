@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteIndexEntry;
 use crate::memory::notes::ProvenanceOrigin;
+use tracing::warn;
 
 /// Build a `NoteIndexEntry` from a row that includes a `link_count` column.
 pub(crate) fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEntry> {
@@ -52,7 +53,10 @@ pub(crate) fn build_resolve_context(
         })?
         .filter_map(|r| r.ok())
         .map(|(path, filename, aliases_json)| {
-            let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+            let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_else(|e| {
+                warn!(%path, %filename, error = %e, "corrupt aliases JSON in notes_index, defaulting to empty");
+                Vec::new()
+            });
             (path, filename, aliases)
         })
         .collect();

@@ -114,6 +114,8 @@ impl PiiEngine {
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
             guard.rules = new_rules;
             guard.config = config;
+        } else {
+            warn!("PiiEngine::reload called but engine not initialized, ignoring");
         }
     }
 
