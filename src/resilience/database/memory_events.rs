@@ -290,7 +290,7 @@ impl StateDatabase {
                 .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
                 .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
         };
-        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+        Ok(count.try_into().unwrap_or(0))
     }
 }
 
