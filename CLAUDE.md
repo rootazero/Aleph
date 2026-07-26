@@ -67,7 +67,7 @@
 
 - **薄 Harness 哲学 (Thin Harness)**: Aleph 采纳 Anthropic 流派，运行时极简、信任模型。Harness 是脚手架不是认知层。**模型越强，Harness 越薄** — 优秀的 Harness 必须通过"面向未来测试 (Future-Proof Test)"：换更强的模型，性能自然提升，无需修改 Harness 代码
 - **笨循环 (Dumb Loop)**: `src/harness/` 仅承载 Think→Act 轮次调度，**不参与任何推理**。所有智能决策（意图理解、工具选择、安全评估、完成度判断）由 LLM 一次推理调用自然完成
-- **核心边界**: `src/harness/` 锁 **12 文件**；行数由 `src/harness/tests/budget.rs` 的棘轮守（实测非手算、只减不增、增必答下方 3 问），当前 **5008 行**（2026-07-20 −62＝移除 `DiminishingReturnsDetector` 硬停 [R10 5-不 #3：loop 不做完成度判断]，`think.rs` 弃 `after_turn` 消费点、detector/`StopDiminishing`/`TurnMetrics` 删自 `src/context/budget/`，见 budget.rs::CEILING；2026-07-18 −2＝流式旁路修复：`stream_llm_call` 弃 `as_http_provider()` 降级分支、改多态 `execute_streaming_dyn`，副作用下沉 `src/providers/` 装饰器，见 budget.rs::CEILING；Batch 6，2026-07-17：两侧同日从 5035 出发、合并实测 5072——上调 +80＝ambient 审批关联 + 完成序 live 事件；删除 −42＝test-only `run_turn` 簇外迁 `tests/harness_ext.rs` + 恒零 `consecutive_errors` trace 字段删除；3 问作答在 budget.rs）。旧的 ~4900 系一次手算口径事故（生产 `impl` 中间的缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，**已退休**——红线是棘轮机制本身，不是那个具体数字：
+- **核心边界**: `src/harness/` 锁 **12 文件**；行数由 `src/harness/tests/budget.rs` 的棘轮守（实测非手算、只减不增、增必答下方 3 问），当前 **5055 行**（**2026-07-26 欠账已清**：`5008 → 5082（+74）` 的 3 问作答补在 `tests/budget.rs::CEILING`；+79 实为前一笔 `c648b5ea4`，前三项全过、第四项"每批 `canonical`/`claims` 穿线"的 `Option::None` 重算臂**零消费者**（唯一传 `None` 的快路径正好撞上 `can_parallel_dispatch` 先行 `return false` 的同一条件），按"零消费者立即撤回"已撤 → **5082 → 5055（−27）**，行为按构造不变。**2026-07-25 文档订正**：本文与 `src/harness/CLAUDE.md` 此前写 5008，而代码里的 `CEILING` 早在 `396c6d200` 就抬到 5082——正是 budget.rs 开头那段"手写状态行会撒谎"要防的事，在文档层复发了一次。**代码是权威**，任何文档数字都只是 `CEILING` 的副本；2026-07-20 −62＝移除 `DiminishingReturnsDetector` 硬停 [R10 5-不 #3：loop 不做完成度判断]，`think.rs` 弃 `after_turn` 消费点、detector/`StopDiminishing`/`TurnMetrics` 删自 `src/context/budget/`，见 budget.rs::CEILING；2026-07-18 −2＝流式旁路修复：`stream_llm_call` 弃 `as_http_provider()` 降级分支、改多态 `execute_streaming_dyn`，副作用下沉 `src/providers/` 装饰器，见 budget.rs::CEILING；Batch 6，2026-07-17：两侧同日从 5035 出发、合并实测 5072——上调 +80＝ambient 审批关联 + 完成序 live 事件；删除 −42＝test-only `run_turn` 簇外迁 `tests/harness_ext.rs` + 恒零 `consecutive_errors` trace 字段删除；3 问作答在 budget.rs）。旧的 ~4900 系一次手算口径事故（生产 `impl` 中间的缩进 `#[cfg(test)]` 截断 `agent.rs`、静默漏计 846 行）的残值，**已退休**——红线是棘轮机制本身，不是那个具体数字：
   - 顶层 (8)：`mod.rs` / `agent.rs` / `deps.rs` / `trait_def.rs` / `callback.rs` / `chain_context.rs` / `trace.rs` / `trace_sink.rs`
   - `agent/` 子目录 (4)：`think.rs` / `act.rs` / `guardrails.rs` / `prompt.rs`（Task 8/9/10 把 `agent.rs` 按 Think/Act/Guardrails/Prompt 拆分为四个子职责）
 - **行数增长红线**：任何新增 LOC 必须先回答"加代码前必答 3 问"（脚手架 vs 认知 / 模型升级后是否还需要 / 是否有真实消费者）。新增文件需在 PR 描述里说明为何无法装进现有 12 个文件之一
@@ -189,7 +189,7 @@
 
 **A3 · 状态可重建，趋向纯 Reducer (Reconstructible State, Toward a Pure Reducer, F5+F12)**
 > **方向性承诺**：执行状态应尽量可从**单一持久源**重建；每轮 Think 趋向"对持久 context 的纯 reduce"（`prompt.rs` 已逐轮重建裸消息）。新增有状态机件时，优先让其状态可观测、可重建。
-> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / `budget.rs` 行数棘轮（当前 5008），或把业务状态搬进笨循环。具体统一方案先走"加代码前必答 3 问"，列为 backlog 评估（见审计文档 B §P2-1）。
+> **硬约束**：**不得**为此让 `src/harness/` 越过 R10 的 12 文件 / `budget.rs` 行数棘轮（当前 5055，以 `budget.rs::CEILING` 为准），或把业务状态搬进笨循环。具体统一方案先走"加代码前必答 3 问"，列为 backlog 评估（见审计文档 B §P2-1）。
 > 关联：R10、P4（依赖倒置）。锚点：`src/harness/trait_def.rs::TurnState`、`src/looping/`、`src/goal/`、`src/agents/swarm/tasks/store/`。
 > ↳ 采纳·非红线（方向性原则，落地需独立评估）
 
@@ -248,6 +248,8 @@
 > **会话模式 (Session Mode)**: 与执行档位正交的第三根会话旋钮——`chat` / `work`（默认）/ `code`，Panel composer 模式 pill 选（随第一条消息生效）或 `session_set_mode` 工具对话式切。模式只做**工具呈现面**的静态分区（schema 常驻核 × 整族延迟，`tool_search` 永远可发现+晋升——R10 渐进披露例外的形状），不授予不拒绝任何权限；审批仍归 exec tier。单一源 `src/config/types/policies/session_mode.rs`（族表 `_` 词边界匹配；MCP 限定名 `{server}__{tool}` 整体豁免内建表；子代理继承父分区并获短版 mode line）。详见 [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) 与 FEATURE_LOCATOR §5.16。
 
 > **繁忙输入与消息车道 (Busy Input & Wait Lane)**: 会话已有在跑的 run 时，新消息按通道声明的 `BusyInputMode` 分流——`Steer`（默认，注入 live 日志让循环下一轮接住）/ `Interrupt`（真取消同会话 run 及其委派子运行）/ `Queue`（不打扰，排队）。**投递不了的一律进 `src/gateway/busy_queue/` 的 per-session FIFO 车道**，channel 与 Panel/CLI 三个 surface 共用同一条车道、同一套到达序与溢出策略（ticket **必须在到达路径同步取**，进 spawn 就把到达序换成调度序）。等待端**不轮询**：靠 `SessionRunRegistry::release` 的放槽信号唤醒（codex `InputQueue` 对位），`wake_fallback_secs` 只是漏发兜底。停止有两个粒度——`/stop` 清整条车道，`chat.abort` 按 `run_id` 停单条排队消息（排队中的 run 不在 `active_runs`，引擎的 cancel 够不到它）。旋钮在 `[execution] busy_queue_*` / `max_pending_steering`。详见 FEATURE_LOCATOR §4.8。
+
+> **团队群聊直播面 (Team Group Chat Live Surface)**: 群聊的实时状态全部走 `team.<id>.*` 五类 topic——`message` / `system` / `activity` / `fanout` / `task.<verb>`，**信封只有一种**（唯一发布口 `gateway::event_emitter::team_fanout::publish_team_event`，per-run 的 `TeamFanoutEmitter` 也走它），Panel **只有一个解析点**（`views::chat::team_events::parse_team_topic`，后缀匹配、team id 可含 `.`、`team.changed` 不匹配）。Gateway 订阅是 `team.*` 通配 ⇒ **投影前必须先按当前 `chat.team_id` 作用域**，否则后台团队的气泡会挤进任意会话（含单聊）。`fanout started/settled` 是团队模式下 `active_run_id` 的**唯一写者**——它给群聊撑起 Stop 键（路由到 `teams.chat.cancel`，**不是** `chat.abort`：fan-out 树不在引擎 `active_runs` 里），并顺带接上 composer 已有的队列 auto-drain 忙→闲边沿。历史回放侧 `teams.chat.history` 只回放对话行（`MessageType::Message` 或无 recipients），定向收件箱流量不进群聊，`kind` 由服务端派生。详见 [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) §Group Chat 与 FEATURE_LOCATOR §4.5。
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI 经 `rust_embed` 在 `aleph-server` **编译时**静态嵌入二进制，运行中的 daemon 不读磁盘 dist/*。改完 panel 看不到效果＝漏了重编 binary。完整刷新链（`just wasm` → 重编 server → 替换运行中 binary，dev / macOS .app / Windows 三种 daemon 替换法）详见 [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)。
 
@@ -332,6 +334,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | PLUGIN_SYSTEM.md | [docs/reference/PLUGIN_SYSTEM.md](docs/reference/PLUGIN_SYSTEM.md) |
 | WORKFLOW_INTEROP.md | [docs/reference/WORKFLOW_INTEROP.md](docs/reference/WORKFLOW_INTEROP.md) |
 | SECURITY.md | [docs/reference/SECURITY.md](docs/reference/SECURITY.md) — 信任模型 + 工具权限三层（`tool_permissions` × exec tier × sandbox 硬底线，唯一强制点 `src/tools/scoped/`）+ 动作化审批门 + **codex / hermes / pi 对照表（Gap analysis，改权限模型前先看，别重做对比）** |
+| **AGENT_IDENTITY.md** | [docs/reference/AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) — 每 agent 独立 Ed25519 密钥 + 签名哈希链操作账本（`src/identity/`，生产者＝`tools/scoped/` 唯一咽喉，读/验＝`agent_identity` 工具 + 离线 `aleph-server identity`）；**威胁模型写明买到什么买不到什么**（不防拥有 `~/.aleph` 的对手、不防进程内冒充、对从未写入的记录无话可说）+ **buzz 逐维度对照表（改这层前先看那张表）** |
 | DESIGN_PATTERNS.md | [docs/reference/DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
 | CODE_ORGANIZATION.md | [docs/reference/CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
 | DOMAIN_MODELING.md | [docs/reference/DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |

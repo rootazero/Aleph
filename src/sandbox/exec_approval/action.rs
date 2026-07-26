@@ -60,12 +60,11 @@ impl ApprovalAction {
     /// A tool call: `name` plus the call's raw JSON `input`.
     #[must_use]
     pub fn for_tool_call(name: &str, input: &Value, reason: impl Into<String>) -> Self {
-        let raw = preview(name, input);
         let analysis = shell_command_of(name, input)
             .map(|cmd| crate::exec::parser::analyze_shell_command(&cmd, None, None));
         Self {
             tool_name: name.to_string(),
-            summary: format!("{name}: {}", redact_and_cap(&raw)),
+            summary: summarize_call(name, input),
             cwd: None,
             analysis,
             reason: reason.into(),
@@ -123,6 +122,18 @@ impl ApprovalAction {
             chains: None,
         })
     }
+}
+
+/// The redacted, capped one-line rendering of a tool call — what
+/// [`ApprovalAction::for_tool_call`] puts on a card, without the
+/// [`CommandAnalysis`] an approval needs and a ledger record does not.
+///
+/// Split out so the signed operation ledger ([`crate::identity`]) can record
+/// every mutating call without paying a shell parse on calls no human will ever
+/// be asked about.
+#[must_use]
+pub fn summarize_call(name: &str, input: &Value) -> String {
+    format!("{name}: {}", redact_and_cap(&preview(name, input)))
 }
 
 /// Stable fingerprint of `(tool, canonical arguments)` — the key for BOTH the
@@ -236,7 +247,12 @@ fn preview(name: &str, input: &Value) -> String {
 }
 
 /// Redact credentials, then cap on a CHAR boundary (`&s[..n]` panics mid-UTF-8).
-fn redact_and_cap(s: &str) -> String {
+/// `pub` because the signed operation ledger ([`crate::identity`]) is the
+/// second operator-visible surface that renders tool arguments and tool-error
+/// text, and it must mask and cap them by the same rule as an approval card. A
+/// second copy of this logic is exactly how the `Authorization: Bearer` leak
+/// got in the first time — one masker, one cap, one place.
+pub fn redact_and_cap(s: &str) -> String {
     let masked = SecretMasker::new().mask(s);
     // Collapse newlines: a multi-line script must still render as one card line.
     let flat = masked.split_whitespace().collect::<Vec<_>>().join(" ");

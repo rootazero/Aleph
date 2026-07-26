@@ -14,12 +14,15 @@ use super::substitute::substitute;
 use super::types::{TeamTemplate, TeamTemplateError, TemplateMember};
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask};
 use crate::config::agent_manager::AgentManager;
-use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
 use crate::error::AlephError;
-use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 use crate::teams::dispatcher::schedule::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
+use crate::teams::member_provision::{
+    register_member_agent, validate_toolset, MemberContract, MemberToolset, ProvisionDeps,
+    ProvisionRequest,
+};
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 
 /// Convenient identifier for "the calling agent should become the leader".
@@ -53,6 +56,13 @@ pub struct MaterializedTeam {
     /// surface a "what got scheduled" report.
     pub task_ids: Vec<(String, String)>,
     pub message: String,
+    /// Member ids whose template `tools` / `tools_denied` declaration had no
+    /// effect — an agent with that id already existed and was reused (or the
+    /// leader is `self`), and an existing agent keeps its own surface.
+    ///
+    /// Silence here would be a lie: the caller asked for a team of narrowed
+    /// members and got something else. Empty in the common case.
+    pub tools_ignored_for: Vec<String>,
 }
 
 /// Materializer execution context. Captures the shared dependencies so callers
@@ -104,6 +114,8 @@ pub async fn materialize_template(
         ("leader", leader_label.as_str()),
     ]);
 
+    let mut tools_ignored_for: Vec<String> = Vec::new();
+
     // --- 1. Resolve / create the leader ---------------------------------
     let leader_id = if tpl.leader.id == LEADER_SELF_ID {
         if req.current_agent_id.is_empty() {
@@ -116,6 +128,16 @@ pub async fn materialize_template(
             let rendered = substitute(addendum, &vars);
             inject_role_prompt(deps, &req.current_agent_id, "leader", &rendered).await;
         }
+        if !MemberToolset::new(tpl.leader.tools.clone(), tpl.leader.tools_denied.clone())
+            .is_unrestricted()
+        {
+            info!(
+                leader = %req.current_agent_id,
+                "team_template: leader is `self`; the template's `tools` declaration \
+                 does not apply (the calling agent keeps its own surface)"
+            );
+            tools_ignored_for.push(req.current_agent_id.clone());
+        }
         req.current_agent_id.clone()
     } else {
         // Treat a non-self leader spec like a member: lookup-or-create.
@@ -125,15 +147,38 @@ pub async fn materialize_template(
             role: Some(tpl.leader.role.clone().unwrap_or_else(|| "leader".into())),
             model: tpl.leader.model.clone(),
             prompt_addendum: tpl.leader.prompt_addendum.clone(),
+            tools: tpl.leader.tools.clone(),
+            tools_denied: tpl.leader.tools_denied.clone(),
         };
-        provision_member(deps, &pseudo_member, &req.current_agent_id, &vars).await?
+        let provisioned = provision_member(
+            deps,
+            &pseudo_member,
+            &req.current_agent_id,
+            &vars,
+            MemberContract::Leader,
+        )
+        .await?;
+        if provisioned.tools_ignored {
+            tools_ignored_for.push(provisioned.agent_id.clone());
+        }
+        provisioned.agent_id
     };
 
     // --- 2. Resolve / create each worker member -------------------------
     let mut enrolled_members: Vec<String> = Vec::with_capacity(tpl.members.len());
     for m in &tpl.members {
-        let agent_id = provision_member(deps, m, &req.current_agent_id, &vars).await?;
-        enrolled_members.push(agent_id);
+        let provisioned = provision_member(
+            deps,
+            m,
+            &req.current_agent_id,
+            &vars,
+            MemberContract::Worker,
+        )
+        .await?;
+        if provisioned.tools_ignored {
+            tools_ignored_for.push(provisioned.agent_id.clone());
+        }
+        enrolled_members.push(provisioned.agent_id);
     }
 
     // --- 3. Create team record -------------------------------------------
@@ -256,6 +301,7 @@ pub async fn materialize_template(
         member_ids: enrolled_members,
         task_ids,
         message,
+        tools_ignored_for,
     })
 }
 
@@ -330,14 +376,28 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
     Ok(out)
 }
 
+/// Outcome of resolving one template member to a live agent id.
+struct ProvisionedMember {
+    agent_id: String,
+    /// The spec declared a tool surface that had no effect, because an
+    /// existing agent was reused.
+    tools_ignored: bool,
+}
+
 /// Look up an agent by id; if missing, create it inline with the given
 /// prompt addendum.
+///
+/// `contract` selects which launch prompt this member will run under, and
+/// therefore which tools a declared `tools` list must still admit. It is
+/// checked before any filesystem work so a stranding declaration fails without
+/// leaving a half-created agent behind.
 async fn provision_member(
     deps: &MaterializeDeps,
     member: &TemplateMember,
     caller_agent_id: &str,
     vars: &HashMap<&str, &str>,
-) -> Result<String, TeamTemplateError> {
+    contract: MemberContract,
+) -> Result<ProvisionedMember, TeamTemplateError> {
     // Reuse existing agent when present.
     if deps.registry.get(&member.id).await.is_some() {
         if let Some(addendum) = &member.prompt_addendum {
@@ -345,13 +405,37 @@ async fn provision_member(
             let role = member.role.as_deref().unwrap_or("worker");
             inject_role_prompt(deps, &member.id, role, &rendered).await;
         }
-        return Ok(member.id.clone());
+        let declared = !MemberToolset::new(member.tools.clone(), member.tools_denied.clone())
+            .is_unrestricted();
+        if declared {
+            info!(
+                member = %member.id,
+                "team_template: reusing an existing agent; the template's `tools` \
+                 declaration does not apply (an existing agent keeps its own surface)"
+            );
+        }
+        return Ok(ProvisionedMember {
+            agent_id: member.id.clone(),
+            tools_ignored: declared,
+        });
     }
 
     // Create inline. Mirrors team_create::create_inline_agent's I/O steps but
     // takes addendum text directly rather than a role name.
     crate::builtin_tools::agent_manage::create::validate_agent_id(&member.id).map_err(|e| {
         TeamTemplateError::Materialize(format!("invalid member id `{}`: {e}", member.id))
+    })?;
+
+    // Reject a stranding tool declaration before any directory is created.
+    let toolset = MemberToolset::new(member.tools.clone(), member.tools_denied.clone());
+    validate_toolset(&toolset, contract).map_err(|missing| {
+        TeamTemplateError::Materialize(format!(
+            "member `{}` declares `tools` that hide {}, which its launch prompt \
+             instructs it to call — add them (a `task_*` / `team_*` glob works) \
+             or drop `tools` to keep the full surface",
+            member.id,
+            missing.join(", ")
+        ))
     })?;
 
     let agents_root = aleph_home().join("agents");
@@ -421,43 +505,29 @@ async fn provision_member(
 
     let system_prompt = if body.is_empty() { None } else { Some(body) };
 
-    let config = AgentInstanceConfig {
+    register_member_agent(
+        ProvisionRequest {
+            agent_id: member.id.clone(),
+            display_name: member.name.clone(),
+            workspace: workspace_path,
+            agent_dir: agent_state_dir,
+            model,
+            system_prompt,
+            toolset,
+        },
+        ProvisionDeps {
+            registry: &deps.registry,
+            session_store: &deps.session_store,
+            agent_manager: deps.agent_manager.as_ref(),
+        },
+    )
+    .await
+    .map_err(TeamTemplateError::Materialize)?;
+
+    Ok(ProvisionedMember {
         agent_id: member.id.clone(),
-        workspace: workspace_path,
-        model: model.clone(),
-        system_prompt,
-        agent_dir: agent_state_dir,
-        ..Default::default()
-    };
-
-    let instance = AgentInstance::new(config, Arc::clone(&deps.session_store)).map_err(|e| {
-        TeamTemplateError::Materialize(format!(
-            "AgentInstance::new for `{}` failed: {e}",
-            member.id
-        ))
-    })?;
-
-    deps.registry.register(instance).await;
-
-    // Best-effort persistence to the TOML registry.
-    if let Some(manager) = &deps.agent_manager {
-        let def = AgentDefinition {
-            id: member.id.clone(),
-            name: member.name.clone(),
-            model: Some(AgentModelRef::Legacy(model)),
-            ..Default::default()
-        };
-        if let Err(e) = manager.create(def) {
-            warn!(
-                agent_id = %member.id,
-                error = %e,
-                "team_template: failed to persist inline agent to TOML (runtime registration succeeded)"
-            );
-        }
-    }
-
-    info!(agent_id = %member.id, "team_template: created inline agent");
-    Ok(member.id.clone())
+        tools_ignored: false,
+    })
 }
 
 /// Append a team-strategy section to an existing agent's SOUL.md,
@@ -558,10 +628,13 @@ impl From<AlephError> for TeamTemplateError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::teams::templates::types::{
         TeamTemplate, TemplateLeader, TemplateMember, TemplatePriority, TemplateTask,
     };
+    use crate::teams::templates::TemplateRegistry;
 
     fn dag_template() -> TeamTemplate {
         TeamTemplate {
@@ -575,6 +648,8 @@ mod tests {
                 role: None,
                 model: None,
                 prompt_addendum: None,
+                tools: None,
+                tools_denied: None,
             },
             members: vec![TemplateMember {
                 id: "w".into(),
@@ -582,6 +657,8 @@ mod tests {
                 role: Some("worker".into()),
                 model: None,
                 prompt_addendum: None,
+                tools: None,
+                tools_denied: None,
             }],
             tasks: vec![
                 TemplateTask {
@@ -624,5 +701,197 @@ mod tests {
         assert!(a_idx < b_idx);
         assert!(a_idx < c_idx);
         assert_eq!(order.len(), 3);
+    }
+
+    /// Built-ins only: pointing discovery at a directory that does not exist
+    /// skips the user-override pass.
+    fn builtins() -> TemplateRegistry {
+        TemplateRegistry::discover(Path::new("/nonexistent/aleph-builtin-only"))
+    }
+
+    /// Every built-in role must satisfy the launch-prompt contract it runs
+    /// under. A future template edit that strands a member fails here instead
+    /// of at a user's `team_from_template`.
+    #[test]
+    fn builtin_templates_satisfy_their_member_contracts() {
+        let registry = builtins();
+        let mut checked = 0;
+        for name in [
+            "software-dev",
+            "code-review",
+            "research-paper",
+            "strategy-room",
+        ] {
+            let tpl = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("built-in `{name}` missing from the registry"));
+            let leader =
+                MemberToolset::new(tpl.leader.tools.clone(), tpl.leader.tools_denied.clone());
+            if let Err(missing) = validate_toolset(&leader, MemberContract::Leader) {
+                panic!("`{name}` leader hides contracted verbs: {missing:?}");
+            }
+            checked += 1;
+            for m in &tpl.members {
+                let ts = MemberToolset::new(m.tools.clone(), m.tools_denied.clone());
+                if let Err(missing) = validate_toolset(&ts, MemberContract::Worker) {
+                    panic!(
+                        "`{name}` member `{}` hides contracted verbs: {missing:?}",
+                        m.id
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 18, "expected 4 leaders + 14 members to be checked");
+    }
+
+    /// Which built-ins narrow and which stay full is a decision, not an
+    /// accident: the two reasoning templates declare a surface, the two
+    /// build/run templates deliberately do not (their members need a broad dev
+    /// surface, and their member ids are the generic ones — `backend`, `qa`,
+    /// `writer`, `analyst` — that a declaration would pin narrow for every
+    /// later use of that global agent id).
+    #[test]
+    fn only_the_reasoning_templates_declare_a_surface() {
+        let registry = builtins();
+        for name in ["strategy-room", "code-review"] {
+            let tpl = registry.get(name).expect("built-in present");
+            assert!(
+                tpl.leader.tools.is_some(),
+                "`{name}` leader must declare a surface"
+            );
+            for m in &tpl.members {
+                assert!(
+                    m.tools.is_some(),
+                    "`{name}` member `{}` must declare a surface",
+                    m.id
+                );
+            }
+        }
+        for name in ["software-dev", "research-paper"] {
+            let tpl = registry.get(name).expect("built-in present");
+            assert!(
+                tpl.leader.tools.is_none(),
+                "`{name}` leader must keep the full surface"
+            );
+            for m in &tpl.members {
+                assert!(
+                    m.tools.is_none(),
+                    "`{name}` member `{}` must keep the full surface",
+                    m.id
+                );
+            }
+        }
+    }
+
+    /// The point of narrowing both declared templates: neither's roles may
+    /// have an edit tool within reach, and strategy-room additionally bans
+    /// `bash`/`code_exec` per spec §3.2 ("Everything else — bash, code
+    /// execution, all file writes ... is out"). `bash` stays for code-review
+    /// — reading a diff needs `git diff` — so that half is attention
+    /// scoping, not enforcement.
+    #[test]
+    fn declared_templates_carry_no_banned_tools() {
+        let registry = builtins();
+        let edit_tools = ["file_write", "file_edit", "file_ops", "apply_patch"];
+        // (template, tools banned on top of the edit set, declared roles).
+        let per_template: &[(&str, &[&str], usize)] = &[
+            ("code-review", &[], 5),
+            ("strategy-room", &["bash", "code_exec"], 4),
+        ];
+        for (name, extra, roles) in per_template {
+            let tpl = registry.get(name).expect("built-in present");
+            let banned: Vec<&str> = edit_tools
+                .iter()
+                .copied()
+                .chain(extra.iter().copied())
+                .collect();
+            let surfaces = std::iter::once((
+                tpl.leader.id.as_str(),
+                tpl.leader.tools.as_ref().expect("declared"),
+            ))
+            .chain(
+                tpl.members
+                    .iter()
+                    .map(|m| (m.id.as_str(), m.tools.as_ref().expect("declared"))),
+            );
+            let mut checked = 0;
+            for (id, tools) in surfaces {
+                checked += 1;
+                for banned_tool in &banned {
+                    assert!(
+                        !tools.iter().any(|t| t == banned_tool),
+                        "`{banned_tool}` must stay out of `{name}` role `{id}`'s surface"
+                    );
+                }
+            }
+            // Without this the guard goes quiet instead of failing when a
+            // template loses roles: `members` is `#[serde(default)]`, so an
+            // emptied list still loads and leaves only the leader to check.
+            assert_eq!(
+                checked, *roles,
+                "`{name}` should declare {roles} roles — fewer means this guard stopped checking them"
+            );
+        }
+    }
+
+    /// `team_delegate` is leader-only (`LEADER_ESSENTIAL_TOOLS`): a worker
+    /// gaining it via copy-paste would let it delegate on the leader's
+    /// behalf. Both declared templates must keep it exclusively on the
+    /// leader's declaration.
+    #[test]
+    fn only_the_leader_declares_team_delegate() {
+        let registry = builtins();
+        for (name, members) in [("strategy-room", 3), ("code-review", 4)] {
+            let tpl = registry.get(name).expect("built-in present");
+            // Same anti-vacuity pin as above: no members, nothing checked.
+            assert_eq!(
+                tpl.members.len(),
+                members,
+                "`{name}` should have {members} members — fewer means this guard stopped checking them"
+            );
+            assert!(
+                tpl.leader
+                    .tools
+                    .as_ref()
+                    .expect("declared")
+                    .iter()
+                    .any(|t| t == "team_delegate"),
+                "`{name}` leader must declare `team_delegate`"
+            );
+            for m in &tpl.members {
+                assert!(
+                    !m.tools
+                        .as_ref()
+                        .expect("declared")
+                        .iter()
+                        .any(|t| t == "team_delegate"),
+                    "`{name}` member `{}` must not declare `team_delegate`",
+                    m.id
+                );
+            }
+        }
+    }
+
+    /// `team_*` must never be globbed: the family contains `team_disband`,
+    /// `team_create`, `team_from_template` and `team_member_remove`, so a glob
+    /// would let a bull-case analyst disband its own team.
+    #[test]
+    fn no_builtin_globs_the_team_family() {
+        let registry = builtins();
+        for name in ["strategy-room", "code-review"] {
+            let tpl = registry.get(name).expect("built-in present");
+            let all = std::iter::once(tpl.leader.tools.as_ref().expect("declared")).chain(
+                tpl.members
+                    .iter()
+                    .map(|m| m.tools.as_ref().expect("declared")),
+            );
+            for tools in all {
+                assert!(
+                    !tools.iter().any(|t| t == "team_*"),
+                    "`{name}` must enumerate team verbs, not glob the family"
+                );
+            }
+        }
     }
 }

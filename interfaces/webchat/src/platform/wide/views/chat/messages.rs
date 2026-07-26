@@ -1,11 +1,11 @@
-//! Message rendering pieces — hero, list, send-error banner, single bubble.
+//! Message rendering pieces — hero, list, single bubble.
 //!
 //! Extracted from `chat/view.rs` so the top-level [`super::view::ChatView`]
 //! stays a thin mount + drop-zone shell. All components here are private to
 //! the chat module (`pub(super)`).
 
 use super::reasoning::ReasoningPanel;
-use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState, QueuedPrompt};
+use super::state::{ChatMessage, ChatPhase, ChatState, QueuedPrompt};
 use super::timeline::{self, TimelineRow};
 use super::PlanArchiveCell;
 use crate::components::markdown::TypewriterRenderer;
@@ -227,9 +227,6 @@ pub(crate) fn MessageList() -> impl IntoView {
                                  pb-[calc(var(--composer-clearance,150px)+1rem)] space-y-2"
                             )
                         }>
-                            // Inline send-error banner (G2) — shown when the last
-                            // outbound send failed; colour-coded by error code.
-                            <SendErrorBanner />
                             <For
                                 each=move || rows.get()
                                 key=timeline::row_key
@@ -240,6 +237,12 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     TimelineRow::Message { message, clock } => {
                                         if let Some(p) = message.plan_archive.clone() {
                                             view! { <PlanArchiveCell plan=p /> }.into_any()
+                                        } else if message.role == "system" {
+                                            // Group-chat notice from the broadcaster
+                                            // (storm-guard explanation, member failure).
+                                            // Nobody's turn — a centered chip, never a
+                                            // bubble attributed to an agent called "system".
+                                            view! { <SystemNoticeRow message=message /> }.into_any()
                                         } else if message.role == "tool" {
                                             // Trace-less history fallback: a run with no
                                             // replayable trace persists its tool call/result
@@ -357,48 +360,6 @@ fn PendingAskCard() -> impl IntoView {
         {move || pending.get().map(|ask| view! {
             <crate::components::ask_user_card::AskUserCard ask=ask />
         })}
-    }
-}
-
-/// Inline banner for the most recent `ChatSendError`. Empty when none.
-#[component]
-fn SendErrorBanner() -> impl IntoView {
-    let i18n = use_i18n();
-    let chat = expect_context::<ChatState>();
-    view! {
-        <Show when=move || chat.send_error.get().is_some()>
-            {move || {
-                let err = chat.send_error.get();
-                err.map(|e| {
-                    let is_warning = matches!(e.code, ChatSendErrorCode::PromptReview);
-                    let class_str = if is_warning {
-                        "px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
-                    } else {
-                        "px-3 py-2 rounded-lg border text-sm bg-danger-subtle border-danger/30 text-danger"
-                    };
-                    view! {
-                        <div class=class_str role="alert">
-                            <div class="flex items-start gap-2">
-                                <span class="font-mono text-[10px] uppercase tracking-wider opacity-70 shrink-0 pt-0.5">
-                                    {format!("{:?}", e.code).to_lowercase()}
-                                </span>
-                                <span class="flex-1">{e.message}</span>
-                                <button
-                                    class="opacity-60 hover:opacity-100 shrink-0"
-                                    title=move || t_string!(i18n, chat.dismiss).to_string()
-                                    on:click=move |_| {
-                                        chat.send_error.set(None);
-                                        chat.error_message.set(None);
-                                    }
-                                >
-                                    "\u{2715}"
-                                </button>
-                            </div>
-                        </div>
-                    }
-                })
-            }}
-        </Show>
     }
 }
 
@@ -986,6 +947,22 @@ fn NarrationRow(message: ChatMessage) -> impl IntoView {
     view! {
         <div class="px-1 py-0.5 text-sm text-text-secondary leading-relaxed aleph-step-narration">
             <TypewriterRenderer content=content message_id=message_id is_streaming=is_streaming />
+        </div>
+    }
+}
+
+/// A group-chat system notice: the broadcaster explaining why the conversation
+/// stopped (depth / activation caps) or that a member's run failed. Rendered as
+/// a centered, muted chip — the Telegram "X joined the group" register — so it
+/// reads as chrome rather than as a participant speaking.
+#[component]
+fn SystemNoticeRow(message: ChatMessage) -> impl IntoView {
+    view! {
+        <div class="flex justify-center py-1">
+            <span class="max-w-[80%] px-2.5 py-1 rounded-full text-[11px] text-text-tertiary
+                         bg-surface-sunken/60 border border-border/40 text-center">
+                {message.content}
+            </span>
         </div>
     }
 }

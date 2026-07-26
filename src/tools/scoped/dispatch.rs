@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
 
+use super::ledger::ApprovalRecord;
 use super::ScopedToolService;
 
 /// XML-escape any literal `<system-reminder>` / `</system-reminder>` boundary
@@ -129,7 +130,15 @@ impl ScopedToolService {
         let canonical = self.inner.resolve(name).map(|t| t.name().to_string());
         let name: &str = canonical.as_deref().unwrap_or(name);
 
-        // Enforce allowed filter.
+        // `None` when no ledger is installed or the dispatch carries no
+        // attributable agent — see `ledger::ScopedToolService::ledger_intent`.
+        // Cheap by construction: the fingerprint and the masked summary are
+        // computed only if a record is actually written.
+        let ledger = self.ledger_intent(name);
+
+        // Enforce allowed filter. Deliberately NOT ledger-recorded: a name the
+        // model guessed wrong never named a real action, and filing those as
+        // refusals would bury the ones that did.
         if !self.is_allowed(name) {
             return Err(ToolError::NotFound {
                 name: name.to_string(),
@@ -142,6 +151,10 @@ impl ScopedToolService {
         // model guessed the name or the policy tightened mid-session — reject
         // with an explicit reason rather than a confusing NotFound.
         if self.is_permission_denied(name) {
+            if let Some(ref l) = ledger {
+                l.commit_refusal(&input, "denied by the configured tool permission policy")
+                    .await;
+            }
             return Err(ToolError::PermissionDenied {
                 name: name.to_string(),
                 reason: format!(
@@ -178,6 +191,13 @@ impl ScopedToolService {
                 Err(err) => {
                     let duration_ms: u64 =
                         started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    if let Some(ref l) = ledger {
+                        l.commit_refusal(
+                            &input,
+                            &format!("blocked by a BeforeToolCall hook: {err}"),
+                        )
+                        .await;
+                    }
                     let rejection: Result<ToolOutput, ToolError> = Err(err);
                     if let Some(ref hook) = self.hook_decorator {
                         hook.after_execute(name, &rejection);
@@ -270,6 +290,15 @@ impl ScopedToolService {
         if let Some(ref hook) = self.hook_decorator {
             hook.after_execute(name, &result);
             hook.after_execute_with_duration(name, &result, duration_ms);
+        }
+
+        // Signed operation ledger. Recorded AFTER the after-hooks so the
+        // recorded outcome is the one the model and the surfaces actually saw
+        // (an interceptor's `update_output:` rewrite included), and only for
+        // calls that reached the tool — every gate above returns earlier and
+        // records its own refusal.
+        if let Some(ref l) = ledger {
+            l.commit_execution(&input, &result).await;
         }
 
         result
@@ -517,6 +546,16 @@ impl ScopedToolService {
         input: &Value,
     ) -> Result<(), ConfirmDenial> {
         let name = action.tool_name.as_str();
+
+        // One key for both stores: the grant and the refusal must name the same
+        // thing, or an approve-session cannot suppress a re-prompt it should,
+        // and a refusal cannot block the retry it should. Computed up front
+        // (it is a pure function of the call) so every decision below —
+        // including the unattended auto-deny — can file its ledger record
+        // under the same action identity.
+        let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
+        let mem_key = self.session_memory_key();
+
         // Unattended security-tax: this run has no human on any surface — a goal
         // or loop continuation, a heartbeat, an A2A delegation, or a cron job
         // with no origin channel. Fail closed — auto-deny any confirm-gated tool
@@ -533,7 +572,10 @@ impl ScopedToolService {
             );
             self.record_approval_decision(
                 name,
-                Some("auto-denied: unattended run, no human available to approve"),
+                &fingerprint,
+                ApprovalRecord::Denied(
+                    "auto-denied: unattended run, no human available to approve",
+                ),
             )
             .await;
             return Err(ConfirmDenial {
@@ -550,22 +592,29 @@ impl ScopedToolService {
             });
         }
 
-        let mem_key = self.session_memory_key();
-
-        // One key for both stores: the grant and the refusal must name the same
-        // thing, or an approve-session cannot suppress a re-prompt it should,
-        // and a refusal cannot block the retry it should.
-        let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
-
         // Session memory short-circuit: a prior session grant of THIS ACTION
         // satisfies the confirmation without re-prompting (and without
         // re-firing observers). A different call of the same tool still asks.
+        //
+        // The decision IS still recorded. It used to return with no record at
+        // all, so every repeat of a granted action executed with nothing in the
+        // trail saying under what authority — the one shape of gap an
+        // accountability record cannot tolerate, because a chain proves nothing
+        // about entries that were never written. It is filed as
+        // `ApprovalSource::Trusted` (a standing grant), not `User` (a human
+        // answering now); conflating them would misreport who decided.
         if let Some(ref key) = mem_key {
             if session_memory::global().is_approved(key, &fingerprint) {
                 tracing::debug!(
                     tool = %name,
                     "confirmation satisfied by session approval memory"
                 );
+                self.record_approval_decision(
+                    name,
+                    &fingerprint,
+                    ApprovalRecord::GrantedBySessionMemory,
+                )
+                .await;
                 return Ok(());
             }
         }
@@ -583,8 +632,12 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
-                self.record_approval_decision(name, Some(reason_kind.agent_hint()))
-                    .await;
+                self.record_approval_decision(
+                    name,
+                    &fingerprint,
+                    ApprovalRecord::Denied(reason_kind.agent_hint()),
+                )
+                .await;
                 // Surface the ledger's reason to the model (not just the log)
                 // so the circuit breaker actually breaks the loop.
                 return Err(ConfirmDenial {
@@ -667,8 +720,12 @@ impl ScopedToolService {
                     }
                 }
             }
-            self.record_approval_decision(name, Some(&format!("user did not approve ({outcome:?})")))
-                .await;
+            self.record_approval_decision(
+                name,
+                &fingerprint,
+                ApprovalRecord::Denied(&format!("user did not approve ({outcome:?})")),
+            )
+            .await;
             // Carry the same hint on the *first* live denial too, so the agent
             // is told to change approach immediately rather than looping into
             // the auto-deny path above.
@@ -688,30 +745,54 @@ impl ScopedToolService {
                 session_memory::global().remember(key, &fingerprint);
             }
         }
-        self.record_approval_decision(name, None).await;
+        self.record_approval_decision(name, &fingerprint, ApprovalRecord::GrantedByUser)
+            .await;
         Ok(())
     }
 
-    /// Persist this gate's decision into the session event log (the SSOT the
-    /// model replays). Without it an agent never learns that the user already
-    /// refused an action and simply asks again.
+    /// Persist this gate's decision to **both** durable trails.
     ///
-    /// Correlation reads the ambient [`crate::approval::CallIdentity`] the
-    /// harness Act phase scoped around this dispatch — exact per call, immune
-    /// to guardrail `Sanitize` rewrites and to same-name siblings in a
-    /// parallel batch (both of which broke the session-log scan this
-    /// replaced). `None` outside harness dispatch (direct `tools.invoke` RPC,
-    /// tests), where there is no `ToolCallRequested` event to anchor to
-    /// anyway — the decision is then not persisted, exactly as before.
+    /// 1. The **signed operation ledger** ([`crate::identity`]) — needs only
+    ///    the turn's agent identity, so it covers every surface, including the
+    ///    ones the session-event path below structurally cannot.
+    /// 2. The **session event log** (the SSOT the model replays). Without it an
+    ///    agent never learns that the user already refused an action and simply
+    ///    asks again.
     ///
-    /// Best-effort: a failed emit is logged, never allowed to overturn a
-    /// decision the user has made.
-    async fn record_approval_decision(&self, name: &str, denial_reason: Option<&str>) {
-        use crate::session::events::{now_ms, ApprovalSource, SessionEvent};
+    /// The session-event correlation reads the ambient
+    /// [`crate::approval::CallIdentity`] the harness Act phase scoped around
+    /// this dispatch — exact per call, immune to guardrail `Sanitize` rewrites
+    /// and to same-name siblings in a parallel batch (both of which broke the
+    /// session-log scan this replaced). `None` outside harness dispatch (direct
+    /// `tools.invoke` RPC, tests), where there is no `ToolCallRequested` event
+    /// to anchor to anyway. That is exactly why the ledger append comes first
+    /// and does not share the early return: an approval granted on a
+    /// non-harness surface is still an authorization that happened.
+    ///
+    /// Best-effort on both: a failed write is logged, never allowed to overturn
+    /// a decision the user has made.
+    async fn record_approval_decision(
+        &self,
+        name: &str,
+        fingerprint: &str,
+        decision: ApprovalRecord<'_>,
+    ) {
+        use crate::session::events::{now_ms, SessionEvent};
 
         let Some(turn) = self.turn_context.as_ref() else {
             return;
         };
+
+        crate::identity::record_action(crate::identity::NewRecord {
+            agent_id: turn.session_key.agent_id().to_string(),
+            action: decision.ledger_action(),
+            target: name.to_string(),
+            outcome: decision.ledger_outcome(),
+            args_fp: Some(fingerprint.to_string()),
+            detail: decision.detail(),
+        })
+        .await;
+
         let Some(session_svc) = crate::session::service::global_session_service() else {
             return;
         };
@@ -727,7 +808,7 @@ impl ScopedToolService {
             return;
         };
 
-        let event = match denial_reason {
+        let event = match decision.denial_reason() {
             Some(reason) => SessionEvent::ToolCallDenied {
                 turn_id,
                 call_id,
@@ -737,7 +818,7 @@ impl ScopedToolService {
             None => SessionEvent::ToolCallApproved {
                 turn_id,
                 call_id,
-                by: ApprovalSource::User,
+                by: decision.approval_source(),
                 at: now_ms(),
             },
         };

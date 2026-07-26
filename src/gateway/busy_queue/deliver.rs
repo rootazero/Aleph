@@ -10,7 +10,7 @@ use std::future::Future;
 
 use tokio::time::{timeout_at, Duration, Instant};
 
-use super::{register, BusyQueueConfig, TicketGuard};
+use super::{BusyQueueConfig, TicketGuard};
 use crate::gateway::execution_engine::ExecutionError;
 
 /// How a queued message finished.
@@ -71,7 +71,8 @@ impl DeliveryOutcome {
 /// because the ticket must be taken **synchronously on the arrival path**
 /// (before the delivery task is spawned) for lane order to follow arrival order
 /// rather than task-scheduling order. Callers handle
-/// [`register`] returning `None` as [`DeliveryOutcome::Rejected`].
+/// [`register`](super::register) returning `None` as
+/// [`DeliveryOutcome::Rejected`].
 ///
 /// The guard is RAII: dropped on every exit path — including a panic inside
 /// `attempt` — so a dead waiter can never leave a corpse ticket wedging the
@@ -136,7 +137,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::busy_queue::{notify_slot_free, purge};
+    use crate::gateway::busy_queue::{notify_slot_free, purge, register};
     use crate::sync_primitives::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

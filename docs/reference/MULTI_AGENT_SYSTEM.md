@@ -416,6 +416,142 @@ via `[team_broadcast]`). Lifecycle ownership (2026-07-24):
 This is the teams peer group chat — distinct from the `src/group_chat/`
 persona roundtable (`[group_chat]` config), a separate system.
 
+### Member Tool Surface (成员工具面)
+
+A team member created inline may declare the tools it is allowed to call.
+Declared on `CreateAgentSpec` (`team_create`) and on `TemplateMember` /
+`TemplateLeader` (team templates) as `tools` / `tools_denied`; both accept a
+trailing-`*` prefix glob (`task_*`). **Omitting them keeps every tool**, which
+is what every team got before the fields existed — so no existing team or
+template changes behaviour.
+
+The declaration lands in `teams::member_provision`, the shared provisioning
+tail both creation paths call. It must reach **both** ends of one chain:
+
+```text
+AgentDefinition.skills ──from_resolved──▶ AgentInstanceConfig.tool_whitelist
+                                                     │
+                                          AgentInstance::is_tool_allowed
+                                                     │
+                    run_loop/inner.rs:156 ── retain ──▶ tools the model sees
+```
+
+The runtime config governs the current boot; the persisted `AgentDefinition`
+is what `AgentInstanceConfig::from_resolved` rebuilds from after a restart.
+Writing only one silently widens or narrows the surface on restart — hence the
+single tail (two copies were two chances to write one end) and the
+`restart_round_trip_preserves_the_surface` test.
+
+**Contract validation (fail-fast).** A member's launch prompt *instructs* it to
+call specific verbs: `broadcast::member_prompt` tells workers to hand work back
+with `task_submit`; `teams::leader_prompt` gives leaders the four-step
+`task_create` → `team_delegate` → `task_read_artifact` → `task_review` duty.
+A declared list that hides these does not yield a narrower member — it yields
+one told to do something it cannot do, failing silently at the first hand-off.
+Creation therefore **rejects** such a declaration, naming the missing tools,
+before any directory is created. Essentials live in
+`WORKER_ESSENTIAL_TOOLS` / `LEADER_ESSENTIAL_TOOLS`.
+
+Note the glob matcher is `gateway::agent_instance::tool_allowed_by`, shared
+with the run-time gate — validation and enforcement cannot disagree.
+
+**Not exhaustive, and not a security boundary.** `get_tool_schema` and
+`subagent` are registered into the loop registry *after* the allowlist filter
+runs (`run_loop/inner.rs` — the "collapsed-but-unsnapshotted" class), so a
+declared list never removes them. Runtime QA confirms it: a member declaring
+`["task_*", "message_send", "search", "web_fetch"]` enumerates exactly those
+plus those two. Since `subagent` spawns a differently-scoped agent, treat
+`tools` as attention/accident scoping — the enforcement boundary stays
+`src/tools/scoped/` + exec tier + the sandbox floor.
+
+**Not derived from `role`.** `role` is free text ("估值建模"); inferring a tool
+surface from it would be keyword matching, which P8 forbids. Declaration is
+explicit or absent.
+
+**Built-in templates: two declare, two do not.** `strategy-room` (moderator +
+bull/bear/contrarian) and `code-review` (lead-reviewer + four lens reviewers)
+declare a surface; `software-dev` and `research-paper` deliberately do not.
+Two reasons line up. Fit: the build/run roles genuinely need a broad dev
+surface, and §"Not exhaustive" means guessing narrow is unrecoverable — a
+`tools` list is a `retain`, so an excluded tool cannot be promoted back with
+`tool_search` the way a mode-deferred one can. Blast radius: template member
+ids are **global agent ids**, and the generic ones (`lead`, `backend`,
+`frontend`, `qa`, `pi`, `reviewer`, `analyst`, `writer`) all live in the two
+undeclared templates.
+
+`team_*` is never globbed in a declaration — the family contains
+`team_disband` / `team_create` / `team_from_template` / `team_member_remove`.
+Enumerate `team_status` and `team_delegate`. `task_*` is safe to glob.
+
+For code-review the surface keeps `bash` (reading a diff needs `git diff`) and
+drops `file_write` / `file_edit` / `file_ops` / `apply_patch`. Since bash can
+write, that is attention scoping — it targets the reviewer who "helpfully"
+edits the code it was asked to review, not an attacker.
+
+**When a declaration is dropped.** `provision_member` reuses an existing agent
+by id and skips `tools` entirely (an existing agent keeps its own surface), and
+a `self` leader is the caller's own agent. Both cases are reported:
+`MaterializedTeam.tools_ignored_for` → `TeamFromTemplateOutput.tools_ignored_for`,
+omitted from the output when empty. Guards live in `templates/materialize.rs`
+tests: every built-in role satisfies its contract, only the two reasoning
+templates declare, no reviewer carries an edit tool, nothing globs `team_*`.
+The report does not yet reach every caller: `interfaces/webchat/src/api/teams.rs`
+extracts only `team_id` from the `team_from_template` tool output and discards
+the rest, so a Panel user creating a team from the "create from template"
+dialog does not see `tools_ignored_for` — only the LLM tool-call path does.
+
+#### Live surface: the `team.<id>.*` topic family
+
+Everything the Panel's group-chat view knows in real time arrives on five
+topics, all sharing one `{topic, data}` envelope published through the single
+source `gateway::event_emitter::team_fanout::publish_team_event` (the
+per-run `TeamFanoutEmitter` calls it too):
+
+| Topic | Payload | Published by | Panel effect |
+|-------|---------|--------------|--------------|
+| `team.<id>.message` | `{agent_id, text, run_id, final}` | `TeamFanoutEmitter` on `RunComplete` | attributed bubble |
+| `team.<id>.system` | `{text}` | `GroupChatBroadcaster::post_system` | centered notice chip |
+| `team.<id>.activity` | `{agent_id, status: working\|done\|error}` | member spawn, `ToolStart`, `RunComplete`, `RunError`, adapter failure | roster status dot |
+| `team.<id>.fanout` | `{run_id, status: started\|settled}` | `dispatch_user`, head and tail | `active_run_id` + `ChatPhase` |
+| `team.<id>.task.<verb>` | `{task_id, status, …}` | `CoordTaskStore` | task strip / drawer |
+
+Contract notes (2026-07-25):
+
+- **One parse point.** The Panel resolves the topic exactly once, in
+  `views::chat::team_events::parse_team_topic`, which returns `(team_id, kind)`.
+  Team ids are opaque and may contain dots, so the kind is matched as a suffix,
+  not by positional split; `team.changed` (the global team-list invalidation)
+  deliberately does not match. Any new consumer must go through it rather than
+  re-testing `topic.starts_with("team.")` — that shortcut is what leaked a
+  background team's bubbles into whatever conversation happened to be open.
+- **Scope before projecting.** Gateway subscription is the `team.*` wildcard, so
+  every team the daemon runs is delivered. Consumers filter on the team the user
+  is actually viewing. The sidebar uses the same parse to badge *other* groups as
+  unread instead of dropping their activity on the floor.
+- **`fanout` owns the run slot.** `started`/`settled` is the only writer of
+  `active_run_id` in team mode, which is what gives group chat a Stop button
+  (routed to `teams.chat.cancel`, not `chat.abort` — a fan-out tree is not an
+  engine `active_runs` entry) and, for free, the busy→idle edge the composer's
+  prompt-queue auto-drain already watches.
+- **`system` is not an agent.** Storm-guard explanations used to be
+  transcript-only: the gates fired, the room went quiet, and a live user saw
+  nothing until they left and came back. They now go out live and render as
+  chrome, never as a bubble from a participant named `system`
+  (`broadcast::SYSTEM_HANDLE`).
+
+#### History replay fidelity
+
+`teams.chat.history` replays the durable transcript, but `team_messages` is a
+shared bus that also carries **directed inbox traffic** (the notifier's leader
+digests, thread-escalation hints, discovery pings). `map_history` keeps only
+conversation rows — `MessageType::Message`, or any recipient-less row — and
+stamps each with a server-derived `kind` (`user` | `agent` | `system`) so the
+Panel renders replayed history identically to what it showed live. The row cap
+is applied *after* filtering (raw fetch over-reads 3×), so a burst of
+notifications cannot squeeze the conversation out of the window. Panels talking
+to an older core default `kind` to `"agent"` and fall back to the reserved-handle
+check for the user's own rows. (teams: rewire the group-chat Panel surface (§4.5))
+
 ## Mode 4: A2A (Remote Agent Delegation)
 
 **Tools**: `a2a_delegate`, `a2a_agents`

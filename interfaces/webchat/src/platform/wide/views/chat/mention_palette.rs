@@ -5,6 +5,7 @@
 
 use super::agent_identity::agent_color_for_id;
 use super::state::TeamMemberView;
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 
 /// Match a roster candidate against the text typed after '@'. Matches name OR
@@ -85,6 +86,7 @@ pub fn MentionPaletteView(
     /// (e.g. `"@risk_analyst "` or `"@all "`).
     on_select: Callback<String>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     // Follow ↑/↓ selection: scroll the highlighted row into view when it
     // leaves the capped viewport.
     let list_ref = NodeRef::<leptos::html::Div>::new();
@@ -132,7 +134,11 @@ pub fn MentionPaletteView(
                             >
                                 "*"
                             </span>
-                            <span class="font-medium shrink-0">"@ 所有人"</span>
+                            <span class="font-medium shrink-0">
+                                {format!("@ {}", t_string!(i18n, chat.team_mention_all))}
+                            </span>
+                            // The literal token that gets inserted — never localized,
+                            // the backend resolves `@all` on this exact spelling.
                             <span class="text-text-tertiary text-[10px] truncate">"all"</span>
                         </button>
                     }

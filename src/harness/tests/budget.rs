@@ -287,7 +287,52 @@ const BUDGETED: [&str; 12] = [
 /// now stops on the harder caps (`max_iterations` / `ToolLoopVerifier` /
 /// consecutive-failure) or the model's own judgement — never a middleware
 /// heuristic. Down-only ratchet: paid down, no 3-question answer required.
-const CEILING: usize = 5082;
+///
+/// 5008 → 5082 (+74): **raised without a written reason, and the debt is settled
+/// here rather than quietly inherited.** `396c6d200` ("adjust line budget
+/// CEILING") moved this constant to make a red test green; the +79 it was
+/// absorbing had landed one commit earlier in `c648b5ea4`, and `9241dd193` +
+/// `396c6d200` trimmed −5. Raising is *permitted* — silently is not, and the
+/// docs then drifted for two days (root `CLAUDE.md` and `src/harness/CLAUDE.md`
+/// both still said 5008), which is this file's own failure mode reappearing one
+/// layer up. The four changes, against R10's three questions:
+///
+///   - **`think.rs`, grace-turn wall-clock cap (+~14).** `race_llm_call`'s
+///     timeout arm exists only when `deps.turn_timeout` is `Some`, so with turn
+///     timeouts disabled a hung provider could hang a run that was already
+///     trying to terminate. Now capped by `GRACE_TIMEOUT_BUDGET`.
+///     Scaffolding (a clock, not a judgement); a stronger model cannot un-hang
+///     a socket; consumer: every `turn_timeout = None` deployment.
+///   - **`agent.rs`, split-turn watchdog skip (+6).** A split turn's tail lives
+///     in the CHILD session, so the consecutive-failure watchdog's parent-
+///     watermark fetch read an empty tail as a clean turn and silently reset
+///     the streak. Scaffolding (counter correctness); model-independent — a
+///     stronger model does not fix a read of the wrong session; consumer: every
+///     split turn.
+///   - **`act.rs`, steer checkpoint hoisted to once per group (net −).** Was
+///     per tool call, paying a seq-ranged session-store read for every call in
+///     the batch. Same mechanical watermark compare, one read per group.
+///     Consumer: every serial group.
+///   - **`act.rs`, per-batch `canonical` / `claims` threading (+~50).** Arg
+///     signatures and concurrency claims computed once in `act()` instead of
+///     recomputed per group. Scaffolding; model-independent. **But question 3
+///     failed on half of it** — see below.
+///
+/// 5082 → 5055 (−27): the answer to question 3 above, applied. The threading
+/// arrived as `Option<&[..]>` with a "recompute on demand" arm on every `None`,
+/// and that arm had **zero consumers**: the only caller passing `None` is
+/// `act()`'s fast path, entered on `!parallel_enabled || tool_calls.len() < 2`,
+/// which is the very condition `can_parallel_dispatch` rejects on at its
+/// `par_n < 2 || tool_calls.len() < 2` guard — it returns `false` before either
+/// value is read. No test reached it either. R10 says withdraw a zero-consumer
+/// abstraction rather than leave a door open, so `can_parallel_dispatch` and
+/// `act_parallel` now take plain slices and `dispatch_group` short-circuits to
+/// the serial loop when the batch data is absent. Behaviour is unchanged by
+/// construction: the removed branches were unreachable. Down-only ratchet, but
+/// recorded because it is the *conclusion* of the answer above, not a separate
+/// cleanup. All −27 are the withdrawal: `act.rs` is otherwise byte-identical to
+/// `main`, so the figure is not padded with drive-by reformatting.
+const CEILING: usize = 5055;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

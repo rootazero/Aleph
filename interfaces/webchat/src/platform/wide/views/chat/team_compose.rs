@@ -110,29 +110,36 @@ pub fn TeamCompose(#[prop(into)] on_close: Callback<()>) -> impl IntoView {
                 Ok(team_id) => {
                     chat.clear_session();
                     chat.team_id.set(Some(team_id));
-                    // Resolve each agent's emoji from the fetched agents list
-                    // (id → emoji) so roster avatars match the agent's glyph.
-                    let agent_emoji = agents.get_untracked();
-                    let emoji_of = |id: &str| -> Option<String> {
-                        agent_emoji
+                    // Resolve each agent's display name + emoji from the fetched
+                    // agents list so a freshly-composed team's roster reads the
+                    // same as a re-opened one (`chat_sidebar::on_open_group`
+                    // resolves both). Seeding `name` from the id showed raw
+                    // handles like `risk_analyst` in the pills and avatars until
+                    // the user left the group and came back.
+                    let agent_list = agents.get_untracked();
+                    let identity_of = |id: &str| -> (String, Option<String>) {
+                        agent_list
                             .iter()
                             .find(|(aid, _, _)| aid == id)
-                            .and_then(|(_, _, e)| e.clone())
+                            .map(|(_, name, emoji)| (name.clone(), emoji.clone()))
+                            .unwrap_or_else(|| (id.to_string(), None))
                     };
                     // Seed the roster with leader + selected members
+                    let (leader_name, leader_emoji) = identity_of(&leader);
                     let mut roster = vec![TeamMemberView {
                         agent_id: leader.clone(),
-                        name: leader.clone(),
-                        emoji: emoji_of(&leader),
+                        name: leader_name,
+                        emoji: leader_emoji,
                         role: "leader".into(),
                         is_leader: true,
                         status: MemberStatus::Idle,
                     }];
                     for (id, role) in &members {
+                        let (name, emoji) = identity_of(id);
                         roster.push(TeamMemberView {
                             agent_id: id.clone(),
-                            name: id.clone(),
-                            emoji: emoji_of(id),
+                            name,
+                            emoji,
                             role: role.clone(),
                             is_leader: false,
                             status: MemberStatus::Idle,

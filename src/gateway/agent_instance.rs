@@ -567,34 +567,45 @@ impl AgentInstance {
     /// Check if a tool is allowed for this agent
     #[must_use]
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
-        // Check blacklist first (supports glob prefix like "bash_*", same as the
-        // whitelist below — a bare Vec::contains would never match a glob entry).
-        if self.config.tool_blacklist.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                tool_name.starts_with(prefix)
-            } else {
-                pattern == tool_name
-            }
-        }) {
-            return false;
-        }
-
-        // If whitelist is empty or contains "*", allow all (except blacklisted)
-        if self.config.tool_whitelist.is_empty()
-            || self.config.tool_whitelist.contains(&"*".to_string())
-        {
-            return true;
-        }
-
-        // Check whitelist (supports glob prefix like "fs_*")
-        self.config.tool_whitelist.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                tool_name.starts_with(prefix)
-            } else {
-                pattern == tool_name
-            }
-        })
+        tool_allowed_by(
+            tool_name,
+            &self.config.tool_whitelist,
+            &self.config.tool_blacklist,
+        )
     }
+}
+
+/// Glob-aware allow/deny match over a `(whitelist, blacklist)` pair.
+///
+/// Extracted from [`AgentInstance::is_tool_allowed`] so the same semantics can
+/// be applied *before* an instance exists — team member provisioning validates
+/// a declared toolset against the tools its launch prompt contracts it to call
+/// (`teams::member_provision`). A second copy of this matcher there would drift
+/// from the one that actually gates the run.
+///
+/// Rules: the blacklist wins; an empty whitelist (or one containing `"*"`)
+/// allows everything else; both lists support a trailing-`*` prefix glob.
+#[must_use]
+pub fn tool_allowed_by(tool_name: &str, whitelist: &[String], blacklist: &[String]) -> bool {
+    let matches = |pattern: &String| {
+        pattern
+            .strip_suffix('*')
+            .map_or(pattern == tool_name, |prefix| tool_name.starts_with(prefix))
+    };
+
+    // Check blacklist first (supports glob prefix like "bash_*", same as the
+    // whitelist below — a bare Vec::contains would never match a glob entry).
+    if blacklist.iter().any(&matches) {
+        return false;
+    }
+
+    // If whitelist is empty or contains "*", allow all (except blacklisted)
+    if whitelist.is_empty() || whitelist.iter().any(|p| p == "*") {
+        return true;
+    }
+
+    // Check whitelist (supports glob prefix like "fs_*")
+    whitelist.iter().any(&matches)
 }
 
 /// Session information (public view)

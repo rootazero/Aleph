@@ -99,6 +99,22 @@ impl AlephTool for SessionSetModeTool {
             ))
         })?;
 
+        // A team run re-stamps its mode into every request, and a
+        // request-carried mode outranks the stored one — so a write here would
+        // be overridden on the member's very next turn while this tool reported
+        // success. Refuse with the reason instead of shipping that lie
+        // (same R8 honesty contract as `agent_switch`).
+        if crate::teams::run_mode::is_team_session(&legacy_key) {
+            return Err(crate::error::AlephError::tool(format!(
+                "session_set_mode: `{session_key_str}` is a team session — team runs pin their \
+                 mode to `{}` on every turn, so a switch here would be silently overridden. \
+                 Tell the user the mode cannot be switched inside a team; a team's tool surface \
+                 is narrowed per member with the `tools` declaration at member creation, not \
+                 with a session mode.",
+                crate::teams::run_mode::TEAM_RUN_MODE.id()
+            )));
+        }
+
         let patch = SessionPatch {
             metadata: Some(serde_json::json!({ MODE_SESSION_KEY: mode.id() })),
             ..Default::default()
@@ -185,6 +201,46 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("game"), "error should name the bad mode: {err}");
+    }
+
+    /// A team run re-stamps its mode onto every turn, so a member that "set"
+    /// the mode here would be told it worked and then silently overridden.
+    /// The call must be refused, and refused before anything is written.
+    #[tokio::test]
+    async fn test_team_session_is_rejected_and_writes_nothing() {
+        let sm = test_session_manager();
+
+        let key = LegacySessionKey::task(
+            "alice",
+            crate::teams::run_mode::TEAM_CHAT_TASK_TYPE,
+            "squad",
+        );
+        let _ = SessionStore::get_or_create(&*sm, &key).await.unwrap();
+
+        let tool = SessionSetModeTool::new(Arc::clone(&sm) as Arc<dyn SessionStore>);
+        let result = tool
+            .call(SessionSetModeArgs {
+                mode: "code".into(),
+                __session_key: key.to_key_string(),
+            })
+            .await;
+
+        let err = format!("{}", result.expect_err("team session must be refused"));
+        assert!(
+            err.contains("tools"),
+            "error must point at the real narrowing knob: {err}"
+        );
+
+        // Nothing may have been persisted — a rejected call that still wrote
+        // would leave a stale override waiting for the session to leave the team.
+        let meta = SessionStore::get_metadata(&*sm, &key)
+            .await
+            .unwrap()
+            .expect("session metadata");
+        let stored = meta
+            .identity_meta
+            .and_then(|im| im.custom.get(MODE_SESSION_KEY).cloned());
+        assert_eq!(stored, None, "rejected call must not write the mode");
     }
 
     #[tokio::test]

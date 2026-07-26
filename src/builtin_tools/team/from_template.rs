@@ -51,6 +51,11 @@ pub struct TeamFromTemplateOutput {
     pub member_ids: Vec<String>,
     pub task_ids: Vec<(String, String)>,
     pub message: String,
+    /// Members whose template `tools` declaration had no effect because an
+    /// agent with that id already existed. Omitted when empty so the common
+    /// case's output is unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools_ignored_for: Vec<String>,
 }
 
 impl From<MaterializedTeam> for TeamFromTemplateOutput {
@@ -62,6 +67,7 @@ impl From<MaterializedTeam> for TeamFromTemplateOutput {
             member_ids: m.member_ids,
             task_ids: m.task_ids,
             message: m.message,
+            tools_ignored_for: m.tools_ignored_for,
         }
     }
 }
@@ -171,5 +177,43 @@ impl AlephTool for TeamFromTemplateTool {
         );
 
         Ok(materialized.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn materialized(tools_ignored_for: Vec<String>) -> MaterializedTeam {
+        MaterializedTeam {
+            team_id: "team-1".into(),
+            team_name: "n".into(),
+            leader_id: "lead".into(),
+            member_ids: vec!["bull".into()],
+            task_ids: vec![],
+            message: "ok".into(),
+            tools_ignored_for,
+        }
+    }
+
+    /// The common case must not churn the tool's output shape.
+    #[test]
+    fn an_empty_report_is_omitted_from_the_output() {
+        let out = TeamFromTemplateOutput::from(materialized(vec![]));
+        let v = serde_json::to_value(&out).expect("serializes");
+        assert!(
+            v.get("tools_ignored_for").is_none(),
+            "an empty report must not appear in the output"
+        );
+    }
+
+    /// When a template's declaration was dropped, the caller must be told
+    /// which member it happened to — otherwise the team silently does not
+    /// match what the template says.
+    #[test]
+    fn a_dropped_declaration_reaches_the_caller() {
+        let out = TeamFromTemplateOutput::from(materialized(vec!["bull".into()]));
+        let v = serde_json::to_value(&out).expect("serializes");
+        assert_eq!(v["tools_ignored_for"], serde_json::json!(["bull"]));
     }
 }

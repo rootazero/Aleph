@@ -20,6 +20,7 @@ use crate::views::chat::agent_identity::agent_color_for_id;
 use crate::views::chat::state::{
     ChatMessage, ChatState, ContextUsage, MemberStatus, TeamMemberView,
 };
+use crate::views::chat::team_events::{parse_team_topic, TeamTopicKind};
 
 use web_sys::HtmlInputElement;
 
@@ -75,16 +76,25 @@ struct AgentEntry {
 /// attributed agent bubbles.
 const RESERVED_USER_HANDLE: &str = "user";
 
-/// Map one replayed `teams.chat.history` item to a chat bubble. The user's own
-/// messages (`from_agent == RESERVED_USER_HANDLE`) become right-aligned user
-/// bubbles (role `"user"`, no `agent_id`) — identical to single chat; every
-/// other author renders as an attributed agent bubble (Layout A). `index` only
-/// seeds a stable dom id.
+/// Map one replayed `teams.chat.history` item to a chat bubble.
+///
+/// The render class comes from the server's `kind` (`user` | `agent` |
+/// `system`) — one classification, derived once, next to the store that knows
+/// the message's recipients and type. `from_agent` is only consulted as the
+/// pre-`kind` fallback so a Panel pointed at an older core still splits its own
+/// messages out of the agent bubbles. `index` seeds a stable dom id.
 fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMessage {
-    let is_user = item.from_agent == RESERVED_USER_HANDLE;
+    let role = match item.kind.as_str() {
+        "user" => "user",
+        "system" => "system",
+        // Legacy core (no `kind`, defaulted to "agent"): fall back to the
+        // handle check so own messages don't replay as agent bubbles.
+        _ if item.from_agent == RESERVED_USER_HANDLE => "user",
+        _ => "assistant",
+    };
     ChatMessage {
         id: format!("team-hist-{index}"),
-        role: if is_user { "user" } else { "assistant" }.to_string(),
+        role: role.to_string(),
         content: item.content,
         tool_calls: Vec::new(),
         is_streaming: false,
@@ -95,7 +105,9 @@ fn team_history_item_to_message(index: usize, item: TeamMessageItem) -> ChatMess
         iteration: None,
         is_final: true,
         text_finalized: true,
-        agent_id: if is_user { None } else { Some(item.from_agent) },
+        // Only agent bubbles carry attribution; user and system rows must stay
+        // out of the Telegram-style grouping pass.
+        agent_id: (role == "assistant").then_some(item.from_agent),
         plan_archive: None,
     }
 }
@@ -305,6 +317,13 @@ pub fn ChatSidebar() -> impl IntoView {
     let group_deleting_id = RwSignal::new(Option::<String>::None);
     let group_edit_text = RwSignal::new(String::new());
     let group_menu_id = RwSignal::new(Option::<String>::None);
+    // Team ids that spoke while the user was looking somewhere else. The chat
+    // view projects `team.<id>.message` only for the ACTIVE team (otherwise a
+    // background group's bubbles land in whatever conversation is open), so
+    // without this marker a group talking in the background is completely
+    // invisible until the user happens to click it.
+    let unread_groups: RwSignal<std::collections::HashSet<String>> =
+        RwSignal::new(std::collections::HashSet::new());
 
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
@@ -481,6 +500,18 @@ pub fn ChatSidebar() -> impl IntoView {
             reload_for_event(sub_dash);
             return;
         }
+        // A background group spoke — badge its row. Scoped the same way the
+        // chat view scopes its projection, so the team you are already reading
+        // never marks itself unread.
+        if let Some((team_id, TeamTopicKind::Message)) = parse_team_topic(&event.topic) {
+            if chat.team_id.get_untracked().as_deref() != Some(team_id) {
+                let id = team_id.to_string();
+                unread_groups.update(|s| {
+                    s.insert(id);
+                });
+            }
+            return;
+        }
         if event.topic != "run.session_updated" {
             return;
         }
@@ -649,6 +680,12 @@ pub fn ChatSidebar() -> impl IntoView {
     // permanently in ChatView (view.rs) — no double-subscribe needed here.
     let on_open_group = move |team_id: String| {
         let dash = dashboard;
+        // Opening the group IS reading it — drop the badge up front so the
+        // marker never outlives the reason for it (the async hydrate below can
+        // fail; the user still opened the room).
+        unread_groups.update(|s| {
+            s.remove(&team_id);
+        });
         leptos::task::spawn_local(async move {
             // 1. Fetch team detail (members list).
             let detail = match TeamsApi::get(&dash, &team_id).await {
@@ -1292,8 +1329,21 @@ pub fn ChatSidebar() -> impl IntoView {
                                                     </div>
                                                     // Group name + last message
                                                     <div class="flex-1 min-w-0">
-                                                        <div class="truncate text-xs font-medium text-text-primary">
-                                                            {group_name.clone()}
+                                                        <div class="flex items-center gap-1.5 min-w-0">
+                                                            <span class="truncate text-xs font-medium text-text-primary">
+                                                                {group_name.clone()}
+                                                            </span>
+                                                            // Unread marker — this group spoke while
+                                                            // the user was reading something else.
+                                                            <Show when={
+                                                                let id = group_id.clone();
+                                                                move || unread_groups.with(|s| s.contains(&id))
+                                                            }>
+                                                                <span
+                                                                    class="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"
+                                                                    title=move || t_string!(i18n, chat.team_unread).to_string()
+                                                                ></span>
+                                                            </Show>
                                                         </div>
                                                         {last_msg.clone().map(|m| view! {
                                                             <div class="truncate text-[10px] text-text-tertiary mt-0.5">
@@ -1674,10 +1724,15 @@ mod team_history_tests {
     use crate::api::team_chat::TeamMessageItem;
 
     fn item(from_agent: &str) -> TeamMessageItem {
+        kinded(from_agent, "agent")
+    }
+
+    fn kinded(from_agent: &str, kind: &str) -> TeamMessageItem {
         TeamMessageItem {
             from_agent: from_agent.to_string(),
             content: "hello".to_string(),
             msg_type: "message".to_string(),
+            kind: kind.to_string(),
             created_at: 0,
         }
     }
@@ -1688,6 +1743,15 @@ mod team_history_tests {
         // left-aligned agent bubbles (role "assistant" + agent_id Some("user")).
         // They must mirror single chat: role "user", no agent_id → right-aligned
         // accent bubble.
+        let m = team_history_item_to_message(0, kinded(RESERVED_USER_HANDLE, "user"));
+        assert_eq!(m.role, "user");
+        assert_eq!(m.agent_id, None);
+    }
+
+    #[test]
+    fn legacy_core_without_kind_still_splits_own_messages() {
+        // `kind` defaults to "agent" against an older core; the handle fallback
+        // is what keeps the user's own replayed rows right-aligned.
         let m = team_history_item_to_message(0, item(RESERVED_USER_HANDLE));
         assert_eq!(m.role, "user");
         assert_eq!(m.agent_id, None);
@@ -1699,6 +1763,16 @@ mod team_history_tests {
         assert_eq!(m.role, "assistant");
         assert_eq!(m.agent_id.as_deref(), Some("risk_analyst"));
         assert_eq!(m.id, "team-hist-3");
+    }
+
+    #[test]
+    fn system_kind_replays_as_unattributed_notice_row() {
+        // A broadcaster notice ("depth cap reached, your turn") must replay as
+        // the same centered chip it showed live — not as a bubble from an agent
+        // literally named "system".
+        let m = team_history_item_to_message(1, kinded("system", "system"));
+        assert_eq!(m.role, "system");
+        assert_eq!(m.agent_id, None);
     }
 }
 

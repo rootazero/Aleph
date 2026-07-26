@@ -1,6 +1,13 @@
 # Multi-perspective code review team.
 # Reviewer agents look at the diff through different lenses, then the lead
 # synthesises a single review with severity-graded findings.
+#
+# Tool surface: every role declares `tools`. Reviewers keep read + inspect
+# tools and `bash` (reading a diff needs `git diff`) but NOT file_write /
+# file_edit / file_ops / apply_patch — the failure mode being scoped out is a
+# reviewer "helpfully" editing the code it was asked to review. Since bash can
+# write, this is attention scoping, not an enforcement boundary. Member ids are
+# GLOBAL agent ids and keep this surface outside the team too.
 
 description = "Multi-perspective code review: security + perf + correctness + style → synthesis"
 default_goal = "Review the diff or PR referenced in the team description"
@@ -9,6 +16,7 @@ default_goal = "Review the diff or PR referenced in the team description"
 id = "lead-reviewer"
 name = "Lead Reviewer"
 role = "leader"
+tools = ["task_*", "team_status", "team_delegate", "message_send", "file_read", "search", "ctx_search", "code_check", "bash"]
 prompt_addendum = """
 You synthesise the four parallel reviews into a single ranked findings list:
 CRITICAL > HIGH > MEDIUM > LOW. Reject the diff if any CRITICAL finding stands.
@@ -18,24 +26,28 @@ CRITICAL > HIGH > MEDIUM > LOW. Reject the diff if any CRITICAL finding stands.
 id = "security-reviewer"
 name = "Security Reviewer"
 role = "security"
+tools = ["task_*", "team_status", "message_send", "file_read", "search", "ctx_search", "code_check", "bash"]
 prompt_addendum = "Look only for security defects: auth, injection, secrets, unsafe blocks."
 
 [[members]]
 id = "perf-reviewer"
 name = "Performance Reviewer"
 role = "performance"
+tools = ["task_*", "team_status", "message_send", "file_read", "search", "ctx_search", "code_check", "bash"]
 prompt_addendum = "Look only for performance issues: N+1 queries, hot allocations, blocking I/O."
 
 [[members]]
 id = "correctness-reviewer"
 name = "Correctness Reviewer"
 role = "correctness"
+tools = ["task_*", "team_status", "message_send", "file_read", "search", "ctx_search", "code_check", "bash"]
 prompt_addendum = "Look only for logic bugs, race conditions, edge-case handling, error propagation."
 
 [[members]]
 id = "style-reviewer"
 name = "Style Reviewer"
 role = "style"
+tools = ["task_*", "team_status", "message_send", "file_read", "search", "ctx_search", "code_check", "bash"]
 prompt_addendum = "Look only for style/readability: naming, file size, abstraction smells."
 
 [[tasks]]

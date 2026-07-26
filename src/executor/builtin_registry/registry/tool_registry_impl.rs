@@ -726,6 +726,15 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.heartbeat_report_tool.call_json(arguments).await })
             }
 
+            // Agent identity + signed operation ledger. Stateless: it reads the
+            // process-global ledger installed at boot, so it needs no struct
+            // field and no deferred injection — construct per call.
+            "agent_identity" => Box::pin(async move {
+                crate::builtin_tools::agent_identity::AgentIdentityTool::new()
+                    .call_json(arguments)
+                    .await
+            }),
+
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
             "agent_create" | "agent_list" | "agent_delete" | "agent_switch" => {

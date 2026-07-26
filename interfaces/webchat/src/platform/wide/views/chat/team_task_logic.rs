@@ -1,29 +1,15 @@
-//! Host-testable pure logic for the team task strip/drawer: status → label/color
+//! Host-testable pure logic for the team task strip/drawer: status → color
 //! mapping over the raw snake_case `CoordTaskStatus` wire strings, "most salient"
 //! task selection, and the overflow count. No Leptos signals / DOM here.
+//!
+//! Status **labels** deliberately do not live here: the kanban already owns a
+//! localized `CoordTaskStatus` → text table
+//! ([`crate::views::teams::components::board_columns::column_label`]), and the
+//! strip/drawer call it. This module used to carry a second, hardcoded-Chinese
+//! copy of the same 10 variants — two sources that could (and did) disagree,
+//! and one of which no locale switch could reach.
 
 use crate::api::teams::CoordTaskDto;
-
-/// Chinese label for a raw `CoordTaskStatus` wire string (snake_case, all 10
-/// variants from src/agents/swarm/tasks/mod.rs). Unknown / future variants echo
-/// verbatim so the strip/drawer always render something (never panics).
-#[must_use]
-pub fn task_status_label(status: &str) -> String {
-    match status {
-        "waiting_review" => "待审阅",
-        "in_progress" => "进行中",
-        "pending" => "待处理",
-        "blocked" => "阻塞",
-        "completed" => "已完成",
-        "failed" => "失败",
-        "cancelled" => "已取消",
-        "skipped" => "已跳过",
-        "paused" => "已暂停",
-        "unsatisfiable" => "不可满足",
-        other => return other.to_string(),
-    }
-    .to_string()
-}
 
 /// Status dot color for a task (CSS hex), reusing the member palette family.
 #[must_use]
@@ -99,22 +85,24 @@ mod tests {
     }
 
     #[test]
-    fn label_maps_all_ten_variants_and_echoes_unknown() {
-        assert_eq!(task_status_label("waiting_review"), "待审阅");
-        assert_eq!(task_status_label("in_progress"), "进行中");
-        assert_eq!(task_status_label("pending"), "待处理");
-        assert_eq!(task_status_label("blocked"), "阻塞");
-        assert_eq!(task_status_label("completed"), "已完成");
-        assert_eq!(task_status_label("failed"), "失败");
-        assert_eq!(task_status_label("cancelled"), "已取消");
-        assert_eq!(task_status_label("skipped"), "已跳过");
-        assert_eq!(task_status_label("paused"), "已暂停");
-        assert_eq!(task_status_label("unsatisfiable"), "不可满足");
-        // Unknown / future variants echo verbatim (never panics, forward-compatible).
-        assert_eq!(
-            task_status_label("weird_future_state"),
-            "weird_future_state"
-        );
+    fn color_covers_every_stored_status_and_unknowns() {
+        // All 10 `CoordTaskStatus` variants plus a future one must resolve to a
+        // dot color (never panic, never render an empty style attribute).
+        for s in [
+            "pending",
+            "blocked",
+            "in_progress",
+            "waiting_review",
+            "paused",
+            "completed",
+            "skipped",
+            "failed",
+            "cancelled",
+            "unsatisfiable",
+            "weird_future_state",
+        ] {
+            assert!(task_status_color(s).starts_with('#'), "no color for {s}");
+        }
     }
 
     #[test]

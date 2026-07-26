@@ -283,7 +283,16 @@
     "todo_current": "On: ",
     "todo_next": "Next: ",
     "todo_done": "Done",
-    "todo_not_started": "Not started"
+    "todo_not_started": "Not started",
+    "team_attachments_unsupported": "Team group chat does not support attachments yet — remove them to send.",
+    "team_leader_badge": "Leader",
+    "team_mention_all": "everyone",
+    "team_roster_working": "Working",
+    "team_roster_idle": "Idle",
+    "team_roster_done": "Done",
+    "team_roster_error": "Error",
+    "team_tasks_title": "Team Tasks",
+    "team_unread": "New messages"
   },
   "memory": {
     "title": "Memory Vault",
@@ -1678,7 +1687,8 @@
         "completed": "Completed",
         "skipped": "Skipped",
         "failed": "Failed",
-        "cancelled": "Cancelled"
+        "cancelled": "Cancelled",
+        "unsatisfiable": "Unsatisfiable"
       },
       "empty_state": {
         "no_teams": "No teams yet. Ask the assistant to create one.",

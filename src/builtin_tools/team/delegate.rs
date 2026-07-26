@@ -375,8 +375,11 @@ impl AlephTool for TeamDelegateTool {
         // above, and best-effort enrollment never blocks the delegation.
         if !is_acp {
             if let Some(caller) = caller_session.as_deref() {
-                let child_key =
-                    crate::gateway::router::SessionKey::task(target.agent_id(), "team", &task.id);
+                let child_key = crate::gateway::router::SessionKey::task(
+                    target.agent_id(),
+                    crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+                    &task.id,
+                );
                 let _ = crate::gateway::goal_budget::check_and_enroll_delegation(
                     context.session_store(),
                     caller,

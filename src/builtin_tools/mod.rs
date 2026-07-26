@@ -23,6 +23,7 @@ use tracing::debug;
 
 pub mod a2a_tools;
 pub mod acp_tools;
+pub mod agent_identity;
 pub mod agent_manage;
 pub mod ask_user;
 pub mod automation_tool;
@@ -117,6 +118,7 @@ pub use acp_tools::{
     AcpDelegateArgs, AcpDelegateOutput, AcpDelegateTool, AcpSwitchArgs, AcpSwitchOutput,
     AcpSwitchTool,
 };
+pub use agent_identity::{AgentIdentityArgs, AgentIdentityTool};
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
     AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs,

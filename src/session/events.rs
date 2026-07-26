@@ -26,10 +26,18 @@ pub enum TurnOutcome {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Who authorized a gated tool call.
+///
+/// `Autoconfirm` was removed: it had no constructor anywhere in the tree, so no
+/// stored event can carry it and nothing could ever read it back. A variant
+/// with no producer is a claim the enum cannot honour.
 pub enum ApprovalSource {
+    /// A human answered the prompt for this call.
     User,
+    /// A grant taken earlier in the session satisfied the gate — nobody was
+    /// asked this time. Produced by the session-approval-memory short circuit
+    /// in `tools::scoped::dispatch::confirm_with_memory`.
     Trusted,
-    Autoconfirm,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

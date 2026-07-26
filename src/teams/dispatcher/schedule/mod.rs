@@ -297,8 +297,11 @@ impl TeamDispatcher {
             if let Some(origin) =
                 crate::gateway::goal_budget::origin_session_from_metadata(&task.metadata)
             {
-                let child_key =
-                    crate::gateway::router::SessionKey::task(&owner, "team", &task_id);
+                let child_key = crate::gateway::router::SessionKey::task(
+                    &owner,
+                    crate::teams::run_mode::TEAM_TASK_TASK_TYPE,
+                    &task_id,
+                );
                 let _ = crate::gateway::goal_budget::check_and_enroll_delegation(
                     self.context.session_store(),
                     &origin,

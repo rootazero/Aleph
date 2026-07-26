@@ -6,10 +6,11 @@
 
 use leptos::prelude::*;
 
+use crate::i18n::{t_string, use_i18n};
 use crate::views::chat::state::ChatState;
-use crate::views::chat::team_task_logic::{
-    extra_task_count, most_salient_task, task_status_color, task_status_label,
-};
+use crate::views::chat::team_task_logic::{extra_task_count, most_salient_task, task_status_color};
+// Single localized `CoordTaskStatus` → text table, shared with the kanban.
+use crate::views::teams::components::board_columns::column_label;
 
 /// Shared open-state for the team task drawer (set by the strip, read by the
 /// drawer). Provided by `ChatView` (view.rs) — a common ancestor of both the
@@ -21,6 +22,7 @@ pub struct TaskDrawerOpen(pub RwSignal<bool>);
 #[must_use]
 pub fn TeamTaskStrip() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     // Open-state lives in ChatView's context (Step 4) so the sibling
     // TeamTaskDrawer reads the same signal. The strip only sets it.
     let TaskDrawerOpen(drawer_open) = expect_context::<TaskDrawerOpen>();
@@ -42,12 +44,12 @@ pub fn TeamTaskStrip() -> impl IntoView {
                         return view! { <span></span> }.into_any();
                     };
                     let dot = task_status_color(&top.status);
-                    let label = task_status_label(&top.status);
+                    let label = column_label(i18n, &top.status);
                     let subject = top.subject.clone();
                     let extra = extra_task_count(tasks.len());
                     view! {
                         <span style=format!("color: {dot};")>"●"</span>
-                        <span class="opacity-60">"任务"</span>
+                        <span class="opacity-60">{t_string!(i18n, common.team_tasks).to_string()}</span>
                         <span class="opacity-40">"·"</span>
                         <span class="font-medium truncate aleph-task-strip-subject">{subject}</span>
                         <span class="opacity-40">"·"</span>
@@ -68,6 +70,7 @@ pub fn TeamTaskStrip() -> impl IntoView {
 #[must_use]
 pub fn TeamTaskDrawer() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let TaskDrawerOpen(open) = expect_context::<TaskDrawerOpen>();
 
     view! {
@@ -80,7 +83,9 @@ pub fn TeamTaskDrawer() -> impl IntoView {
                         shadow-xl flex flex-col aleph-no-drag"
                  data-tauri-drag-region="false">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-border">
-                    <span class="text-sm font-semibold">"团队任务"</span>
+                    <span class="text-sm font-semibold">
+                        {move || t_string!(i18n, chat.team_tasks_title).to_string()}
+                    </span>
                     <button
                         type="button"
                         class="text-xs opacity-60 hover:opacity-100"
@@ -92,14 +97,16 @@ pub fn TeamTaskDrawer() -> impl IntoView {
                         let tasks = chat.team_tasks.get();
                         if tasks.is_empty() {
                             return view! {
-                                <div class="text-xs opacity-50 px-2 py-4 text-center">"暂无任务"</div>
+                                <div class="text-xs opacity-50 px-2 py-4 text-center">
+                                    {t_string!(i18n, common.team_no_tasks).to_string()}
+                                </div>
                             }.into_any();
                         }
                         tasks
                             .into_iter()
                             .map(|t| {
                                 let dot = task_status_color(&t.status);
-                                let label = task_status_label(&t.status);
+                                let label = column_label(i18n, &t.status);
                                 view! {
                                     <div class="flex items-center gap-2 px-2 py-2 rounded \
                                                 hover:bg-surface-sunken/40 text-xs">

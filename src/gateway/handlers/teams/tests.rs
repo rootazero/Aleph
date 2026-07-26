@@ -504,6 +504,102 @@ mod tests {
         assert_eq!(items[1].created_at, t1.timestamp_millis());
     }
 
+    /// Build a transcript row. `recipients` empty ⇒ broadcast to the group;
+    /// non-empty ⇒ directed inbox traffic.
+    fn history_msg(
+        from_agent: &str,
+        msg_type: crate::teams::messages::types::MessageType,
+        to: &[&str],
+        at_millis: i64,
+    ) -> crate::teams::messages::types::TeamMessage {
+        use crate::teams::messages::types::{Recipient, RecipientRole, TeamMessage};
+        use chrono::{TimeZone, Utc};
+        TeamMessage {
+            id: format!("m-{from_agent}-{at_millis}"),
+            team_id: "t1".to_string(),
+            from_agent: from_agent.to_string(),
+            msg_type,
+            subject: String::new(),
+            content: "body".to_string(),
+            recipients: to
+                .iter()
+                .map(|a| Recipient {
+                    agent_id: (*a).to_string(),
+                    role: RecipientRole::To,
+                })
+                .collect(),
+            reply_to: None,
+            thread_id: None,
+            attachments: vec![],
+            created_at: Utc.timestamp_millis_opt(at_millis).unwrap(),
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn map_history_classifies_user_agent_and_system_rows() {
+        use crate::teams::messages::types::MessageType;
+
+        let items = map_history(vec![
+            history_msg(
+                crate::teams::broadcast::RESERVED_USER_HANDLE,
+                MessageType::Message,
+                &[],
+                1,
+            ),
+            history_msg("risk_analyst", MessageType::Message, &[], 2),
+            history_msg(
+                crate::teams::broadcast::SYSTEM_HANDLE,
+                MessageType::SystemNotification,
+                &[],
+                3,
+            ),
+        ]);
+
+        let kinds: Vec<&str> = items.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, vec!["user", "agent", "system"]);
+    }
+
+    #[test]
+    fn map_history_drops_directed_inbox_traffic() {
+        use crate::teams::messages::types::MessageType;
+
+        // `team_messages` is a shared bus: the notifier's leader digests and the
+        // router's escalation hints are addressed to one agent and were never
+        // shown live. Replaying them turned a re-opened group chat into a
+        // noisier conversation than the one the user had just been watching.
+        let items = map_history(vec![
+            history_msg(
+                "team_dispatcher",
+                MessageType::SystemNotification,
+                &["leader"],
+                1,
+            ),
+            history_msg("risk_analyst", MessageType::Message, &[], 2),
+        ]);
+
+        assert_eq!(items.len(), 1, "only the conversation row survives");
+        assert_eq!(items[0].from_agent, "risk_analyst");
+    }
+
+    #[test]
+    fn map_history_keeps_directed_conversation_rows() {
+        use crate::teams::messages::types::MessageType;
+
+        // An addressed *conversation* message (@mention reply) is still chat —
+        // the filter keys on type-plus-recipients, not recipients alone, so an
+        // agent-to-agent reply is not mistaken for inbox plumbing.
+        let items = map_history(vec![history_msg(
+            "risk_analyst",
+            MessageType::Message,
+            &["growth_analyst"],
+            1,
+        )]);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "agent");
+    }
+
     // -------------------------------------------------------------------------
     // handle_rename tests
     // -------------------------------------------------------------------------

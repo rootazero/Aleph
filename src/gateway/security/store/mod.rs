@@ -5,7 +5,9 @@
 //! Under LAN-trust this store is the persistence layer for the secret vault
 //! master key (shared-token chain), cluster-node device records, remote Panel
 //! device-auth tokens + bootstrap tickets (see `tokens.rs` / `devices.rs` /
-//! `bootstrap_tickets.rs`), channel sender policies, and the security audit log.
+//! `bootstrap_tickets.rs`), channel sender policies, the security audit log,
+//! and agent signing identities + their signed operation ledger (see
+//! `identity.rs`; the domain logic lives in [`crate::identity`]).
 //!
 //! Legacy tables: the migration chain below still creates `sessions` and
 //! `pairing_requests` (SCHEMA_V2/V3; v9/v10 rebuild `pairing_requests` for the
@@ -22,6 +24,7 @@ use tracing::{debug, info};
 
 mod bootstrap_tickets;
 mod devices;
+mod identity;
 mod senders;
 mod tokens;
 mod types;
@@ -33,7 +36,7 @@ pub use bootstrap_tickets::{BootstrapTicketError, ConsumedBootstrapTicket};
 pub use types::*;
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -214,6 +217,19 @@ impl SecurityStore {
             conn.execute_batch(SCHEMA_V11)?;
             drop(conn);
             self.set_schema_version(11)?;
+        }
+
+        if version < 12 {
+            info!(
+                from = version,
+                to = 12,
+                "Migrating security schema to v12 (agent identities + signed ledger)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(crate::identity::IDENTITY_SCHEMA)?;
+            drop(conn);
+            self.set_schema_version(12)?;
         }
 
         // Final safety: ensure version is at latest
