@@ -1,0 +1,284 @@
+/* Session export stylesheet — embedded via include_str!.
+ *
+ * Constraints this file must respect:
+ *  - No @import, no url() to any host. The document declares
+ *    `default-src 'none'` and is meant to work offline from a file:// path.
+ *  - No web fonts, not even data: ones — the gateway CSP sets font-src 'self',
+ *    so a data: font would be blocked when the export is served rather than
+ *    opened from disk. System stacks only.
+ *  - Light and dark both styled via prefers-color-scheme; the document has no
+ *    script, so there is no toggle to fall back on.
+ */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --surface-2: #efeff1;
+  --border: #e2e2e6;
+  --text: #1b1b1f;
+  --text-dim: #6b6b75;
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a;
+    --surface: #1e1e24;
+    --surface-2: #26262e;
+    --border: #33333d;
+    --text: #e8e8ec;
+    --text-dim: #9a9aa6;
+    --accent: #a5b4fc;
+    --accent-soft: #262640;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 4rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.page-head {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 2.5rem 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+}
+
+.page-meta {
+  margin: 0.35rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+
+main {
+  max-width: 52rem;
+  margin: 0 auto;
+}
+
+/* ── Transcript ─────────────────────────────────────────────── */
+
+.transcript { padding-top: 1.5rem; }
+
+.msg {
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg:last-child { border-bottom: none; }
+
+.msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.role {
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.msg--user .role { color: var(--accent); }
+
+.ts {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.msg--user .msg-body {
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+.msg-body > *:first-child { margin-top: 0; }
+.msg-body > *:last-child { margin-bottom: 0; }
+
+.msg-body h1, .msg-body h2, .msg-body h3,
+.msg-body h4, .msg-body h5, .msg-body h6 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.msg-body h1 { font-size: 1.3rem; }
+.msg-body h2 { font-size: 1.15rem; }
+.msg-body h3 { font-size: 1.02rem; }
+
+.msg-body p { margin: 0.7em 0; }
+
+.msg-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg-body a[href^="#disallowed-"] {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
+.msg-body ul, .msg-body ol { margin: 0.7em 0; padding-left: 1.5em; }
+.msg-body li { margin: 0.2em 0; }
+
+.msg-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+
+.msg-body code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--surface-2);
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+}
+
+.msg-body pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+
+.msg-body pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.84em;
+  line-height: 1.55;
+}
+
+.msg-body table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.msg-body th, .msg-body td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+
+.msg-body th { background: var(--surface-2); font-weight: 600; }
+
+.msg-body img { max-width: 100%; height: auto; border-radius: 6px; }
+
+.msg-body hr { border: none; border-top: 1px solid var(--border); margin: 1.4em 0; }
+
+.empty { color: var(--text-dim); font-style: italic; }
+
+/* ── Attachments ────────────────────────────────────────────── */
+
+.artifacts {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.artifacts h2 {
+  margin: 0 0 1rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: 0.85rem;
+}
+
+.art {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.art--image { margin: 0; }
+
+.art--image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--surface-2);
+}
+
+.art--image figcaption,
+.art--file,
+.art--omitted {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.art--file {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.art--file:hover { background: var(--surface-2); }
+
+.icon { color: var(--accent); font-weight: 700; }
+
+.label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.size {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.art--omitted { border-style: dashed; opacity: 0.75; }
+
+@media print {
+  body { padding: 0; }
+  .msg { break-inside: avoid; }
+  .art { break-inside: avoid; }
+}
