@@ -35,7 +35,7 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
     let mut hits: Vec<&'static str> = Vec::new();
     let mut buf: Option<Vec<u8>> = None;
 
-    for (name, re) in &patterns {
+    for (name, re) in patterns {
         let working_slice = buf.as_deref().unwrap_or(bytes);
         if !re.is_match(working_slice) {
             continue;
