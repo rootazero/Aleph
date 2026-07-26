@@ -182,7 +182,10 @@ pub fn ArtifactsSurface() -> impl IntoView {
     view! {
         // `relative` anchors the lightbox overlay to the pane, so an image
         // preview covers this column and leaves the chat streaming beside it.
-        <div class="relative flex-1 min-h-0 flex flex-col aleph-content-top">
+        // `aleph-pane-top` (not `aleph-content-top`): the header below carries
+        // a real button, and on web the smaller content inset would park it on
+        // the NotificationCenter bell.
+        <div class="relative flex-1 min-h-0 flex flex-col aleph-pane-top">
             <div class="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
                 <span class="text-xs font-semibold">{t!(i18n, common.artifacts_title)}</span>
                 <span class="text-[11px] text-text-tertiary">

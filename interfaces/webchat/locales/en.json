@@ -52,7 +52,6 @@
     "agent_binding_title": "Agent Binding",
     "unbound_option": "— Unbound —",
     "bound_to_prefix": "bound to",
-    "workspace_title": "Workspace",
     "artifacts_title": "Artifacts",
     "artifacts_export": "Export HTML",
     "artifacts_empty": "Nothing produced in this conversation yet",

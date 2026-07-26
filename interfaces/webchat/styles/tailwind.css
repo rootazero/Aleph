@@ -1913,9 +1913,8 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 /* ── Collapsible workspace pane (chat right overlay) ───────────────
    The pane FLOATS over the chat surface (absolute, right-anchored) so
    opening/closing it never reflows the chat detail. Collapse eases by
-   sliding it off the right edge + fading over 200ms (mirrors the
-   `.aleph-ws-label` park-off-right), instead of the old flex-basis
-   shrink it used as a sibling column. */
+   sliding it off the right edge + fading over 200ms, instead of the
+   old flex-basis shrink it used as a sibling column. */
 .aleph-workspace-pane {
     transition: transform 200ms ease-out, opacity 200ms ease-out;
 }
@@ -1925,20 +1924,13 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
     pointer-events: none;
 }
 
-/* Workspace chrome (LayoutToggle + "WORKSPACE · …" label) glides in
-   lockstep with the pane — same 200ms ease-out — so the toggle's right
-   edge and the label's left edge slide with the boundary instead of
-   snapping. The label additionally fades + parks off the right edge when
-   collapsed (it's always mounted now so it can animate out). */
+/* The LayoutToggle glides in lockstep with the pane — same 200ms ease-out — so
+   its right edge slides with the chat/workspace boundary instead of snapping.
+   The band's "WORKSPACE" label that used to animate alongside it is gone: both
+   pane bodies label themselves, and on web the band label drew on top of the
+   pane's own header. */
 .aleph-ws-toggle {
     transition: right 200ms ease-out;
-}
-.aleph-ws-label {
-    transition: left 200ms ease-out, opacity 200ms ease-out;
-}
-.aleph-ws-label.workspace-collapsed {
-    left: calc(100% + 16px);
-    opacity: 0;
 }
 
 /* === Title-row layout tokens ====================================
@@ -1993,6 +1985,20 @@ html[data-platform="macos"] {
    padding; only the top inset is centralized here. */
 .aleph-content-top {
     padding-top: var(--aleph-content-top);
+}
+
+/* Top inset for a pane that carries its own INTERACTIVE header (the workspace
+   pane's title row, the lightbox's caption row) rather than plain page text.
+   `--aleph-content-top` alone is not enough for those: it only clears the macOS
+   overlay titlebar, which is 0 on web / Win / Linux — but the app's OWN chrome
+   row (NotificationCenter bell, LayoutToggle) is `aleph-chrome-top` on EVERY
+   platform, so on web a pane header sat exactly on the bell and the bell, being
+   later in the DOM, won the click. Take whichever inset is larger:
+   • web/Win/Linux: chrome-y 28px → 48px (clears the 28px-tall chrome row),
+   • macOS:         content-top 2.45rem ≈ 39px wins (clears the traffic lights).
+   One rule, both hazards, no per-platform branch at the call site. */
+.aleph-pane-top {
+    padding-top: max(var(--aleph-content-top), calc(var(--aleph-chrome-y) + 20px));
 }
 
 /* Belt-and-braces opt-out from the macOS `-webkit-app-region: drag`

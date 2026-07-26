@@ -1,4 +1,4 @@
-use crate::i18n::{t_string, use_i18n, I18nContextProvider};
+use crate::i18n::{use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -419,42 +419,17 @@ fn ChatBandChrome() -> impl IntoView {
     let Some(workspace) = use_context::<WorkspaceState>() else {
         return ().into_any();
     };
-    let i18n = use_i18n();
-    // Team mode swaps the workspace pane for a self-labelled "deliverables | tasks"
-    // tab header parked at the same top-leading position. The generic
-    // "Workspace · …" band label would sit right on top of those tabs (and
-    // "tool details" is a single-agent tool-activity concept that doesn't apply
-    // to a team pane), so gate it off whenever a team is active. `ChatState`
-    // may be absent during early boot races — treat that as "not a team".
-    let chat = use_context::<ChatState>();
+    // No band label. Both pane bodies are self-labelled now — team mode by its
+    // "deliverables | tasks" tabs, single-agent by the artifacts header ("产物 ·
+    // N") — so a generic "WORKSPACE" floating in the band was a second, vaguer
+    // title for the same column. It also *overlapped* the real one: the band
+    // label sits at `aleph-chrome-top` while the pane header sits at the pane's
+    // own top inset, and on web those are the same row, so the two strings drew
+    // on top of each other. Deleting the weaker one is the fix; the pane keeps
+    // the title that carries a count.
 
     view! {
         <Show when=move || mode.get() == PanelMode::Chat>
-            // Workspace label — single-agent only. Within that case it stays
-            // always-mounted (not Split-gated) so it can glide + fade in
-            // lockstep with the pane (same 200ms ease-out via `.aleph-ws-label`)
-            // instead of popping; `workspace-collapsed` slides it off the right
-            // edge when not in Split.
-            <Show when=move || chat.is_none_or(|c| c.team_id.get().is_none())>
-                <div
-                    class="aleph-ws-label aleph-no-drag pointer-events-none absolute aleph-chrome-top
-                           left-[calc(100%_-_var(--aleph-workspace-w)_+_16px)] flex items-center gap-2
-                           text-xs uppercase tracking-wider text-text-tertiary h-7"
-                    class:workspace-collapsed=move || workspace.mode.get() != LayoutMode::Split
-                    data-tauri-drag-region="false"
-                >
-                    // No sub-label. It used to read "· tool detail" / "· idle"
-                    // off `tool_payloads`, which described the contextual
-                    // inspector this band once sat beside. The pane now lists
-                    // artifacts, and "a tool ran" is not "an artifact exists" —
-                    // the two drift apart on the very first tool call that
-                    // produces nothing. The pane's own header already carries an
-                    // accurate count, and the LayoutToggle badge already carries
-                    // the unseen-activity signal, so a second, wrong indicator
-                    // here is worse than none.
-                    <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
-                </div>
-            </Show>
             // LayoutToggle — right-edge tracks the chat / workspace
             // boundary. `pointer-events-auto` re-enables clicks because
             // the band itself is `pointer-events:none` on web / Win /

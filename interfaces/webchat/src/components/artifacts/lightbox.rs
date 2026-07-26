@@ -48,7 +48,10 @@ pub(super) fn Lightbox(target: RwSignal<Option<LightboxTarget>>) -> impl IntoVie
                     class="absolute inset-0 z-30 flex flex-col bg-surface-base/95 backdrop-blur-sm"
                     on:click=move |_| target.set(None)
                 >
-                    <div class="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+                    // `aleph-pane-top`: the overlay covers the pane from its very
+                    // top edge, so without the inset this row — ✕ included — lands
+                    // under the app chrome on web and the bell swallows the click.
+                    <div class="aleph-pane-top flex items-center gap-2 px-3 pb-2 border-b border-border shrink-0">
                         <span class="min-w-0 flex-1 truncate text-xs">{caption}</span>
                         // Stop propagation so following the link does not also
                         // run the backdrop's close handler.
