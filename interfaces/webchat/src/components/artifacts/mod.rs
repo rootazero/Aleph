@@ -83,13 +83,16 @@ pub fn filtered(items: &[ArtifactItem], filter: ArtifactFilter) -> Vec<ArtifactI
 
 /// Tailwind classes for an origin badge. Inbound (what the user gave the agent)
 /// and outbound (what the agent produced) read differently at a glance.
+///
+/// Deliverables deliberately have no arm here: they never reach a material row
+/// — [`partition_deliverables`] lifts them into their own section, where the
+/// card carries its own styling.
 #[must_use]
 pub fn origin_badge_class(origin: &str) -> &'static str {
     use aleph_protocol::artifact as wire;
     match origin {
         wire::ORIGIN_INBOUND => "bg-surface-muted text-text-secondary",
         wire::ORIGIN_EXPORT => "bg-primary/15 text-primary",
-        wire::ORIGIN_DELIVERABLE => "bg-primary text-white",
         // "outbound" and anything a newer core invents.
         _ => "bg-success/15 text-success",
     }
