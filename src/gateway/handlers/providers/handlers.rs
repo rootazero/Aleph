@@ -712,7 +712,7 @@ pub async fn handle_models_refresh(
                     .clone()
                     .or_else(|| resolve_api_key(name, &vault));
                 if api_key.is_none() {
-                    tracing::warn!(
+                    warn!(
                         provider = %name,
                         "Skipping modelsRefresh: no API key resolvable"
                     );
