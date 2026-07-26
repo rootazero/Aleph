@@ -260,6 +260,41 @@ The previous QA round exercised `team_create`'s inline path only. These run the
    `team_delegate`. Run it **before** the fix first — they should be absent —
    so the pin is proven against a reproduced failure rather than assumed.
 
+### 5.3 QA result (2026-07-26, macOS, live daemon on port 18790)
+
+All of §5.2 ran and passed. The "before the fix" binary was the daemon already
+running from the previous day, so the A/B is a genuine pre/post comparison on one
+machine, one config, one team, one prompt — only the binary differed.
+
+| check | result |
+|---|---|
+| pre-fix, global `mode = "chat"`, leader asked which verbs it can call | `task_create=无` / `team_delegate=无` — **defect reproduced** |
+| post-fix, same config / team / prompt | `task_create=有` / `team_delegate=有` |
+| `strategy-room` materialized fresh | `tools_ignored_for` **absent** from the output (`skip_serializing_if`) |
+| persisted `skills` in `config.toml` | leader `moderator` carries `team_delegate`; the three workers do not — the declared lists exactly |
+| `bull` probed **after a daemon restart** | exactly the declared 14 + `get_tool_schema` + `subagent`; nothing else of the ~215-tool registry. `tool_search` **absent**, independently confirming §2's "retain, not defer" |
+| second materialization (all four ids now exist) | `tools_ignored_for: ["moderator","bull","bear","contrarian"]` |
+| stranding worker declaration (`tools = ["search"]`) | rejected naming `task_submit, message_send`; no `qa-strand-worker` directory |
+| `session_set_mode` inside a team run | session's stored mode stayed `work` — refused |
+| same call in a non-team session (control) | stored mode became `code` — succeeds normally |
+
+Two observations, neither caused by this work:
+
+1. **A rejected materialization leaves the leader agent behind.** Provisioning is
+   leader-then-members, so a member-level `validate_toolset` failure orphans an
+   already-created leader (`qa-strand-lead` persisted in `config.toml` and
+   `~/.aleph/agents/`). No team record leaks. Pre-existing ordering, but this
+   work makes the rejection path more reachable, so it is worth a cleanup pass.
+2. **`FileSessionStore` metadata corruption reproduced.** The team session's
+   `metadata.json` ended with trailing bytes after the closing brace (`}9\n}`),
+   the known non-atomic / non-truncating write defect. Unrelated to this change
+   beyond §4.4's note that the pin adds one metadata write per member session.
+
+A model's self-report is not evidence: asked to call `session_set_mode`, the
+leader returned a fabricated success payload whose shape does not match
+`SessionSetModeOutput`. The verdict above comes from the stored session record,
+not from what the agent said.
+
 ## 6. Documentation
 
 * `MULTI_AGENT_SYSTEM.md` — built-in template scope table; the global-id caveat;
