@@ -3,6 +3,14 @@
 //! Used by the subagent spawner so that a sub-agent can only see / execute
 //! the tools its `AgentDef` permits. Delegates all passing calls to the inner
 //! service unchanged.
+//!
+//! It is also where a delegated role's **identity** enters the signed ledger.
+//! A subagent runs on the parent's `ScopedToolService` and under the parent's
+//! `TURN_CONTEXT`, so the chokepoint would otherwise file its actions under
+//! whoever spawned it. This wrapper is the one layer that knows the acting
+//! `AgentDef`, and it sits inside each of the tasks the harness Act phase
+//! spawns per tool call — which is exactly where the scope has to be opened
+//! for the chokepoint to see it. See [`crate::identity::actor`].
 
 use crate::sync_primitives::Arc;
 
@@ -34,7 +42,7 @@ impl ToolService for AllowlistToolService {
                 reason: format!("agent '{}' disallows this tool", self.agent_def.id),
             });
         }
-        self.inner.execute(name, input).await
+        crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)).await
     }
 
     async fn execute_with_cancel(
@@ -52,7 +60,11 @@ impl ToolService for AllowlistToolService {
                 reason: format!("agent '{}' disallows this tool", self.agent_def.id),
             });
         }
-        self.inner.execute_with_cancel(name, input, cancel).await
+        crate::identity::as_actor(
+            &self.agent_def.id,
+            self.inner.execute_with_cancel(name, input, cancel),
+        )
+        .await
     }
 
     async fn list(&self) -> Vec<ToolDefinition> {
@@ -256,5 +268,63 @@ mod tests {
         let svc = AllowlistToolService::new(Arc::new(FakeTools), def);
         let schema = svc.metadata_schema();
         assert_eq!(schema.len(), 3);
+    }
+
+    /// Reports the ledger actor the inner service would see — i.e. exactly what
+    /// `ScopedToolService::ledger_agent_id` reads at the chokepoint.
+    struct ActorProbe;
+
+    #[async_trait]
+    impl ToolService for ActorProbe {
+        async fn execute(&self, _: &str, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: json!({ "actor": crate::identity::current_actor() }),
+                metadata: ToolOutputMetadata::default(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+            None
+        }
+        fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+            std::sync::Arc::from(Vec::new())
+        }
+    }
+
+    /// The wiring the signed ledger depends on: a delegated role's calls must
+    /// reach the inner service carrying that role's identity. Without it the
+    /// chokepoint falls back to `TURN_CONTEXT`, which for a subagent is the
+    /// *parent's* — and `SessionKey::Subagent::agent_id()` delegates to the
+    /// parent too, so nothing downstream could have noticed.
+    #[tokio::test]
+    async fn the_acting_role_reaches_the_inner_service() {
+        let def = agent_with_allowed(vec!["*"]);
+        let svc = AllowlistToolService::new(Arc::new(ActorProbe), def);
+
+        let out = svc.execute("anything", json!({})).await.unwrap();
+        assert_eq!(out.value["actor"], json!("test"));
+
+        let out = svc
+            .execute_with_cancel("anything", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            out.value["actor"],
+            json!("test"),
+            "the cancel-aware path is the one the harness actually takes"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denied_call_scopes_no_actor() {
+        // The gate returns before delegating, so nothing is attributed — and
+        // the refusal is recorded by the parent's chokepoint under the parent,
+        // which never saw this call at all.
+        let def = agent_with_allowed(vec![]);
+        let svc = AllowlistToolService::new(Arc::new(ActorProbe), def);
+        assert!(svc.execute("anything", json!({})).await.is_err());
+        assert_eq!(crate::identity::current_actor(), None);
     }
 }

@@ -20,6 +20,15 @@
 /// [`verify`](super::verify) detect tail truncation — the failure mode a plain
 /// hash chain is structurally blind to, because a truncated chain is still
 /// internally consistent.
+///
+/// `agent_ledger_health` is a single row counting appends this installation
+/// **failed** to write. It is durable rather than a process counter because a
+/// record that was never written is invisible to every chain check, and the
+/// surface that most needs to know — the offline `aleph-server identity verify`,
+/// used precisely when the writing daemon is not trusted — runs in a different
+/// process and would otherwise always read zero. A daemon restart would lose it
+/// too. Every read of the verdict reports it alongside, so a clean `ok` is
+/// never mistaken for "complete".
 pub const IDENTITY_SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS agent_keys (
     fingerprint TEXT PRIMARY KEY,
@@ -56,6 +65,12 @@ CREATE TABLE IF NOT EXISTS agent_ledger (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_ledger_hash ON agent_ledger(agent_id, hash);
 CREATE INDEX IF NOT EXISTS idx_agent_ledger_at ON agent_ledger(at_ms);
+
+CREATE TABLE IF NOT EXISTS agent_ledger_health (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    lost_appends INTEGER NOT NULL DEFAULT 0,
+    last_lost_ms INTEGER
+);
 ";
 
 /// Columns selected by every ledger read, in the order

@@ -26,14 +26,19 @@
 //! key can be exported and pinned off-box, after which an exported chain
 //! segment is verifiable by someone who does not trust the machine it came
 //! from. See `docs/reference/AGENT_IDENTITY.md`.
+//!
+//! This module signs; it deliberately does **not** verify. Verification lives
+//! in [`verify`](super::verify), where a signature is checked against a key
+//! *and* that key is checked to be the chain owner's. A convenience
+//! `verify(fingerprint, …)` here would be a second, weaker path — valid
+//! signature, wrong agent — and a second copy of a security check is how the
+//! divergence gets shipped.
 
 use std::collections::HashMap;
 
 use zeroize::Zeroizing;
 
-use crate::gateway::security::crypto::{
-    generate_keypair, sign_message, verify_signature, CryptoError, DeviceFingerprint,
-};
+use crate::gateway::security::crypto::{generate_keypair, sign_message, DeviceFingerprint};
 use crate::gateway::security::shared_token::SharedTokenManager;
 use crate::gateway::security::store::SecurityStore;
 use crate::sync_primitives::{Arc, Mutex};
@@ -75,8 +80,6 @@ pub enum KeyError {
     UnknownAgent(String),
     #[error("agent {0} is revoked")]
     Revoked(String),
-    #[error(transparent)]
-    Crypto(#[from] CryptoError),
 }
 
 /// Vault entry name for a signing key. Keyed by fingerprint — see module doc.
@@ -174,22 +177,6 @@ impl AgentKeystore {
         Ok(sign_message(&seed, message))
     }
 
-    /// Verify `signature` over `message` against the *stored public key* for
-    /// `fingerprint` — including retired keys, since old records were signed
-    /// by them.
-    pub fn verify(
-        &self,
-        fingerprint: &str,
-        message: &[u8],
-        signature: &[u8],
-    ) -> Result<(), KeyError> {
-        let key = self
-            .store
-            .get_agent_key(fingerprint)?
-            .ok_or_else(|| KeyError::MissingKey(fingerprint.to_string()))?;
-        verify_signature(&key.public_key, message, signature).map_err(KeyError::from)
-    }
-
     pub fn identity(&self, agent_id: &str) -> Result<Option<AgentIdentityRow>, KeyError> {
         Ok(self.store.get_agent_identity(agent_id)?)
     }
@@ -279,6 +266,22 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// What `verify::Keyring` does for one row, minus the ownership check:
+    /// resolve the stored public key by fingerprint and check the signature.
+    fn verifies(ks: &AgentKeystore, fingerprint: &str, message: &[u8], signature: &[u8]) -> bool {
+        ks.store()
+            .get_agent_key(fingerprint)
+            .unwrap()
+            .is_some_and(|k| {
+                crate::gateway::security::crypto::verify_signature(
+                    &k.public_key,
+                    message,
+                    signature,
+                )
+                .is_ok()
+            })
+    }
+
     fn keystore() -> (AgentKeystore, TempDir) {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
@@ -313,10 +316,8 @@ mod tests {
         let (ks, _d) = keystore();
         let id = ks.ensure("main").unwrap();
         let sig = ks.sign(&id.active_fingerprint, b"payload").unwrap();
-        ks.verify(&id.active_fingerprint, b"payload", &sig).unwrap();
-        assert!(ks
-            .verify(&id.active_fingerprint, b"tampered", &sig)
-            .is_err());
+        assert!(verifies(&ks, &id.active_fingerprint, b"payload", &sig));
+        assert!(!verifies(&ks, &id.active_fingerprint, b"tampered", &sig));
     }
 
     #[test]
@@ -332,8 +333,12 @@ mod tests {
 
         // The retired key still verifies what it signed — this is why keys are
         // keyed by fingerprint and never deleted.
-        ks.verify(&old.active_fingerprint, b"before rotation", &sig)
-            .unwrap();
+        assert!(verifies(
+            &ks,
+            &old.active_fingerprint,
+            b"before rotation",
+            &sig
+        ));
 
         let keys = ks.keys_of("main").unwrap();
         assert_eq!(keys.len(), 2);
@@ -401,8 +406,12 @@ mod tests {
         let sig = ks
             .sign(&signing.active_fingerprint, b"after revocation")
             .unwrap();
-        ks.verify(&signing.active_fingerprint, b"after revocation", &sig)
-            .unwrap();
+        assert!(verifies(
+            &ks,
+            &signing.active_fingerprint,
+            b"after revocation",
+            &sig
+        ));
     }
 
     #[test]

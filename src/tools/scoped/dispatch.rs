@@ -783,8 +783,11 @@ impl ScopedToolService {
             return;
         };
 
+        // Same attribution the call record uses — an approval granted for a
+        // delegated role's call belongs on that role's chain, next to the call
+        // it authorized, not on the spawning agent's.
         crate::identity::record_action(crate::identity::NewRecord {
-            agent_id: turn.session_key.agent_id().to_string(),
+            agent_id: Self::ledger_actor_for(turn),
             action: decision.ledger_action(),
             target: name.to_string(),
             outcome: decision.ledger_outcome(),

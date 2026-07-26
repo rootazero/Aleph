@@ -145,6 +145,67 @@ pub struct NewRecord {
     pub detail: String,
 }
 
+/// Key-lifecycle records.
+///
+/// These exist because `agent_keys.retired_at` and `agent_identities.revoked_at`
+/// are ordinary mutable columns: anyone who can write the database can
+/// un-revoke an identity or erase the fact that a key was ever replaced, and a
+/// chain that says nothing about its own key history verifies clean afterwards.
+/// Writing the lifecycle into the subject's own chain makes that history
+/// tamper-evident on the same terms as everything else in it.
+///
+/// Each lands on the chain of the agent it *concerns*, not the operator who
+/// triggered it. The operator's own chain separately records the
+/// `agent_identity` tool call, so "who did it" and "what happened to whom"
+/// stay two facts rather than one conflated one.
+impl NewRecord {
+    /// The statement that opens a chain: this identity, under this key,
+    /// starting here. Written by the ledger writer itself — see
+    /// [`AgentLedger::append`](super::ledger::AgentLedger::append).
+    #[must_use]
+    pub fn identity_created(agent_id: &str, fingerprint: &str) -> Self {
+        Self {
+            agent_id: agent_id.to_string(),
+            action: LedgerAction::IdentityCreated,
+            target: fingerprint.to_string(),
+            outcome: LedgerOutcome::Ok,
+            args_fp: None,
+            detail: format!("chain opened under key {fingerprint}"),
+        }
+    }
+
+    /// Signed by the **new** key: the retired one no longer makes statements.
+    #[must_use]
+    pub fn identity_rotated(agent_id: &str, fingerprint: &str, previous: Option<&str>) -> Self {
+        Self {
+            agent_id: agent_id.to_string(),
+            action: LedgerAction::IdentityRotated,
+            target: fingerprint.to_string(),
+            outcome: LedgerOutcome::Ok,
+            args_fp: None,
+            detail: previous.map_or_else(
+                || format!("signing key minted: {fingerprint}"),
+                |p| format!("signing key replaced: {p} retired, {fingerprint} active"),
+            ),
+        }
+    }
+
+    /// Signed by the key being revoked — the chain's last statement under it,
+    /// and the reason [`AgentKeystore::signing_identity`](super::AgentKeystore::signing_identity)
+    /// tolerates a revoked agent instead of refusing to sign.
+    #[must_use]
+    pub fn identity_revoked(agent_id: &str, fingerprint: &str) -> Self {
+        Self {
+            agent_id: agent_id.to_string(),
+            action: LedgerAction::IdentityRevoked,
+            target: fingerprint.to_string(),
+            outcome: LedgerOutcome::Ok,
+            args_fp: None,
+            detail: format!("identity revoked; key {fingerprint} retired"),
+        }
+    }
+}
+
 /// A materialized ledger row.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedgerRecord {

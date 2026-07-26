@@ -478,7 +478,7 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
-### Signed agent ledger (2026-07-25)
+### Signed agent ledger (2026-07-25, hardened 2026-07-26)
 
 The session event log answers *what the run did*. It does not answer *who,
 provably*: its only actor identity is the `agent_id` inside the session key, and
@@ -503,14 +503,40 @@ not have to ask the process that wrote the records).** Shipping the reader in
 the same change is deliberate: the deleted store above is what happens when it
 is not.
 
+**A delegated sub-agent is a principal here, not a line on its parent's chain.**
+It holds its own key and signs its own work. That is not free: a subagent runs
+on its *parent's* `ScopedToolService`, inherits the parent's `TURN_CONTEXT`, and
+`SessionKey::Subagent::agent_id()` resolves to the parent — all three roads led
+to the spawner. The acting role is injected by the one layer that knows it
+(`AllowlistToolService`, which the spawner builds from the child's `AgentDef`),
+and it has to be injected *there* because the harness spawns a task per tool
+call. Any future delegation or isolation path that does not go through that
+wrapper must open its own `identity::as_actor` scope, inside the spawn, or its
+work will be signed by whoever started it.
+
+**Key lifecycle is inside the chain, not beside it.** `agent_keys.retired_at`
+and `agent_identities.revoked_at` are ordinary mutable columns; on their own
+they mean an attacker with database write access can un-revoke an identity or
+erase a rotation and still get a clean `verify`. Every chain therefore opens
+with a signed `identity_created`, and each rotation and revocation appends a
+signed record to the affected agent's own chain — the revocation signed by the
+key it retires.
+
 **What a clean `verify` proves**: no stored record was edited, reordered,
 transplanted between agents, prefix-deleted, tail-truncated or forged without
-the agent's private key. **What it does not prove**: anything against an
-adversary holding `~/.aleph` (vault, master key and database share a disk);
-anything about in-process impersonation (`agent_id` is still a caller-supplied
-string on `chat.send` — see AGENT_IDENTITY.md §6); and anything about records
-that were never written, which is why `failed_appends` is returned next to
-every `ok`.
+**that** agent's private key — "that" being enforced, not assumed: a row naming
+a key this installation minted for a *different* agent is a `ForeignSigner`
+fault even when its signature is arithmetically valid. Without that check the
+guarantee would only ever have been "some agent's private key", and every
+delegated role that now holds a key enlarges that set. **What it does not
+prove**: anything against an adversary holding `~/.aleph` (vault, master key and
+database share a disk); anything about in-process impersonation (`agent_id` is
+still a caller-supplied string on `chat.send` — see AGENT_IDENTITY.md §6); and
+anything about records that were never written, which is why `failed_appends` is
+returned next to every `ok` — and why that counter is **durable**, not
+process-local: the offline verifier, the one surface you reach for when you do
+not trust the daemon, runs in a different process and would otherwise always
+read zero.
 
 Revocation is a mark, not an execution gate — nothing in this subsystem stops a
 revoked agent from running, so its actions keep being recorded (under the
@@ -1121,7 +1147,7 @@ from the pre-revert build:
 | Per-tool override | per-server *and* per-tool approval mode; two-tier memory | hermes: `approvals.deny` globs that survive yolo; per-rule grain | `[policies.tool_permissions]` exact + glob, 3-tier merge, most-restrictive-wins; explicit beats the tier | **gap → closed** (the tier used to *widen* a `default = "deny"`) |
 | Background inheritance | approval store lives on shared session services | hermes: background writes must stage; **cron gets its own axis** because "ask" is meaningless with no human attached | subagents inherit correctly; continuations now carry `caller_role` + channel permissions; headless producers stamp `unattended` ⇒ fail closed | **gap → closed** |
 | Audit trail | telemetry on the orchestrator path | hermes: observability hooks, everything redacted before display | live: `ToolCallApproved` / `ToolCallDenied` session events | **gap → closed** by deleting the dead SQLite trail that reported zeros |
-| Cryptographic actor identity | none — the caller is a process, not a principal | hermes / pi: none | per-agent Ed25519 keypair; vault-held private half, fingerprint + public half in `security.db` | **ahead** — no reference implementation in this set has one (buzz does; see AGENT_IDENTITY.md) |
+| Cryptographic actor identity | none — the caller is a process, not a principal | hermes / pi: none | per-agent Ed25519 keypair, **delegated sub-agents included**; vault-held private half, fingerprint + public half in `security.db`; key lifecycle recorded inside the agent's own chain | **ahead** — no reference implementation in this set has one (buzz does, but keyless and with no lifecycle; see AGENT_IDENTITY.md) |
 | Record integrity | append-only intent, no chain | none | per-agent hash chain, Ed25519-signed, anchored head, first-row genesis check | **ahead** — detects edit / reorder / mid-delete / transplant / prefix-delete / tail-truncate, each located to a `seq` |
 | Verifier | none | none | `agent_identity(action="verify")` + `aleph-server identity verify` (offline, daemon-independent) | **ahead** — shipped with the chain, not after it |
 | Floor beneath the top tier | under `Never`, dangerous commands are Forbidden — **but only when the sandbox profile is Managed**; with it off, the top tier is unbounded | hermes: `HARDLINE_PATTERNS` + a user-editable `approvals.deny` floor that survives yolo | `[sandbox.command_policy]` holds under every tier including `Full` (unit-pinned); a `deny` override also beats the tier | **aligned** — better placed than codex's |

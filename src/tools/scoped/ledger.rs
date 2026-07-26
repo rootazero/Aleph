@@ -52,26 +52,38 @@ pub(super) struct LedgerIntent {
 }
 
 impl ScopedToolService {
-    /// The ledger intent for this call, or `None` when there is nothing
-    /// attributable to record.
+    /// The agent a dispatch running under `turn` is recorded against — the
+    /// **single source** for that question, shared by the call record and the
+    /// approval record so the two can never disagree.
     ///
-    /// `None` when no ledger is installed (unit tests, embedded use) or when
-    /// the dispatch carries no `TURN_CONTEXT` — an unattributable action must
-    /// not be filed under a guessed agent. `audit_identity`'s fallback to the
-    /// literal `"main"` is a defensible default for a log line; it would be a
-    /// forgery in a signed chain.
+    /// Two sources, in order:
+    ///
+    /// 1. The **scoped actor** ([`crate::identity::actor`]), set by the
+    ///    subagent spawner's wrapper. A delegated role runs on its parent's
+    ///    service under the parent's `TURN_CONTEXT`, and `SessionKey::Subagent`
+    ///    even resolves `agent_id()` to the parent — so without this the role's
+    ///    work would be signed by whoever spawned it.
+    /// 2. The turn's own session key, for every agent that owns its turn.
+    ///
+    /// Taking `turn` by argument rather than reading `self.turn_context` keeps
+    /// the "no turn, no record" decision at the call sites that already have to
+    /// make it, instead of adding an `Option` here that neither could hit. An
+    /// unattributable action must not be filed under a guessed agent:
+    /// `audit_identity`'s fallback to the literal `"main"` is a defensible
+    /// default for a log line, and a forgery in a signed chain.
+    pub(super) fn ledger_actor_for(turn: &crate::tools::turn_context::TurnContext) -> String {
+        crate::identity::current_actor().unwrap_or_else(|| turn.session_key.agent_id().to_string())
+    }
+
+    /// The ledger intent for this call, or `None` when nothing is recordable —
+    /// no ledger installed (unit tests, embedded use), or no turn to attribute
+    /// the call to.
     pub(super) fn ledger_intent(&self, name: &str) -> Option<LedgerIntent> {
-        if crate::identity::global().is_none() {
-            return None;
-        }
-        let agent_id = self
-            .turn_context
-            .as_ref()?
-            .session_key
-            .agent_id()
-            .to_string();
+        // Bail out unless a ledger is installed — the handle itself is unused
+        // here; `record_action` re-resolves it on the writer side.
+        crate::identity::global()?;
         Some(LedgerIntent {
-            agent_id,
+            agent_id: Self::ledger_actor_for(self.turn_context.as_ref()?),
             tool: name.to_string(),
             mutating: !self.tool_facts(name).idempotent,
         })

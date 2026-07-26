@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{AlephError, Result};
-use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord};
+use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord, NewRecord};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -133,6 +133,8 @@ Every agent holds its own Ed25519 keypair. Every mutating tool call, every refus
 - {"action": "rotate", "agent": "main"} — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
 - {"action": "revoke", "agent": "main"} — stop the agent signing. Its chain stays readable and verifiable. `rotate` brings a revoked agent back.
 
+Rotation and revocation are themselves appended to the affected agent's chain, so key history cannot be quietly rewritten by editing the database. A delegated sub-agent holds its own key and signs its own work; it is a separate agent here, not a line on its parent's chain.
+
 What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. Export the public fingerprints and check an exported chain elsewhere if you need a proof that does not trust this host.
 
 Arguments are never stored; each record carries a fingerprint of them, plus a secret-redacted one-line summary."#;
@@ -207,6 +209,17 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 let row = keys
                     .rotate(&agent)
                     .map_err(|e| AlephError::tool(e.to_string()))?;
+                // Into the SUBJECT's chain, not the operator's: `retired_at` is
+                // an ordinary mutable column, so without this the fact that a
+                // key was ever replaced can be erased and the chain still
+                // verifies clean. The operator's own chain separately carries
+                // the `agent_identity` tool call that caused it.
+                crate::identity::record_action(NewRecord::identity_rotated(
+                    &agent,
+                    &row.active_fingerprint,
+                    previous.as_deref(),
+                ))
+                .await;
                 Ok(json!({
                     "action": "rotate",
                     "identity": identity_json(&row),
@@ -216,9 +229,23 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
 
             "revoke" => {
                 let agent = Self::agent_of(&args, "revoke")?;
+                // Read the key first: it is the one that will sign the
+                // revocation, and after this call it is retired.
+                let fingerprint = keys
+                    .identity(&agent)
+                    .map_err(|e| AlephError::tool(e.to_string()))?
+                    .map(|r| r.active_fingerprint);
                 let revoked = keys
                     .revoke(&agent)
                     .map_err(|e| AlephError::tool(e.to_string()))?;
+                // Only when something was actually revoked — recording against
+                // an agent that has no identity would mint a key just to say it
+                // was taken away. The revocation is signed by the key being
+                // revoked (see `AgentKeystore::signing_identity`), which is the
+                // whole reason that method tolerates a revoked agent.
+                if let (true, Some(fp)) = (revoked, fingerprint.as_deref()) {
+                    crate::identity::record_action(NewRecord::identity_revoked(&agent, fp)).await;
+                }
                 Ok(json!({
                     "action": "revoke",
                     "agent": agent,

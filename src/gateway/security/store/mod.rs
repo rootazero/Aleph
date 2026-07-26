@@ -36,7 +36,7 @@ pub use bootstrap_tickets::{BootstrapTicketError, ConsumedBootstrapTicket};
 pub use types::*;
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -230,6 +230,22 @@ impl SecurityStore {
             conn.execute_batch(crate::identity::IDENTITY_SCHEMA)?;
             drop(conn);
             self.set_schema_version(12)?;
+        }
+
+        if version < 13 {
+            info!(
+                from = version,
+                to = 13,
+                "Migrating security schema to v13 (durable ledger loss counter)"
+            );
+
+            // The whole identity batch is `CREATE ... IF NOT EXISTS`, so
+            // re-running it adds only the new table and keeps one definition
+            // of the shape rather than a second, drifting copy here.
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(crate::identity::IDENTITY_SCHEMA)?;
+            drop(conn);
+            self.set_schema_version(13)?;
         }
 
         // Final safety: ensure version is at latest

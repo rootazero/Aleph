@@ -130,7 +130,10 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
             // chain check, so a clean verdict must never be printed alone.
             let lost = ledger.lost();
             if lost > 0 {
-                println!("\nWARNING: {lost} record(s) failed to append in the writing process.");
+                println!(
+                    "\nWARNING: {lost} record(s) failed to append on this installation. \
+                     They are missing from the chains above and no verification can see them."
+                );
             }
             if !all_ok {
                 return Err("ledger verification failed".into());

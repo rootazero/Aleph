@@ -334,7 +334,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | PLUGIN_SYSTEM.md | [docs/reference/PLUGIN_SYSTEM.md](docs/reference/PLUGIN_SYSTEM.md) |
 | WORKFLOW_INTEROP.md | [docs/reference/WORKFLOW_INTEROP.md](docs/reference/WORKFLOW_INTEROP.md) |
 | SECURITY.md | [docs/reference/SECURITY.md](docs/reference/SECURITY.md) — 信任模型 + 工具权限三层（`tool_permissions` × exec tier × sandbox 硬底线，唯一强制点 `src/tools/scoped/`）+ 动作化审批门 + **codex / hermes / pi 对照表（Gap analysis，改权限模型前先看，别重做对比）** |
-| **AGENT_IDENTITY.md** | [docs/reference/AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) — 每 agent 独立 Ed25519 密钥 + 签名哈希链操作账本（`src/identity/`，生产者＝`tools/scoped/` 唯一咽喉，读/验＝`agent_identity` 工具 + 离线 `aleph-server identity`）；**威胁模型写明买到什么买不到什么**（不防拥有 `~/.aleph` 的对手、不防进程内冒充、对从未写入的记录无话可说）+ **buzz 逐维度对照表（改这层前先看那张表）** |
+| **AGENT_IDENTITY.md** | [docs/reference/AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) — 每 agent 独立 Ed25519 密钥 + 签名哈希链操作账本（`src/identity/`，生产者＝`tools/scoped/` 唯一咽喉，归属单一源＝`ledger_agent_id()`，**子代理由 `AllowlistToolService` 开 `as_actor` 签自己的活**，密钥生命周期本身进链，读/验＝`agent_identity` 工具 + 离线 `aleph-server identity`）；**威胁模型写明买到什么买不到什么**（不防拥有 `~/.aleph` 的对手、不防进程内冒充、对从未写入的记录无话可说——故 `lost` 计数落库并与 `ok` 并排返回）+ **buzz 逐维度对照表（改这层前先看那张表）** |
 | DESIGN_PATTERNS.md | [docs/reference/DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
 | CODE_ORGANIZATION.md | [docs/reference/CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
 | DOMAIN_MODELING.md | [docs/reference/DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |

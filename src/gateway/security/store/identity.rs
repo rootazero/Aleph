@@ -262,6 +262,44 @@ impl SecurityStore {
         }
     }
 
+    // ── health ──────────────────────────────────────────────────────────────
+
+    /// Count one append this installation failed to write.
+    ///
+    /// Durable because a lost record leaves no trace a chain check can find,
+    /// and the offline verifier — a different process, run when the daemon is
+    /// not trusted — must be able to say "this trail is incomplete". A best
+    /// effort by nature: the same disk failure that lost the record can lose
+    /// the count of it, which is why the caller also keeps a process counter
+    /// and reports the larger of the two.
+    pub fn ledger_note_lost(&self) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO agent_ledger_health (id, lost_appends, last_lost_ms)
+             VALUES (1, 1, ?1)
+             ON CONFLICT(id) DO UPDATE SET
+               lost_appends = lost_appends + 1,
+               last_lost_ms = excluded.last_lost_ms",
+            params![current_timestamp_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Appends this installation is known to have lost, across all time and
+    /// every process that has written this database.
+    pub fn ledger_lost_total(&self) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT lost_appends FROM agent_ledger_health WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(0),
+            other => Err(other),
+        })
+    }
+
     /// The whole chain in sequence order — the verification read.
     pub fn ledger_chain(&self, agent_id: &str) -> SqliteResult<Vec<LedgerRecord>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

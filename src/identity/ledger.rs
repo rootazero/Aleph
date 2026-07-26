@@ -54,22 +54,65 @@ impl AgentLedger {
         &self.keys
     }
 
-    /// Records this process failed to append. Non-zero means the chain has
-    /// holes that verification **cannot** see.
+    /// Records this installation failed to append. Non-zero means the chains
+    /// have holes that verification **cannot** see.
+    ///
+    /// Reads the durable counter and returns the larger of it and this
+    /// process's own — the two disagree only when the failure that lost the
+    /// record also lost the count of it, and in that direction the bigger
+    /// number is the honest one. A store that cannot be read at all falls back
+    /// to the process counter rather than reporting a reassuring zero.
     #[must_use]
     pub fn lost(&self) -> u64 {
-        self.lost.load(Ordering::Relaxed)
+        let here = self.lost.load(Ordering::Relaxed);
+        let durable = self
+            .keys
+            .store()
+            .ledger_lost_total()
+            .ok()
+            .and_then(|n| u64::try_from(n).ok())
+            .unwrap_or(0);
+        here.max(durable)
     }
 
     /// Append one record: assign position, hash, sign, insert, advance anchor.
+    ///
+    /// A chain that is opening (position 1) gets a signed
+    /// [`IdentityCreated`](super::record::LedgerAction::IdentityCreated) row
+    /// first, so "this chain belongs to this agent and began under this key"
+    /// is itself a chained, signed fact rather than a claim resting on the
+    /// mutable `agent_identities` row. The follow-on position is known without
+    /// re-querying: an empty chain's next two slots are 1 and 2.
     ///
     /// Call from the writer task only — see the module doc.
     pub fn append(&self, new: &NewRecord) -> Result<LedgerRecord, KeyError> {
         // `signing_identity`, not `ensure`: a revoked agent's actions must still
         // be recorded — see `AgentKeystore::signing_identity`.
         let identity = self.keys.signing_identity(&new.agent_id)?;
+        let (seq, prev_hash) = self.keys.store().ledger_next_position(&new.agent_id)?;
+
+        if seq == 1 {
+            let genesis = self.write(
+                &identity,
+                &NewRecord::identity_created(&new.agent_id, &identity.active_fingerprint),
+                1,
+                None,
+            )?;
+            return self.write(&identity, new, 2, Some(genesis.hash));
+        }
+        self.write(&identity, new, seq, prev_hash)
+    }
+
+    /// Hash, sign, insert and advance the anchor for one record at a position
+    /// its caller has already resolved.
+    fn write(
+        &self,
+        identity: &super::keystore::AgentIdentityRow,
+        new: &NewRecord,
+        seq: i64,
+        prev_hash: Option<Vec<u8>>,
+    ) -> Result<LedgerRecord, KeyError> {
         let store = self.keys.store();
-        let (seq, prev_hash) = store.ledger_next_position(&new.agent_id)?;
         let at_ms = crate::session::events::now_ms();
 
         let hash = super::hash::compute_hash(&super::hash::Preimage {
@@ -92,7 +135,7 @@ impl AgentLedger {
             prev_hash,
             hash: hash.to_vec(),
             signature: signature.to_vec(),
-            signer_fp: identity.active_fingerprint,
+            signer_fp: identity.active_fingerprint.clone(),
             action: new.action,
             target: new.target.clone(),
             outcome: new.outcome,
@@ -117,7 +160,15 @@ impl AgentLedger {
         verify_chain(&self.keys, agent_id)
     }
 
-    /// Verify every known chain. Used by the read tool and by the boot check.
+    /// Verify every known chain. Used by the `agent_identity` tool and by the
+    /// offline `aleph-server identity verify`.
+    ///
+    /// Deliberately **not** run at boot: a full pass reads every row of every
+    /// chain and checks a signature per row, which is the wrong thing to put on
+    /// the startup path, and a warning in a log the daemon itself wrote is not
+    /// the evidence anyone would act on anyway. Verification belongs where it
+    /// is asked for — and, for the case that matters, in the process that did
+    /// not write the records.
     pub fn verify_all(&self) -> Result<Vec<ChainReport>, KeyError> {
         self.keys
             .list()?
@@ -128,6 +179,11 @@ impl AgentLedger {
 
     fn note_lost(&self) {
         let n = self.lost.fetch_add(1, Ordering::Relaxed) + 1;
+        // Persist so the offline verifier — run in another process, precisely
+        // when this one is not trusted — can say the trail is incomplete.
+        if let Err(e) = self.keys.store().ledger_note_lost() {
+            tracing::warn!(error = %e, "could not persist the ledger loss counter");
+        }
         if n == 1 || n.is_multiple_of(100) {
             tracing::error!(
                 lost = n,
@@ -225,6 +281,47 @@ mod tests {
         }
     }
 
+    /// Every chain opens with a signed `identity_created` row, so a caller's
+    /// Nth append lands at seq N+1. Named so the offset reads as the deliberate
+    /// thing it is rather than an off-by-one.
+    const GENESIS_ROWS: usize = 1;
+
+    #[test]
+    fn a_new_chain_opens_with_a_signed_identity_record() {
+        // `agent_keys.retired_at` / `agent_identities.revoked_at` are ordinary
+        // mutable columns. Stating the owning identity and its key inside the
+        // chain is what makes that history tamper-evident on the same terms as
+        // everything else in it.
+        let (l, _s, _d) = ledger();
+        let first_action = l.append(&entry("main", "bash")).unwrap();
+        assert_eq!(first_action.seq, 2, "the caller's record follows genesis");
+
+        let chain = l.keys().store().ledger_chain("main").unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].seq, 1);
+        assert_eq!(chain[0].action, LedgerAction::IdentityCreated);
+        assert!(chain[0].prev_hash.is_none());
+        assert_eq!(chain[0].target, chain[0].signer_fp, "names the opening key");
+        assert!(l.verify("main").unwrap().ok);
+    }
+
+    #[test]
+    fn genesis_is_written_once_per_chain() {
+        let (l, _s, _d) = ledger();
+        for i in 0..3 {
+            l.append(&entry("main", &format!("t{i}"))).unwrap();
+        }
+        let opens = l
+            .keys()
+            .store()
+            .ledger_chain("main")
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.action == LedgerAction::IdentityCreated)
+            .count();
+        assert_eq!(opens, 1);
+    }
+
     #[test]
     fn appends_form_a_verifiable_chain() {
         let (l, _s, _d) = ledger();
@@ -233,9 +330,9 @@ mod tests {
         }
         let report = l.verify("main").unwrap();
         assert!(report.ok, "clean chain must verify: {:?}", report.faults);
-        assert_eq!(report.records, 5);
-        assert_eq!(report.anchor_seq, 5);
-        assert_eq!(report.last_seq, 5);
+        assert_eq!(report.records, 5 + GENESIS_ROWS);
+        assert_eq!(report.anchor_seq, 6);
+        assert_eq!(report.last_seq, 6);
     }
 
     #[test]
@@ -244,7 +341,7 @@ mod tests {
         l.append(&entry("main", "a")).unwrap();
         l.append(&entry("trader", "b")).unwrap();
         let second = l.append(&entry("main", "c")).unwrap();
-        assert_eq!(second.seq, 2, "trader's append must not advance main's seq");
+        assert_eq!(second.seq, 3, "trader's append must not advance main's seq");
         assert!(l.verify("main").unwrap().ok);
         assert!(l.verify("trader").unwrap().ok);
     }
@@ -258,7 +355,7 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "UPDATE agent_ledger SET target = 'harmless' WHERE agent_id='main' AND seq=1",
+                "UPDATE agent_ledger SET target = 'harmless' WHERE agent_id='main' AND seq=2",
                 [],
             )
             .unwrap();
@@ -266,7 +363,7 @@ mod tests {
 
         let report = l.verify("main").unwrap();
         assert!(!report.ok);
-        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 1 }));
+        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
     }
 
     #[test]
@@ -281,7 +378,7 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "DELETE FROM agent_ledger WHERE agent_id='main' AND seq >= 3",
+                "DELETE FROM agent_ledger WHERE agent_id='main' AND seq >= 4",
                 [],
             )
             .unwrap();
@@ -290,8 +387,8 @@ mod tests {
         let report = l.verify("main").unwrap();
         assert!(!report.ok);
         assert!(report.faults.contains(&ChainFault::TailTruncated {
-            anchor_seq: 4,
-            last_seq: 2
+            anchor_seq: 5,
+            last_seq: 3
         }));
     }
 
@@ -306,7 +403,7 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "DELETE FROM agent_ledger WHERE agent_id='main' AND seq >= 3",
+                "DELETE FROM agent_ledger WHERE agent_id='main' AND seq >= 4",
                 [],
             )
             .unwrap();
@@ -318,8 +415,8 @@ mod tests {
         assert!(report.faults.iter().any(|f| matches!(
             f,
             ChainFault::SeqGap {
-                expected: 3,
-                found: 5
+                expected: 4,
+                found: 6
             }
         )));
     }
@@ -359,7 +456,7 @@ mod tests {
         assert!(!report.ok);
         assert!(report
             .faults
-            .contains(&ChainFault::ChainWiped { anchor_seq: 1 }));
+            .contains(&ChainFault::ChainWiped { anchor_seq: 2 }));
     }
 
     #[test]
@@ -372,16 +469,65 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "UPDATE agent_ledger SET agent_id='main', seq=2, prev_hash=
-                   (SELECT hash FROM agent_ledger WHERE agent_id='main' AND seq=1)
-                 WHERE agent_id='trader'",
+                "UPDATE agent_ledger SET agent_id='main', seq=3, prev_hash=
+                   (SELECT hash FROM agent_ledger WHERE agent_id='main' AND seq=2)
+                 WHERE agent_id='trader' AND seq=2",
                 [],
             )
             .unwrap();
         }
         let report = l.verify("main").unwrap();
         assert!(!report.ok);
-        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
+        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 3 }));
+        // And independently: the row names a key that was never main's.
+        assert!(report
+            .faults
+            .iter()
+            .any(|f| matches!(f, ChainFault::ForeignSigner { seq: 3, .. })));
+    }
+
+    #[test]
+    fn a_row_signed_by_another_agents_key_is_detected() {
+        // The narrow version of the transplant: the row is otherwise perfect —
+        // correct agent, correct position, hash recomputed over the substituted
+        // signer, signature genuinely produced by the named key. Only the fact
+        // that the key belongs to `trader` is wrong. Without the ownership
+        // check, "forging a record needs THIS agent's private key" would mean
+        // "needs SOME agent's private key".
+        let (l, store, _d) = ledger();
+        l.append(&entry("main", "a")).unwrap();
+        let trader = l.keys().ensure("trader").unwrap().active_fingerprint;
+
+        let chain = store.ledger_chain("main").unwrap();
+        let hash = super::super::hash::compute_hash(&super::super::hash::Preimage {
+            signer_fp: &trader,
+            ..super::super::verify::preimage_of(&chain[1])
+        });
+        let signature = l.keys().sign(&trader, &hash).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE agent_ledger SET signer_fp=?1, hash=?2, signature=?3
+                 WHERE agent_id='main' AND seq=2",
+                rusqlite::params![trader, hash.to_vec(), signature.to_vec()],
+            )
+            .unwrap();
+        }
+
+        let report = l.verify("main").unwrap();
+        assert!(!report.ok);
+        assert!(
+            report.faults.iter().any(|f| matches!(
+                f,
+                ChainFault::ForeignSigner { seq: 2, owner, .. } if owner == "trader"
+            )),
+            "expected a foreign-signer fault, got {:?}",
+            report.faults
+        );
+        assert!(
+            !report.faults.contains(&ChainFault::BadSignature { seq: 2 }),
+            "the signature itself is valid — only its owner is wrong"
+        );
     }
 
     #[test]
@@ -394,7 +540,7 @@ mod tests {
 
         let forged = LedgerRecord {
             agent_id: "main".into(),
-            seq: 2,
+            seq: 3,
             prev_hash: Some(first.hash.clone()),
             hash: vec![0u8; 32],
             signature: vec![0u8; 64],
@@ -426,7 +572,7 @@ mod tests {
 
         let report = l.verify("main").unwrap();
         assert!(!report.ok);
-        assert!(report.faults.contains(&ChainFault::BadSignature { seq: 2 }));
+        assert!(report.faults.contains(&ChainFault::BadSignature { seq: 3 }));
     }
 
     #[test]
@@ -442,7 +588,74 @@ mod tests {
             "rotation must not invalidate history: {:?}",
             report.faults
         );
-        assert_eq!(report.records, 2);
+        assert_eq!(report.records, 2 + GENESIS_ROWS);
+    }
+
+    #[test]
+    fn a_rotation_recorded_in_the_chain_verifies_under_the_new_key() {
+        // The lifecycle record the `agent_identity` tool enqueues. It is signed
+        // by the incoming key — the retired one no longer makes statements —
+        // and it must not disturb the rows the outgoing key signed.
+        let (l, _s, _d) = ledger();
+        l.append(&entry("main", "before")).unwrap();
+        let old = l
+            .keys()
+            .identity("main")
+            .unwrap()
+            .unwrap()
+            .active_fingerprint;
+        let new = l.keys().rotate("main").unwrap().active_fingerprint;
+        l.append(&NewRecord::identity_rotated("main", &new, Some(&old)))
+            .unwrap();
+
+        let report = l.verify("main").unwrap();
+        assert!(report.ok, "{:?}", report.faults);
+        let chain = l.keys().store().ledger_chain("main").unwrap();
+        let rotation = chain.last().unwrap();
+        assert_eq!(rotation.action, LedgerAction::IdentityRotated);
+        assert_eq!(rotation.signer_fp, new);
+        assert_eq!(chain[1].signer_fp, old, "history keeps its own signer");
+    }
+
+    #[test]
+    fn a_revocation_is_recorded_and_signed_by_the_key_it_retires() {
+        // The reason `signing_identity` tolerates a revoked agent: refusing to
+        // sign here would delete the record of the revocation itself.
+        let (l, _s, _d) = ledger();
+        let fp = l.keys().ensure("main").unwrap().active_fingerprint;
+        assert!(l.keys().revoke("main").unwrap());
+        l.append(&NewRecord::identity_revoked("main", &fp)).unwrap();
+
+        let report = l.verify("main").unwrap();
+        assert!(report.ok, "{:?}", report.faults);
+        let chain = l.keys().store().ledger_chain("main").unwrap();
+        assert_eq!(chain.last().unwrap().action, LedgerAction::IdentityRevoked);
+        assert_eq!(chain.last().unwrap().signer_fp, fp);
+    }
+
+    #[test]
+    fn the_loss_counter_outlives_the_process_that_lost_the_record() {
+        // The offline verifier runs in a different process — precisely when the
+        // writing one is not trusted — so a process-local counter would always
+        // read zero exactly where it matters most. It also survives a restart.
+        let (l, store, dir) = ledger();
+        assert_eq!(l.lost(), 0);
+        store.ledger_note_lost().unwrap();
+        store.ledger_note_lost().unwrap();
+        assert_eq!(l.lost(), 2);
+
+        let reopened = AgentLedger::new(Arc::new(AgentKeystore::new(
+            store.clone(),
+            Arc::new(SharedTokenManager::new(
+                store.clone(),
+                dir.path().join("t.vault"),
+            )),
+        )));
+        assert_eq!(
+            reopened.lost(),
+            2,
+            "a fresh reader must still see the holes"
+        );
     }
 
     #[test]

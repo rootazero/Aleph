@@ -22,16 +22,18 @@
 //!   record the identity it was given. Closing that requires binding the
 //!   claimed agent to the device's authorization, which is a change to the RPC
 //!   authorization model, not to this subsystem.
-//! * **Subagent calls are attributed to their parent**, because they execute
-//!   through the parent's `ScopedToolService` and therefore under the parent's
-//!   `TURN_CONTEXT` — the chokepoint has no sub-role signal to record. This is
-//!   the honest reading of the current execution model, not an oversight to be
-//!   papered over with a guessed attribution.
 //! * **Not tamper-proof, tamper-evident.** See [`keystore`] for exactly what a
 //!   signature here does and does not prove.
 //!
+//! Subagent calls used to land on the *parent's* chain, because a subagent
+//! executes through the parent's `ScopedToolService` and `SessionKey::Subagent`
+//! resolves `agent_id()` to its parent. They no longer do: the spawner-side
+//! wrapper scopes the acting role through [`actor`], so a delegated role signs
+//! its own work. Teams were never affected — a member run owns its turn.
+//!
 //! Full model: `docs/reference/AGENT_IDENTITY.md`.
 
+pub mod actor;
 pub mod hash;
 pub mod keystore;
 pub mod ledger;
@@ -39,6 +41,7 @@ pub mod record;
 pub mod schema;
 pub mod verify;
 
+pub use actor::{as_actor, current_actor};
 pub use keystore::{AgentIdentityRow, AgentKeyRow, AgentKeystore, KeyError};
 pub use ledger::{global, install, record as record_action, AgentLedger};
 pub use record::{LedgerAction, LedgerOutcome, LedgerRecord, NewRecord};
