@@ -332,8 +332,21 @@ pub fn Memory() -> impl IntoView {
                     active=facet
                     counts=counts
                     raw_count=raw_total
-                    // TODO(Task 18): thread the real `load_search_hits` count
-                    // through here; `None` keeps the chip hidden until then.
+                    // TODO(Task 18): this is only half-wired. Two things need
+                    // a real producer, not just `hits_count`:
+                    // 1. `hits_count` itself — `None` keeps the chip hidden
+                    //    until `load_search_hits` is threaded through here.
+                    // 2. The `Pager` below (in the `is_notes` branch) is fed
+                    //    `current_len=Signal::derive(|| 0usize)` — hardcoded.
+                    //    Once `hits_count` goes `Some` the chip becomes
+                    //    selectable and `notes_total` is `None` for
+                    //    `SearchHits` (see `facet_total`), so `Pager` falls
+                    //    back to its unknown-total heuristic
+                    //    `current_len >= page_size`. Against a hardcoded `0`
+                    //    that is always false, so prev/indicator/next would
+                    //    silently vanish on any multi-page hit set. Replace
+                    //    `current_len` with the real loaded-hits length in
+                    //    the same change that wires `hits_count`.
                     hits_count=Signal::derive(|| None)
                     on_select=Callback::new(move |f: MemoryFacet| { facet.set(f); notes_page.set(0); })
                 />
@@ -366,6 +379,10 @@ pub fn Memory() -> impl IntoView {
                         {move || (notes_window.get().len() >= NOTE_WINDOW).then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
                         })}
+                        // `current_len` is hardcoded to 0 — see the
+                        // TODO(Task 18) at the `FacetBar` call above; it only
+                        // matters once `SearchHits` is reachable and
+                        // `notes_total` goes `None` for it.
                         <Pager page=notes_page page_size=page_size total=notes_total current_len=Signal::derive(|| 0usize) />
                     }.into_any()
                 } else {
