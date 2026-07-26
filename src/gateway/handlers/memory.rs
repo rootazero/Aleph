@@ -158,6 +158,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
     match db.get_raw_memories_dashboard(
         Some(agent_id),
+        None,
         params.limit as usize,
         params.offset as usize,
     ) {
@@ -362,7 +363,7 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
-    let raw_count = db.count_raw_memories().unwrap_or(0);
+    let raw_count = db.count_raw_memories(None, None).unwrap_or(0);
 
     // Note memory: count across all agents
     let note_count = db.count_all_notes().await.unwrap_or(0);
