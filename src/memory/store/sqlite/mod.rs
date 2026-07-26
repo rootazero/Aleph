@@ -193,10 +193,13 @@ impl SqliteMemoryBackend {
 
     /// Get raw memory entries (session summaries / conversation records).
     ///
-    /// `query` is an optional case-sensitive substring filter over `content`
-    /// (`LIKE '%q%'`). `raw_memories` has no fts5 shadow table — this is a
-    /// browse-UI filter, and building real FTS here would need a DDL migration
-    /// plus sync triggers (deliberately out of scope).
+    /// `query` is an optional substring filter over `content` (`LIKE '%q%'`).
+    /// SQLite's default `LIKE` is case-insensitive for ASCII only — it does
+    /// not case-fold non-ASCII text, so a search over this store's Chinese
+    /// content is effectively case-sensitive there. `raw_memories` has no
+    /// fts5 shadow table — this is a browse-UI filter, and building real FTS
+    /// here would need a DDL migration plus sync triggers (deliberately out
+    /// of scope).
     ///
     /// `offset` skips the first N rows of the `created_at DESC` ordering,
     /// enabling stable server-side pagination for the dashboard.

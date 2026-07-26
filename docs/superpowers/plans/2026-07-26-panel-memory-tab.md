@@ -223,7 +223,7 @@ Expected: PASS（6 tests）。
 ```rust
     /// Get raw memory entries (session summaries / conversation records).
     ///
-    /// `query` is an optional case-sensitive substring filter over `content`
+    /// `query` is an optional substring filter over `content`, case-insensitive for ASCII only
     /// (`LIKE '%q%'`). `raw_memories` has no fts5 shadow table — this is a
     /// browse-UI filter, and building real FTS here would need a DDL migration
     /// plus sync triggers (deliberately out of scope).
