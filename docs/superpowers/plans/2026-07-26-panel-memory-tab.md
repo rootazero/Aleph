@@ -855,7 +855,12 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let (graph_nodes, graph_edges) = match agent {
         Some(a) => match db.get_graph_data(a, 10000).await {
             Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
-            Err(_) => (Some(0), Some(0)),
+            // A failed fetch is not "zero nodes" — it is "we could not count".
+            // `None` is already the wire shape for that, so use it rather than
+            // sending a confidently wrong 0 the Panel would render as a real
+            // number. (The pre-`Option` code sent `(0, 0)` here; that is the
+            // habit this task exists to break.)
+            Err(_) => (None, None),
         },
         None => (None, None),
     };
