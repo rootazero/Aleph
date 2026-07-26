@@ -414,8 +414,10 @@ for '100%' does not match every row."
 - Test: `src/gateway/handlers/memory.rs`（新增 `#[cfg(test)] mod search_tests`）
 
 **Interfaces:**
-- Consumes: Task 1 的 `get_raw_memories_dashboard(agent, query, limit, offset)`
-- Produces: `memory.search` 响应恒为 `{"memories": [MemoryEntry]}`，`MemoryEntry` 字段 = `id` / `agent_id` / `window_title` / `user_input` / `ai_output` / `session_id` / `timestamp`（`similarity_score` 删除）
+- Consumes: Task 1 的 `get_raw_memories_dashboard(agent, query, limit, offset)` 与 `count_raw_memories(agent, query)`
+- Produces: `memory.search` 响应恒为 `{"memories": [MemoryEntry], "total": i64}`，`MemoryEntry` 字段 = `id` / `agent_id` / `window_title` / `user_input` / `ai_output` / `session_id` / `timestamp`（`similarity_score` 删除）
+
+> **`total` 必须是「过滤后」的计数**（`count_raw_memories(agent, query)`，同一个 `query`），不是全库计数。否则查询态下 pager 会拿到比实际行数大的 total —— B4 幽灵页在过滤态原样复活。这也是 Task 1 给 `count_raw_memories` 加 `query` 参数的唯一生产消费者：若不接，那个参数就是零消费者，按 R10「零消费者立即撤回」该删。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -450,7 +452,7 @@ mod search_tests {
         let raw = RawMemory {
             id: "raw-1".to_string(),
             content: "we should run smoke tests before deploy".to_string(),
-            source: RawMemorySource::Conversation,
+            source: RawMemorySource::Transcript,
             agent_id: "main".to_string(),
             session_id: Some("s-77".to_string()),
             path: None,
@@ -733,7 +735,7 @@ mod stats_tests {
         RawMemory {
             id: id.to_string(),
             content: "c".to_string(),
-            source: RawMemorySource::Conversation,
+            source: RawMemorySource::Transcript,
             agent_id: agent.to_string(),
             session_id: None,
             path: None,
@@ -1298,7 +1300,7 @@ NoteStore::get_neighbors stays -- note_graph_query still calls it."
 - Modify: `interfaces/cli/src/commands/memory_cmd.rs:19-42`（`search`）与 `:44-93`（`stats`）
 
 **Interfaces:**
-- Consumes: Task 2 的 `memory.search` 响应 `{memories:[{id, agent_id, user_input, ai_output, session_id, timestamp}]}`；Task 3 的 `memory.stats` 响应 `{totalMemories, totalFacts, validFacts, totalGraphNodes, totalGraphEdges, scope}`
+- Consumes: Task 2 的 `memory.search` 响应 `{memories:[{id, agent_id, user_input, ai_output, session_id, timestamp}], total}`；Task 3 的 `memory.stats` 响应 `{totalMemories, totalFacts, validFacts, totalGraphNodes, totalGraphEdges, scope}`
 
 - [ ] **Step 1: 先手工确认症状**
 
@@ -1851,7 +1853,7 @@ guard and its explanatory label read."
   - `CompressedFact { id, agent_id, content, fact_type, created_at, updated_at, category, path, tags, link_count }`
   - `MemoryStats { total_facts, total_memories, valid_facts, total_graph_nodes: Option<u64>, total_graph_edges: Option<u64>, scope: String }`
   - `MemoryApi::list_facts(state, agent, limit, offset) -> Result<(Vec<CompressedFact>, u64), String>`
-  - `MemoryApi::browse_raw(state, agent, query, limit, offset) -> Result<Vec<RawMemory>, String>`（原 `search` 改名，语义收窄为 raw）
+  - `MemoryApi::browse_raw(state, agent, query, limit, offset) -> Result<(Vec<RawMemory>, u64), String>`（原 `search` 改名，语义收窄为 raw；元组第二位是**过滤后**行数）
   - `MemoryApi::stats(state, agent) -> Result<MemoryStats, String>`
   - `MemoryApi::trace(state, agent, target, kind: TraceKind, max_results: usize) -> Result<TraceResult, String>` + `pub enum TraceKind { Note, Raw }` + `pub struct TraceResult { target, notes, evidence }` + `pub struct EvidenceItem { raw_id, via_note, via_session, content, pruned }`
   - `canvas_engine::adapter::SearchResultDto` 追加 `agent_id` / `created_at` / `updated_at` / `tags` / `link_count`
@@ -2099,6 +2101,10 @@ struct BackendListFactsResponse {
 struct BackendSearchResponse {
     #[serde(default)]
     memories: Vec<BackendMemoryEntry>,
+    /// Rows matching the same filter, independent of `limit`/`offset`. Defaults
+    /// to 0 against an un-upgraded core, which the pager reads as "unknown".
+    #[serde(default)]
+    total: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2178,13 +2184,15 @@ impl MemoryApi {
     ///
     /// `query` is a substring filter over raw content. This never returns
     /// notes — note full-text search is `GraphApi::search`.
+    /// Returns the page plus the **filtered** row count, so a pager over a
+    /// query result sizes itself to the matches rather than to the whole store.
     pub async fn browse_raw(
         state: &DashboardState,
         agent_id: &str,
         query: String,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<RawMemory>, String> {
+    ) -> Result<(Vec<RawMemory>, u64), String> {
         let params = serde_json::json!({
             "agent_id": agent_id,
             "query": query,
@@ -2196,7 +2204,8 @@ impl MemoryApi {
         let response: BackendSearchResponse = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse memory.search: {e}"))?;
 
-        Ok(response
+        let total = response.total;
+        let rows = response
             .memories
             .into_iter()
             .map(|entry| RawMemory {
@@ -2207,7 +2216,8 @@ impl MemoryApi {
                 session_id: entry.session_id,
                 created_at: (entry.timestamp > 0).then(|| format_timestamp_secs(entry.timestamp)),
             })
-            .collect())
+            .collect();
+        Ok((rows, total))
     }
 
     /// Delete one raw memory. Note deletion is `GraphApi::delete_note` —
@@ -3182,7 +3192,8 @@ pre-joined 'Q: ...\\nA: ...' string to one line."
 - Produces:
   - `pub struct NotesWindow { pub facts: Vec<CompressedFact>, pub total: u64 }`
   - `pub fn load_notes(state: DashboardState, agent: String, limit: usize, slot: RwSignal<Loadable<NotesWindow>>)`
-  - `pub fn load_raw(state: DashboardState, agent: String, query: String, limit: u32, offset: u32, slot: RwSignal<Loadable<Vec<RawMemory>>>)`
+  - `pub fn load_raw(state: DashboardState, agent: String, query: String, limit: u32, offset: u32, slot: RwSignal<Loadable<RawWindow>>)`
+  - `pub struct RawWindow { pub raws: Vec<RawMemory>, pub total: u64 }`
   - `pub fn load_search_hits(state: DashboardState, agent: String, query: String, limit: usize, slot: RwSignal<Loadable<Vec<CompressedFact>>>)`
   - `pub fn load_stats(state: DashboardState, agent: String, slot: RwSignal<Loadable<MemoryStats>>)`
 - 后续 Task 依赖：`mod.rs`（Task 18）
@@ -3231,17 +3242,29 @@ pub fn load_notes(
     });
 }
 
+/// One `memory.search` page plus the count of rows matching the same filter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawWindow {
+    pub raws: Vec<RawMemory>,
+    /// Rows matching the active filter, independent of `limit`/`offset` — this
+    /// is what lets the pager stop at the last page of a *filtered* result
+    /// instead of sizing itself to the whole store.
+    pub total: u64,
+}
+
 pub fn load_raw(
     state: DashboardState,
     agent: String,
     query: String,
     limit: u32,
     offset: u32,
-    slot: RwSignal<Loadable<Vec<RawMemory>>>,
+    slot: RwSignal<Loadable<RawWindow>>,
 ) {
     slot.set(Loadable::Loading);
     spawn_local(async move {
-        let res = MemoryApi::browse_raw(&state, &agent, query, limit, offset).await;
+        let res = MemoryApi::browse_raw(&state, &agent, query, limit, offset)
+            .await
+            .map(|(raws, total)| RawWindow { raws, total });
         slot.set(Loadable::from_rpc(res));
     });
 }
@@ -3608,7 +3631,7 @@ use leptos_router::hooks::use_location;
 
 use crate::api::agents::AgentsApi;
 use crate::api::graph::GraphApi;
-use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
+use crate::api::{CompressedFact, MemoryApi, MemoryStats};
 use crate::components::ui::Card;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -3633,7 +3656,7 @@ use data::{
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
-use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow};
+use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow};
 use pager::Pager;
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
 
@@ -3665,7 +3688,7 @@ pub fn Memory() -> impl IntoView {
     // ── Load slots ──────────────────────────────────────────────────────────
     let stats = RwSignal::new(Loadable::<MemoryStats>::Loading);
     let notes = RwSignal::new(Loadable::<NotesWindow>::Loading);
-    let raws = RwSignal::new(Loadable::<Vec<RawMemory>>::Loading);
+    let raws = RwSignal::new(Loadable::<RawWindow>::Loading);
     let hits = RwSignal::new(Loadable::<Vec<CompressedFact>>::Loading);
 
     // ── View state ──────────────────────────────────────────────────────────
@@ -3863,7 +3886,8 @@ pub fn Memory() -> impl IntoView {
     let note_page_rows = Signal::derive(move || {
         page_slice(&note_rows.get(), page.get(), page_size.get())
     });
-    let raw_rows = Signal::derive(move || raws.get().as_ready().cloned().unwrap_or_default());
+    let raw_rows =
+        Signal::derive(move || raws.get().as_ready().map(|w| w.raws.clone()).unwrap_or_default());
 
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-6">
@@ -4037,7 +4061,7 @@ fn scrub_note_param() {
                 let src = match raws.get() {
                     Loadable::Loading => Loadable::Loading,
                     Loadable::Failed(e) => Loadable::Failed(e),
-                    Loadable::Ready(v) => Loadable::Ready(v.len()),
+                    Loadable::Ready(w) => Loadable::Ready(w.raws.len()),
                 };
                 view! {
                     <CardListShell
@@ -4086,7 +4110,7 @@ fn scrub_note_param() {
                     <Pager
                         page=page
                         page_size=page_size
-                        total=Signal::derive(move || stats.get().as_ready().map(|s| s.total_memories))
+                        total=Signal::derive(move || raws.get().as_ready().map(|w| w.total))
                         current_len=Signal::derive(move || raw_rows.get().len())
                     />
                 }.into_any()
