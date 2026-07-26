@@ -23,16 +23,15 @@ impl ImageMediaProvider {
         Self { pipeline, priority }
     }
 
-    /// Convert media image format to vision image format (best effort).
-    const fn to_vision_format(fmt: &MediaImageFormat) -> VisionImageFormat {
+    /// Convert media image format to vision image format.
+    ///
+    /// Returns `None` for formats not supported by the vision pipeline (GIF, SVG, HEIC).
+    const fn to_vision_format(fmt: &MediaImageFormat) -> Option<VisionImageFormat> {
         match fmt {
-            MediaImageFormat::Png => VisionImageFormat::Png,
-            MediaImageFormat::Jpeg => VisionImageFormat::Jpeg,
-            MediaImageFormat::WebP => VisionImageFormat::WebP,
-            // Formats not directly supported by VisionPipeline — default to PNG
-            MediaImageFormat::Gif | MediaImageFormat::Svg | MediaImageFormat::Heic => {
-                VisionImageFormat::Png
-            }
+            MediaImageFormat::Png => Some(VisionImageFormat::Png),
+            MediaImageFormat::Jpeg => Some(VisionImageFormat::Jpeg),
+            MediaImageFormat::WebP => Some(VisionImageFormat::WebP),
+            MediaImageFormat::Gif | MediaImageFormat::Svg | MediaImageFormat::Heic => None,
         }
     }
 
@@ -47,7 +46,11 @@ impl ImageMediaProvider {
             MediaInput::Url { url } => Ok(ImageInput::Url { url: url.clone() }),
             MediaInput::Base64 { data, media_type } => {
                 let format = match media_type {
-                    MediaType::Image { format, .. } => Self::to_vision_format(format),
+                    MediaType::Image { format, .. } => {
+                        Self::to_vision_format(format).ok_or_else(|| {
+                            MediaError::UnsupportedFormat(format!("{:?}", format))
+                        })?
+                    }
                     _ => VisionImageFormat::Png,
                 };
                 Ok(ImageInput::Base64 {
@@ -231,15 +234,12 @@ mod tests {
     fn format_conversion() {
         assert!(matches!(
             ImageMediaProvider::to_vision_format(&MediaImageFormat::Png),
-            VisionImageFormat::Png
+            Some(VisionImageFormat::Png)
         ));
         assert!(matches!(
             ImageMediaProvider::to_vision_format(&MediaImageFormat::Jpeg),
-            VisionImageFormat::Jpeg
+            Some(VisionImageFormat::Jpeg)
         ));
-        assert!(matches!(
-            ImageMediaProvider::to_vision_format(&MediaImageFormat::Gif),
-            VisionImageFormat::Png
-        ));
+        assert!(ImageMediaProvider::to_vision_format(&MediaImageFormat::Gif).is_none());
     }
 }

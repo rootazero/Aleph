@@ -94,7 +94,7 @@ Example:
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let path = PathBuf::from(&args.file_path);
-        let mt = match detect_from_path(&path) {
+        let mt = match detect_from_path(&path).await {
             Ok(mt) => mt,
             Err(e) => {
                 return Ok(DocumentExtractOutput::err(format!(

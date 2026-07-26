@@ -70,7 +70,7 @@ impl ApprovalHandler {
     /// Request approval from the user
     ///
     /// Returns the user's decision or Timeout if no response within timeout.
-    pub async fn request_approval(&self, request: ApprovalRequest) -> Result<ApprovalDecision> {
+    pub async fn request_approval(&self, request: ApprovalRequest) -> ApprovalDecision {
         // rust-doctor-disable-next-line excessive-clone
         let request_id = request.request_id.clone();
         let timeout_secs = request.timeout_seconds.unwrap_or_else(|| {
@@ -135,7 +135,7 @@ impl ApprovalHandler {
                     tracing::warn!("No approval callback registered, auto-rejecting");
                     let mut pending = self.pending.write().await;
                     pending.remove(&request_id);
-                    return Ok(ApprovalDecision::Rejected);
+                    return ApprovalDecision::Rejected;
                 }
             }
         };
@@ -151,9 +151,9 @@ impl ApprovalHandler {
                 pending.remove(&request_id);
 
                 if response.approved {
-                    Ok(ApprovalDecision::Approved)
+                    ApprovalDecision::Approved
                 } else {
-                    Ok(ApprovalDecision::Rejected)
+                    ApprovalDecision::Rejected
                 }
             }
             Ok(Err(_)) => {
@@ -161,14 +161,14 @@ impl ApprovalHandler {
                 tracing::warn!(request_id = %request_id, "Approval channel closed without response, treating as rejected");
                 let mut pending = self.pending.write().await;
                 pending.remove(&request_id);
-                Ok(ApprovalDecision::Rejected)
+                ApprovalDecision::Rejected
             }
             Err(_) => {
                 // Timeout
                 let mut pending = self.pending.write().await;
                 pending.remove(&request_id);
                 tracing::warn!(request_id = %request_id, "Approval request timed out");
-                Ok(ApprovalDecision::Timeout)
+                ApprovalDecision::Timeout
             }
         }
     }
@@ -249,7 +249,7 @@ mod tests {
         let handler = ApprovalHandler::new();
         let request = ApprovalRequest::new("req-1", "Test action", "test-server");
 
-        let result = handler.request_approval(request).await.unwrap();
+        let result = handler.request_approval(request).await;
         assert_eq!(result, ApprovalDecision::Rejected);
     }
 
@@ -289,7 +289,7 @@ mod tests {
 
         let request = ApprovalRequest::new("req-2", "Delete file", "filesystem-server");
 
-        let result = handler.request_approval(request).await.unwrap();
+        let result = handler.request_approval(request).await;
 
         assert!(callback_called.load(Ordering::SeqCst));
         assert_eq!(result, ApprovalDecision::Approved);
@@ -314,7 +314,7 @@ mod tests {
 
         let request = ApprovalRequest::new("req-3", "Send email", "email-server");
 
-        let result = handler.request_approval(request).await.unwrap();
+        let result = handler.request_approval(request).await;
         assert_eq!(result, ApprovalDecision::Rejected);
     }
 
@@ -331,7 +331,7 @@ mod tests {
 
         let request = ApprovalRequest::new("req-4", "Slow operation", "slow-server");
 
-        let result = handler.request_approval(request).await.unwrap();
+        let result = handler.request_approval(request).await;
         assert_eq!(result, ApprovalDecision::Timeout);
         assert_eq!(handler.pending_count().await, 0);
     }

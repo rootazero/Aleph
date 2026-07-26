@@ -244,34 +244,52 @@ impl LoopGraphStore {
     /// Remove dangling edges (endpoint node gone). Explicit only — never
     /// automatic. Returns human-readable descriptions of what was removed.
     pub fn gc(&self, agent_id: &str) -> Result<Vec<String>> {
-        let dangling = self.dangling_edges(agent_id)?;
         let conn = self.lock();
-        let mut removed = Vec::new();
-        for e in dangling {
-            conn.execute(
-                "DELETE FROM graph_edges
-                 WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
-                rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, id, kind, label, body, cadence, origin,
+                        created_at_ms, updated_at_ms
+                 FROM graph_nodes WHERE agent_id = ?1",
             )
-            .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
-            removed.push(format!(
-                "{} -[{}]-> {}",
-                e.from_id,
-                e.kind.as_str(),
-                e.to_id
-            ));
+            .map_err(|e| AlephError::other(format!("loop_graph gc nodes prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id], row_to_node)
+            .map_err(|e| AlephError::other(format!("loop_graph gc nodes query: {e}")))?;
+        let ids: std::collections::HashSet<String> = rows
+            .filter_map(|r| r.ok().and_then(|n| n.map(|n| n.id)))
+            .collect();
+        drop(stmt);
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
+                 FROM graph_edges WHERE agent_id = ?1",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph gc edges prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id], row_to_edge)
+            .map_err(|e| AlephError::other(format!("loop_graph gc edges query: {e}")))?;
+        let edges: Vec<GraphEdge> = rows.filter_map(|r| r.ok().and_then(|e| e)).collect();
+        drop(stmt);
+
+        let mut removed = Vec::new();
+        for e in &edges {
+            if !ids.contains(&e.from_id) || !ids.contains(&e.to_id) {
+                conn.execute(
+                    "DELETE FROM graph_edges
+                     WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
+                    rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
+                )
+                .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
+                removed.push(format!(
+                    "{} -[{}]-> {}",
+                    e.from_id,
+                    e.kind.as_str(),
+                    e.to_id
+                ));
+            }
         }
         Ok(removed)
-    }
-
-    fn dangling_edges(&self, agent_id: &str) -> Result<Vec<GraphEdge>> {
-        let edges = self.list_edges(agent_id)?;
-        let nodes = self.list_nodes(agent_id)?;
-        let ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
-        Ok(edges
-            .into_iter()
-            .filter(|e| !ids.contains(e.from_id.as_str()) || !ids.contains(e.to_id.as_str()))
-            .collect())
     }
 
     /// Structural lint — pure graph checks, zero semantics (semantic verdicts
@@ -283,8 +301,42 @@ impl LoopGraphStore {
     /// - fast loops owning slower loops' references (only when both declare
     ///   a known cadence class).
     pub fn lint(&self, agent_id: &str) -> Result<Vec<String>> {
-        let nodes = self.list_nodes(agent_id)?;
-        let edges = self.list_edges(agent_id)?;
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, id, kind, label, body, cadence, origin,
+                        created_at_ms, updated_at_ms
+                 FROM graph_nodes WHERE agent_id = ?1 ORDER BY kind, id",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph lint nodes prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id], row_to_node)
+            .map_err(|e| AlephError::other(format!("loop_graph lint nodes query: {e}")))?;
+        let mut nodes = Vec::new();
+        for r in rows {
+            if let Ok(Some(n)) = r {
+                nodes.push(n);
+            }
+        }
+        drop(stmt);
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
+                 FROM graph_edges WHERE agent_id = ?1 ORDER BY from_id, to_id, kind",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph lint edges prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id], row_to_edge)
+            .map_err(|e| AlephError::other(format!("loop_graph lint edges query: {e}")))?;
+        let mut edges = Vec::new();
+        for r in rows {
+            if let Ok(Some(e)) = r {
+                edges.push(e);
+            }
+        }
+        drop(stmt);
+
         let by_id: std::collections::HashMap<&str, &GraphNode> =
             nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 

@@ -122,7 +122,13 @@ impl JsonRpcResponse {
         if let Some(error) = self.error {
             Err(error)
         } else {
-            Ok(self.result.unwrap_or(Value::Null))
+            self.result.map(Ok).unwrap_or_else(|| {
+                Err(JsonRpcError {
+                    code: error_codes::INVALID_REQUEST,
+                    message: "Response missing result field".to_string(),
+                    data: None,
+                })
+            })
         }
     }
 

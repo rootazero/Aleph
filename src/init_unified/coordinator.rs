@@ -135,6 +135,16 @@ impl InitializationCoordinator {
         }
         let _guard = Guard;
 
+        // Clean up stale config.tmp.* files from previous crashed init attempts
+        if let Ok(mut entries) = tokio::fs::read_dir(&self.config_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with("config.tmp.") {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
+
         self.run_internal().await
     }
 
@@ -316,18 +326,21 @@ impl InitializationCoordinator {
     }
 
     async fn rollback_database(&self, pre_existing: &PreExistingState, errors: &mut Vec<String>) {
-        // Don't delete memory.db (may pre-exist), but clean up WAL files
-        // that were created during this initialization. If the database
-        // pre-existed, its WAL may hold committed-but-uncheckpointed
-        // transactions (or belong to a live connection) — leave it alone.
         if pre_existing.database {
-            warn!("memory.db pre-existed; skipping WAL cleanup during rollback");
+            warn!("memory.db pre-existed; skipping rollback to preserve existing database");
             return;
+        }
+        let db_path = self.config_dir.join("memory.db");
+        if let Err(e) = fs::remove_file(&db_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
+                errors.push(format!("memory.db: {e}"));
+            }
         }
         for suffix in ["-wal", "-shm"] {
             let wal_path = self.config_dir.join(format!("memory.db{suffix}"));
-            if fs::try_exists(&wal_path).await.unwrap_or(false) {
-                if let Err(e) = fs::remove_file(&wal_path).await {
+            if let Err(e) = fs::remove_file(&wal_path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
                     warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
                     errors.push(format!("wal {suffix}: {e}"));
                 }
@@ -379,16 +392,8 @@ impl InitializationCoordinator {
         // Create root config dir (no clone needed — use the reference)
         Self::ensure_dir(self.config_dir.as_path()).await?;
 
-        let subdirs: [PathBuf; 5] = [
-            self.config_dir.join("logs"),
-            self.config_dir.join("cache"),
-            self.config_dir.join("output"),
-            self.config_dir.join("skills"),
-            self.config_dir.join("models"),
-        ];
-
-        for dir in &subdirs {
-            Self::ensure_dir(dir).await?;
+        for subdir in CONFIG_SUBDIRS {
+            Self::ensure_dir(&self.config_dir.join(subdir)).await?;
         }
 
         info!(dir = ?self.config_dir, "Directory structure created");

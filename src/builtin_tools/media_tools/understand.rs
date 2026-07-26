@@ -107,7 +107,7 @@ Examples:
         let (input, media_type) = match (&args.file_path, &args.url, &args.base64_data) {
             (Some(path), None, None) => {
                 let path = PathBuf::from(path);
-                let mt = match detect_from_path(&path) {
+                let mt = match detect_from_path(&path).await {
                     Ok(mt) => mt,
                     Err(e) => {
                         return Ok(MediaUnderstandOutput::err(format!(

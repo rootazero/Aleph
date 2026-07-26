@@ -61,7 +61,7 @@ use crate::sync_primitives::Arc;
 /// authorized or refresh fails — callers fall back to unauthenticated
 /// connection, and the `AuthExpired` error guidance points at `mcp_login`.
 pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<String> {
-    let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));
+    let storage = oauth_storage_singleton();
     let entry = storage.get_entry(server).await.ok().flatten()?;
     let tokens = entry.tokens.as_ref()?;
 
@@ -73,7 +73,6 @@ pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<Strin
     }
 
     let client_id = entry.client_info.as_ref()?.client_id.clone();
-    // Callback URL is irrelevant for the refresh grant.
     let provider = OAuthProvider::new(storage, server, server_url, "");
     let metadata = match provider.discover_metadata().await {
         Ok(m) => m,
@@ -90,4 +89,12 @@ pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<Strin
             None
         }
     }
+}
+
+fn oauth_storage_singleton() -> Arc<OAuthStorage> {
+    use std::sync::OnceLock;
+    static STORAGE: OnceLock<Arc<OAuthStorage>> = OnceLock::new();
+    Arc::clone(STORAGE.get_or_init(|| {
+        Arc::new(OAuthStorage::new(OAuthStorage::default_path()))
+    }))
 }

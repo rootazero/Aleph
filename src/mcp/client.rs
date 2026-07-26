@@ -292,7 +292,8 @@ impl McpClient {
         }
         let mut best: Option<&Arc<McpServerConnection>> = None;
         for (id, conn) in servers {
-            if name.starts_with(&format!("{id}:"))
+            let prefix = format!("{id}:");
+            if name.starts_with(&prefix)
                 && best.as_ref().is_none_or(|b| b.name().len() < id.len())
             {
                 best = Some(conn);

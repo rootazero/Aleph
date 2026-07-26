@@ -96,6 +96,8 @@ pub struct SseTransport {
     request_handler: Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
     /// Shutdown signal sender
     shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
+    /// Handle for the spawned SSE listener task
+    listener_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl SseTransport {
@@ -118,6 +120,7 @@ impl SseTransport {
             notification_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             request_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             shutdown_tx: RwLock::new(None),
+            listener_handle: RwLock::new(None),
         })
     }
 
@@ -172,6 +175,14 @@ impl SseTransport {
             *tx = Some(shutdown_tx);
         }
 
+        // Abort any previously running listener before starting a new one.
+        {
+            let mut handle = self.listener_handle.write().await;
+            if let Some(h) = handle.take() {
+                h.abort();
+            }
+        }
+
         let sse_url = format!("{}/events", validated_url.as_str().trim_end_matches('/'));
         let server_name = self.server_name.clone();
         let headers = self.config.headers.clone();
@@ -179,7 +190,7 @@ impl SseTransport {
         let request_handler = Arc::clone(&self.request_handler);
         let alive = Arc::clone(&self.alive);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tracing::info!(
                 server = %server_name,
                 url = %sse_url,
@@ -222,6 +233,11 @@ impl SseTransport {
 
             tracing::info!(server = %server_name, "SSE listener stopped");
         });
+
+        {
+            let mut guard = self.listener_handle.write().await;
+            *guard = Some(handle);
+        }
 
         Ok(())
     }
