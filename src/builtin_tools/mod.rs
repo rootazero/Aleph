@@ -30,6 +30,7 @@ pub mod automation_tool;
 pub mod bash_exec;
 // pub mod browser; — deleted; Task 13 recreates with text-first design
 pub mod browser_tools;
+pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;
 pub mod clawhub;
@@ -150,6 +151,9 @@ pub use browser_tools::{
 };
 pub use channel_manage::{
     ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
+};
+pub use channel_directory::{
+    ChannelDirectoryArgs, ChannelDirectoryEntry, ChannelDirectoryOutput, ChannelDirectoryTool,
 };
 pub use channel_message::{
     ChannelMessageAction, ChannelMessageArgs, ChannelMessageOutput, ChannelMessageTool,

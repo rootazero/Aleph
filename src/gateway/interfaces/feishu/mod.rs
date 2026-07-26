@@ -86,7 +86,15 @@ impl FeishuChannel {
             replies: true,
             editing: false,
             deletion: false,
-            typing_indicator: true,
+            // Feishu has no typing endpoint: the streaming emitter *emulates*
+            // one by reacting to the inbound message
+            // (`feishu_outbound/reactions.rs`), which needs a message_id that
+            // `Channel::send_typing(&conversation_id)` does not carry. So the
+            // trait method is genuinely unavailable here, and declaring `true`
+            // only bought a fake success from its default body. The emulated
+            // indicator is unaffected — it runs off `[channels.feishu]
+            // typing_indicator`, a different knob.
+            typing_indicator: false,
             read_receipts: false,
             rich_text: true,
             max_message_length: 4096,

@@ -79,6 +79,12 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "tool_search",
     "read_config_guide",
     "node_list",
+    // Channel roster lookup: `name → conversation_id`. Reads routing metadata
+    // (names, ids, membership), never message content, and mutates nothing —
+    // its whole purpose is to be callable under the `Ask` tier so the model can
+    // find out where to send BEFORE the send asks for approval. Its write
+    // sibling `channel_message` is deliberately NOT here.
+    "channel_directory",
     // Search / retrieval (no mutation).
     "search",
     "web_fetch",
@@ -636,6 +642,8 @@ mod tests {
             "heartbeat_update",
             "skill_install",
             "channel_pairing",
+            // Off-machine egress: a sent message cannot be unsent.
+            "channel_message",
             // Input-dependent read/write multiplexers resolve per-argument in
             // `concurrency_claim` and must never sit on the static read-only
             // list (their write arm would ride the `Shared` claim AND the
@@ -680,6 +688,10 @@ mod tests {
             // The live progressive-disclosure meta-tool (formerly the ghost
             // names `list_tools` / `search_tools`).
             "tool_search",
+            // Channel roster lookup. Its write sibling `channel_message` is
+            // asserted absent in the write list above — the pair is the whole
+            // reason the read is a separate tool.
+            "channel_directory",
         ];
         for tool in read_tools {
             assert!(

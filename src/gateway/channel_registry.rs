@@ -546,6 +546,30 @@ impl ChannelRegistry {
         channel.send_typing(conversation_id).await
     }
 
+    /// List addressable conversations on a specific channel.
+    ///
+    /// Read half of the outbound API: `send`/`edit`/`react` all need a
+    /// [`ConversationId`] the caller already has, which is why a proactive
+    /// "post this to #eng-releases" was impossible before this.
+    pub async fn list_conversations(
+        &self,
+        channel_id: &ChannelId,
+        query: &str,
+        limit: usize,
+    ) -> ChannelResult<super::channel::ConversationPage> {
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
+        })?;
+
+        // NOTE: guard held across await (see `edit`). This call can be a
+        // multi-page HTTP sweep, i.e. held far longer than a send — adapters
+        // are expected to serve it from a TTL cache and to cap pagination so a
+        // cold lookup cannot wedge `stop_channel` / `restart_channel`, which
+        // need the WRITE lock.
+        let channel = channel_arc.read().await;
+        channel.list_conversations(query, limit).await
+    }
+
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.

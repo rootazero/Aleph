@@ -660,6 +660,79 @@ pub enum PairingData {
     QrCode(String),
 }
 
+/// What kind of conversation a [`ConversationRef`] points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    /// A named, multi-party room (Slack channel, Discord text channel, …).
+    Channel,
+    /// An ad-hoc multi-party conversation with no stable name.
+    Group,
+    /// A one-to-one conversation with a single person.
+    Direct,
+}
+
+/// An addressable conversation, as returned by [`Channel::list_conversations`].
+///
+/// This exists because [`ConversationId`] is an opaque platform handle (`C0A1B2C3`,
+/// a numeric chat id, a JID). Until a channel can hand back `name → id`, the model
+/// can only ever reply where it was spoken to: "post the summary to #eng-releases"
+/// is unanswerable, because nothing in the process knows what `#eng-releases` is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationRef {
+    /// Platform handle — what [`OutboundMessage::conversation_id`] wants.
+    pub id: ConversationId,
+    /// Human name as the user would say it, WITHOUT any platform sigil
+    /// (`eng-releases`, not `#eng-releases`).
+    pub name: String,
+    /// Room / group / DM.
+    pub kind: ConversationKind,
+    /// Whether this account can actually post here.
+    ///
+    /// Carried rather than filtered out on purpose: a public Slack channel the
+    /// bot has not been invited to is *visible* and *not postable*, and those
+    /// are different answers. Dropping it yields "no such channel" for a channel
+    /// that plainly exists, which sends the model looking for a typo instead of
+    /// telling the user to invite the bot.
+    pub is_member: bool,
+}
+
+/// The answer to one [`Channel::list_conversations`] call.
+///
+/// Carries `warnings` rather than returning a bare `Vec` because a roster
+/// lookup has a real PARTIAL outcome: a Slack app granted `channels:read` but
+/// not `users:read` can list every channel and no people. A bare `Vec` can only
+/// say "no match", which sends the model to report that a person does not exist
+/// when the truth is that it was never allowed to look — the same silent-vanish
+/// failure the write methods' defaults used to have.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConversationPage {
+    /// Matches, best first.
+    pub conversations: Vec<ConversationRef>,
+    /// Non-fatal reasons this answer may be incomplete. Empty on a full answer.
+    pub warnings: Vec<String>,
+}
+
+/// The error an optional [`Channel`] method returns when it was not overridden.
+///
+/// There are two ways to reach a default body, and they are different problems,
+/// so they get different words:
+///
+/// - `declared == false` — the adapter honestly does not do this. Normal.
+/// - `declared == true` — the adapter advertised the capability and forgot to
+///   implement it. This used to return `Ok(())`, which made every caller report
+///   a success that never happened: `channel_message(action="react", ...)`
+///   answered `delivered: true` while nothing reached the platform. A capability
+///   flag is a promise; the default body is where a broken promise must surface,
+///   not where it gets absorbed.
+fn unsupported_feature(channel_type: &str, declared: bool, feature: &str) -> ChannelError {
+    ChannelError::UnsupportedFeature(if declared {
+        format!("{channel_type} declares `{feature}` support but does not implement it")
+    } else {
+        format!("{feature} (not supported by {channel_type})")
+    })
+}
+
 /// The main Channel trait - all channel implementations must implement this
 #[async_trait]
 pub trait Channel: Send + Sync {
@@ -731,26 +804,22 @@ pub trait Channel: Send + Sync {
 
     /// Send a typing indicator
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        if !self.capabilities().typing_indicator {
-            return Err(ChannelError::UnsupportedFeature(
-                "typing indicator".to_string(),
-            ));
-        }
-        // Default implementation does nothing
         let _ = conversation_id;
-        Ok(())
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().typing_indicator,
+            "typing indicator",
+        ))
     }
 
     /// Mark a message as read
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
-        if !self.capabilities().read_receipts {
-            return Err(ChannelError::UnsupportedFeature(
-                "read receipts".to_string(),
-            ));
-        }
-        // Default implementation does nothing
         let _ = message_id;
-        Ok(())
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().read_receipts,
+            "read receipts",
+        ))
     }
 
     /// React to a message
@@ -760,12 +829,12 @@ pub trait Channel: Send + Sync {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        if !self.capabilities().reactions {
-            return Err(ChannelError::UnsupportedFeature("reactions".to_string()));
-        }
-        // Default implementation does nothing
         let _ = (conversation_id, message_id, reaction);
-        Ok(())
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().reactions,
+            "reactions",
+        ))
     }
 
     /// Edit a previously sent message
@@ -775,12 +844,12 @@ pub trait Channel: Send + Sync {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        if !self.capabilities().editing {
-            return Err(ChannelError::UnsupportedFeature("editing".to_string()));
-        }
-        // Default implementation does nothing
         let _ = (conversation_id, message_id, new_text);
-        Ok(())
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().editing,
+            "editing",
+        ))
     }
 
     /// Delete a message
@@ -789,12 +858,35 @@ pub trait Channel: Send + Sync {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        if !self.capabilities().deletion {
-            return Err(ChannelError::UnsupportedFeature("deletion".to_string()));
-        }
-        // Default implementation does nothing
         let _ = (conversation_id, message_id);
-        Ok(())
+        Err(unsupported_feature(
+            self.channel_type(),
+            self.capabilities().deletion,
+            "deletion",
+        ))
+    }
+
+    /// Conversations on this channel the agent can address, newest/most
+    /// relevant first, narrowed by a case-insensitive `query` over the name
+    /// (empty `query` = no filter) and capped at `limit`.
+    ///
+    /// This is the only *read* on the trait, and it reads routing metadata —
+    /// names and ids — never message content. That boundary is deliberate:
+    /// pulling conversation content would arrive with none of the inbound
+    /// path's access control (`inbound_router::check_permission`, dm/group
+    /// policy, pairing) applied to it, because that gate only runs on PUSHED
+    /// messages.
+    ///
+    /// Unlike the write methods above there is no capability flag to consult,
+    /// and that is on purpose: a flag is a second place to state the same fact,
+    /// and every one of the five above has been wrong in at least one adapter
+    /// (see `unsupported_feature`). Overriding this method IS the declaration.
+    async fn list_conversations(&self, query: &str, limit: usize) -> ChannelResult<ConversationPage> {
+        let _ = (query, limit);
+        Err(ChannelError::UnsupportedFeature(format!(
+            "conversation directory (not supported by {})",
+            self.channel_type()
+        )))
     }
 
     /// Get native stream handler (if channel supports `StreamProtocol::Native`)
@@ -904,6 +996,105 @@ mod tests {
         assert!(!caps.attachments);
         assert!(!caps.reactions);
         assert_eq!(caps.max_message_length, 0);
+    }
+
+    /// A channel that advertises every optional feature and implements none of
+    /// them — the exact shape six shipped adapters were in before 2026-07-26
+    /// (msteams `reactions`, whatsapp `deletion`, feishu `typing_indicator`,
+    /// matrix/signal/xmpp `read_receipts`).
+    struct OverclaimingChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+    }
+
+    impl OverclaimingChannel {
+        fn new() -> Self {
+            Self {
+                info: ChannelInfo {
+                    id: ChannelId::new("overclaimer"),
+                    name: "Overclaimer".to_string(),
+                    channel_type: "overclaimer".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities {
+                        reactions: true,
+                        editing: true,
+                        deletion: true,
+                        typing_indicator: true,
+                        read_receipts: true,
+                        ..ChannelCapabilities::default()
+                    },
+                },
+                state: ChannelState::new(8),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Channel for OverclaimingChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+            unreachable!("this test never sends")
+        }
+    }
+
+    /// Declaring a capability without implementing it must FAIL, not succeed
+    /// quietly.
+    ///
+    /// These defaults used to `Ok(())` once the flag was set, so
+    /// `channel_message(action="react", channel_id="msteams", …)` answered
+    /// `delivered: true` for a call that never left the process. A fake success
+    /// is worse than an error: the model reports the work as done and moves on.
+    #[tokio::test]
+    async fn declared_but_unimplemented_optional_methods_fail_loudly() {
+        let ch = OverclaimingChannel::new();
+        let conv = ConversationId::new("c1");
+        let msg = MessageId::new("m1");
+
+        for err in [
+            ch.react(&conv, &msg, "👍").await.unwrap_err(),
+            ch.edit(&conv, &msg, "new").await.unwrap_err(),
+            ch.delete(&conv, &msg).await.unwrap_err(),
+            ch.send_typing(&conv).await.unwrap_err(),
+            ch.mark_read(&msg).await.unwrap_err(),
+        ] {
+            match err {
+                // The message must name the adapter and say it broke its own
+                // promise — that is what makes the bug findable.
+                ChannelError::UnsupportedFeature(m) => {
+                    assert!(m.contains("overclaimer"), "{m}");
+                    assert!(m.contains("does not implement it"), "{m}");
+                }
+                other => panic!("expected UnsupportedFeature, got {other:?}"),
+            }
+        }
+    }
+
+    /// The honest case keeps its old wording (callers and adapter tests match
+    /// on the feature word).
+    #[tokio::test]
+    async fn undeclared_optional_methods_report_plain_unsupported() {
+        let mut ch = OverclaimingChannel::new();
+        ch.info.capabilities = ChannelCapabilities::default();
+
+        let err = ch.send_typing(&ConversationId::new("c1")).await.unwrap_err();
+        match err {
+            ChannelError::UnsupportedFeature(m) => {
+                assert!(m.contains("typing"), "{m}");
+                assert!(!m.contains("does not implement it"), "{m}");
+            }
+            other => panic!("expected UnsupportedFeature, got {other:?}"),
+        }
     }
 
     #[test]

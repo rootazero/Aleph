@@ -1083,6 +1083,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Channel directory tool (deferred — same ChannelRegistry cell)
+            "channel_directory" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool(
+                        "channel_directory not available: ChannelRegistry not yet injected",
+                    )
+                })?;
+                let tool = crate::builtin_tools::channel_directory::ChannelDirectoryTool::new(
+                    Arc::clone(cr),
+                );
+                tool.call_json(arguments).await
+            }),
+
             // Google Meet tool — forwards the action to the configured
             // out-of-core transport bridge over JSON-RPC.
             "google_meet" => {

@@ -101,7 +101,8 @@ impl XmppChannel {
             editing: false,
             deletion: false,
             typing_indicator: true, // XEP-0085 Chat State Notifications
-            read_receipts: true,    // XEP-0184 Message Delivery Receipts
+            // XEP-0184 receipts are not wired: no `mark_read` override exists.
+            read_receipts: false,
             rich_text: false,       // Using plain text for simplicity
             max_message_length: 65535,
             max_attachment_size: 0,
@@ -280,7 +281,9 @@ mod tests {
         assert!(!caps.editing);
         assert!(!caps.deletion);
         assert!(caps.typing_indicator);
-        assert!(caps.read_receipts);
+        // XEP-0184 is unimplemented (no `mark_read` override) — flip back only
+        // together with the impl.
+        assert!(!caps.read_receipts);
         assert!(!caps.rich_text);
         assert_eq!(caps.max_message_length, 65535);
         assert_eq!(caps.max_attachment_size, 0);
