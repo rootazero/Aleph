@@ -294,7 +294,6 @@ impl PiiEngine {
                         "PII detected in outbound message (warn mode)"
                     );
                 }
-                PiiAction::Off => {}
             }
         }
 
