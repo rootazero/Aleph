@@ -13,6 +13,7 @@ mod cards;
 pub mod data;
 mod drawer;
 mod facets;
+mod loader;
 mod pager;
 mod toast;
 

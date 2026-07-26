@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `user_input` / `ai_output` stay separate: the card renders the two halves
 /// with different weights, which a pre-joined `content` string made impossible.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RawMemory {
     pub id: String,
     #[serde(default)]
@@ -35,7 +35,7 @@ impl RawMemory {
 }
 
 /// Compiled knowledge note (Layer 2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompressedFact {
     pub id: String,
     #[serde(default)]
