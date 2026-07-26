@@ -416,10 +416,12 @@ impl ContextCompactor {
         // cached summary explicitly as prior state and folds only the new gap
         // into it (openclaw "merge prior summaries", done incrementally) — and
         // refresh the cache to cover the wider range.
-        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = cache.as_ref() {
             if c.start < c.end && c.end <= cut_end && hash_window(&messages[c.start..c.end]) == c.hash {
-                return self.reapply_cached(messages, c.clone(), cut_end).await;
+                let c = c.clone();
+                drop(cache);
+                return self.reapply_cached(messages, c, cut_end).await;
             }
             drop(cache);
             // Stale fingerprint (prefix changed under a preflight pass, or the
