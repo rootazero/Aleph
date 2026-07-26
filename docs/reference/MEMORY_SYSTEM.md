@@ -429,3 +429,17 @@ sentence, in the user's language, saying what was recorded and to which
 tier — never quoting the stored content back verbatim, and treating the
 tool's success response as terminal (no repeated writes, no re-echo into
 another memory tool). This replaces the earlier "silent logging" design.
+
+## Panel 呈现面与 RPC 形状
+
+The desktop Panel's Memory Vault tab (`interfaces/webchat/src/platform/wide/views/memory/`, see [FEATURE_LOCATOR.md §6.7](FEATURE_LOCATOR.md)) is a pure-I/O consumer (R4) of five gateway RPCs. Each one now has exactly **one shape** — the 2026-07-26 refactor's core fix was that `memory.search` used to also answer queries with note rows, which the desktop view rendered into the Raw table (wrong data, undeletable rows, no error surfaced).
+
+| RPC | 返回什么 | 谁消费 |
+|---|---|---|
+| `memory.listFacts` | 笔记页 + `total`（含 tags / link_count / updated_at） | Panel 笔记层、phone Vault |
+| `memory.search` | **只有**原始对话行（`query` 做 content LIKE 过滤） | Panel Raw 层、CLI `memory search` |
+| `graph.search` | **只有**笔记 FTS 命中（完整索引行，`SearchResultDto` 9 字段） | Panel SearchHits 层、星系高亮、抽屉 wikilink 解析 |
+| `memory.stats` | 单一 scope 的四项计数 + `scope` 字段 | Panel 统计卡、CLI `memory stats` |
+| `memory.trace` | 证据链（notes + evidence，含 `pruned`） | `memory_trace` 工具、Panel 抽屉溯源区（`provenance.rs`，2026-07-26 前零消费者） |
+
+`graph.neighbors` is intentionally absent from this table — it was cut on 2026-07-26 (zero callers repo-wide; see FEATURE_LOCATOR.md §6.3/附录 A #7). `NoteStore::get_neighbors` remains as a Rust-level API for `note_graph_query`.
