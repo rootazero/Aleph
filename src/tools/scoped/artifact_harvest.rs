@@ -25,8 +25,6 @@
 //!   consumer must treat [`ArtifactStore::list`] as the settlement and the ping
 //!   as nothing more than "re-read now".
 
-use std::sync::OnceLock;
-
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -43,26 +41,6 @@ const MEDIA_FIELD: &str = "_media";
 
 /// Characters of a random id mixed into a derived filename.
 const FILENAME_SUFFIX_LEN: usize = 8;
-
-/// Process-wide store rooted at `<aleph_data_dir>/artifacts`.
-///
-/// An [`ArtifactStore`] owns nothing but its root path, so an instance built
-/// here and one built by the gateway from the same root are interchangeable —
-/// there is no shared mutable state to keep coherent. Resolved once: a data
-/// directory that cannot be resolved at first use will not resolve later
-/// either, and re-warning on every tool call would be noise.
-fn shared_store() -> Option<&'static ArtifactStore> {
-    static SHARED_STORE: OnceLock<Option<ArtifactStore>> = OnceLock::new();
-    SHARED_STORE
-        .get_or_init(|| match ArtifactStore::default_root() {
-            Ok(root) => Some(ArtifactStore::new(root)),
-            Err(e) => {
-                warn!(error = %e, "artifact harvest disabled: cannot resolve the artifact root");
-                None
-            }
-        })
-        .as_ref()
-}
 
 /// Store every `_media` item the tool declared, then ping the session.
 ///
@@ -102,7 +80,7 @@ pub(crate) async fn harvest_media_for_session(
     if items.is_empty() {
         return;
     }
-    let Some(store) = shared_store() else {
+    let Some(store) = ArtifactStore::shared() else {
         return;
     };
     if store_media_items(store, session_key, run_id, tool, items).await > 0 {

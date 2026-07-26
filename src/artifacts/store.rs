@@ -58,6 +58,31 @@ impl ArtifactStore {
             .map_err(|e| ArtifactError::Root(e.to_string()))
     }
 
+    /// The process-wide store at [`default_root`](Self::default_root), for
+    /// callers with no injected one — tools and the dispatch chokepoint.
+    ///
+    /// A store owns nothing but its root path, so this instance and one the
+    /// gateway builds from the same root are interchangeable; there is no
+    /// shared mutable state to keep coherent. Resolved once: a data directory
+    /// that cannot be resolved at first use will not resolve later either, and
+    /// re-warning on every tool call would be noise.
+    ///
+    /// `None` means the data directory is unavailable — the caller has no store
+    /// and must degrade, never fail the work it was doing.
+    #[must_use]
+    pub fn shared() -> Option<&'static Self> {
+        static SHARED: std::sync::OnceLock<Option<ArtifactStore>> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| match Self::default_root() {
+                Ok(root) => Some(Self::new(root)),
+                Err(e) => {
+                    warn!(error = %e, "artifact store unavailable: cannot resolve the artifact root");
+                    None
+                }
+            })
+            .as_ref()
+    }
+
     /// Root directory this store writes under.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -231,8 +256,23 @@ async fn count_sidecars(dir: &Path) -> Result<usize, std::io::Error> {
     Ok(count)
 }
 
-/// Drop the oldest artifacts until the session is back within
-/// [`MAX_ARTIFACTS_PER_SESSION`].
+/// Eviction order key: lower is discarded first.
+///
+/// Deliverables rank last because they are the *point* of the session — the
+/// report the user asked for, as opposed to the screenshots and intermediate
+/// downloads that produced it. Evicting purely by age would let a run that
+/// generates two hundred scratch images silently delete the one artifact the
+/// session existed to produce.
+const fn eviction_rank(origin: ArtifactOrigin) -> u8 {
+    match origin {
+        ArtifactOrigin::Inbound | ArtifactOrigin::Outbound | ArtifactOrigin::Export => 0,
+        ArtifactOrigin::Deliverable => 1,
+    }
+}
+
+/// Drop the least valuable artifacts until the session is back within
+/// [`MAX_ARTIFACTS_PER_SESSION`] — oldest first within a rank, and
+/// deliverables only once nothing else is left (see [`eviction_rank`]).
 ///
 /// Best-effort: the blob is already durably written when this runs, so a
 /// failure here is logged, never surfaced as a failed `put`.
@@ -257,11 +297,12 @@ async fn evict_overflow(dir: &Path) {
         return;
     }
 
-    // Oldest first, with a stable tiebreak so concurrent puts in the same
-    // millisecond still evict deterministically.
+    // Cheapest-to-lose first, then oldest first, with a stable tiebreak so
+    // concurrent puts in the same millisecond still evict deterministically.
     records.sort_by(|a, b| {
-        a.created_at
-            .cmp(&b.created_at)
+        eviction_rank(a.origin)
+            .cmp(&eviction_rank(b.origin))
+            .then_with(|| a.created_at.cmp(&b.created_at))
             .then_with(|| a.id.cmp(&b.id))
     });
     let overflow = records.len() - MAX_ARTIFACTS_PER_SESSION;
@@ -494,6 +535,50 @@ mod tests {
             store.read(SESSION, &oldest.id).await.unwrap_err(),
             ArtifactError::NotFound(_)
         ));
+    }
+
+    /// The oldest artifact is normally the first to go — but not when it is the
+    /// deliverable. A run that generates a flood of scratch images must not be
+    /// able to evict the report the session existed to produce.
+    #[tokio::test]
+    async fn eviction_sacrifices_everything_before_the_deliverable() {
+        let (store, _guard) = test_store();
+
+        let deliverable = store
+            .put(
+                SESSION,
+                None,
+                ArtifactOrigin::Deliverable,
+                "report.html",
+                "text/html",
+                b"<p>the point of all this</p>",
+            )
+            .await
+            .unwrap();
+        // Strictly the oldest by millisecond clock: under a pure age order this
+        // is exactly the record that would be dropped.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        for i in 0..=MAX_ARTIFACTS_PER_SESSION {
+            store
+                .put(
+                    SESSION,
+                    None,
+                    ArtifactOrigin::Outbound,
+                    &format!("scratch-{i}.png"),
+                    "image/png",
+                    b"x",
+                )
+                .await
+                .unwrap();
+        }
+
+        let listed = store.list(SESSION).await.unwrap();
+        assert_eq!(listed.len(), MAX_ARTIFACTS_PER_SESSION);
+        assert!(
+            listed.iter().any(|r| r.id == deliverable.id),
+            "the deliverable was evicted despite being the last thing worth losing"
+        );
     }
 
     #[tokio::test]
