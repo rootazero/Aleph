@@ -40,7 +40,7 @@ pub fn build_member_input(
          请以你的身份在群里回应。约定:\n\
          - 要不要发言、说什么由你判断;与你无关可以简短跳过。\n\
          - 想让某成员接话,在回复里 `@<agent_id>`(用名册里的 id);`@all` 叫全员。\n\
-         - 调任何团队工具(task_create / team_delegate / team_status 等)时,team_id 必须填 `{team_id}`。\n\
+         - 调任何团队工具(task_create / task_submit / team_status 等,以你实际可用的工具为准)时,team_id 必须填 `{team_id}`。\n\
          - 不要 @ 自己,也不要 @ user。"
     )
 }
@@ -73,6 +73,32 @@ mod tests {
         assert!(
             out.contains("task_submit"),
             "member told to submit via task_submit"
+        );
+    }
+
+    /// The shared convention block reaches workers too, so it must not name a
+    /// verb only the leader has. `team_delegate` is the one every declared
+    /// template deliberately withholds from members — the invariant
+    /// `templates::materialize::only_the_leader_declares_team_delegate`
+    /// enforces on the declaration side. Naming it here told a worker to call
+    /// a tool it cannot see. (`task_*` and `team_status` are NOT leader-only:
+    /// the declared worker roles do carry them.)
+    #[test]
+    fn member_prompt_names_no_leader_only_verb() {
+        let out = build_member_input(
+            "team-xyz",
+            "alice",
+            "researcher",
+            "bob (writer), leader (leader)",
+            "[user]: @alice 查下 X",
+            false,
+            "Squad",
+            None,
+            "查下 X",
+        );
+        assert!(
+            !out.contains("team_delegate"),
+            "worker prompt names leader-only `team_delegate`: {out}"
         );
     }
 
