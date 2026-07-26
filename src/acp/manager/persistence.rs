@@ -117,9 +117,15 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                 }
                 store.clone()
             };
-            drop(tokio::task::spawn_blocking(move || {
-                save_persisted_sessions(&store_clone);
-            }));
+            tokio::spawn(async move {
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    save_persisted_sessions(&store_clone);
+                })
+                .await
+                {
+                    tracing::warn!(?e, "persist_sessions: spawn_blocking failed");
+                }
+            });
         }))
         .await;
 

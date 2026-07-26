@@ -2,6 +2,7 @@
 
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use tracing::warn;
 
 use crate::agents::types::{AgentDef, AgentMode, ContextMode};
@@ -17,25 +18,28 @@ use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 /// catalog only run per-request afterwards. Lowest precedence: read only on a
 /// registry miss (resolve) or insert-if-absent (catalog), so a builtin / user /
 /// project agent of the same id always wins.
-static PLUGIN_SUBAGENTS: std::sync::RwLock<Vec<AgentDef>> = std::sync::RwLock::new(Vec::new());
+static PLUGIN_SUBAGENTS: OnceLock<RwLock<Arc<[AgentDef]>>> = OnceLock::new();
+
+fn plugin_subagents_lock() -> &'static RwLock<Arc<[AgentDef]>> {
+    PLUGIN_SUBAGENTS.get_or_init(|| RwLock::new(Arc::new([])))
+}
 
 /// Publish the installed plugins' sub-agent definitions for delegation +
 /// catalog surfacing. Replaces the previous set wholesale (called after every
 /// extension (re)load so the set stays in sync with what is installed).
 pub fn publish_plugin_subagents(agents: Vec<AgentDef>) {
-    let mut guard = PLUGIN_SUBAGENTS
+    let mut guard = plugin_subagents_lock()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = agents;
+    *guard = Arc::from(agents.into_boxed_slice());
 }
 
 /// Snapshot the currently-published plugin sub-agent definitions.
 #[must_use]
-pub fn plugin_subagents() -> Vec<AgentDef> {
-    PLUGIN_SUBAGENTS
+pub fn plugin_subagents() -> Arc<[AgentDef]> {
+    Arc::clone(&plugin_subagents_lock()
         .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+        .unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 /// Registry for managing agent definitions
@@ -110,7 +114,7 @@ impl AgentRegistry {
     /// succeeded.
     pub fn available_agent_ids(&self) -> Vec<String> {
         let mut ids = self.list_ids();
-        ids.extend(plugin_subagents().into_iter().map(|a| a.id));
+        ids.extend(plugin_subagents().iter().map(|a| a.id.clone()));
         ids.sort();
         ids.dedup();
         ids
@@ -230,7 +234,7 @@ impl AgentRegistry {
         // Plugin-shipped sub-agents (lowest precedence): reached only after the
         // registry and alias table both miss, so a plugin agent adds a new
         // delegatable id but never shadows a builtin/user/project one.
-        plugin_subagents().into_iter().find(|a| a.id == id)
+        plugin_subagents().iter().find(|a| a.id == id).cloned()
     }
 
     /// Remove an agent by ID

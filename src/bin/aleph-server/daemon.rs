@@ -72,7 +72,10 @@ fn rotate_stale_or_oversized_log(log_path: &Path, max_bytes: u64) -> std::io::Re
     };
     // A file whose mtime is unreadable is treated as "today" (only size can
     // then trigger rotation) rather than blocking startup.
-    let modified = metadata.modified().unwrap_or_else(|_| SystemTime::now());
+    let modified = metadata.modified().unwrap_or_else(|e| {
+        tracing::warn!(?e, log_path=%log_path.display(), "unable to read log file mtime; treating as today for rotation");
+        SystemTime::now()
+    });
     let Some(date) = rotation_suffix_date(metadata.len(), modified, SystemTime::now(), max_bytes)
     else {
         return Ok(());

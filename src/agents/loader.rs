@@ -43,6 +43,9 @@ pub enum LoaderError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("invalid value in {path}: {message}")]
+    InvalidValue { path: PathBuf, message: String },
 }
 
 #[derive(Debug, Clone)]
@@ -155,21 +158,15 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
         def = def.with_denied_tools(fm.denied_tools);
     }
     if let Some(n) = fm.max_iterations {
-        def = def.with_max_iterations(u32::try_from(n).map_err(|_| LoaderError::Io {
+        def = def.with_max_iterations(u32::try_from(n).map_err(|_| LoaderError::InvalidValue {
             path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("max_iterations {n} exceeds u32 limit"),
-            ),
+            message: format!("max_iterations {n} exceeds u32 limit"),
         })?);
     }
     if let Some(n) = fm.token_budget {
-        def = def.with_token_budget(u32::try_from(n).map_err(|_| LoaderError::Io {
+        def = def.with_token_budget(u32::try_from(n).map_err(|_| LoaderError::InvalidValue {
             path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("token_budget {n} exceeds u32 limit"),
-            ),
+            message: format!("token_budget {n} exceeds u32 limit"),
         })?);
     }
     if let Some(cm) = fm.context_mode {

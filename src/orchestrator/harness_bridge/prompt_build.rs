@@ -449,8 +449,8 @@ impl AgentHarnessRunner {
                 by_id.insert(a.id.clone(), a);
             }
             // Plugin sub-agents last, insert-if-absent (lowest precedence).
-            for a in crate::agents::plugin_subagents() {
-                by_id.entry(a.id.clone()).or_insert(a);
+            for a in crate::agents::plugin_subagents().iter() {
+                by_id.entry(a.id.clone()).or_insert_with(|| a.clone());
             }
             (!by_id.is_empty()).then(|| {
                 by_id

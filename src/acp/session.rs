@@ -154,12 +154,14 @@ impl AcpSession {
         })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
+            let _ = child.start_kill();
             crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::SpawnFailed,
                 format!("ACP harness '{harness_id}': failed to capture stdin"),
             )
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
+            let _ = child.start_kill();
             crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::SpawnFailed,
                 format!("ACP harness '{harness_id}': failed to capture stdout"),

@@ -104,11 +104,14 @@ fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(hit) = guard.get(pattern) {
-        return hit.clone();
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = guard.get(pattern) {
+            return hit.clone();
+        }
     }
     let compiled = regex::Regex::new(&glob_to_regex_str(pattern)).ok();
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() < GLOB_CACHE_MAX {
         guard.insert(pattern.to_string(), compiled.clone());
     }
