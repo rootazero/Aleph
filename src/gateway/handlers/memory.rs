@@ -279,7 +279,11 @@ const fn default_facts_limit() -> usize {
     50
 }
 
-/// Fact entry for JSON serialization
+/// Fact entry for JSON serialization.
+///
+/// `tags` / `link_count` / `updated_at` are already carried by every
+/// `NoteIndexEntry` the underlying query returns — this handler used to drop
+/// them, leaving the panel with nothing per row but a filename.
 #[derive(Debug, Clone, Serialize)]
 pub struct FactEntry {
     pub id: String,
@@ -288,8 +292,11 @@ pub struct FactEntry {
     #[serde(rename = "fact_type")]
     pub note_type: String,
     pub created_at: i64,
+    pub updated_at: i64,
     pub category: String,
     pub path: String,
+    pub tags: Vec<String>,
+    pub link_count: usize,
 }
 
 /// List note memories (compiled knowledge notes from `notes_index`).
@@ -309,6 +316,9 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
 
     match db.list_notes(agent_id).await {
         Ok(notes) => {
+            // `total` describes the whole agent store, so the pager can size
+            // itself instead of guessing from a full page.
+            let total = notes.len() as i64;
             let entries: Vec<FactEntry> = notes
                 .into_iter()
                 .skip(params.offset)
@@ -319,12 +329,15 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
                     content: n.filename.clone(),
                     note_type: n.category.clone(),
                     created_at: n.created_at,
+                    updated_at: n.updated_at,
                     category: n.category,
                     path: n.path,
+                    tags: n.tags,
+                    link_count: n.link_count,
                 })
                 .collect();
 
-            JsonRpcResponse::success(request.id, json!({ "facts": entries }))
+            JsonRpcResponse::success(request.id, json!({ "facts": entries, "total": total }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -1354,5 +1367,89 @@ mod stats_tests {
         assert_eq!(v["totalGraphEdges"], 0);
         assert!(!v["totalGraphNodes"].is_null());
         assert!(!v["totalGraphEdges"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod list_facts_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_lf_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.listFacts".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn total_counts_the_whole_store_not_the_page() {
+        let db = db();
+        for i in 0..7 {
+            let note = KnowledgeNote {
+                title: format!("n{i}"),
+                category: "facts".to_string(),
+                facts: vec!["f".to_string()],
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+                content_hash: format!("h{i}"),
+                ..Default::default()
+            };
+            db.index_note(&note, "main", "facts").await.unwrap();
+        }
+
+        let v = handle_list_facts(
+            req(serde_json::json!({ "agent_id": "main", "limit": 3, "offset": 0 })),
+            db,
+        )
+        .await
+        .result
+        .expect("success");
+
+        assert_eq!(v["facts"].as_array().unwrap().len(), 3, "page is capped");
+        assert_eq!(v["total"], 7, "total describes the store, not the page");
+    }
+
+    /// tags / link_count / updated_at are already on every NoteIndexEntry the
+    /// query returns. They used to be dropped here, which is why the panel had
+    /// nothing to show per row beyond a filename.
+    #[tokio::test]
+    async fn passes_through_tags_link_count_and_updated_at() {
+        let db = db();
+        let mut note = KnowledgeNote {
+            title: "tagged".to_string(),
+            category: "facts".to_string(),
+            facts: vec!["f".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_009_999,
+            content_hash: "h".to_string(),
+            ..Default::default()
+        };
+        note.tags = vec!["rust".to_string(), "ci".to_string()];
+        db.index_note(&note, "main", "facts").await.unwrap();
+
+        let v = handle_list_facts(
+            req(serde_json::json!({ "agent_id": "main", "limit": 50, "offset": 0 })),
+            db,
+        )
+        .await
+        .result
+        .expect("success");
+
+        let row = &v["facts"][0];
+        assert_eq!(row["updated_at"], 1_700_009_999_i64);
+        let tags: Vec<String> = serde_json::from_value(row["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["rust".to_string(), "ci".to_string()]);
+        assert!(row["link_count"].is_u64());
     }
 }
