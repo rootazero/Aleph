@@ -65,7 +65,7 @@ impl SkillWatcher {
         let skills_dir = skills_dir.as_ref().to_path_buf();
 
         // Create channel for file system events
-        let (event_tx, event_rx) = mpsc::channel(100);
+        let (event_tx, event_rx) = mpsc::channel(256);
 
         // Create debounced watcher
         let mut debouncer = new_debouncer(

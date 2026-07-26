@@ -228,8 +228,7 @@ impl MarkdownCliTool {
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let image = self.get_docker_image().unwrap_or_default();
-            check_docker_exit_code(exit_code, &stderr, bin, &image)?;
+            check_docker_exit_code(exit_code, &stderr, bin, &container_image)?;
             warn!(
                 tool = %self.spec.name,
                 exit_code = exit_code,

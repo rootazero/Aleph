@@ -78,7 +78,7 @@ impl PlatformOcrProvider {
     /// - `Base64` variant: decoded into bytes.
     /// - `FilePath` variant: read from disk as-is.
     /// - `Url` variant: not supported for platform OCR (would need HTTP fetch).
-    fn resolve_png_bytes(image: &ImageInput) -> Result<Vec<u8>, VisionError> {
+    async fn resolve_png_bytes(image: &ImageInput) -> Result<Vec<u8>, VisionError> {
         match image {
             ImageInput::Base64 { data, .. } => {
                 use base64::Engine;
@@ -101,7 +101,7 @@ impl PlatformOcrProvider {
                 Ok(decoded)
             }
             ImageInput::FilePath { path } => {
-                let bytes = std::fs::read(path).map_err(|e| {
+                let bytes = tokio::fs::read(path).await.map_err(|e| {
                     VisionError::ImageError(format!(
                         "Failed to read image file {}: {}",
                         path.display(),
@@ -144,7 +144,7 @@ impl VisionProvider for PlatformOcrProvider {
     }
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
-        let png_bytes = Self::resolve_png_bytes(image)?;
+        let png_bytes = Self::resolve_png_bytes(image).await?;
         let result = match &self.source {
             ScreenSource::Direct(screen) => screen.ocr(Some(&png_bytes)).await,
             ScreenSource::Platform(platform) => {
@@ -249,22 +249,22 @@ mod tests {
             .contains("does not support image understanding"));
     }
 
-    #[test]
-    fn resolve_png_bytes_from_base64_input() {
+    #[tokio::test]
+    async fn resolve_png_bytes_from_base64_input() {
         let image = ImageInput::Base64 {
             data: "aGVsbG8=".to_string(),
             format: ImageFormat::Png,
         };
-        let result = PlatformOcrProvider::resolve_png_bytes(&image).unwrap();
+        let result = PlatformOcrProvider::resolve_png_bytes(&image).await.unwrap();
         assert_eq!(result, b"hello");
     }
 
-    #[test]
-    fn resolve_png_bytes_from_url_returns_error() {
+    #[tokio::test]
+    async fn resolve_png_bytes_from_url_returns_error() {
         let image = ImageInput::Url {
             url: "https://example.com/img.png".to_string(),
         };
-        let err = PlatformOcrProvider::resolve_png_bytes(&image).unwrap_err();
+        let err = PlatformOcrProvider::resolve_png_bytes(&image).await.unwrap_err();
         assert!(matches!(err, VisionError::ImageError(_)));
     }
 

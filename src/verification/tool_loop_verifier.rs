@@ -133,7 +133,7 @@ impl TurnVerifier for ToolLoopVerifier {
         // regardless of narration: an exact-repeat is never productive.
         if run >= profile.repeat_threshold {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
-            if run >= profile.halt_threshold && profile.halt_threshold > profile.repeat_threshold {
+            if run >= profile.halt_threshold {
                 return VerifierVerdict::Halt {
                     reason: format!(
                         "tool '{tool}' invoked {run} consecutive times with identical arguments \

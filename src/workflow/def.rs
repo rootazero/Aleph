@@ -162,6 +162,12 @@ impl WorkflowDef {
                             step.id
                         )));
                     }
+                    if step.prompt.trim().is_empty() {
+                        return Err(AlephError::invalid_input(format!(
+                            "step '{}' has no prompt",
+                            step.id
+                        )));
+                    }
                 }
                 WorkflowStepKind::Clarify => {
                     // A clarify step needs a question (the prompt); `agent` is

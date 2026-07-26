@@ -436,7 +436,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
                     Some(v) if v.is_null() => true,
                     Some(Value::String(s)) => {
                         let s = s.trim();
-                        s.is_empty() || s == "." || s == "./" || !s.starts_with('/')
+                        s.is_empty() || s == "." || s == "./" || !std::path::Path::new(s).is_absolute()
                     }
                     _ => false,
                 };

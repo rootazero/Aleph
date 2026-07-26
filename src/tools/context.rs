@@ -48,11 +48,17 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
         tracing::warn!(
             error = %e,
             path = %default_workspace.display(),
-            "Failed to create default workspace output dir; tools may fail"
+            "Failed to create default workspace output dir; using fallback"
         );
-        ToolContext {
-            output_dir: default_workspace.join("output"),
+        let output_dir = default_workspace.join("output");
+        if let Err(e) = std::fs::create_dir_all(&output_dir) {
+            tracing::error!(
+                error = %e,
+                path = %output_dir.display(),
+                "Failed to create fallback output dir; tools may fail"
+            );
         }
+        ToolContext { output_dir }
     });
     Arc::new(tokio::sync::RwLock::new(ctx))
 }

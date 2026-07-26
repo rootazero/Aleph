@@ -46,7 +46,16 @@ impl TurnVerifier for StopHookVerifier {
             return VerifierVerdict::Continue;
         }
         let hctx = StopHookContext {
-            final_text: ctx.final_text.map(|s| s.to_string()),
+            final_text: ctx.final_text.map(|s| {
+                let cap = 4096; // mirror extension_stop_gate::LAST_MESSAGE_ENV_CAP
+                let end = s
+                    .char_indices()
+                    .take(cap)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                s[..end.min(s.len())].to_string()
+            }),
             iterations: ctx.iterations,
             tool_calls_made: ctx.tool_calls_made,
             stop_reason: stop_reason.to_string(),

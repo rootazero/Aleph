@@ -234,15 +234,15 @@ struct RpcProgressHandle {
 
 impl ProgressHandle for RpcProgressHandle {
     fn update(&self, message: &str) {
-        debug!(label = %self.label, message = %message, "Progress update");
+        tracing::info!(label = %self.label, message = %message, "Progress update");
     }
 
     fn finish(&self, message: &str) {
-        debug!(label = %self.label, message = %message, "Progress finished");
+        tracing::info!(label = %self.label, message = %message, "Progress finished");
     }
 
     fn finish_error(&self, message: &str) {
-        debug!(label = %self.label, message = %message, "Progress error");
+        tracing::info!(label = %self.label, message = %message, "Progress error");
     }
 }
 
