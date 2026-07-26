@@ -42,6 +42,15 @@ impl ToolHandlerRegistry {
         let source = handler.definition().source.clone();
         let mut inserted = false;
         self.inner.rcu(|current| {
+            // `rcu` re-runs this closure on every lost CAS, so the flag has to
+            // speak for the CURRENT attempt only. Without this reset, a thread
+            // that found the key absent on its first pass (setting the flag),
+            // then lost the CAS and saw the key present on its second, still
+            // reported success — so N concurrent registers for one name could
+            // all return `Ok` and the `Duplicate` error callers rely on never
+            // fired. Only the final invocation is the one whose value is
+            // stored, so only its verdict may survive.
+            inserted = false;
             if current.contains_key(&name) {
                 return Arc::clone(current);
             }
