@@ -200,7 +200,7 @@ impl MarkdownCliTool {
         // Pass environment variables and extra flags (filtered through allowlist)
         self.push_docker_runtime_args(&mut docker_args);
 
-        docker_args.push(container_image);
+        docker_args.push(container_image.clone());
         docker_args.push(bin.clone());
         docker_args.extend_from_slice(cli_args);
 
