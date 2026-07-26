@@ -75,7 +75,7 @@ pub const fn github_markdown_css() -> &'static str {
 }
 
 /// Escape special HTML characters to prevent injection.
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

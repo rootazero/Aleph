@@ -17,7 +17,6 @@ use crate::browser::playwright_cli::PlaywrightCliDriver;
 use crate::browser::profile::PlaywrightCliConfig;
 use crate::builtin_tools::error::ToolError;
 
-/// Convert Markdown source to HTML fragment using pulldown-cmark.
 fn file_url_from_path(path: &Path) -> String {
     // RFC 8089: file URLs use forward slashes and require `file:///` on
     // Windows where paths start with a drive letter (`C:\…` → `file:///C:/…`).
@@ -29,6 +28,7 @@ fn file_url_from_path(path: &Path) -> String {
     }
     format!("file://{s}")
 }
+/// Convert Markdown source to HTML fragment using pulldown-cmark.
 ///
 /// Enables all extensions: tables, footnotes, strikethrough, task lists, etc.
 pub fn markdown_to_html(markdown: &str) -> String {
@@ -45,12 +45,6 @@ pub fn markdown_to_html(markdown: &str) -> String {
 pub fn build_html_document(markdown: &str, title: Option<&str>) -> String {
     let html_body = markdown_to_html(markdown);
     styles::wrap_html_with_styles(&html_body, title)
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Cheap synchronous check: is the playwright-cli toolchain likely available
@@ -75,7 +69,7 @@ pub async fn generate(
     let html_doc = match args.format {
         ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
         ContentFormat::Text => {
-            let escaped = html_escape(&args.content);
+            let escaped = styles::html_escape(&args.content);
             styles::wrap_html_with_styles(&format!("<pre>{escaped}</pre>"), args.title.as_deref())
         }
     };

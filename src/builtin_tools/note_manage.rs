@@ -1139,7 +1139,10 @@ impl NoteManageTool {
         let events = EventLog::new(&agent_dir)
             .read_last(5)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!(?e, "handle_evolution: failed to read event log");
+                Vec::new()
+            });
 
         let mut content = String::from("# Memory Evolution Gate\n\n");
         if events.is_empty() {

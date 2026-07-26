@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
 use crate::hub::trust::{scan_for_injection, InjectionFinding};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Maximum number of bytes accepted from the remote response body.
@@ -42,6 +43,12 @@ impl AlephTool for HubFetchDocsTool {
     type Output = HubFetchDocsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // SSRF protection: reject private/reserved IP ranges before the request.
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url_async(&args.url, &ssrf_policy)
+            .await
+            .map_err(|e| AlephError::network(format!("SSRF blocked for URL '{}': {e}", args.url)))?;
+
         // Build a short-timeout client, mirroring docker_mcp/mcp_registry providers.
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))

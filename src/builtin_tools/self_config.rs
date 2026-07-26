@@ -128,16 +128,17 @@ pub struct SelfConfigTool {
 }
 
 impl SelfConfigTool {
-    pub fn new(agent_id: impl Into<String>) -> Self {
+    pub fn new(agent_id: impl Into<String>) -> Result<Self> {
         let agent_id = agent_id.into();
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+        let home = dirs::home_dir()
+            .ok_or_else(|| ToolError::Execution("Cannot determine home directory".to_string()))?;
         let agent_dir = home.join(".aleph").join("agents").join(&agent_id);
-        Self {
+        Ok(Self {
             agent_dir,
             agent_id,
             config: None,
             config_patcher: Arc::new(std::sync::OnceLock::new()),
-        }
+        })
     }
 
     pub fn with_config(mut self, config: Arc<RwLock<Config>>) -> Self {

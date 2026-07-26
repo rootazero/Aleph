@@ -75,6 +75,7 @@ fn call_once(
     // reuse is irrelevant, and propagating a build failure beats panicking
     // on a user-facing path.
     let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .context("failed to build HTTP client for admin IPC")?;

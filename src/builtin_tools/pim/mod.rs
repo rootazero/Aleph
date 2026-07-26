@@ -9,6 +9,7 @@ use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde_json;
+use tracing;
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::error::Result;
@@ -187,15 +188,20 @@ impl PimTool {
         let result: std::result::Result<serde_json::Value, aleph_desktop::DesktopError> =
             match args.action.as_str() {
                 // ── Notes ───────────────────────────────────────
-                "notes_list" => pim
-                    .notes_list(args.folder.as_deref())
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "notes_list" => pim.notes_list(args.folder.as_deref()).await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
                 "notes_get" => {
                     let id = require!(args.id.as_deref(), "id");
-                    pim.notes_read(id)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.notes_read(id).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
                 "notes_create" => {
                     let title = require!(args.title.as_deref(), "title");
@@ -217,10 +223,12 @@ impl PimTool {
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
                 }
-                "notes_folders" => pim
-                    .notes_folders()
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "notes_folders" => pim.notes_folders().await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
 
                 // ── Calendar ────────────────────────────────────
                 "calendar_list" => {
@@ -228,13 +236,21 @@ impl PimTool {
                     let to = require!(args.to, "to");
                     pim.calendar_list_events(from, to, args.calendar_id.as_deref())
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                        .map(|v| {
+                            serde_json::to_value(v).unwrap_or_else(|e| {
+                                tracing::warn!(?e, "pim: serialization failed");
+                                serde_json::Value::Null
+                            })
+                        })
                 }
                 "calendar_get" => {
                     let id = require!(args.id.as_deref(), "id");
-                    pim.calendar_get_event(id)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.calendar_get_event(id).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
                 "calendar_create" => {
                     let title = require!(args.title.as_deref(), "title");
@@ -320,23 +336,33 @@ impl PimTool {
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
                 }
-                "calendar_calendars" => pim
-                    .calendar_calendars()
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "calendar_calendars" => pim.calendar_calendars().await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
 
                 // ── Reminders ───────────────────────────────────
                 "reminders_list" => {
                     let include_completed = args.include_completed.unwrap_or(false);
                     pim.reminders_list(args.list_id.as_deref(), include_completed)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                        .map(|v| {
+                            serde_json::to_value(v).unwrap_or_else(|e| {
+                                tracing::warn!(?e, "pim: serialization failed");
+                                serde_json::Value::Null
+                            })
+                        })
                 }
                 "reminders_get" => {
                     let id = require!(args.id.as_deref(), "id");
-                    pim.reminders_get(id)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.reminders_get(id).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
                 "reminders_create" => {
                     let title = require!(args.title.as_deref(), "title");
@@ -363,28 +389,38 @@ impl PimTool {
                         .await
                         .map(|()| serde_json::json!({ "deleted": true }))
                 }
-                "reminders_lists" => pim
-                    .reminders_lists()
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "reminders_lists" => pim.reminders_lists().await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
 
                 // ── Contacts ────────────────────────────────────
                 "contacts_search" => {
                     let query = require!(args.query.as_deref(), "query");
-                    pim.contacts_search(query)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.contacts_search(query).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
                 "contacts_get" => {
                     let id = require!(args.id.as_deref(), "id");
-                    pim.contacts_get(id)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.contacts_get(id).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
-                "contacts_groups" => pim
-                    .contacts_groups()
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "contacts_groups" => pim.contacts_groups().await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
 
                 // ── Mail ────────────────────────────────────────
                 "mail_search" => {
@@ -394,18 +430,28 @@ impl PimTool {
                     let limit = args.limit.unwrap_or(20).clamp(1, 200);
                     pim.mail_search(query, args.folder.as_deref(), limit)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                        .map(|v| {
+                            serde_json::to_value(v).unwrap_or_else(|e| {
+                                tracing::warn!(?e, "pim: serialization failed");
+                                serde_json::Value::Null
+                            })
+                        })
                 }
                 "mail_get" => {
                     let id = require!(args.id.as_deref(), "id");
-                    pim.mail_get(id)
-                        .await
-                        .map(|v| serde_json::to_value(v).unwrap_or_default())
+                    pim.mail_get(id).await.map(|v| {
+                        serde_json::to_value(v).unwrap_or_else(|e| {
+                            tracing::warn!(?e, "pim: serialization failed");
+                            serde_json::Value::Null
+                        })
+                    })
                 }
-                "mail_folders" => pim
-                    .mail_folders()
-                    .await
-                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
+                "mail_folders" => pim.mail_folders().await.map(|v| {
+                    serde_json::to_value(v).unwrap_or_else(|e| {
+                        tracing::warn!(?e, "pim: serialization failed");
+                        serde_json::Value::Null
+                    })
+                }),
 
                 // contacts_create, contacts_update, contacts_delete are not in
                 // PimCapability today and remain unsupported on the platform path.
@@ -878,10 +924,7 @@ mod tests {
         );
     }
 
-    fn deny_policy_blocking(
-        action_type: ActionType,
-        secret: &str,
-    ) -> Arc<ConfigApprovalPolicy> {
+    fn deny_policy_blocking(action_type: ActionType, secret: &str) -> Arc<ConfigApprovalPolicy> {
         use crate::approval::{ConfigApprovalPolicy, PolicyConfig, PolicyRule};
         use std::collections::HashMap;
         let pattern = format!("*{secret}*");

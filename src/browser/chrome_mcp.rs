@@ -59,6 +59,9 @@ pub struct ChromeMcpDriver {
     /// because Chrome's host-resolver-rules are process-wide — once Chrome is
     /// up, the pin is fixed for its lifetime.
     pending_launch_pins: Mutex<HashMap<String, String>>,
+    /// Handle to the launched Chrome process, kept alive to prevent
+    /// the process from becoming an orphan.
+    chrome_child: Mutex<Option<tokio::process::Child>>,
 }
 
 impl ChromeMcpDriver {
@@ -70,6 +73,7 @@ impl ChromeMcpDriver {
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
             pending_launch_pins: Mutex::new(HashMap::new()),
+            chrome_child: Mutex::new(None),
         }
     }
 
@@ -127,6 +131,7 @@ impl ChromeMcpDriver {
             BrowserError::ChromeMcpError("Session not found after creation".into())
         })?;
         let session = Arc::clone(session);
+        drop(sessions);
 
         // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
         let server_name = format!("chrome-mcp-{profile_name}");
@@ -143,10 +148,9 @@ impl ChromeMcpDriver {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
                     );
-                    // Drop read lock before destroying session, but only destroy
-                    // if the same session is still stored (avoid racing a
-                    // concurrent recreate that replaced the errored session).
-                    drop(sessions);
+                    // Only destroy if the same session is still stored
+                    // (avoid racing a concurrent recreate that replaced
+                    // the errored session).
                     self.destroy_session_if_same(profile_name, &session).await;
                 }
                 return Err(BrowserError::ChromeMcpError(err_str));
@@ -214,7 +218,9 @@ impl ChromeMcpDriver {
                 tracing::info!(
                     "Chrome DevTools MCP connection failed, attempting to launch Chrome: {e}"
                 );
-                let _ = client.stop_all().await;
+                if let Err(e) = client.stop_all().await {
+                    tracing::warn!("Failed to stop Chrome DevTools MCP client: {e}");
+                }
                 self.ensure_chrome_running(profile_name).await?;
 
                 // Retry after Chrome launch
@@ -293,6 +299,8 @@ impl ChromeMcpDriver {
                 )));
             }
         }
+
+        *self.chrome_child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
         Ok(())
     }
 

@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
@@ -498,25 +498,22 @@ fn parse_cargo_json(stdout: &str) -> Vec<Diagnostic> {
 /// severity — go vet, clang). Lines that match nothing are ignored.
 fn parse_generic(text: &str) -> Vec<Diagnostic> {
     // tsc: path(line,col): error TS1234: message
-    let tsc = match Regex::new(
+    let tsc = Regex::new(
         r"^(?P<file>[^(\s][^(]*)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<sev>error|warning)\s+(?P<code>[A-Za-z]+\d+):\s*(?P<msg>.+)$",
-    ) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
-    };
+    )
+    .map_err(|e| warn!(?e, "code_check: tsc regex compilation failed"))
+    .ok();
     // unix with severity: path:line:col: severity: message
-    let unix_sev = match Regex::new(
+    let unix_sev = Regex::new(
         r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<sev>error|warning|note):\s*(?P<msg>.+)$",
-    ) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
-    };
+    )
+    .map_err(|e| warn!(?e, "code_check: unix_sev regex compilation failed"))
+    .ok();
     // unix without severity (go vet / clang): path:line:col: message
     let unix_plain =
-        match Regex::new(r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<msg>.+)$") {
-            Ok(re) => re,
-            Err(_) => return Vec::new(),
-        };
+        Regex::new(r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<msg>.+)$")
+            .map_err(|e| warn!(?e, "code_check: unix_plain regex compilation failed"))
+            .ok();
 
     let mut out = Vec::new();
     for raw in text.lines() {
@@ -524,7 +521,7 @@ fn parse_generic(text: &str) -> Vec<Diagnostic> {
         if line.is_empty() {
             continue;
         }
-        if let Some(c) = tsc.captures(line) {
+        if let Some(c) = tsc.as_ref().and_then(|re| re.captures(line)) {
             out.push(Diagnostic {
                 file: c["file"].trim().to_string(),
                 line: c["line"].parse().unwrap_or(0),
@@ -535,7 +532,7 @@ fn parse_generic(text: &str) -> Vec<Diagnostic> {
             });
             continue;
         }
-        if let Some(c) = unix_sev.captures(line) {
+        if let Some(c) = unix_sev.as_ref().and_then(|re| re.captures(line)) {
             out.push(Diagnostic {
                 file: c["file"].trim().to_string(),
                 line: c["line"].parse().unwrap_or(0),
@@ -546,7 +543,7 @@ fn parse_generic(text: &str) -> Vec<Diagnostic> {
             });
             continue;
         }
-        if let Some(c) = unix_plain.captures(line) {
+        if let Some(c) = unix_plain.as_ref().and_then(|re| re.captures(line)) {
             out.push(Diagnostic {
                 file: c["file"].trim().to_string(),
                 line: c["line"].parse().unwrap_or(0),

@@ -176,6 +176,7 @@ impl AlephTool for AgentDeleteTool {
         //    misreported "could not be removed" and skipped archival + the
         //    lifecycle event for never-instantiated agents.
         let removed = self.registry.remove(&args.agent_id).await;
+        let deleted = removed.is_some();
 
         // 6. Archive workspace + state dir (rename to .archived) — legacy path
         //    for agents without a TOML entry; the manager already trashed the
@@ -201,8 +202,20 @@ impl AlephTool for AgentDeleteTool {
                 }
 
                 // Also archive agent state directory (~/.aleph/agents/{id}/)
-                let agent_state_dir = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                let Some(home) = dirs::home_dir() else {
+                    warn!(
+                        agent_id = %args.agent_id,
+                        "Cannot determine home directory, skipping agent state archive"
+                    );
+                    return Ok(AgentDeleteOutput {
+                        deleted,
+                        message: format!(
+                            "Agent '{}' deleted but agent state could not be archived (no home directory).",
+                            args.agent_id
+                        ),
+                    });
+                };
+                let agent_state_dir = home
                     .join(".aleph")
                     .join("agents")
                     .join(&args.agent_id);
@@ -224,8 +237,6 @@ impl AlephTool for AgentDeleteTool {
                 }
             }
         }
-
-        let deleted = removed.is_some();
 
         // Emit lifecycle event (TopicEvent-wrapped inside `publish`).
         if deleted {

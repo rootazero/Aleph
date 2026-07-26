@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::config::agent_manager::AgentManager;
@@ -318,14 +317,13 @@ impl AlephTool for AgentCreateTool {
         }
 
         // 3. Determine paths
-        let agents_state_root = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph/agents");
+        let home = dirs::home_dir().ok_or_else(|| {
+            crate::error::AlephError::other("Cannot determine home directory")
+        })?;
+        let agents_state_root = home.join(".aleph/agents");
         let agent_state_dir = agents_state_root.join(&args.id);
 
-        let workspaces_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph/workspaces");
+        let workspaces_dir = home.join(".aleph/workspaces");
         let workspace_path = workspaces_dir.join(&args.id);
 
         // 4. Compose this agent's soul (archetype + base + personalization, or a

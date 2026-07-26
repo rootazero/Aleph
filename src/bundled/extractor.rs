@@ -86,10 +86,17 @@ pub(crate) fn sync_official_with_urls(
             Ok(()) => {
                 let mut manifest =
                     InstallRegistry::load(&skills_dir).unwrap_or_else(|| InstallRegistry::new(""));
-                let _ = manifest.reconcile(&skills_dir);
+                if let Err(e) = manifest.reconcile(&skills_dir) {
+                    warn!("reconcile failed: {e}");
+                }
                 report.skills = extract_skill_tree_from_dir(&checkout, &skills_dir, &mut manifest);
-                let _ = manifest.reconcile(&skills_dir);
-                let _ = manifest.save(&skills_dir);
+                if let Err(e) = manifest.reconcile(&skills_dir) {
+                    warn!("reconcile failed: {e}");
+                }
+                manifest.bundled_version = BUNDLED_VERSION.to_string();
+                if let Err(e) = manifest.save(&skills_dir) {
+                    warn!("save failed: {e}");
+                }
             }
             Err(e) => last_err = Some(e),
         }

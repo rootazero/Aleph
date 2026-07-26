@@ -438,7 +438,7 @@ impl SessionsSendTool {
                     Some(content) => {
                         // Check if the sub-agent's response was truncated (contains truncation marker)
                         // If so, automatically send a continuation request once
-                        let content = if content.contains("⚠️ 输出因 token 限制被截断")
+                        let content = if content.contains("[output truncated")
                         {
                             info!(
                                 run_id = %run_id,
@@ -448,7 +448,7 @@ impl SessionsSendTool {
                             // Send a continuation request to the sub-agent
                             let continue_request = RunRequest {
                                 run_id: format!("{run_id}-continue"),
-                                input: "继续".to_string(),
+                                input: "Please continue from where you left off".to_string(),
                                 session_key: session_key_to_gateway(&target_session_key),
                                 timeout_secs: Some(u64::from(args.timeout_seconds)),
                                 metadata: sub_metadata.clone(),
@@ -480,10 +480,7 @@ impl SessionsSendTool {
                                             .await;
                                     match continuation {
                                         Some(cont_text) => {
-                                            // Strip the truncation marker from original, append continuation
-                                            let clean = content
-                                                .replace("\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。", "");
-                                            format!("{clean}{cont_text}")
+                                            format!("{content}{cont_text}")
                                         }
                                         None => content,
                                     }

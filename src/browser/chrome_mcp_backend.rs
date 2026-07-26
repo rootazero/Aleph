@@ -221,6 +221,9 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(())
     }
 
+    /// Delegates to `fill` (clear-then-set), not keystroke simulation.
+    /// The chrome-devtools-mcp server does not expose a discrete `type` tool,
+    /// so this behaves as fill rather than as character-by-character typing.
     async fn type_text(
         &self,
         tab_id: &str,

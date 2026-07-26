@@ -143,7 +143,7 @@ impl BuiltinToolRegistry {
                 .current_agent_id
                 .clone()
                 .unwrap_or_else(|| "main".to_string());
-            let mut tool = crate::builtin_tools::self_config::SelfConfigTool::new(agent_id);
+            let mut tool = crate::builtin_tools::self_config::SelfConfigTool::new(agent_id)?;
             if let Some(ref cfg) = config.config {
                 tool = tool.with_config(Arc::clone(cfg));
             }

@@ -71,7 +71,14 @@ impl InstallRegistry {
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp_path = path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
-        std::fs::rename(&tmp_path, &path)?;
+        if let Err(e) = std::fs::rename(&tmp_path, &path) {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                std::fs::remove_file(&path)?;
+                std::fs::rename(&tmp_path, &path)?;
+            } else {
+                return Err(e);
+            }
+        }
         debug!(path = %path.display(), "Saved skills manifest");
         Ok(())
     }
