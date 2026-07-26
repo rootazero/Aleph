@@ -175,15 +175,22 @@ pub fn format_ts(ts: i64) -> String {
 
 /// Locate a note by its `path` within the loaded window. Returns the facet to
 /// switch to (mapped from the note's category) and the zero-indexed page that
-/// holds it within that facet's slice. `None` when the path is not in the
-/// window (e.g. it falls outside the NOTE_WINDOW cap) — callers surface a notice.
+/// holds it within that facet's slice, computed against the caller's current
+/// `page_size` (the pager's page-size selector can change this at runtime, so
+/// a baked-in constant here would point at the wrong page). `None` when the
+/// path is not in the window (e.g. it falls outside the NOTE_WINDOW cap) —
+/// callers surface a notice.
 #[must_use]
-pub fn locate_note(window: &[CompressedFact], path: &str) -> Option<(MemoryFacet, u32)> {
+pub fn locate_note(
+    window: &[CompressedFact],
+    path: &str,
+    page_size: u32,
+) -> Option<(MemoryFacet, u32)> {
     let note = window.iter().find(|f| f.path == path)?;
     let facet = fact_facet(&note.category);
     let slice = facet_slice(window, facet);
     let pos = slice.iter().position(|f| f.path == path)?;
-    Some((facet, (pos as u32) / PAGE_SIZE))
+    Some((facet, (pos as u32) / page_size))
 }
 
 // ─── Markdown export ────────────────────────────────────────────────────────
@@ -344,16 +351,44 @@ mod tests {
         window.push(fact_p("feedback", "fb0"));
 
         // 56th Facts note (index 55) lands on page 1 (55 / 50).
-        assert_eq!(locate_note(&window, "f55"), Some((MemoryFacet::Facts, 1)));
+        assert_eq!(
+            locate_note(&window, "f55", 50),
+            Some((MemoryFacet::Facts, 1))
+        );
         // First Facts note is on page 0.
-        assert_eq!(locate_note(&window, "f0"), Some((MemoryFacet::Facts, 0)));
+        assert_eq!(
+            locate_note(&window, "f0", 50),
+            Some((MemoryFacet::Facts, 0))
+        );
         // Feedback note maps to the Feedback facet, page 0.
         assert_eq!(
-            locate_note(&window, "fb0"),
+            locate_note(&window, "fb0", 50),
             Some((MemoryFacet::Feedback, 0))
         );
         // Unknown path → None.
-        assert_eq!(locate_note(&window, "missing"), None);
+        assert_eq!(locate_note(&window, "missing", 50), None);
+    }
+
+    #[test]
+    fn locate_note_uses_the_caller_s_page_size_not_a_baked_in_one() {
+        // The pager's page-size selector can change page_size at runtime; if
+        // this used a fixed constant instead of the parameter, the returned
+        // page would point at the wrong page as soon as the user picked a
+        // different size, and the reverse-link jump would silently land on
+        // an empty or mismatched page.
+        let window: Vec<CompressedFact> = (0..60)
+            .map(|i| fact_p("preference", &format!("f{i}")))
+            .collect();
+
+        // Index 55: page 1 at page_size 50, but page 2 at page_size 25.
+        assert_eq!(
+            locate_note(&window, "f55", 50),
+            Some((MemoryFacet::Facts, 1))
+        );
+        assert_eq!(
+            locate_note(&window, "f55", 25),
+            Some((MemoryFacet::Facts, 2))
+        );
     }
 
     fn fact_content(content: &str) -> CompressedFact {
@@ -561,5 +596,21 @@ mod tests {
         assert_eq!(page_count(120, 25), 5);
         assert_eq!(page_count(120, 50), 3);
         assert_eq!(page_count(120, 100), 2);
+    }
+
+    #[test]
+    fn page_count_exact_multiple_has_no_phantom_trailing_page() {
+        // 100 rows at 50/page is exactly 2 full pages — div_ceil must not
+        // round an exact multiple up to a 3rd, empty page.
+        assert_eq!(page_count(100, 50), 2);
+    }
+
+    #[test]
+    fn page_count_zero_total_is_still_one_page_at_any_page_size() {
+        // An empty store reports one (empty) page regardless of which size
+        // the user picked — this is the input where a phantom page would
+        // reappear if the `.max(1)` floor were ever lost.
+        assert_eq!(page_count(0, 25), 1);
+        assert_eq!(page_count(0, 100), 1);
     }
 }

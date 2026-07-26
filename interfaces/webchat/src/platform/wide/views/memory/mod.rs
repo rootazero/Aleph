@@ -177,7 +177,7 @@ pub fn Memory() -> impl IntoView {
             return; // wait for the window; re-runs when it loads
         }
         let window = notes_window.get();
-        match locate_note(&window, &path) {
+        match locate_note(&window, &path, page_size.get()) {
             Some((f, pg)) => {
                 facet.set(f);
                 notes_page.set(pg);
