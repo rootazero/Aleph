@@ -33,14 +33,19 @@ fn FacetChip(
     }
 }
 
-/// Facet bar. `counts` = `[AllNotes, Facts, Feedback, Lessons]` (note window);
-/// `raw_count` = stats total memories (or `None` while unknown). `on_select`
-/// fires on every chip click (parent resets the relevant page).
+/// Facet bar. `counts` = `[AllNotes, Facts, Feedback, Lessons]` over the loaded
+/// window; `raw_count` = the agent's raw total; `hits_count` = number of
+/// server-side search hits, or `None` when no search is active.
+///
+/// The hits chip appears only while a search is live. Leaving an empty
+/// "Search results 0" chip behind after the box is cleared would imply the
+/// store had been searched and found wanting.
 #[component]
 pub fn FacetBar(
     active: RwSignal<MemoryFacet>,
     counts: Signal<[usize; 4]>,
     raw_count: Signal<Option<u64>>,
+    hits_count: Signal<Option<usize>>,
     on_select: Callback<MemoryFacet>,
 ) -> impl IntoView {
     let i18n = use_i18n();
@@ -72,6 +77,14 @@ pub fn FacetBar(
                 label=t_string!(i18n, memory.facet_raw).to_string()
                 badge=Signal::derive(move || raw_count.get().map(|c| c.to_string()).unwrap_or_default())
             />
+            <Show when=move || hits_count.get().is_some()>
+                <span class="mx-1 text-border select-none">"|"</span>
+                <FacetChip
+                    facet=MemoryFacet::SearchHits active=active on_select=on_select
+                    label=t_string!(i18n, memory.facet_search_hits).to_string()
+                    badge=Signal::derive(move || hits_count.get().map(|c| c.to_string()).unwrap_or_default())
+                />
+            </Show>
         </div>
     }
 }

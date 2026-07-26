@@ -26,17 +26,23 @@ use facets::FacetBar;
 use pager::Pager;
 
 /// Total item count for a facet, read from the pre-computed bucket counts
-/// (`[AllNotes, Facts, Feedback, Lessons]`). Raw is server-paginated, so 0 here.
-fn facet_total(counts: [usize; 4], facet: MemoryFacet) -> u64 {
+/// (`[AllNotes, Facts, Feedback, Lessons]`). `None` for facets this window
+/// cannot count: `Raw` is server-paginated via `MemoryApi::stats` instead
+/// (its own `Pager` uses `raw_total`, not this one), and `SearchHits` rows
+/// arrive on their own signal — `graph.search` returns a capped `results`
+/// list with no total. Reporting `Some(0)` for either would make the pager
+/// compute `page_count(0, ps) == 1` and silently hide prev/next behind a
+/// false one-page claim even when many rows are loaded elsewhere; `None` lets
+/// `Pager` degrade to its honest "unknown total" heuristic instead.
+fn facet_total(counts: [usize; 4], facet: MemoryFacet) -> Option<u64> {
     let n = match facet {
         MemoryFacet::AllNotes => counts[0],
         MemoryFacet::Facts => counts[1],
         MemoryFacet::Feedback => counts[2],
         MemoryFacet::Lessons => counts[3],
-        MemoryFacet::Raw => 0,
-        MemoryFacet::SearchHits => 0,
+        MemoryFacet::Raw | MemoryFacet::SearchHits => return None,
     };
-    n as u64
+    Some(n as u64)
 }
 
 /// Top-level memory management console at `/dashboard/memory`.
@@ -253,7 +259,7 @@ pub fn Memory() -> impl IntoView {
     // Memo so switching among note facets updates the table in place rather
     // than remounting it; only a notes<->raw flip changes the active table.
     let is_notes = Memo::new(move |_| facet.get().is_notes());
-    let notes_total = Signal::derive(move || Some(facet_total(counts.get(), facet.get())));
+    let notes_total = Signal::derive(move || facet_total(counts.get(), facet.get()));
     let connected = state.is_connected;
 
     view! {
@@ -326,6 +332,9 @@ pub fn Memory() -> impl IntoView {
                     active=facet
                     counts=counts
                     raw_count=raw_total
+                    // TODO(Task 18): thread the real `load_search_hits` count
+                    // through here; `None` keeps the chip hidden until then.
+                    hits_count=Signal::derive(|| None)
                     on_select=Callback::new(move |f: MemoryFacet| { facet.set(f); notes_page.set(0); })
                 />
             </div>
@@ -657,5 +666,40 @@ fn RawRow(
                 </div>
             </td>
         </tr>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facet_total_reports_the_note_bucket_it_names() {
+        let counts = [10, 4, 3, 3];
+        assert_eq!(facet_total(counts, MemoryFacet::AllNotes), Some(10));
+        assert_eq!(facet_total(counts, MemoryFacet::Facts), Some(4));
+        assert_eq!(facet_total(counts, MemoryFacet::Feedback), Some(3));
+        assert_eq!(facet_total(counts, MemoryFacet::Lessons), Some(3));
+    }
+
+    #[test]
+    fn facet_total_is_honestly_unknown_for_search_hits_not_a_lying_zero() {
+        // SearchHits rows arrive on their own signal, not the note window
+        // `counts` is built from — there is nothing here resembling a real
+        // count. Reporting `Some(0)` (what this used to return) would make
+        // the pager compute `page_count(0, ps) == 1` and silently hide
+        // prev/next even while many real hits are loaded elsewhere. `None`
+        // is the honest "unknown" `Pager` already knows how to degrade from.
+        let counts = [10, 4, 3, 3]; // any note-window counts; must not leak in
+        assert_eq!(facet_total(counts, MemoryFacet::SearchHits), None);
+    }
+
+    #[test]
+    fn facet_total_is_none_for_raw_too_its_own_pager_uses_stats_total() {
+        // Raw is server-paginated via `raw_total` (agent stats), not this
+        // note-window total; `None` here is inert (its `Pager` never reads
+        // this value) but must not be a lying zero either.
+        let counts = [10, 4, 3, 3];
+        assert_eq!(facet_total(counts, MemoryFacet::Raw), None);
     }
 }
