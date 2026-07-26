@@ -63,10 +63,20 @@ pub struct ArtifactPublishArgs {
 }
 
 /// Result of a successful publish.
+///
+/// Deliberately no `_display` field. `media_send` has one and the `_` prefix
+/// suggests the infrastructure treats it specially — it does not: nothing in
+/// the repository reads `_display`, only `_media`. Copying the convention would
+/// propagate that fiction.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArtifactPublishOutput {
-    /// Human-readable line for the transcript.
-    pub _display: String,
+    /// What just happened, in the model's own working language.
+    ///
+    /// Carries one fact the model cannot infer from anywhere else: the document
+    /// is already in front of the user. Without it the very next move is to
+    /// paste the whole report into the reply as well, which is precisely the
+    /// chat-bubble burial this tool exists to avoid.
+    pub published: String,
     /// Store id of the published document.
     pub artifact_id: String,
     /// Filename it was stored under.
@@ -162,7 +172,11 @@ impl AlephTool for ArtifactPublishTool {
         publish_artifact_ping(&session_key);
 
         Ok(ArtifactPublishOutput {
-            _display: format!("Published \"{title}\" ({})", human_size(record.size)),
+            published: format!(
+                "Published \"{title}\" ({}). It is now open in the user's browser and listed in \
+                 their artifacts pane — refer to it in your reply, do not repeat its contents.",
+                human_size(record.size)
+            ),
             artifact_id: record.id,
             filename: record.filename,
             size: record.size,
