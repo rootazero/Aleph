@@ -358,20 +358,48 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 // Stats
 // ============================================================================
 
-/// Get memory statistics
+/// Parameters for `memory.stats`.
+#[derive(Debug, Default, Deserialize)]
+pub struct StatsParams {
+    /// Scope every count to one agent. Omitted = whole store.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+/// Get memory statistics.
+///
+/// **Every count in one response shares one scope.** Mixing a cross-agent note
+/// count with an agent-scoped list is what made the console's stat cards
+/// contradict the rows beneath them, and what fed the raw pager a total that
+/// did not describe the list it was paging.
+///
+/// The note graph is inherently per-agent, so an unscoped request returns
+/// `null` for the graph counts rather than passing the default agent's graph
+/// off as everyone's.
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
-    let raw_count = db.count_raw_memories(None, None).unwrap_or(0);
+    let params: StatsParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
 
-    // Note memory: count across all agents
-    let note_count = db.count_all_notes().await.unwrap_or(0);
+    let agent = params.agent_id.as_deref();
+    let scope = if agent.is_some() { "agent" } else { "global" };
 
-    // Graph stats for default agent
-    let agent_id = crate::routing::DEFAULT_AGENT_ID;
-    let (graph_nodes, graph_edges) = match db.get_graph_data(agent_id, 10000).await {
-        Ok((entries, links)) => (entries.len() as i64, links.len() as i64),
-        Err(_) => (0, 0),
+    let raw_count = db.count_raw_memories(agent, None).unwrap_or(0);
+    let note_count = match agent {
+        Some(a) => db.count_notes(a).await.unwrap_or(0),
+        None => db.count_all_notes().await.unwrap_or(0),
+    };
+
+    let (graph_nodes, graph_edges) = match agent {
+        Some(a) => match db.get_graph_data(a, 10000).await {
+            Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
+            Err(_) => (Some(0), Some(0)),
+        },
+        None => (None, None),
     };
 
     JsonRpcResponse::success(
@@ -379,9 +407,12 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         json!({
             "totalMemories": raw_count,
             "totalFacts": note_count,
+            // Notes have no invalidated state (unlike the retired fact model),
+            // so this mirrors totalFacts. Kept for response compatibility.
             "validFacts": note_count,
             "totalGraphNodes": graph_nodes,
             "totalGraphEdges": graph_edges,
+            "scope": scope,
         }),
     )
 }
@@ -1188,5 +1219,111 @@ mod search_tests {
         )
         .await;
         assert_eq!(resp.result.expect("success")["total"], 5);
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_stats_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: Option<serde_json::Value>) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.stats".to_string(),
+            params,
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    fn note(title: &str) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.to_string(),
+            category: "facts".to_string(),
+            facts: vec!["f".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            content_hash: format!("h-{title}"),
+            ..Default::default()
+        }
+    }
+
+    fn raw(id: &str, agent: &str) -> RawMemory {
+        RawMemory {
+            id: id.to_string(),
+            content: "c".to_string(),
+            source: RawMemorySource::Transcript,
+            agent_id: agent.to_string(),
+            session_id: None,
+            path: None,
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    /// Two agents, asymmetric data. Scoped stats must describe ONE of them.
+    async fn seed(db: &MemoryBackend) {
+        db.index_note(&note("a1"), "alpha", "facts").await.unwrap();
+        db.index_note(&note("a2"), "alpha", "facts").await.unwrap();
+        db.index_note(&note("b1"), "beta", "facts").await.unwrap();
+        db.insert_raw_memory(&raw("r1", "alpha")).await.unwrap();
+        db.insert_raw_memory(&raw("r2", "alpha")).await.unwrap();
+        db.insert_raw_memory(&raw("r3", "beta")).await.unwrap();
+    }
+
+    /// The regression: the stat cards used to show a cross-agent note count and
+    /// a global raw count while the rows underneath were agent-scoped, so
+    /// switching agents left the numbers describing a different population.
+    #[tokio::test]
+    async fn scoped_stats_describe_only_that_agent() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "agent");
+        assert_eq!(v["totalFacts"], 2, "alpha has 2 notes, not 3");
+        assert_eq!(v["totalMemories"], 2, "alpha has 2 raw rows, not 3");
+    }
+
+    #[tokio::test]
+    async fn unscoped_stats_are_global_and_disclaim_graph_counts() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(None), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "global");
+        assert_eq!(v["totalFacts"], 3, "all agents");
+        assert_eq!(v["totalMemories"], 3, "all agents");
+        // The note graph is inherently per-agent. Rather than silently report
+        // the default agent's graph as if it were everyone's, an unscoped
+        // request declines to answer.
+        assert!(v["totalGraphNodes"].is_null());
+        assert!(v["totalGraphEdges"].is_null());
+    }
+
+    #[tokio::test]
+    async fn scoped_stats_answer_graph_counts() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let v = r.result.expect("success");
+        assert_eq!(v["totalGraphNodes"], 2, "alpha's two notes are two nodes");
+        assert!(v["totalGraphEdges"].is_i64());
     }
 }
