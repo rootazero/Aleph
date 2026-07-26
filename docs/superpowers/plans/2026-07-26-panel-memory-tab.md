@@ -2787,7 +2787,7 @@ fn next_seq() -> u64 {
 /// browser event loop. The test that matters is the one where two pushes carry
 /// identical text and kind: their `seq` differ, so the older timer must not
 /// clear the newer toast.
-const fn should_clear(current: Option<u64>, expected: u64) -> bool {
+fn should_clear(current: Option<u64>, expected: u64) -> bool {
     current == Some(expected)
 }
 
