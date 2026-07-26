@@ -19,6 +19,7 @@ mod drawer;
 mod facets;
 mod loader;
 mod pager;
+mod provenance;
 mod stats;
 mod toast;
 
@@ -43,6 +44,12 @@ const SEARCH_DEBOUNCE_MS: u64 = 200;
 /// Cap on server-side full-text hits. Surfaced in the UI (`search_hits_capped`)
 /// because a silent cap reads as "the store only has this much".
 const SEARCH_HITS_LIMIT: usize = 100;
+
+/// Cap on `memory.trace` evidence items per fetch. The server accepts an
+/// unbounded walk (`max_results: Option<usize>`); this panel-side cap keeps
+/// one evidence-chain fetch bounded, and `provenance_capped` says so in the
+/// UI whenever the returned list actually hits it (no silent caps).
+const TRACE_MAX_RESULTS: usize = 20;
 
 /// Memory Vault console at `/memory?view=table`.
 ///
@@ -598,7 +605,11 @@ pub fn Memory() -> impl IntoView {
             }}
 
             <ToastHost toast_slot=toast_slot />
-            <DetailDrawer target=drawer_target />
+            <DetailDrawer
+                target=drawer_target
+                toast_slot=toast_slot
+                on_mutated=Callback::new(move |()| refresh_nonce.update(|n| *n += 1))
+            />
         </div>
     }
 }
