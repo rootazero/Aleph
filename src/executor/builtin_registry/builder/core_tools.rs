@@ -239,5 +239,13 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
             schema::<crate::builtin_tools::media_send::MediaSendArgs>("media_send"),
         );
+        reg(
+            tools,
+            "artifact_publish",
+            crate::builtin_tools::artifact_publish::ArtifactPublishTool::DESCRIPTION,
+            schema::<crate::builtin_tools::artifact_publish::ArtifactPublishArgs>(
+                "artifact_publish",
+            ),
+        );
     }
 }
