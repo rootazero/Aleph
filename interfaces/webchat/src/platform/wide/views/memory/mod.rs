@@ -1,13 +1,17 @@
+use std::collections::HashSet;
+
+use leptos::leptos_dom::helpers::set_timeout_with_handle;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
+
 use crate::api::agents::AgentsApi;
-use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
-use crate::components::ui::{
-    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, ConfirmButton,
-};
-use crate::context::DashboardState;
+use crate::api::graph::GraphApi;
+use crate::api::{CompressedFact, MemoryApi, MemoryStats};
+use crate::components::ui::Card;
+use crate::context::{strip_params, DashboardState};
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::memory::{MemoryState, MemoryView};
-use leptos::prelude::*;
-use std::collections::HashSet;
 
 mod batch_bar;
 mod cards;
@@ -18,42 +22,34 @@ mod loader;
 mod pager;
 mod toast;
 
+use batch_bar::BatchBar;
+use cards::{CardListShell, NoteCard, RawCard};
 use data::{
-    bucket_counts, facet_slice, format_ts, locate_note, page_slice, MemoryFacet, NOTE_WINDOW,
+    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, page_slice,
+    raws_to_markdown, Loadable, MemoryFacet, NoteExport, RawExport, EXPORT_MAX, NOTE_WINDOW,
     PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
+use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow};
 use pager::Pager;
+use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
 
-/// Total item count for a facet, read from the pre-computed bucket counts
-/// (`[AllNotes, Facts, Feedback, Lessons]`). `None` for facets this window
-/// cannot count: `Raw` is server-paginated via `MemoryApi::stats` instead
-/// (its own `Pager` uses `raw_total`, not this one), and `SearchHits` rows
-/// arrive on their own signal — `graph.search` returns a capped `results`
-/// list with no total. Reporting `Some(0)` for either would make the pager
-/// compute `page_count(0, ps) == 1` and silently hide prev/next behind a
-/// false one-page claim even when many rows are loaded elsewhere; `None` lets
-/// `Pager` degrade to its honest "unknown total" heuristic instead.
-fn facet_total(counts: [usize; 4], facet: MemoryFacet) -> Option<u64> {
-    let n = match facet {
-        MemoryFacet::AllNotes => counts[0],
-        MemoryFacet::Facts => counts[1],
-        MemoryFacet::Feedback => counts[2],
-        MemoryFacet::Lessons => counts[3],
-        MemoryFacet::Raw | MemoryFacet::SearchHits => return None,
-    };
-    Some(n as u64)
-}
+/// Debounce before the search box filters the loaded window. Long enough that a
+/// fast typist does not re-filter on every keystroke, short enough to feel live.
+const SEARCH_DEBOUNCE_MS: u64 = 200;
 
-/// Top-level memory management console at `/dashboard/memory`.
+/// Cap on server-side full-text hits. Surfaced in the UI (`search_hits_capped`)
+/// because a silent cap reads as "the store only has this much".
+const SEARCH_HITS_LIMIT: usize = 100;
+
+/// Memory Vault console at `/memory?view=table`.
 ///
-/// Faceted over the note layer (All / Facts / Feedback / Lessons) plus a Raw
-/// conversation-log facet. Notes are pulled in one `list_facts` window per
-/// agent and faceted/paginated client-side; Raw is server-paginated via
-/// `memory.search`. Row click opens the shared `DetailDrawer`. Agent selection
-/// is shared with the Canvas via `MemoryState`. Pure I/O — all persistence is
-/// JSON-RPC (R4).
+/// Layered over the note store (All / Facts / Feedback / Lessons), the raw
+/// conversation log, and server-side full-text hits. Search is dual-track: the
+/// box filters the loaded window locally as you type, and Enter runs a real
+/// `graph.search` whose hits land in their own layer. Pure I/O — every mutation
+/// is a JSON-RPC call (R4).
 #[component]
 #[must_use]
 pub fn Memory() -> impl IntoView {
@@ -61,36 +57,32 @@ pub fn Memory() -> impl IntoView {
     let mem = expect_context::<MemoryState>();
     let i18n = use_i18n();
 
-    let stats = RwSignal::new(None::<MemoryStats>);
+    // ── Load slots ──────────────────────────────────────────────────────────
+    let stats = RwSignal::new(Loadable::<MemoryStats>::Loading);
+    let notes = RwSignal::new(Loadable::<NotesWindow>::Loading);
+    let raws = RwSignal::new(Loadable::<RawWindow>::Loading);
+    let hits = RwSignal::new(Loadable::<Vec<CompressedFact>>::Loading);
+
+    // ── View state ──────────────────────────────────────────────────────────
     let facet = RwSignal::new(MemoryFacet::AllNotes);
-    // Shared by both tables' pagers; the selector resets its own `page` signal
-    // to 0 on change (see `Pager`), so a stale offset never survives a resize.
+    let page = RwSignal::new(0u32);
     let page_size = RwSignal::new(PAGE_SIZE);
-
-    // Note window (faceted + paginated client-side), reloaded per agent.
-    let notes_window = RwSignal::new(Vec::<CompressedFact>::new());
-    let notes_loaded = RwSignal::new(false);
-    let notes_page = RwSignal::new(0u32);
-
-    // Raw memories (server-paginated).
-    let applied_query = RwSignal::new(String::new());
-    let raw_memories = RwSignal::new(Vec::<RawMemory>::new());
-    let is_searching = RwSignal::new(false);
-    let raw_loaded = RwSignal::new(false);
-    let raw_page = RwSignal::new(0u32);
-
-    // Raw batch selection + shared detail drawer.
-    let selected_ids = RwSignal::new(HashSet::<String>::new());
+    let raw_query = RwSignal::new(String::new());
+    let local_query = RwSignal::new(String::new());
+    let search_live = RwSignal::new(false);
+    let selected = RwSignal::new(HashSet::<String>::new());
     let drawer_target = RwSignal::new(None::<DrawerTarget>);
+    let highlight_id = RwSignal::new(None::<String>);
+    let exporting = RwSignal::new(None::<(usize, usize)>);
+    let toast_slot = RwSignal::new(None::<ToastMsg>);
+    let refresh_nonce = RwSignal::new(0u32);
 
-    // Agent bootstrap — only if the Canvas hasn't already populated the shared
-    // list. Idempotent: re-runs until `agents` is non-empty.
+    // ── Agent bootstrap (only if the canvas hasn't populated it yet) ─────────
     Effect::new(move || {
         if !state.is_connected.get() || !mem.agents.get().is_empty() {
             return;
         }
-        let state = state;
-        leptos::task::spawn_local(async move {
+        spawn_local(async move {
             if let Ok(resp) = AgentsApi::list(&state).await {
                 mem.agents.set(resp.agents);
                 if mem.agent_id.get_untracked() != resp.default_id {
@@ -100,590 +92,625 @@ pub fn Memory() -> impl IntoView {
         });
     });
 
-    // Stats — refreshed after deletes via `refresh_raw`.
+    // ── Fetches ─────────────────────────────────────────────────────────────
     Effect::new(move || {
-        if state.is_connected.get() {
-            let state = state;
-            let agent = mem.agent_id.get();
-            leptos::task::spawn_local(async move {
-                if let Ok(s) = MemoryApi::stats(&state, &agent).await {
-                    stats.set(Some(s));
-                }
-            });
-        } else {
-            stats.set(None);
+        refresh_nonce.get();
+        if !state.is_connected.get() {
+            stats.set(Loadable::Loading);
+            notes.set(Loadable::Loading);
+            return;
+        }
+        let agent = mem.agent_id.get();
+        load_stats(state, agent.clone(), stats);
+        load_notes(state, agent, NOTE_WINDOW, notes);
+        page.set(0);
+    });
+
+    Effect::new(move || {
+        refresh_nonce.get();
+        if !state.is_connected.get() {
+            raws.set(Loadable::Loading);
+            return;
+        }
+        let (p, size, q, agent) = (
+            page.get(),
+            page_size.get(),
+            raw_query.get(),
+            mem.agent_id.get(),
+        );
+        load_raw(state, agent, q, size, p * size, raws);
+    });
+
+    // ── Dual-track search ───────────────────────────────────────────────────
+    // Track 1: every keystroke debounce-filters the LOADED window. `filter_notes`
+    // has existed (and been unit-tested) since the phone list shipped; the
+    // desktop view never called it, so typing here used to do nothing to the
+    // note layers.
+    let debounce_handle = StoredValue::new(None::<leptos::leptos_dom::helpers::TimeoutHandle>);
+    Effect::new(move || {
+        let q = mem.search_query.get();
+        if let Some(h) = debounce_handle.get_value() {
+            h.clear();
+        }
+        let handle = set_timeout_with_handle(
+            move || {
+                local_query.set(q.clone());
+                page.set(0);
+            },
+            std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS),
+        )
+        .ok();
+        debounce_handle.set_value(handle);
+    });
+    on_cleanup(move || {
+        if let Some(h) = debounce_handle.get_value() {
+            h.clear();
         }
     });
 
-    // Notes window loader — reruns on connection or agent change.
+    // Track 2: Enter runs a real server-side search. Hits get their own layer;
+    // they are NOT poured into the raw table (they are notes).
     Effect::new(move || {
-        if state.is_connected.get() {
-            let state = state;
-            let agent = mem.agent_id.get();
-            leptos::task::spawn_local(async move {
-                notes_loaded.set(false);
-                if let Ok((facts, _total)) =
-                    MemoryApi::list_facts(&state, &agent, NOTE_WINDOW, 0).await
-                {
-                    notes_window.set(facts);
-                }
-                notes_loaded.set(true);
-                notes_page.set(0);
-            });
-        } else {
-            notes_window.set(Vec::new());
-            notes_loaded.set(false);
-        }
-    });
-
-    // Raw loader — reruns on page / applied query / agent / connection change.
-    Effect::new(move || {
-        if state.is_connected.get() {
-            let page = raw_page.get();
-            let ps = page_size.get();
-            let query = applied_query.get();
-            let agent = mem.agent_id.get();
-            let state = state;
-            leptos::task::spawn_local(async move {
-                is_searching.set(true);
-                raw_loaded.set(false);
-                if let Ok((results, _total)) =
-                    MemoryApi::browse_raw(&state, &agent, query, ps, page * ps).await
-                {
-                    raw_memories.set(results);
-                }
-                is_searching.set(false);
-                raw_loaded.set(true);
-            });
-        } else {
-            raw_memories.set(Vec::new());
-            raw_loaded.set(false);
-        }
-    });
-
-    // Shared search box (in the hub toolbar) writes `mem.search_query` live and
-    // bumps `mem.search_nonce` on Enter. Commit that into the Raw search here;
-    // a non-empty query also switches to the Raw facet so results are visible.
-    Effect::new(move || {
-        mem.search_nonce.get(); // subscribe to submit pulses
+        mem.search_nonce.get();
         let q = mem.search_query.get_untracked();
-        applied_query.set(q.clone());
-        raw_page.set(0);
-        if !q.is_empty() {
-            facet.set(MemoryFacet::Raw);
+        let agent = mem.agent_id.get_untracked();
+        page.set(0);
+        if q.trim().is_empty() {
+            search_live.set(false);
+            if facet.get_untracked() == MemoryFacet::SearchHits {
+                facet.set(MemoryFacet::AllNotes);
+            }
+            return;
+        }
+        search_live.set(true);
+        facet.set(MemoryFacet::SearchHits);
+        load_search_hits(state, agent, q, SEARCH_HITS_LIMIT, hits);
+    });
+
+    // The raw layer filters server-side (LIKE over content), so it needs the
+    // committed query rather than the local one.
+    Effect::new(move || {
+        let q = local_query.get();
+        if facet.get_untracked() == MemoryFacet::Raw {
+            raw_query.set(q);
+        }
+    });
+    Effect::new(move || {
+        if facet.get() == MemoryFacet::Raw {
+            raw_query.set(local_query.get_untracked());
         }
     });
 
-    // Reverse link (graph → list): the node detail panel sets
-    // `mem.highlight_note_id`; jump to the note's facet+page, highlight the row,
-    // and open its drawer. Outside the loaded window → inline notice.
-    let highlight_id = RwSignal::new(None::<String>);
-    let highlight_missing = RwSignal::new(false);
+    // ── Deep link: ?note=<path> ─────────────────────────────────────────────
+    // `?view=` stays owned by memory_hub; this Effect owns `?note=` only, so the
+    // two never overwrite each other. The param is scrubbed after consumption or
+    // a reload would force the drawer open again.
+    let location = use_location();
+    Effect::new(move || {
+        let search = location.search.get();
+        let Some(path) = parse_note_param(&search) else {
+            return;
+        };
+        let Some(window) = notes.get().as_ready().cloned() else {
+            return; // wait for the window; this re-runs when it lands
+        };
+        match locate_note(&window.facts, &path, page_size.get()) {
+            Some((f, pg)) => {
+                facet.set(f);
+                page.set(pg);
+                highlight_id.set(Some(path.clone()));
+                if let Some(found) = window.facts.iter().find(|x| x.path == path) {
+                    drawer_target.set(Some(DrawerTarget::Note(found.clone())));
+                }
+            }
+            None => {
+                // Outside the loaded window: open it directly rather than
+                // shrugging with "not in the current window" like the old view.
+                drawer_target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
+                    &path,
+                ))));
+            }
+        }
+        scrub_note_param();
+    });
+
+    // Reverse link from the galaxy's node detail panel.
     Effect::new(move || {
         let Some(path) = mem.highlight_note_id.get() else {
             return;
         };
-        if !notes_loaded.get() {
-            return; // wait for the window; re-runs when it loads
-        }
-        let window = notes_window.get();
-        match locate_note(&window, &path, page_size.get()) {
-            Some((f, pg)) => {
-                facet.set(f);
-                notes_page.set(pg);
-                highlight_id.set(Some(path.clone()));
-                highlight_missing.set(false);
-                if let Some(found) = window.into_iter().find(|x| x.path == path) {
-                    drawer_target.set(Some(DrawerTarget::Note(found)));
-                }
+        let Some(window) = notes.get().as_ready().cloned() else {
+            return;
+        };
+        if let Some((f, pg)) = locate_note(&window.facts, &path, page_size.get()) {
+            facet.set(f);
+            page.set(pg);
+            highlight_id.set(Some(path.clone()));
+            if let Some(found) = window.facts.iter().find(|x| x.path == path) {
+                drawer_target.set(Some(DrawerTarget::Note(found.clone())));
             }
-            None => {
-                highlight_missing.set(true);
-                highlight_id.set(None);
-            }
+        } else {
+            drawer_target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
+                &path,
+            ))));
         }
-        mem.highlight_note_id.set(None); // consume so re-selecting re-triggers
+        mem.highlight_note_id.set(None);
     });
 
-    // Reusable raw refresh after a delete — keeps stats + current page coherent
-    // and steps back off a now-empty trailing page.
-    let refresh_raw = move || {
-        let state = state;
-        leptos::task::spawn_local(async move {
-            let agent = mem.agent_id.get_untracked();
-            if let Ok(s) = MemoryApi::stats(&state, &agent).await {
-                stats.set(Some(s));
-            }
-            let page = raw_page.get_untracked();
-            let ps = page_size.get_untracked();
-            let query = applied_query.get_untracked();
-            if let Ok((results, _total)) =
-                MemoryApi::browse_raw(&state, &agent, query, ps, page * ps).await
-            {
-                if results.is_empty() && page > 0 {
-                    raw_page.set(page - 1);
-                } else {
-                    raw_memories.set(results);
-                }
-            }
-        });
-    };
-
-    let on_delete_one = move |memory_id: String| {
-        let state = state;
-        leptos::task::spawn_local(async move {
-            if MemoryApi::delete(&state, memory_id).await.is_ok() {
-                refresh_raw();
-            }
-        });
-    };
-
-    let on_batch_delete = move || {
-        let ids: Vec<String> = selected_ids.get_untracked().into_iter().collect();
-        if ids.is_empty() {
-            return;
+    // ── Derived rows ────────────────────────────────────────────────────────
+    // `SearchHits` rows come from `hits`, not the loaded window: `facet_slice`
+    // deliberately returns empty for this facet (its rows arrive on their own
+    // signal), so reading it here is what gives the hit list an actual body
+    // instead of an always-empty "no notes" card.
+    let note_rows = Signal::derive(move || {
+        let f = facet.get();
+        if f == MemoryFacet::SearchHits {
+            return hits.get().as_ready().cloned().unwrap_or_default();
         }
-        let state = state;
-        leptos::task::spawn_local(async move {
-            for id in ids {
-                let _ = MemoryApi::delete(&state, id).await;
-            }
-            selected_ids.set(HashSet::new());
-            refresh_raw();
-        });
-    };
-
-    // Derived signals.
-    let counts = Signal::derive(move || bucket_counts(&notes_window.get()));
-    let raw_total = Signal::derive(move || stats.get().map(|s| s.total_memories));
-    let is_search_active = Signal::derive(move || !applied_query.get().is_empty());
-    // Memo so switching among note facets updates the table in place rather
-    // than remounting it; only a notes<->raw flip changes the active table.
+        let Some(window) = notes.get().as_ready().cloned() else {
+            return Vec::new();
+        };
+        filter_notes(&facet_slice(&window.facts, f), &local_query.get())
+    });
+    let counts = Signal::derive(move || {
+        notes
+            .get()
+            .as_ready()
+            .map(|w| bucket_counts(&w.facts))
+            .unwrap_or([0; 4])
+    });
     let is_notes = Memo::new(move |_| facet.get().is_notes());
-    let notes_total = Signal::derive(move || facet_total(counts.get(), facet.get()));
-    let connected = state.is_connected;
+
+    // Note rows are paginated client-side over the loaded window; raw rows are
+    // server-paginated, so their pager reads the scoped stats total.
+    let note_page_rows =
+        Signal::derive(move || page_slice(&note_rows.get(), page.get(), page_size.get()));
+    let raw_rows = Signal::derive(move || {
+        raws.get()
+            .as_ready()
+            .map(|w| w.raws.clone())
+            .unwrap_or_default()
+    });
 
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-6">
-            <header class="flex items-center justify-between">
-                <div>
-                    <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
-                        <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <ellipse cx="12" cy="5" rx="9" ry="3" />
-                            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                        </svg>
-                        {t!(i18n, memory.title)}
-                    </h2>
-                    <p class="text-text-secondary">{t!(i18n, memory.description)}</p>
-                </div>
-            </header>
+            <MemoryHeader on_refresh=move || refresh_nonce.update(|n| *n += 1) />
+            <StatCards stats=stats.into() />
 
-            {move || {
-                if !connected.get() {
-                    view! {
-                        <div class="bg-warning-subtle border border-warning/20 rounded-xl p-6 flex items-start gap-4">
-                            <svg width="24" height="24" attr:class="w-6 h-6 text-warning flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                                <line x1="12" y1="9" x2="12" y2="13" />
-                                <line x1="12" y1="17" x2="12.01" y2="17" />
-                            </svg>
-                            <div>
-                                <h3 class="text-warning font-semibold mb-1">{t!(i18n, dashboard.gateway_required)}</h3>
-                                <p class="text-sm text-text-secondary">{t!(i18n, memory.gateway_required_desc)}</p>
-                            </div>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
-
-            // Memory stats
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-                <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.compressed_facts)}</span>
-                    <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().map(|s| s.total_facts.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
-                    </span>
-                </Card>
-                <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">{t!(i18n, memory.raw_memories)}</span>
-                    <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().map(|s| s.total_memories.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
-                    </span>
-                </Card>
-                <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_nodes)}</span>
-                    <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().and_then(|s| s.total_graph_nodes).map(|n| n.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
-                    </span>
-                </Card>
-                <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_edges)}</span>
-                    <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().and_then(|s| s.total_graph_edges).map(|n| n.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
-                    </span>
-                </Card>
-            </div>
-
-            // Facet bar (search lives in the hub toolbar).
             <div class="flex items-center justify-between gap-3 flex-wrap border-b border-border pb-2">
                 <FacetBar
                     active=facet
                     counts=counts
-                    raw_count=raw_total
-                    // TODO(Task 18): this is only half-wired. Two things need
-                    // a real producer, not just `hits_count`:
-                    // 1. `hits_count` itself — `None` keeps the chip hidden
-                    //    until `load_search_hits` is threaded through here.
-                    // 2. The `Pager` below (in the `is_notes` branch) is fed
-                    //    `current_len=Signal::derive(|| 0usize)` — hardcoded.
-                    //    Once `hits_count` goes `Some` the chip becomes
-                    //    selectable and `notes_total` is `None` for
-                    //    `SearchHits` (see `facet_total`), so `Pager` falls
-                    //    back to its unknown-total heuristic
-                    //    `current_len >= page_size`. Against a hardcoded `0`
-                    //    that is always false, so prev/indicator/next would
-                    //    silently vanish on any multi-page hit set. Replace
-                    //    `current_len` with the real loaded-hits length in
-                    //    the same change that wires `hits_count`.
-                    hits_count=Signal::derive(|| None)
-                    on_select=Callback::new(move |f: MemoryFacet| { facet.set(f); notes_page.set(0); })
+                    raw_count=Signal::derive(move || stats.get().as_ready().map(|s| s.total_memories))
+                    hits_count=Signal::derive(move || {
+                        search_live
+                            .get()
+                            .then(|| hits.get().as_ready().map(Vec::len).unwrap_or(0))
+                    })
+                    on_select=Callback::new(move |f: MemoryFacet| {
+                        facet.set(f);
+                        page.set(0);
+                        selected.set(HashSet::new());
+                    })
                 />
             </div>
 
-            // Reverse-link notice when the highlighted note is outside the window.
-            {move || highlight_missing.get().then(|| view! {
-                <p class="text-xs text-warning italic">{t!(i18n, memory.highlight_not_in_window)}</p>
-            })}
+            <BatchBar
+                selected=selected
+                page_ids=Signal::derive(move || {
+                    if is_notes.get() {
+                        note_page_rows.get().into_iter().map(|f| f.path).collect()
+                    } else {
+                        raw_rows.get().into_iter().map(|r| r.id).collect()
+                    }
+                })
+                exporting=exporting
+                on_copy_md=move || {
+                    let ids: Vec<String> = selected.get_untracked().into_iter().collect();
+                    if ids.is_empty() || ids.len() > EXPORT_MAX {
+                        return;
+                    }
+                    let agent = mem.agent_id.get_untracked();
+                    if is_notes.get_untracked() {
+                        let rows: Vec<CompressedFact> = note_rows
+                            .get_untracked()
+                            .into_iter()
+                            .filter(|f| ids.contains(&f.path))
+                            .collect();
+                        let total = rows.len();
+                        exporting.set(Some((0, total)));
+                        spawn_local(async move {
+                            let mut staged = Vec::with_capacity(total);
+                            let mut failures = 0usize;
+                            for (i, f) in rows.into_iter().enumerate() {
+                                let body = GraphApi::node_detail(&state, &agent, &f.path)
+                                    .await
+                                    .map(|d| d.content);
+                                if body.is_err() {
+                                    failures += 1;
+                                }
+                                staged.push(NoteExport {
+                                    title: f.content.clone(),
+                                    path: f.path.clone(),
+                                    body,
+                                });
+                                exporting.set(Some((i + 1, total)));
+                            }
+                            write_clipboard(&notes_to_markdown(&staged));
+                            exporting.set(None);
+                            let msg = if failures > 0 {
+                                format!(
+                                    "{} — {}",
+                                    t_string!(i18n, memory.toast_copied),
+                                    t_string!(i18n, memory.batch_export_partial)
+                                )
+                            } else {
+                                t_string!(i18n, memory.toast_copied).to_string()
+                            };
+                            push_toast(toast_slot, msg, ToastKind::Success);
+                        });
+                    } else {
+                        let staged: Vec<RawExport> = raw_rows
+                            .get_untracked()
+                            .into_iter()
+                            .filter(|r| ids.contains(&r.id))
+                            .map(|r| RawExport {
+                                id: r.id,
+                                agent_id: r.agent_id,
+                                session_id: r.session_id,
+                                created_at: r.created_at.unwrap_or_default(),
+                                user_input: r.user_input,
+                                ai_output: r.ai_output,
+                            })
+                            .collect();
+                        write_clipboard(&raws_to_markdown(&staged));
+                        push_toast(toast_slot, t_string!(i18n, memory.toast_copied).to_string(), ToastKind::Success);
+                    }
+                }
+                on_delete=move || {
+                    let ids: Vec<String> = selected.get_untracked().into_iter().collect();
+                    if ids.is_empty() {
+                        return;
+                    }
+                    // Two stores, two verbs. Notes are curated files
+                    // (graph.delete_note); raw rows live in raw_memories
+                    // (memory.delete). Sending a note path to memory.delete is
+                    // exactly the mix-up that produced undeletable ghost rows.
+                    let notes_layer = is_notes.get_untracked();
+                    let agent = mem.agent_id.get_untracked();
+                    spawn_local(async move {
+                        let mut failed = 0usize;
+                        for id in ids {
+                            let res = if notes_layer {
+                                GraphApi::delete_note(&state, &agent, &id).await
+                            } else {
+                                MemoryApi::delete(&state, id).await
+                            };
+                            if res.is_err() {
+                                failed += 1;
+                            }
+                        }
+                        selected.set(HashSet::new());
+                        refresh_nonce.update(|n| *n += 1);
+                        if failed > 0 {
+                            push_toast(toast_slot, format!("{} ({failed})", t_string!(i18n, memory.toast_delete_failed)), ToastKind::Error);
+                        } else {
+                            push_toast(toast_slot, t_string!(i18n, memory.toast_deleted).to_string(), ToastKind::Success);
+                        }
+                    });
+                }
+            />
 
-            // Content — switches only between notes-vs-raw so paging/loads don't
-            // remount the active table.
-            {move || {
-                if is_notes.get() {
-                    view! {
-                        <NotesTable
-                            window=notes_window
-                            facet=facet
-                            page=notes_page
-                            page_size=page_size
-                            loaded=notes_loaded
-                            connected=connected
-                            highlight=Signal::derive(move || highlight_id.get())
-                            on_open=move |fact| drawer_target.set(Some(DrawerTarget::Note(fact)))
-                            on_locate=move |path: String| {
-                                mem.selected_node.set(Some(path));
-                                mem.memory_view.set(MemoryView::Graph);
+            {move || if is_notes.get() {
+                view! {
+                    <CardListShell
+                        state=Signal::derive(move || {
+                            if facet.get() == MemoryFacet::SearchHits {
+                                match hits.get() {
+                                    Loadable::Loading => Loadable::Loading,
+                                    Loadable::Failed(e) => Loadable::Failed(e),
+                                    Loadable::Ready(_) => Loadable::Ready(note_rows.get().len()),
+                                }
+                            } else {
+                                match notes.get() {
+                                    Loadable::Loading => Loadable::Loading,
+                                    Loadable::Failed(e) => Loadable::Failed(e),
+                                    Loadable::Ready(_) => Loadable::Ready(note_rows.get().len()),
+                                }
+                            }
+                        })
+                        empty_label=Signal::derive(move || {
+                            if facet.get() == MemoryFacet::SearchHits {
+                                t_string!(i18n, memory.no_search_hits).to_string()
+                            } else {
+                                t_string!(i18n, memory.no_facts).to_string()
+                            }
+                        })
+                        on_retry=move || refresh_nonce.update(|n| *n += 1)
+                    >
+                        <For
+                            each=move || note_page_rows.get()
+                            key=|f| f.path.clone()
+                            children=move |fact| {
+                                let path = fact.path.clone();
+                                let p_sel = path.clone();
+                                let p_tog = path.clone();
+                                let p_hl = path.clone();
+                                let p_loc = path.clone();
+                                let p_link = path.clone();
+                                let fact_open = fact.clone();
+                                view! {
+                                    <NoteCard
+                                        fact=fact
+                                        checked=Signal::derive(move || selected.get().contains(&p_sel))
+                                        highlighted=Signal::derive(move || highlight_id.get().as_deref() == Some(p_hl.as_str()))
+                                        on_toggle=move || selected.update(|s| { if !s.remove(&p_tog) { s.insert(p_tog.clone()); } })
+                                        on_open=move || drawer_target.set(Some(DrawerTarget::Note(fact_open.clone())))
+                                        on_locate=move || {
+                                            mem.selected_node.set(Some(p_loc.clone()));
+                                            mem.memory_view.set(MemoryView::Graph);
+                                        }
+                                        on_copy_link=move || {
+                                            copy_note_link(&p_link);
+                                            push_toast(toast_slot, t_string!(i18n, memory.toast_link_copied).to_string(), ToastKind::Success);
+                                        }
+                                    />
+                                }
                             }
                         />
-                        {move || (notes_window.get().len() >= NOTE_WINDOW).then(|| view! {
+                    </CardListShell>
+                    // No silent caps: say when the window or the hit list is capped.
+                    {move || (facet.get() == MemoryFacet::SearchHits
+                        && hits.get().as_ready().map(|h| h.len() >= SEARCH_HITS_LIMIT).unwrap_or(false))
+                        .then(|| view! {
+                            <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_hits_capped)}</p>
+                        })}
+                    {move || notes.get().as_ready()
+                        .map(|w| w.total as usize > w.facts.len())
+                        .unwrap_or(false)
+                        .then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
                         })}
-                        // `current_len` is hardcoded to 0 — see the
-                        // TODO(Task 18) at the `FacetBar` call above; it only
-                        // matters once `SearchHits` is reachable and
-                        // `notes_total` goes `None` for it.
-                        <Pager page=notes_page page_size=page_size total=notes_total current_len=Signal::derive(|| 0usize) />
-                    }.into_any()
-                } else {
-                    let on_delete = on_delete_one;
-                    let on_batch = on_batch_delete;
-                    view! {
-                        <RawTable
-                            memories=raw_memories
-                            loaded=raw_loaded
-                            searching=is_searching
-                            connected=connected
-                            selected=selected_ids
-                            on_open=move |raw| drawer_target.set(Some(DrawerTarget::Raw(raw)))
-                            on_delete=on_delete
-                            on_batch_delete=on_batch
+                    <Pager
+                        page=page
+                        page_size=page_size
+                        total=Signal::derive(move || Some(note_rows.get().len() as u64))
+                        current_len=Signal::derive(move || note_page_rows.get().len())
+                    />
+                }.into_any()
+            } else {
+                view! {
+                    <CardListShell
+                        state=Signal::derive(move || match raws.get() {
+                            Loadable::Loading => Loadable::Loading,
+                            Loadable::Failed(e) => Loadable::Failed(e),
+                            Loadable::Ready(w) => Loadable::Ready(w.raws.len()),
+                        })
+                        empty_label=Signal::derive(move || t_string!(i18n, memory.no_raw).to_string())
+                        on_retry=move || refresh_nonce.update(|n| *n += 1)
+                    >
+                        <For
+                            each=move || raw_rows.get()
+                            key=|r| r.id.clone()
+                            children=move |raw| {
+                                let id = raw.id.clone();
+                                let id_sel = id.clone();
+                                let id_tog = id.clone();
+                                let id_del = id.clone();
+                                let raw_open = raw.clone();
+                                view! {
+                                    <RawCard
+                                        raw=raw
+                                        checked=Signal::derive(move || selected.get().contains(&id_sel))
+                                        on_toggle=move || selected.update(|s| { if !s.remove(&id_tog) { s.insert(id_tog.clone()); } })
+                                        on_open=move || drawer_target.set(Some(DrawerTarget::Raw(raw_open.clone())))
+                                        on_delete={
+                                            let id_del = id_del.clone();
+                                            move || {
+                                                let id = id_del.clone();
+                                                spawn_local(async move {
+                                                    match MemoryApi::delete(&state, id).await {
+                                                        Ok(()) => {
+                                                            push_toast(toast_slot, t_string!(i18n, memory.toast_deleted).to_string(), ToastKind::Success);
+                                                            refresh_nonce.update(|n| *n += 1);
+                                                        }
+                                                        // The old view checked is_ok() and dropped the
+                                                        // reason, so a failed delete left the row in
+                                                        // place with no explanation.
+                                                        Err(e) => push_toast(toast_slot, format!("{}: {e}", t_string!(i18n, memory.toast_delete_failed)), ToastKind::Error),
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    />
+                                }
+                            }
                         />
-                        {move || if is_search_active.get() {
-                            view! { <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_no_pagination)}</p> }.into_any()
-                        } else {
-                            view! { <Pager page=raw_page page_size=page_size total=raw_total current_len=Signal::derive(move || raw_memories.get().len()) /> }.into_any()
-                        }}
-                    }.into_any()
-                }
+                    </CardListShell>
+                    <Pager
+                        page=page
+                        page_size=page_size
+                        total=Signal::derive(move || raws.get().as_ready().map(|w| w.total))
+                        current_len=Signal::derive(move || raw_rows.get().len())
+                    />
+                }.into_any()
             }}
 
+            <ToastHost toast_slot=toast_slot />
             <DetailDrawer target=drawer_target />
         </div>
     }
 }
 
-// ─── Notes Table ────────────────────────────────────────────────────────────
+/// Extract the raw (still percent-encoded) `note=` value from a URL query
+/// string. Split from the percent-decoding step in [`parse_note_param`] so the
+/// parsing logic is unit-testable without a browser runtime — mirrors
+/// `loader.rs`'s split of "pure mapping" from the RPC call it feeds.
+fn raw_note_param(search: &str) -> Option<&str> {
+    let s = search.strip_prefix('?').unwrap_or(search);
+    s.split('&')
+        .find_map(|pair| pair.strip_prefix("note="))
+        .filter(|v| !v.is_empty())
+}
 
-#[component]
-fn NotesTable(
-    window: RwSignal<Vec<CompressedFact>>,
-    facet: RwSignal<MemoryFacet>,
-    page: RwSignal<u32>,
-    page_size: RwSignal<u32>,
-    loaded: RwSignal<bool>,
-    connected: RwSignal<bool>,
-    highlight: Signal<Option<String>>,
-    on_open: impl Fn(CompressedFact) + Clone + Send + 'static,
-    on_locate: impl Fn(String) + Clone + Send + 'static,
-) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <Card class="overflow-hidden".to_string()>
-            <table class="w-full text-left border-collapse">
-                <thead>
-                    <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                        <th class="p-4 pl-8">{t!(i18n, memory.col_title)}</th>
-                        <th class="p-4">{t!(i18n, memory.col_agent)}</th>
-                        <th class="p-4">{t!(i18n, memory.col_type)}</th>
-                        <th class="p-4 pr-8">{t!(i18n, memory.col_date)}</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-border-subtle">
-                    {move || {
-                        if !connected.get() {
-                            return view! { <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_facts)}</td></tr> }.into_any();
-                        }
-                        if !loaded.get() {
-                            return view! { <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr> }.into_any();
-                        }
-                        let current = facet_slice(&window.get(), facet.get());
-                        let rows = page_slice(&current, page.get(), page_size.get());
-                        if rows.is_empty() {
-                            return view! { <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_facts)}</td></tr> }.into_any();
-                        }
-                        let on_open = on_open.clone();
-                        rows.into_iter().map(|fact| {
-                            let badge_variant = match fact.fact_type.as_str() {
-                                "preference" | "personal" => BadgeVariant::Indigo,
-                                "learning" | "lesson" | "skill" => BadgeVariant::Emerald,
-                                "plan" | "project" => BadgeVariant::Amber,
-                                "feedback" => BadgeVariant::Red,
-                                _ => BadgeVariant::Slate,
-                            };
-                            let agent_id = fact.agent_id.clone();
-                            let fact_type = fact.fact_type.clone();
-                            let path = fact.path.clone();
-                            let content = fact.content.clone();
-                            let date = format_ts(fact.created_at);
-                            let on_open = on_open.clone();
-                            let on_locate = on_locate.clone();
-                            let fact_for_click = fact.clone();
-                            let path_for_locate = path.clone();
-                            let path_for_highlight = path.clone();
-                            let i18n_row = i18n;
-                            let is_hl = Signal::derive(move || highlight.get().as_deref() == Some(path_for_highlight.as_str()));
-                            view! {
-                                <tr
-                                    class=move || if is_hl.get() {
-                                        "group bg-primary-subtle ring-1 ring-primary/40 transition-colors cursor-pointer"
-                                    } else {
-                                        "group hover:bg-surface-sunken transition-colors cursor-pointer"
-                                    }
-                                    on:click=move |_| on_open(fact_for_click.clone())
-                                >
-                                    <td class="p-4 pl-8">
-                                        <div class="flex items-start justify-between gap-2">
-                                            <div class="min-w-0">
-                                                <div class="text-sm font-medium text-text-primary line-clamp-2">{content}</div>
-                                                <div class="text-xs text-text-tertiary mt-0.5 font-mono">{path}</div>
-                                            </div>
-                                            <button
-                                                class="flex-shrink-0 p-1 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-primary transition-all"
-                                                title=t_string!(i18n_row, memory.view_in_graph)
-                                                on:click=move |ev| { ev.stop_propagation(); on_locate(path_for_locate.clone()); }
-                                            >
-                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                    <circle cx="5" cy="6" r="2" /><circle cx="19" cy="6" r="2" /><circle cx="12" cy="18" r="2" />
-                                                    <line x1="6.6" y1="7.4" x2="10.6" y2="16.4" /><line x1="17.4" y1="7.4" x2="13.4" y2="16.4" /><line x1="7" y1="6" x2="17" y2="6" />
-                                                </svg>
-                                            </button>
-                                        </div>
-                                    </td>
-                                    <td class="p-4"><Badge variant=BadgeVariant::Indigo>{agent_id}</Badge></td>
-                                    <td class="p-4"><Badge variant=badge_variant>{fact_type}</Badge></td>
-                                    <td class="p-4 pr-8">
-                                        <div class="flex items-center gap-2 text-xs text-text-tertiary font-mono">
-                                            <svg width="12" height="12" attr:class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                                            </svg>
-                                            {date}
-                                        </div>
-                                    </td>
-                                </tr>
-                            }
-                        }).collect_view().into_any()
-                    }}
-                </tbody>
-            </table>
-        </Card>
+/// Read `note=<path>` out of a URL query string. `None` when absent, so the
+/// Effect leaves the current selection alone.
+#[must_use]
+pub(crate) fn parse_note_param(search: &str) -> Option<String> {
+    let raw = raw_note_param(search)?;
+    let decoded: String = js_sys::decode_uri_component(raw).ok()?.into();
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+/// Drop `note=` from the address bar after consuming it, so a reload does not
+/// force the drawer open again. Reuses `context::strip_params` (the same
+/// rebuild-the-query-string logic already covers `?token=`/`?bt=` there) and
+/// mirrors `context::scrub_credentials_from_url`'s use of `location().search()`
+/// / `location().pathname()` rather than splitting `href` by hand, which would
+/// mis-split a URL that also carries a `#fragment`.
+fn scrub_note_param() {
+    let Some(win) = web_sys::window() else { return };
+    let Ok(search) = win.location().search() else {
+        return;
+    };
+    if !search.contains("note=") {
+        return;
+    }
+    let Ok(history) = win.history() else { return };
+    let pathname = win
+        .location()
+        .pathname()
+        .unwrap_or_else(|_| "/".to_string());
+    let remaining = strip_params(&search, &["note="]);
+    let next = if remaining.is_empty() {
+        pathname
+    } else {
+        format!("{pathname}?{remaining}")
+    };
+    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
+}
+
+/// Write `text` to the system clipboard. Mirrors `chat/messages.rs`.
+fn write_clipboard(text: &str) {
+    if let Some(win) = web_sys::window() {
+        let _promise = win.navigator().clipboard().write_text(text);
     }
 }
 
-// ─── Raw Memories Table ─────────────────────────────────────────────────────
+/// Build a shareable deep link to one note and put it on the clipboard.
+fn copy_note_link(path: &str) {
+    let Some(win) = web_sys::window() else { return };
+    let origin = win.location().origin().unwrap_or_default();
+    let encoded: String = js_sys::encode_uri_component(path).into();
+    write_clipboard(&format!("{origin}/memory?view=table&note={encoded}"));
+}
 
 #[component]
-fn RawTable(
-    memories: RwSignal<Vec<RawMemory>>,
-    loaded: RwSignal<bool>,
-    searching: RwSignal<bool>,
-    connected: RwSignal<bool>,
-    selected: RwSignal<HashSet<String>>,
-    on_open: impl Fn(RawMemory) + Clone + Send + 'static,
-    on_delete: impl Fn(String) + Clone + Send + 'static,
-    on_batch_delete: impl Fn() + Clone + Send + 'static,
-) -> impl IntoView {
+fn MemoryHeader(on_refresh: impl Fn() + Clone + Send + 'static) -> impl IntoView {
     let i18n = use_i18n();
-    let confirm_batch = RwSignal::new(false);
-    let selected_count = Signal::derive(move || selected.get().len());
+    view! {
+        <header class="flex items-start justify-between gap-4">
+            <div>
+                <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">
+                    <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <ellipse cx="12" cy="5" rx="9" ry="3" />
+                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                    </svg>
+                    {t!(i18n, memory.title)}
+                </h2>
+                <p class="text-text-secondary">{t!(i18n, memory.description)}</p>
+            </div>
+            <button
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border \
+                       text-text-secondary hover:text-text-primary transition-colors flex-shrink-0"
+                on:click=move |_| on_refresh()
+            >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-3-6.7" /><polyline points="21 3 21 9 15 9" />
+                </svg>
+                {t!(i18n, memory.refresh)}
+            </button>
+        </header>
+    }
+}
+
+#[component]
+fn StatCards(stats: Signal<Loadable<MemoryStats>>) -> impl IntoView {
+    let i18n = use_i18n();
+    // "—" for both Loading and Failed: the header's Retry and the list's error
+    // card already carry the failure; four red boxes would be noise.
+    let num = move |pick: fn(&MemoryStats) -> Option<u64>| {
+        Signal::derive(move || {
+            stats
+                .get()
+                .as_ready()
+                .and_then(pick)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "\u{2014}".to_string())
+        })
+    };
+    // Graph node/edge counts are `None` specifically when the server answered
+    // store-wide (`MemoryStats::total_graph_nodes` doc comment: the note graph
+    // is per-agent, so there is no honest single number). A bare "—" there
+    // reads the same as a load failure; say why instead of leaving it silent.
+    let graph_num = move |pick: fn(&MemoryStats) -> Option<u64>| {
+        Signal::derive(move || match stats.get().as_ready().cloned() {
+            None => "\u{2014}".to_string(),
+            Some(s) => match pick(&s) {
+                Some(n) => n.to_string(),
+                None if s.scope == "global" => {
+                    t_string!(i18n, memory.graph_scope_unavailable).to_string()
+                }
+                None => "\u{2014}".to_string(),
+            },
+        })
+    };
+    let scope_label =
+        Signal::derive(
+            move || match stats.get().as_ready().map(|s| s.scope.as_str()) {
+                Some("global") => t_string!(i18n, memory.scope_global).to_string(),
+                Some(_) => t_string!(i18n, memory.scope_agent).to_string(),
+                None => String::new(),
+            },
+        );
+
+    let facts = num(|s| Some(s.total_facts));
+    let raws = num(|s| Some(s.total_memories));
+    let nodes = graph_num(|s| s.total_graph_nodes);
+    let edges = graph_num(|s| s.total_graph_edges);
 
     view! {
-        <div class="space-y-2">
-            {move || {
-                if selected_count.get() == 0 {
-                    return view! { <div></div> }.into_any();
-                }
-                let on_batch_delete = on_batch_delete.clone();
-                view! {
-                    <div class="flex items-center justify-between bg-surface-sunken border border-border rounded-lg px-4 py-2">
-                        <span class="text-sm text-text-secondary">
-                            {move || selected_count.get().to_string()} " " {t!(i18n, memory.batch_selected)}
-                        </span>
-                        <div class="flex items-center gap-2">
-                            {move || if confirm_batch.get() {
-                                view! { <ConfirmButton confirming=confirm_batch on_confirm=on_batch_delete.clone() size_class="px-3 py-1 text-xs" /> }.into_any()
-                            } else {
-                                view! {
-                                    <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="px-3 py-1 text-xs".to_string() on:click=move |_| confirm_batch.set(true)>
-                                        {t!(i18n, memory.batch_delete)}
-                                    </Button>
-                                }.into_any()
-                            }}
-                            <button class="text-xs text-text-tertiary hover:text-text-secondary" on:click=move |_| { selected.set(HashSet::new()); confirm_batch.set(false); }>
-                                {t!(i18n, memory.batch_clear)}
-                            </button>
-                        </div>
-                    </div>
-                }.into_any()
-            }}
-
-            <Card class="overflow-hidden".to_string()>
-                <table class="w-full text-left border-collapse">
-                    <thead>
-                        <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                            <th class="p-4 pl-8 w-10"></th>
-                            <th class="p-4">{t!(i18n, memory.col_content)}</th>
-                            <th class="p-4">{t!(i18n, memory.col_agent)}</th>
-                            <th class="p-4">{t!(i18n, memory.col_date)}</th>
-                            <th class="p-4 pr-8 text-right">{t!(i18n, memory.col_actions)}</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-border-subtle">
-                        {move || {
-                            if !connected.get() {
-                                return view! { <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_raw)}</td></tr> }.into_any();
-                            }
-                            if searching.get() {
-                                return view! { <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.searching)}</td></tr> }.into_any();
-                            }
-                            if !loaded.get() {
-                                return view! { <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr> }.into_any();
-                            }
-                            if memories.get().is_empty() {
-                                return view! { <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_raw)}</td></tr> }.into_any();
-                            }
-                            let on_open = on_open.clone();
-                            let on_delete = on_delete.clone();
-                            view! {
-                                <For
-                                    each=move || memories.get()
-                                    key=|m| m.id.clone()
-                                    children=move |entry| {
-                                        let created_at = entry.created_at.clone().unwrap_or_else(|| t_string!(i18n, memory.unknown).to_string());
-                                        let entry_id = entry.id.clone();
-                                        let entry_id_sel = entry.id.clone();
-                                        let entry_id_toggle = entry.id.clone();
-                                        let agent_id = entry.agent_id.clone();
-                                        let content = entry.display_text();
-                                        let entry_for_open = entry.clone();
-                                        let on_open = on_open.clone();
-                                        let on_delete = on_delete.clone();
-                                        let is_checked = Signal::derive(move || selected.get().contains(&entry_id_sel));
-                                        view! {
-                                            <RawRow
-                                                content=content
-                                                agent_id=agent_id
-                                                date=created_at
-                                                checked=is_checked
-                                                on_toggle=move || selected.update(|s| { if !s.remove(&entry_id_toggle) { s.insert(entry_id_toggle.clone()); } })
-                                                on_open=move || on_open(entry_for_open.clone())
-                                                on_delete=move || on_delete(entry_id.clone())
-                                            />
-                                        }
-                                    }
-                                />
-                            }.into_any()
-                        }}
-                    </tbody>
-                </table>
-            </Card>
+        <div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                <StatCard tone="primary" label=t_string!(i18n, memory.compressed_facts).to_string() value=facts />
+                <StatCard tone="success" label=t_string!(i18n, memory.raw_memories).to_string() value=raws />
+                <StatCard tone="primary" label=t_string!(i18n, memory.graph_nodes).to_string() value=nodes />
+                <StatCard tone="success" label=t_string!(i18n, memory.graph_edges).to_string() value=edges />
+            </div>
+            // Say which population the numbers describe — they used to be a
+            // cross-agent mix presented next to an agent-scoped list.
+            <p class="text-[10px] text-text-tertiary mt-1.5 uppercase tracking-widest">
+                {move || scope_label.get()}
+            </p>
         </div>
     }
 }
 
 #[component]
-fn RawRow(
-    content: String,
-    agent_id: String,
-    date: String,
-    checked: Signal<bool>,
-    on_toggle: impl Fn() + Clone + Send + 'static,
-    on_open: impl Fn() + Clone + Send + 'static,
-    on_delete: impl Fn() + Clone + Send + 'static,
-) -> impl IntoView {
-    let confirm = RwSignal::new(false);
-    let on_confirm_delete = move || on_delete();
-
+fn StatCard(tone: &'static str, label: String, value: Signal<String>) -> impl IntoView {
+    let (bg, fg) = if tone == "success" {
+        ("bg-success-subtle border-success/10", "text-success")
+    } else {
+        ("bg-primary-subtle border-primary/10", "text-primary")
+    };
     view! {
-        <tr class="group hover:bg-surface-sunken transition-colors">
-            <td class="p-4 pl-8">
-                <input
-                    type="checkbox"
-                    class="cursor-pointer"
-                    prop:checked=move || checked.get()
-                    on:change=move |_| on_toggle()
-                />
-            </td>
-            <td class="p-4 cursor-pointer" on:click=move |_| on_open()>
-                <div class="text-sm font-medium text-text-primary line-clamp-1">{content}</div>
-            </td>
-            <td class="p-4"><Badge variant=BadgeVariant::Indigo>{agent_id}</Badge></td>
-            <td class="p-4">
-                <div class="flex items-center gap-2 text-xs text-text-tertiary font-mono">
-                    <svg width="12" height="12" attr:class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                    {date}
-                </div>
-            </td>
-            <td class="p-4 pr-8 text-right">
-                <div class="flex items-center justify-end gap-2">
-                    {move || if confirm.get() {
-                        view! { <ConfirmButton confirming=confirm on_confirm=on_confirm_delete.clone() size_class="px-2.5 py-1 text-xs" /> }.into_any()
-                    } else {
-                        view! {
-                            <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=move |_| confirm.set(true)>
-                                <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="3 6 5 6 21 6" />
-                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                                </svg>
-                            </Button>
-                        }.into_any()
-                    }}
-                </div>
-            </td>
-        </tr>
+        <Card class=format!("{bg} p-6 flex flex-col items-start")>
+            <span class=format!("text-[10px] font-bold {fg} uppercase tracking-widest mb-1.5")>{label}</span>
+            <span class="text-3xl font-bold font-mono">{move || value.get()}</span>
+        </Card>
     }
 }
 
@@ -691,33 +718,36 @@ fn RawRow(
 mod tests {
     use super::*;
 
+    // ── raw_note_param ───────────────────────────────────────────────────────
+
     #[test]
-    fn facet_total_reports_the_note_bucket_it_names() {
-        let counts = [10, 4, 3, 3];
-        assert_eq!(facet_total(counts, MemoryFacet::AllNotes), Some(10));
-        assert_eq!(facet_total(counts, MemoryFacet::Facts), Some(4));
-        assert_eq!(facet_total(counts, MemoryFacet::Feedback), Some(3));
-        assert_eq!(facet_total(counts, MemoryFacet::Lessons), Some(3));
+    fn raw_note_param_extracts_the_still_encoded_value() {
+        assert_eq!(raw_note_param("?note=facts%2Fx"), Some("facts%2Fx"));
+        assert_eq!(raw_note_param("note=facts%2Fx"), Some("facts%2Fx"));
     }
 
     #[test]
-    fn facet_total_is_honestly_unknown_for_search_hits_not_a_lying_zero() {
-        // SearchHits rows arrive on their own signal, not the note window
-        // `counts` is built from — there is nothing here resembling a real
-        // count. Reporting `Some(0)` (what this used to return) would make
-        // the pager compute `page_count(0, ps) == 1` and silently hide
-        // prev/next even while many real hits are loaded elsewhere. `None`
-        // is the honest "unknown" `Pager` already knows how to degrade from.
-        let counts = [10, 4, 3, 3]; // any note-window counts; must not leak in
-        assert_eq!(facet_total(counts, MemoryFacet::SearchHits), None);
+    fn raw_note_param_finds_it_alongside_other_params_in_either_order() {
+        assert_eq!(
+            raw_note_param("?view=table&note=facts%2Fx"),
+            Some("facts%2Fx")
+        );
+        assert_eq!(
+            raw_note_param("?note=facts%2Fx&view=table"),
+            Some("facts%2Fx")
+        );
     }
 
     #[test]
-    fn facet_total_is_none_for_raw_too_its_own_pager_uses_stats_total() {
-        // Raw is server-paginated via `raw_total` (agent stats), not this
-        // note-window total; `None` here is inert (its `Pager` never reads
-        // this value) but must not be a lying zero either.
-        let counts = [10, 4, 3, 3];
-        assert_eq!(facet_total(counts, MemoryFacet::Raw), None);
+    fn raw_note_param_absent_is_none() {
+        assert_eq!(raw_note_param("?view=table"), None);
+        assert_eq!(raw_note_param(""), None);
+    }
+
+    #[test]
+    fn raw_note_param_empty_value_is_none() {
+        // An empty `note=` must not open the drawer on a stub path.
+        assert_eq!(raw_note_param("?note="), None);
+        assert_eq!(raw_note_param("?note=&view=table"), None);
     }
 }

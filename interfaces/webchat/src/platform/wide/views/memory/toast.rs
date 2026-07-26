@@ -78,11 +78,19 @@ fn should_clear(current: Option<u64>, expected: u64) -> bool {
     current == Some(expected)
 }
 
+// The prop is named `toast_slot`, not the shorter `slot` its type suggests:
+// `slot` is the native HTML slotting attribute, and leptos's `view!` macro
+// special-cases that exact name on a component tag. A call site writing
+// `<ToastHost slot=toast_slot />` type-checks and compiles clean — no error,
+// no warning — but the whole element is silently dropped from the expansion,
+// so the host never mounts and no toast ever renders. Caught only because
+// Task 18 tried to actually wire this component in; it had zero consumers
+// before that.
 #[component]
 #[must_use]
-pub fn ToastHost(slot: ToastSlot) -> impl IntoView {
+pub fn ToastHost(toast_slot: ToastSlot) -> impl IntoView {
     view! {
-        {move || slot.get().map(|m| {
+        {move || toast_slot.get().map(|m| {
             let tone = match m.kind {
                 ToastKind::Success => "bg-success-subtle text-success border-success/30",
                 ToastKind::Error => "bg-danger-subtle text-danger border-danger/30",
