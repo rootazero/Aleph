@@ -56,24 +56,53 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
                     </div>
                 }.into_any(),
 
-                Loadable::Ready(res) if res.evidence.is_empty() => view! {
-                    <p class="text-[11px] italic text-text-tertiary">{t!(i18n, memory.provenance_empty)}</p>
-                }.into_any(),
-
                 Loadable::Ready(res) => {
+                    // The server also answers "which notes did the walk visit"
+                    // (`notes_citing`, for `TraceKind::Raw`) separately from the
+                    // evidence rows themselves — render it too rather than
+                    // dropping a populated response field. Not filtered/deduped:
+                    // whatever the server sent is what shows up here.
                     let capped = res.evidence.len() >= TRACE_MAX_RESULTS;
+                    let notes = res.notes;
+                    let evidence = res.evidence;
+                    let has_notes = !notes.is_empty();
+                    let has_evidence = !evidence.is_empty();
                     view! {
-                        <ul class="space-y-1.5">
-                            {res.evidence.into_iter().map(|item| view! {
-                                <EvidenceRow item=item expanded=expanded />
-                            }).collect_view()}
-                        </ul>
-                        // No silent caps.
-                        {capped.then(|| view! {
-                            <p class="text-[10px] italic text-text-tertiary mt-1">
-                                {t!(i18n, memory.provenance_capped)}
-                            </p>
-                        })}
+                        <div>
+                            {has_notes.then(|| view! {
+                                <div class="mb-2">
+                                    <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-1">
+                                        {t!(i18n, memory.provenance_notes)}
+                                    </div>
+                                    <ul class="space-y-1">
+                                        {notes.into_iter().map(|n| view! {
+                                            <li class="text-[11px] font-mono text-text-secondary break-all">{n}</li>
+                                        }).collect_view()}
+                                    </ul>
+                                </div>
+                            })}
+                            {if has_evidence {
+                                view! {
+                                    <div>
+                                        <ul class="space-y-1.5">
+                                            {evidence.into_iter().map(|item| view! {
+                                                <EvidenceRow item=item expanded=expanded />
+                                            }).collect_view()}
+                                        </ul>
+                                        // No silent caps.
+                                        {capped.then(|| view! {
+                                            <p class="text-[10px] italic text-text-tertiary mt-1">
+                                                {t!(i18n, memory.provenance_capped)}
+                                            </p>
+                                        })}
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <p class="text-[11px] italic text-text-tertiary">{t!(i18n, memory.provenance_empty)}</p>
+                                }.into_any()
+                            }}
+                        </div>
                     }.into_any()
                 }
             }}
