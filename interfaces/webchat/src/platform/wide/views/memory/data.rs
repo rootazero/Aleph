@@ -12,6 +12,10 @@ pub const NOTE_WINDOW: usize = 1000;
 /// Fixed number of entries shown per page.
 pub const PAGE_SIZE: u32 = 50;
 
+/// Page sizes offered by the pager's selector. `PAGE_SIZE` must appear here so
+/// the default is reachable after the user changes it.
+pub const PAGE_SIZES: [u32; 3] = [25, 50, 100];
+
 /// The state of one fetch.
 ///
 /// Replaces the `(loaded: bool, data: T)` pair the memory console used to carry
@@ -540,5 +544,22 @@ mod tests {
         // The batch bar disables itself above this and says so; the constant is
         // the single source both the guard and the message read.
         assert_eq!(EXPORT_MAX, 50);
+    }
+
+    // ── Pager ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn page_sizes_start_at_the_current_default() {
+        // 50 was the hardcoded page size; it stays the middle option so the
+        // default view is unchanged for existing users.
+        assert!(PAGE_SIZES.contains(&PAGE_SIZE));
+        assert_eq!(PAGE_SIZES, [25, 50, 100]);
+    }
+
+    #[test]
+    fn page_count_tracks_the_chosen_page_size() {
+        assert_eq!(page_count(120, 25), 5);
+        assert_eq!(page_count(120, 50), 3);
+        assert_eq!(page_count(120, 100), 2);
     }
 }

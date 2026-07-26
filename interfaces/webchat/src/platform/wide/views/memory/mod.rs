@@ -12,13 +12,15 @@ use std::collections::HashSet;
 pub mod data;
 mod drawer;
 mod facets;
+mod pager;
 
 use data::{
-    bucket_counts, facet_slice, format_ts, locate_note, page_count, page_slice, MemoryFacet,
-    NOTE_WINDOW, PAGE_SIZE,
+    bucket_counts, facet_slice, format_ts, locate_note, page_slice, MemoryFacet, NOTE_WINDOW,
+    PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
+use pager::Pager;
 
 /// Total item count for a facet, read from the pre-computed bucket counts
 /// (`[AllNotes, Facts, Feedback, Lessons]`). Raw is server-paginated, so 0 here.
@@ -51,6 +53,9 @@ pub fn Memory() -> impl IntoView {
 
     let stats = RwSignal::new(None::<MemoryStats>);
     let facet = RwSignal::new(MemoryFacet::AllNotes);
+    // Shared by both tables' pagers; the selector resets its own `page` signal
+    // to 0 on change (see `Pager`), so a stale offset never survives a resize.
+    let page_size = RwSignal::new(PAGE_SIZE);
 
     // Note window (faceted + paginated client-side), reloaded per agent.
     let notes_window = RwSignal::new(Vec::<CompressedFact>::new());
@@ -125,6 +130,7 @@ pub fn Memory() -> impl IntoView {
     Effect::new(move || {
         if state.is_connected.get() {
             let page = raw_page.get();
+            let ps = page_size.get();
             let query = applied_query.get();
             let agent = mem.agent_id.get();
             let state = state;
@@ -132,7 +138,7 @@ pub fn Memory() -> impl IntoView {
                 is_searching.set(true);
                 raw_loaded.set(false);
                 if let Ok((results, _total)) =
-                    MemoryApi::browse_raw(&state, &agent, query, PAGE_SIZE, page * PAGE_SIZE).await
+                    MemoryApi::browse_raw(&state, &agent, query, ps, page * ps).await
                 {
                     raw_memories.set(results);
                 }
@@ -199,9 +205,10 @@ pub fn Memory() -> impl IntoView {
                 stats.set(Some(s));
             }
             let page = raw_page.get_untracked();
+            let ps = page_size.get_untracked();
             let query = applied_query.get_untracked();
             if let Ok((results, _total)) =
-                MemoryApi::browse_raw(&state, &agent, query, PAGE_SIZE, page * PAGE_SIZE).await
+                MemoryApi::browse_raw(&state, &agent, query, ps, page * ps).await
             {
                 if results.is_empty() && page > 0 {
                     raw_page.set(page - 1);
@@ -334,6 +341,7 @@ pub fn Memory() -> impl IntoView {
                             window=notes_window
                             facet=facet
                             page=notes_page
+                            page_size=page_size
                             loaded=notes_loaded
                             connected=connected
                             highlight=Signal::derive(move || highlight_id.get())
@@ -346,7 +354,7 @@ pub fn Memory() -> impl IntoView {
                         {move || (notes_window.get().len() >= NOTE_WINDOW).then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
                         })}
-                        <Pager page=notes_page total=notes_total current_len=Signal::derive(|| 0usize) />
+                        <Pager page=notes_page page_size=page_size total=notes_total current_len=Signal::derive(|| 0usize) />
                     }.into_any()
                 } else {
                     let on_delete = on_delete_one;
@@ -365,7 +373,7 @@ pub fn Memory() -> impl IntoView {
                         {move || if is_search_active.get() {
                             view! { <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_no_pagination)}</p> }.into_any()
                         } else {
-                            view! { <Pager page=raw_page total=raw_total current_len=Signal::derive(move || raw_memories.get().len()) /> }.into_any()
+                            view! { <Pager page=raw_page page_size=page_size total=raw_total current_len=Signal::derive(move || raw_memories.get().len()) /> }.into_any()
                         }}
                     }.into_any()
                 }
@@ -376,54 +384,6 @@ pub fn Memory() -> impl IntoView {
     }
 }
 
-// ─── Pagination ─────────────────────────────────────────────────────────────
-
-#[component]
-fn Pager(
-    page: RwSignal<u32>,
-    total: Signal<Option<u64>>,
-    current_len: Signal<usize>,
-) -> impl IntoView {
-    let i18n = use_i18n();
-
-    let total_pages =
-        Signal::derive(move || total.get().map(|t| page_count(t as usize, PAGE_SIZE)));
-    let has_prev = Signal::derive(move || page.get() > 0);
-    let has_next = Signal::derive(move || match total_pages.get() {
-        Some(tp) => page.get() + 1 < tp,
-        None => current_len.get() as u32 >= PAGE_SIZE,
-    });
-
-    move || {
-        if !has_prev.get() && !has_next.get() {
-            return view! { <div></div> }.into_any();
-        }
-        let indicator = match total_pages.get() {
-            Some(tp) => format!("{} / {}", page.get() + 1, tp),
-            None => format!("{}", page.get() + 1),
-        };
-        view! {
-            <div class="flex items-center justify-end gap-2 pt-1">
-                <button
-                    class="px-3 py-1.5 text-sm rounded-lg border border-border bg-surface-raised text-text-secondary hover:text-text-primary hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    prop:disabled=move || !has_prev.get()
-                    on:click=move |_| { let p = page.get(); if p > 0 { page.set(p - 1); } }
-                >
-                    {t!(i18n, memory.prev_page)}
-                </button>
-                <span class="px-2 text-sm font-mono text-text-secondary tabular-nums">{indicator}</span>
-                <button
-                    class="px-3 py-1.5 text-sm rounded-lg border border-border bg-surface-raised text-text-secondary hover:text-text-primary hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    prop:disabled=move || !has_next.get()
-                    on:click=move |_| { if has_next.get() { page.set(page.get() + 1); } }
-                >
-                    {t!(i18n, memory.next_page)}
-                </button>
-            </div>
-        }.into_any()
-    }
-}
-
 // ─── Notes Table ────────────────────────────────────────────────────────────
 
 #[component]
@@ -431,6 +391,7 @@ fn NotesTable(
     window: RwSignal<Vec<CompressedFact>>,
     facet: RwSignal<MemoryFacet>,
     page: RwSignal<u32>,
+    page_size: RwSignal<u32>,
     loaded: RwSignal<bool>,
     connected: RwSignal<bool>,
     highlight: Signal<Option<String>>,
@@ -458,7 +419,7 @@ fn NotesTable(
                             return view! { <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr> }.into_any();
                         }
                         let current = facet_slice(&window.get(), facet.get());
-                        let rows = page_slice(&current, page.get(), PAGE_SIZE);
+                        let rows = page_slice(&current, page.get(), page_size.get());
                         if rows.is_empty() {
                             return view! { <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_facts)}</td></tr> }.into_any();
                         }
