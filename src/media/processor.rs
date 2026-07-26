@@ -7,13 +7,18 @@
 //! |-------------|----------------------|-----------------------|
 //! | `image/*`   | base64 Image block   | `VisionPipeline` fallback → text description |
 //! | `audio/*`   | `TranscriptionService` → text | Same |
-//! | Other       | `[Attachment: name (mime)]` | Same |
+//! | Other       | `[Attachment: name (mime, size)]` | Same |
 //!
 //! Each attachment is processed independently — a single failure produces a
 //! fallback text block, never an abort.
+//!
+//! Every non-native path produces *self-describing* text via [`media_summary`].
+//! It used to emit a `{{media:<kind>:<id>}}` placeholder instead, which was a
+//! dangling handle: the registry that resolved those ids had no production
+//! consumer, so the model received an opaque token naming neither the file nor
+//! its type and could not even tell the user what had arrived.
 
 use crate::gateway::channel::Attachment;
-use crate::media::placeholder::{MediaPlaceholder, MediaPlaceholderType};
 use crate::providers::message::ContentBlock;
 use crate::sync_primitives::Arc;
 use crate::vision::types::{ImageFormat, ImageInput};
@@ -115,7 +120,7 @@ impl MediaProcessor {
                 "Attachment processed"
             );
             ContentBlock::Text {
-                text: MediaPlaceholder::new(MediaPlaceholderType::File, &attachment.id).to_text(),
+                text: media_summary("Attachment", attachment, None, None),
                 cache_control: None,
             }
         }
@@ -219,9 +224,14 @@ impl MediaProcessor {
         attachment: &Attachment,
     ) -> ContentBlock {
         let Some(ref vision) = self.vision else {
-            debug!(attachment_id = %attachment.id, "no vision pipeline, returning placeholder");
+            debug!(attachment_id = %attachment.id, "no vision pipeline, describing image in text");
             return ContentBlock::Text {
-                text: MediaPlaceholder::new(MediaPlaceholderType::Image, &attachment.id).to_text(),
+                text: media_summary(
+                    "Image",
+                    attachment,
+                    Some(cached.size),
+                    Some("not viewable by this model"),
+                ),
                 cache_control: None,
             };
         };
@@ -233,7 +243,12 @@ impl MediaProcessor {
                 "unsupported image format for vision fallback"
             );
             return ContentBlock::Text {
-                text: MediaPlaceholder::new(MediaPlaceholderType::Image, &attachment.id).to_text(),
+                text: media_summary(
+                    "Image",
+                    attachment,
+                    Some(cached.size),
+                    Some("format not supported for description"),
+                ),
                 cache_control: None,
             };
         };
@@ -281,7 +296,7 @@ impl MediaProcessor {
                 "Attachment processed"
             );
             return ContentBlock::Text {
-                text: MediaPlaceholder::new(MediaPlaceholderType::Audio, &attachment.id).to_text(),
+                text: media_summary("Audio", attachment, None, Some("transcription unavailable")),
                 cache_control: None,
             };
         };
@@ -348,8 +363,12 @@ impl MediaProcessor {
                     "Attachment processed"
                 );
                 ContentBlock::Text {
-                    text: MediaPlaceholder::new(MediaPlaceholderType::Audio, &attachment.id)
-                        .to_text(),
+                    text: media_summary(
+                        "Audio",
+                        attachment,
+                        Some(cached.size),
+                        Some("transcription failed"),
+                    ),
                     cache_control: None,
                 }
             }
@@ -363,21 +382,74 @@ impl MediaProcessor {
 
 /// Build a generic fallback text block for a failed attachment.
 fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
-    let mime_lower = attachment.mime_type.to_ascii_lowercase();
-    let ty = if mime_lower.starts_with("image/") {
-        MediaPlaceholderType::Image
-    } else if mime_lower.starts_with("audio/") {
-        MediaPlaceholderType::Audio
-    } else {
-        MediaPlaceholderType::File
-    };
     ContentBlock::Text {
-        text: format!(
-            "{} [{}]",
-            MediaPlaceholder::new(ty, &attachment.id).to_text(),
-            error
+        text: media_summary(
+            media_kind(&attachment.mime_type),
+            attachment,
+            None,
+            Some(&format!("could not be retrieved: {error}")),
         ),
         cache_control: None,
+    }
+}
+
+/// Display label for a MIME type.
+fn media_kind(mime: &str) -> &'static str {
+    let mime_lower = mime.to_ascii_lowercase();
+    if mime_lower.starts_with("image/") {
+        "Image"
+    } else if mime_lower.starts_with("audio/") {
+        "Audio"
+    } else {
+        "Attachment"
+    }
+}
+
+/// Self-describing text for media the model cannot receive natively, e.g.
+/// `[Attachment: report.pdf (application/pdf, 2.3 MB)]`.
+///
+/// Names the file and its type so the model can at least tell the user what
+/// arrived — the whole point of replacing the old opaque `{{media:...}}` token.
+/// `size` overrides the attachment's own metadata when the resolved byte count
+/// is known; `note` appends a short reason such as `transcription failed`.
+fn media_summary(
+    kind: &str,
+    attachment: &Attachment,
+    size: Option<u64>,
+    note: Option<&str>,
+) -> String {
+    let name = attachment
+        .filename
+        .as_deref()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(&attachment.id);
+    let size = size
+        .or(attachment.size)
+        .or_else(|| attachment.data.as_ref().map(|d| d.len() as u64));
+    let details = match size {
+        Some(size) => format!("{}, {}", attachment.mime_type, human_size(size)),
+        None => attachment.mime_type.clone(),
+    };
+    match note {
+        Some(note) => format!("[{kind}: {name} ({details}) — {note}]"),
+        None => format!("[{kind}: {name} ({details})]"),
+    }
+}
+
+/// Render a byte count for humans, e.g. `512 B`, `1.5 KB`, `2.3 MB`.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    #[allow(clippy::cast_precision_loss)] // display only
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -448,8 +520,11 @@ mod tests {
         };
         let block = fallback_text(&att, "network timeout");
         if let ContentBlock::Text { text, .. } = block {
-            assert!(text.starts_with("{{media:image:att-1}}"));
+            // The model must be able to name the file and its type, which the
+            // old `{{media:image:att-1}}` token could not express.
+            assert!(text.starts_with("[Image: photo.png (image/png"), "{text}");
             assert!(text.contains("network timeout"));
+            assert!(!text.contains("{{media:"), "no dangling handle: {text}");
         } else {
             panic!("expected Text block");
         }
@@ -468,11 +543,38 @@ mod tests {
         };
         let block = fallback_text(&att, "download failed");
         if let ContentBlock::Text { text, .. } = block {
-            assert!(text.starts_with("{{media:audio:att-2}}"));
+            // No filename on this attachment — fall back to the id, still
+            // alongside the MIME type.
+            assert!(text.starts_with("[Audio: att-2 (audio/mp3"), "{text}");
             assert!(text.contains("download failed"));
         } else {
             panic!("expected Text block");
         }
+    }
+
+    #[test]
+    fn test_media_summary_names_file_and_size() {
+        let att = Attachment {
+            id: "att-9".into(),
+            mime_type: "application/pdf".into(),
+            filename: Some("report.pdf".into()),
+            size: Some(2_411_724),
+            url: None,
+            path: None,
+            data: None,
+        };
+        assert_eq!(
+            media_summary("Attachment", &att, None, None),
+            "[Attachment: report.pdf (application/pdf, 2.3 MB)]"
+        );
+    }
+
+    #[test]
+    fn test_human_size_units() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
     }
 
     #[tokio::test]
@@ -492,7 +594,7 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert_eq!(text, "{{media:file:att-3}}");
+            assert_eq!(text, "[Attachment: report.pdf (application/pdf)]");
         } else {
             panic!("expected Text block");
         }
@@ -544,7 +646,10 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert_eq!(text, "{{media:image:img-2}}");
+            assert_eq!(
+                text,
+                "[Image: selfie.jpg (image/jpeg, 3 B) — not viewable by this model]"
+            );
         } else {
             panic!("expected Text block");
         }
@@ -568,7 +673,10 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert_eq!(text, "{{media:audio:aud-1}}");
+            assert_eq!(
+                text,
+                "[Audio: voice.mp3 (audio/mp3, 2 B) — transcription unavailable]"
+            );
         } else {
             panic!("expected Text block");
         }

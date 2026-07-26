@@ -295,6 +295,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                 }
 
+                // Settle the same items into the artifact store so they reach
+                // the workspace pane. The buffer above only feeds the channel
+                // delivery path (`ReplyEmitter::drain_and_send_media`), and this
+                // fast path never touches `ScopedToolService`, where the harvest
+                // normally hangs — so without this call `/image …` would remain
+                // the one invocation whose output a Panel user can never see.
+                // Best-effort by construction: the harvest swallows its own
+                // failures and cannot fail the command.
+                crate::tools::scoped::artifact_harvest::harvest_media_for_session(
+                    tool_id,
+                    &result,
+                    &request.session_key.to_key_string(),
+                    Some(run_id),
+                )
+                .await;
+
                 let response = extract_tool_response(&result);
 
                 // Stream response

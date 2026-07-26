@@ -1,7 +1,6 @@
 // short-lived sync guards held across await; reviewed non-contending.
 #![allow(clippy::await_holding_lock)]
 
-use alephcore::media::{MediaPlaceholder, MediaPlaceholderType, MediaRecord, MediaRegistry};
 use alephcore::pii::{PiiAction, PiiEngine, PlatformPiiPolicy, PrivacyConfig};
 use alephcore::secrets::injection::AsyncSecretResolver;
 use alephcore::secrets::types::{DecryptedSecret, SecretError};
@@ -87,32 +86,6 @@ async fn test_outbound_blocks_accidental_secret_in_user_text() {
         matches!(result, Ok(GuardResult::Blocked { .. })),
         "Expected outbound accidental secret to be blocked, got {:?}",
         result
-    );
-}
-
-#[test]
-fn test_media_placeholder_format() {
-    let ph_image = MediaPlaceholder::new(MediaPlaceholderType::Image, "img_001");
-    assert_eq!(ph_image.to_text(), "{{media:image:img_001}}");
-    assert_eq!(ph_image.ty, MediaPlaceholderType::Image);
-
-    let ph_audio = MediaPlaceholder::new(MediaPlaceholderType::Audio, "audio_002");
-    assert_eq!(ph_audio.to_text(), "{{media:audio:audio_002}}");
-
-    let mut registry = MediaRegistry::new();
-    let ph_file = registry.register(
-        "doc_003",
-        MediaRecord {
-            mime_type: "application/pdf".to_string(),
-            original_name: "report.pdf".to_string(),
-            description: Some("Quarterly report".to_string()),
-        },
-    );
-    assert_eq!(ph_file.to_text(), "{{media:file:doc_003}}");
-    assert_eq!(ph_file.ty, MediaPlaceholderType::File);
-    assert_eq!(
-        registry.resolve("doc_003").unwrap().original_name,
-        "report.pdf"
     );
 }
 

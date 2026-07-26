@@ -84,11 +84,15 @@ async fn test_image_vision_fallback() {
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
         ContentBlock::Text { text, .. } => {
+            // A self-describing summary, not the old dangling
+            // `{{media:image:png1}}` token: the model must be able to name what
+            // it received even when it cannot see it.
             assert!(
-                text.contains("{{media:image:png1}}"),
-                "expected media reference placeholder for image fallback, got: {}",
+                text.starts_with("[Image: png1.test (image/png"),
+                "expected a self-describing image summary, got: {}",
                 text
             );
+            assert!(!text.contains("{{media:"), "no dangling handle: {}", text);
         }
         other => panic!("expected Text block for vision fallback, got {:?}", other),
     }
@@ -122,7 +126,7 @@ async fn test_audio_transcription() {
     processor.cleanup(session_id);
 }
 
-/// 4. Unknown MIME type -> placeholder text
+/// 4. Unknown MIME type -> self-describing summary text
 #[tokio::test]
 async fn test_unknown_type_placeholder() {
     let processor = MediaProcessor::new(None, None);
@@ -142,13 +146,9 @@ async fn test_unknown_type_placeholder() {
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
         ContentBlock::Text { text, .. } => {
-            assert!(
-                text.contains("{{media:file:pdf1}}"),
-                "expected media reference placeholder for unknown type, got: {}",
-                text
-            );
+            assert_eq!(text, "[Attachment: report.pdf (application/pdf)]");
         }
-        other => panic!("expected Text placeholder block, got {:?}", other),
+        other => panic!("expected Text summary block, got {:?}", other),
     }
 
     processor.cleanup(session_id);
@@ -218,13 +218,17 @@ async fn test_download_failure_graceful() {
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
         ContentBlock::Text { text, .. } => {
-            // MediaProcessor falls back to a media-reference placeholder rather
-            // than embedded English error text. The placeholder still carries
-            // the attachment id so downstream consumers can resolve or surface
-            // a fetch error.
+            // The fallback names the file and the reason it is missing, so the
+            // model can tell the user what failed rather than relaying an
+            // opaque id.
             assert!(
-                text.contains("{{media:image:bad-att}}"),
-                "expected media reference placeholder for download failure, got: {}",
+                text.starts_with("[Image: broken.jpg (image/jpeg)"),
+                "expected a self-describing failure summary, got: {}",
+                text
+            );
+            assert!(
+                text.contains("could not be retrieved"),
+                "expected the failure reason, got: {}",
                 text
             );
         }

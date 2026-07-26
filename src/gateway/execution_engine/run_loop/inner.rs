@@ -435,6 +435,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         .and_then(|p| p.serving_model_hint().map(std::borrow::Cow::into_owned))
                 };
             let supports_vision = model_supports_vision(configured_model, serving_hint.as_deref());
+
+            // Archive the attachments before they are turned into content
+            // blocks. The media cache writes under the OS temp dir and every
+            // terminal branch of the retry loop below `remove_dir_all`s it, so
+            // the cache is not a record of what the session received — the
+            // artifact store, rooted in the Aleph data directory, is.
+            archive_inbound_attachments(
+                &request.attachments,
+                &request.session_key.to_key_string(),
+                run_id,
+                self.event_bus.as_deref(),
+            )
+            .await;
+
             let blocks = media_processor
                 .process(
                     &request.attachments,
@@ -740,9 +754,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // points the model at a snapshot lookup that must miss. Only
                 // when disclosure is active — pushing into an empty core set
                 // would flip the operator's escape hatch back on.
-                if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(
-                    &mode_core_tools,
-                ) {
+                if crate::tools::scoped::ProgressiveDisclosureRewriter::is_enabled(&mode_core_tools)
+                {
                     let ts = crate::tools::tool_search::ToolSearchTool::NAME;
                     if !mode_core_tools.iter().any(|c| c == ts) {
                         mode_core_tools.push(ts.to_string());
@@ -1367,8 +1380,8 @@ fn join_capped_messages(messages: &[String]) -> Option<String> {
 /// attributable provider error (or an ignored block) the user can act on,
 /// whereas degrading an image for a model that could have seen it is silent —
 /// and when no `VisionPipeline` is configured the degradation is not even a
-/// description but a bare `[Image: id]` placeholder, i.e. total content loss
-/// with no signal. Unknown ids are overwhelmingly custom endpoints / proxy
+/// description but a bare name/type summary, i.e. total loss of the picture
+/// itself. Unknown ids are overwhelmingly custom endpoints / proxy
 /// aliases of modern (vision-capable) models, so the closed default would
 /// blind them all. This matches the deliberate fail-open stance of
 /// [`providers::capability_gate`](crate::providers::capability_gate): the
@@ -1379,4 +1392,112 @@ pub(super) fn model_supports_vision(configured: &str, serving_hint: Option<&str>
         .flatten()
         .find_map(crate::providers::capabilities_for)
         .is_none_or(|caps| caps.supports_vision)
+}
+
+/// Copy every inbound attachment into the durable artifact store, then ping
+/// subscribers that the session's artifact list moved.
+///
+/// Entirely best-effort: a read-only data directory, an oversized payload or an
+/// unreachable URL costs that one attachment, never the user's turn. The
+/// attachment still reaches the model through `MediaProcessor` either way.
+async fn archive_inbound_attachments(
+    attachments: &[crate::gateway::channel::Attachment],
+    session_key: &str,
+    run_id: &str,
+    event_bus: Option<&crate::gateway::event_bus::GatewayEventBus>,
+) {
+    let root = match crate::artifacts::ArtifactStore::default_root() {
+        Ok(root) => root,
+        Err(e) => {
+            warn!(error = %e, "cannot resolve the artifact root; inbound attachments not archived");
+            return;
+        }
+    };
+    let store = crate::artifacts::ArtifactStore::new(root);
+    let cache = crate::media::cache::MediaCache::new();
+    let mut stored = 0usize;
+
+    for attachment in attachments {
+        // Inline bytes are the common case (Panel and Slack uploads) and need
+        // no I/O at all. A `path` or `url` attachment goes through the media
+        // cache so the SSRF policy and the 50 MB ceiling apply here exactly as
+        // they do on the injection path. That costs a second fetch for a remote
+        // URL, which is the price of not letting the only copy of the bytes
+        // vanish with the temp directory at the end of the run.
+        let bytes = match attachment.data.clone() {
+            Some(bytes) => bytes,
+            None => match cache.resolve(attachment, session_key).await {
+                Ok(cached) => match tokio::fs::read(&cached.local_path).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!(
+                            attachment_id = %attachment.id,
+                            error = %e,
+                            "cannot read a resolved attachment for archiving"
+                        );
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        attachment_id = %attachment.id,
+                        error = %e,
+                        "cannot resolve an attachment for archiving"
+                    );
+                    continue;
+                }
+            },
+        };
+
+        let filename = attachment
+            .filename
+            .as_deref()
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&attachment.id);
+        match store
+            .put(
+                session_key,
+                Some(run_id),
+                crate::artifacts::ArtifactOrigin::Inbound,
+                filename,
+                &attachment.mime_type,
+                &bytes,
+            )
+            .await
+        {
+            Ok(record) => {
+                stored += 1;
+                tracing::debug!(
+                    artifact_id = %record.id,
+                    filename = %record.filename,
+                    size = record.size,
+                    "archived an inbound attachment"
+                );
+            }
+            Err(e) => warn!(
+                attachment_id = %attachment.id,
+                error = %e,
+                "failed to archive an inbound attachment"
+            ),
+        }
+    }
+
+    if stored > 0 {
+        publish_artifact_invalidation(event_bus, session_key);
+    }
+}
+
+/// Broadcast the content-free `session.artifact` ping on the injected bus.
+///
+/// The frame itself is built in
+/// [`crate::gateway::event_emitter::artifact_ping`] — the single source for its
+/// shape, shared with the outbound harvest at the tool chokepoint. Only the bus
+/// resolution differs between the two producers, and that difference is real:
+/// here one was injected, there it has to be looked up.
+fn publish_artifact_invalidation(
+    event_bus: Option<&crate::gateway::event_bus::GatewayEventBus>,
+    session_key: &str,
+) {
+    let Some(bus) = event_bus else { return };
+    crate::gateway::event_emitter::artifact_ping::publish_artifact_ping_on(bus, session_key);
 }

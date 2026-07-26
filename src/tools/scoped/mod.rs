@@ -9,9 +9,14 @@
 //! - [`traits`] — public extension points (`ToolDefinitionRewriter`, `ToolHookDecorator`)
 //! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
 //! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
+//! - [`artifact_harvest`] — settles `_media` tool output into the artifact store
 //! - [`ledger`] — what the signed operation ledger records at this chokepoint
 //! - this module — `ScopedToolService` struct + `ToolService` trait impl
 
+// `pub(crate)` for one reason: the slash-command fast path bypasses
+// `ScopedToolService` entirely and has to reach the same harvest, or its media
+// would be the only kind that never lands in the artifact store.
+pub(crate) mod artifact_harvest;
 mod builder;
 mod cat_guard;
 mod deferred;

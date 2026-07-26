@@ -12,7 +12,7 @@
 //!             ├─ Image + vision → ContentBlock::Image (native)
 //!             ├─ Image - vision → VisionPipeline → ContentBlock::Text
 //!             ├─ Audio + STT    → WhisperAPI → ContentBlock::Text
-//!             └─ Other          → ContentBlock::Text (placeholder)
+//!             └─ Other          → ContentBlock::Text (name/type/size summary)
 //!         → UnifiedMessage::User { content: [Text, Image, ...] }
 //!             → Provider adapter → LLM API call
 //! ```
@@ -29,7 +29,6 @@ pub mod cache;
 pub mod detect;
 pub mod error;
 pub mod pipeline;
-pub mod placeholder;
 pub mod policy;
 pub mod processor;
 pub mod processors;
@@ -41,7 +40,6 @@ pub mod whisper;
 pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
 pub use pipeline::MediaPipeline;
-pub use placeholder::{MediaPlaceholder, MediaPlaceholderType, MediaRecord, MediaRegistry};
 pub use policy::MediaPolicy;
 pub use processors::{AudioStubProvider, ImageMediaProvider, TextDocumentProvider};
 pub use provider::MediaProvider;

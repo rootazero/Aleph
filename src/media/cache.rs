@@ -441,9 +441,18 @@ fn base_dir() -> PathBuf {
     std::env::temp_dir().join("aleph").join("media")
 }
 
-/// Per-session directory: `<temp_dir>/aleph/media/<session_id>`
+/// Per-session directory: `<temp_dir>/aleph/media/<encoded_session_id>`
+///
+/// `session_id` is a raw session key such as `agent:main:main`. Joining it
+/// verbatim made `create_dir_all` fail on Windows, where `:` is illegal in a
+/// path component. It goes through the same encoder the artifact store uses so
+/// both agree on how a session key becomes one directory name.
+///
+/// Directories created under the old raw naming are still swept by
+/// [`MediaCache::cleanup_stale`], which walks the base dir by age and never
+/// interprets the names.
 fn session_dir(session_id: &str) -> PathBuf {
-    base_dir().join(session_id)
+    base_dir().join(crate::artifacts::encode_session_key(session_id))
 }
 
 /// Ensure session directory exists and write a `.created_at` marker
@@ -512,6 +521,22 @@ fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_dir_encodes_characters_illegal_on_windows() {
+        // Session keys look like `agent:main:main`. A raw join put a `:` into a
+        // path component, which `create_dir_all` rejects on Windows.
+        let dir = session_dir("agent:main:main");
+        let component = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("session dir has a final component");
+        assert!(
+            !component.contains(':'),
+            "no colon may survive into the path, got {component}"
+        );
+        assert_eq!(component, "agent%3Amain%3Amain");
+    }
 
     #[tokio::test]
     async fn download_media_item_rejects_local_path_outside_temp_root() {
