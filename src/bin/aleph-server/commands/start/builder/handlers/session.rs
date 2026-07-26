@@ -137,6 +137,59 @@ pub(in crate::commands::start) fn register_session_handlers(
     }
 }
 
+// ─── register_artifact_handlers ──────────────────────────────────────────────
+
+/// Wire the artifact metadata RPCs (`artifacts.list`, `session.export_html`).
+///
+/// The store is built here from its default root (`<data_dir>/artifacts`) —
+/// an `ArtifactStore` owns nothing but that path, so producers that build their
+/// own handle from the same root see the same artifacts.
+///
+/// If the data directory cannot be resolved, both methods stay unregistered
+/// rather than being wired to a store that would fail every call: a
+/// `method_not_found` is a diagnosable boot problem, a handler that always
+/// errors is not.
+pub(in crate::commands::start) fn register_artifact_handlers(
+    server: &mut GatewayServer,
+    session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    daemon: bool,
+) {
+    use alephcore::artifacts::ArtifactStore;
+    use alephcore::gateway::handlers::artifacts as artifact_handlers;
+
+    let root = match ArtifactStore::default_root() {
+        Ok(root) => root,
+        Err(e) => {
+            tracing::warn!(
+                "Artifact store unavailable ({e}); artifacts.list and session.export_html are not registered"
+            );
+            return;
+        }
+    };
+    let store = Arc::new(ArtifactStore::new(root));
+
+    register_handler!(
+        server,
+        "artifacts.list",
+        artifact_handlers::handle_list,
+        store
+    );
+    register_handler!(
+        server,
+        "session.export_html",
+        artifact_handlers::handle_export_html,
+        store,
+        session_store
+    );
+
+    if !daemon {
+        println!("Artifact methods:");
+        println!("  - artifacts.list      : List a session's stored artifacts");
+        println!("  - session.export_html : Export a session as a self-contained HTML document");
+        println!();
+    }
+}
+
 // ─── register_channel_handlers ───────────────────────────────────────────────
 
 pub(in crate::commands::start) fn register_channel_handlers(

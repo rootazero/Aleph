@@ -27,7 +27,8 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
-    register_agent_handlers, register_agents_handlers, register_config_handlers,
+    register_agent_handlers, register_agents_handlers, register_artifact_handlers,
+    register_config_handlers,
     register_core_handlers, register_cron_handlers, register_daemon_handlers,
     register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
     register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
@@ -1412,6 +1413,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
 
     register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
+    // Artifact metadata (`artifacts.list`, `session.export_html`). The byte
+    // route itself is plain HTTP on the axum router; these RPCs are what mint
+    // the capability that authorises it.
+    register_artifact_handlers(&mut server, &session_store, args.daemon);
     register_memory_handlers(
         &mut server,
         &memory_db,
