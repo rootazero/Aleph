@@ -144,6 +144,7 @@ impl WebFetchTool {
         if !self.fetch_providers.is_empty() {
             validate_url_async(&args.url, &self.ssrf_policy)
                 .await
+                .map(|(_, _pinned)| ())
                 .map_err(|e| {
                     let msg = format!("Fetch blocked or failed: {e}");
                     notify_tool_result(Self::NAME, &msg, false);

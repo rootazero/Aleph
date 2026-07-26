@@ -101,6 +101,7 @@ impl SearchProvider for TavilyProvider {
         let results = tavily_response
             .results
             .into_iter()
+            .take(options.validated_max_results())
             .map(|r| SearchResult {
                 title: r.title,
                 url: r.url,

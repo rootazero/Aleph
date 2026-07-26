@@ -199,6 +199,7 @@ impl BrowserSsrfGuard {
         // is rejected before being handed to Playwright/Chrome.
         ssrf::validate_url_async(url_str, &core_policy)
             .await
+            .map(|(_, _pinned)| ())
             .map_err(PolicyViolation::from)?;
 
         // Additional browser-specific: allowlist-only mode

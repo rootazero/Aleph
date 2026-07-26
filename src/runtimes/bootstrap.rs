@@ -40,8 +40,6 @@ pub enum BootstrapError {
     Io(#[from] std::io::Error),
     #[error("post-install action failed: {0}")]
     PostInstall(#[from] post_install::PostInstallError),
-    #[error("unknown capability: {0}")]
-    Unknown(String),
     #[error("bootstrap timed out after {0}s")]
     Timeout(u64),
 }

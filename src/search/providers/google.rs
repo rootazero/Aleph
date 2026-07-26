@@ -128,6 +128,7 @@ impl SearchProvider for GoogleProvider {
             .items
             .unwrap_or_default()
             .into_iter()
+            .take(options.validated_max_results())
             .map(|item| SearchResult {
                 title: item.title,
                 url: item.link,

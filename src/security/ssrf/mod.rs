@@ -123,9 +123,23 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
     Ok(url)
 }
 
-pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
-    let (url, _pinned) = validate_url_with_pinned(url_str, policy).await?;
-    Ok(url)
+/// Validates a URL with DNS resolution and returns the pinned `SocketAddr`.
+///
+/// Performs full SSRF validation including DNS resolution to check IP addresses
+/// against the policy. Returns `(Url, Option<SocketAddr>)` where the pinned
+/// address MUST be used on the outbound HTTP client (via reqwest's
+/// `.resolve(host, addr)`) to close the DNS rebinding TOCTOU window between
+/// validation and fetch. Returns `None` for IP-literal URLs and when
+/// `policy.enabled == false`.
+///
+/// Callers that perform outbound HTTP after validation should either pass the
+/// pinned address to their HTTP client, or use [`safe_fetch`] which handles
+/// pinning internally.
+pub async fn validate_url_async(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
+    validate_url_with_pinned(url_str, policy).await
 }
 
 /// Validates a URL and (when a hostname lookup was performed) returns the

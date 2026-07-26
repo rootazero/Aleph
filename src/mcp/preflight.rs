@@ -34,6 +34,7 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) -> Result<()> {
     validate_url_async(url, &SsrfPolicy::default())
         .await
+        .map(|(_, _pinned)| ())
         .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{url}': {e}")))?;
 
     let client = match reqwest::Client::builder()

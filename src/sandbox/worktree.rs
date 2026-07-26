@@ -102,24 +102,31 @@ impl Drop for WorktreeHandle {
                 leaked: true,
             });
         }
-        std::thread::spawn(move || {
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo_root)
-                .arg("worktree")
-                .arg("remove")
-                .arg("--force")
-                .arg(&path)
-                .no_window()
-                .status();
-            if let Err(e) = status {
+        let result = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_root)
+            .arg("worktree")
+            .arg("remove")
+            .arg("--force")
+            .arg(&path)
+            .status();
+        match result {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                tracing::error!(
+                    path = %path.display(),
+                    code = ?status.code(),
+                    "Drop safety-net cleanup returned non-zero exit code"
+                );
+            }
+            Err(e) => {
                 tracing::error!(
                     path = %path.display(),
                     error = %e,
                     "Drop safety-net cleanup failed"
                 );
             }
-        });
+        }
     }
 }
 

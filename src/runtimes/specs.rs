@@ -126,9 +126,9 @@ pub const SPECS: &[RuntimeSpec] = &[
             },
             OsInstall {
                 os: TargetOs::Windows,
-                strategy: InstallStrategy::PowerShell(
-                    "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"",
-                ),
+        strategy: InstallStrategy::PowerShell(
+            "irm https://astral.sh/uv/install.ps1 | iex",
+        ),
             },
         ],
         post_install: &[PostInstallAction::AssetProbe {
@@ -289,6 +289,17 @@ mod tests {
     fn test_all_specs_have_nonempty_name() {
         for spec in SPECS {
             assert!(!spec.name.is_empty(), "spec name must not be empty");
+        }
+    }
+
+    #[test]
+    fn test_all_specs_have_nonempty_binaries() {
+        for spec in SPECS {
+            assert!(
+                !spec.binaries.is_empty(),
+                "spec '{}' has no binaries; probe would silently return NotFound",
+                spec.name
+            );
         }
     }
 

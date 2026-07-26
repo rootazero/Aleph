@@ -93,11 +93,12 @@ impl FirecrawlProvider {
 
     /// Map a parsed Firecrawl response into unified search results.
     /// Pure function so the field mapping can be unit-tested without a network call.
-    fn map_response(response: FirecrawlResponse) -> Vec<SearchResult> {
+    fn map_response(response: FirecrawlResponse, max_results: usize) -> Vec<SearchResult> {
         response
             .data
             .web
             .into_iter()
+            .take(max_results)
             .map(|r| SearchResult {
                 title: r.title,
                 url: r.url,
@@ -141,7 +142,7 @@ impl SearchProvider for FirecrawlProvider {
         let response = check_status(response, NAME)?;
         let firecrawl_response: FirecrawlResponse = parse_json(response, NAME).await?;
 
-        Ok(Self::map_response(firecrawl_response))
+        Ok(Self::map_response(firecrawl_response, options.validated_max_results()))
     }
 
     fn name(&self) -> &str {
@@ -235,7 +236,7 @@ mod tests {
             "id": "abc"
         }"##;
         let parsed: FirecrawlResponse = serde_json::from_str(json).unwrap();
-        let results = FirecrawlProvider::map_response(parsed);
+        let results = FirecrawlProvider::map_response(parsed, usize::MAX);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Example");
         assert_eq!(results[0].url, "https://example.com");
@@ -254,7 +255,7 @@ mod tests {
             { "url": "https://e.com", "title": "T", "description": "D" }
         ]}}"#;
         let parsed: FirecrawlResponse = serde_json::from_str(json).unwrap();
-        let results = FirecrawlProvider::map_response(parsed);
+        let results = FirecrawlProvider::map_response(parsed, usize::MAX);
         assert_eq!(results.len(), 1);
         assert!(results[0].full_content.is_none());
     }
