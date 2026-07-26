@@ -82,7 +82,7 @@ pub struct OutputDigest {
 /// Strip ANSI / VT100 escape sequences (CSI `ESC [ … final`, plus the common
 /// OSC `ESC ] … BEL/ST` form) from a line. Returns [`Cow::Borrowed`] when the
 /// line contains no escape byte, so the common (clean) case never allocates.
-pub fn strip_ansi(line: &str) -> Cow<'_, str> {
+pub(crate) fn strip_ansi(line: &str) -> Cow<'_, str> {
     if !line.as_bytes().contains(&0x1b) {
         return Cow::Borrowed(line);
     }

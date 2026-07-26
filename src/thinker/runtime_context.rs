@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 pub struct RuntimeContext {
     /// Operating system name, e.g. "macos", "linux", "windows"
     pub os: String,
-    /// CPU architecture, e.g. "aarch64", "`x86_64`"
+    /// CPU architecture, e.g. "aarch64", "x86_64"
     pub arch: String,
     /// User's default shell, e.g. "zsh", "bash"
     pub shell: String,

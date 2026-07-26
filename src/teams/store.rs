@@ -711,7 +711,11 @@ impl TeamStore for SqliteTeamStore {
                 // the leader's system prompt at render time, so an unbounded
                 // string gives whoever can call set_protocol an arbitrary
                 // prompt-injection sink against the leader.
-                Some(t[..MAX_PROTOCOL_LEN].to_string())
+                let mut end = MAX_PROTOCOL_LEN;
+                while end > 0 && !t.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Some(t[..end].to_string())
             } else {
                 Some(t.to_string())
             }

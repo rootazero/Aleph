@@ -5,7 +5,7 @@ use alephcore::tasks::cron::alert::should_send_alert;
 use alephcore::tasks::cron::config::{
     CronJob, DeliveryMode, DeliveryStatus, DeliveryTargetConfig, FailureAlertConfig, ScheduleKind,
 };
-use alephcore::tasks::cron::delivery::should_skip_delivery;
+use alephcore::tasks::cron::delivery::pre_delivery_status;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ fn make_alert_config(after: u32, cooldown_ms: i64) -> FailureAlertConfig {
 /// When the agent already sent results, delivery should return AlreadySentByAgent.
 #[test]
 fn delivery_dedup_agent_sent() {
-    let status = should_skip_delivery(true, &DeliveryMode::Primary);
+    let status = pre_delivery_status(true, &DeliveryMode::Primary);
     assert_eq!(
         status,
         DeliveryStatus::AlreadySentByAgent,
@@ -53,7 +53,7 @@ fn delivery_dedup_agent_sent() {
 /// When delivery mode is None, should return NotRequested regardless of agent state.
 #[test]
 fn delivery_none_mode() {
-    let status = should_skip_delivery(false, &DeliveryMode::None);
+    let status = pre_delivery_status(false, &DeliveryMode::None);
     assert_eq!(
         status,
         DeliveryStatus::NotRequested,
@@ -63,14 +63,15 @@ fn delivery_none_mode() {
 
 // ── 3. delivery_normal_proceeds ─────────────────────────────────────────
 
-/// Normal delivery (agent hasn't sent, mode is Primary) should return Delivered.
+/// Normal delivery (agent hasn't sent, mode is Primary) should return NotDelivered,
+/// signalling the caller to proceed with actual delivery.
 #[test]
 fn delivery_normal_proceeds() {
-    let status = should_skip_delivery(false, &DeliveryMode::Primary);
+    let status = pre_delivery_status(false, &DeliveryMode::Primary);
     assert_eq!(
         status,
-        DeliveryStatus::Delivered,
-        "normal delivery should return Delivered"
+        DeliveryStatus::NotDelivered,
+        "normal delivery should return NotDelivered, signalling caller to proceed"
     );
 }
 
