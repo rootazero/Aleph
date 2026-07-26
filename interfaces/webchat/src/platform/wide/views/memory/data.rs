@@ -2,7 +2,9 @@
 //! bucketing, and client-side pagination. No Leptos runtime dependency, so it
 //! is unit-tested directly.
 
-use crate::api::CompressedFact;
+use std::collections::HashSet;
+
+use crate::api::{CompressedFact, RawMemory};
 
 /// Window of notes pulled in one `list_facts` call, then faceted/paginated
 /// client-side. When `list_facts` returns exactly this many, the store may be
@@ -155,6 +157,27 @@ pub fn page_count(total: usize, page_size: u32) -> u32 {
     (total as u64).div_ceil(page_size as u64).max(1) as u32
 }
 
+/// Whether the pager's "next" control should be enabled.
+///
+/// `total_pages` is `None` when the true total is unknown — a version-skewed
+/// core that never sent a `total` field, surfaced all the way through
+/// `RawWindow`/`NotesWindow` as `Option<u64>`. In that case, fall back to
+/// "this page came back full, so there is probably more" rather than hiding
+/// the control: reading an absent total as "no more rows" is what made the
+/// raw pager vanish entirely against an un-upgraded core.
+#[must_use]
+pub fn has_next_page(
+    page: u32,
+    total_pages: Option<u32>,
+    current_len: usize,
+    page_size: u32,
+) -> bool {
+    match total_pages {
+        Some(tp) => page + 1 < tp,
+        None => current_len as u32 >= page_size,
+    }
+}
+
 /// Format a unix-seconds timestamp for display (`YYYY-MM-DD HH:MM`); `—` for
 /// non-positive. Single source of truth for both memory tabs (replaces the
 /// former duplicate in `views/memory` and mirrors `api/memory::format_timestamp_secs`).
@@ -171,6 +194,25 @@ pub fn format_ts(ts: i64) -> String {
         date.get_hours(),
         date.get_minutes(),
     )
+}
+
+/// Whether the loaded notes window is truncated relative to the true store
+/// size.
+///
+/// Prefers the server-reported `total` when the core sent one (`None` means
+/// an un-upgraded core didn't send the field at all, not that the count is
+/// zero — see [`crate::api::MemoryApi::list_facts`]). Without it, fall back
+/// to the same cap heuristic the phone list already uses
+/// (`loaded >= NOTE_WINDOW`): a version-skewed core that can't report the
+/// true total must not read as "definitely not truncated" just because the
+/// precise comparison is unavailable — that silently re-opens the exact
+/// trailing-page bug this notice exists to prevent.
+#[must_use]
+pub fn notes_truncated(total: Option<u64>, loaded: usize) -> bool {
+    match total {
+        Some(t) => (t as usize) > loaded,
+        None => loaded >= NOTE_WINDOW,
+    }
 }
 
 /// Locate a note by its `path` within the loaded window. Returns the facet to
@@ -223,6 +265,29 @@ pub struct RawExport {
     pub created_at: String,
     pub user_input: String,
     pub ai_output: String,
+}
+
+/// Which of `selected` are present on `page_rows`, and how many are not.
+///
+/// Raw rows are server-paginated and `selected` is never cleared on page
+/// change, so a selection built across two pages can outlive the page it was
+/// made on. Silently exporting only the ids still on the current page would
+/// hand the user a partial export under an unqualified "Copied to
+/// clipboard" — this reports the drop count so the caller can disclose it,
+/// the same way `batch_export_partial` already discloses a failed
+/// `node_detail` fetch on the notes side.
+#[must_use]
+pub fn stage_raw_export(
+    selected: &HashSet<String>,
+    page_rows: &[RawMemory],
+) -> (Vec<RawMemory>, usize) {
+    let staged: Vec<RawMemory> = page_rows
+        .iter()
+        .filter(|r| selected.contains(&r.id))
+        .cloned()
+        .collect();
+    let dropped = selected.len().saturating_sub(staged.len());
+    (staged, dropped)
 }
 
 /// Render staged notes as a markdown document, one `#` section per note.
@@ -612,5 +677,77 @@ mod tests {
         // reappear if the `.max(1)` floor were ever lost.
         assert_eq!(page_count(0, 25), 1);
         assert_eq!(page_count(0, 100), 1);
+    }
+
+    #[test]
+    fn has_next_page_uses_the_precise_total_when_known() {
+        assert!(has_next_page(0, Some(3), 50, 50));
+        assert!(!has_next_page(2, Some(3), 20, 50));
+    }
+
+    #[test]
+    fn has_next_page_falls_back_to_the_full_page_heuristic_when_total_is_unknown() {
+        // Version skew: `total_pages` is `None` because the core never sent
+        // a total at all. A full page must still offer "next" — this is the
+        // exact case where the raw pager used to vanish entirely once `total`
+        // silently defaulted to `0` instead of `None`.
+        assert!(has_next_page(0, None, 50, 50));
+        assert!(!has_next_page(0, None, 12, 50));
+    }
+
+    // ── notes_truncated ──────────────────────────────────────────────────────
+
+    #[test]
+    fn notes_truncated_uses_the_precise_total_when_known() {
+        assert!(notes_truncated(Some(1200), 1000));
+        assert!(!notes_truncated(Some(1000), 1000));
+        assert!(!notes_truncated(Some(3), 3));
+    }
+
+    #[test]
+    fn notes_truncated_falls_back_to_the_window_cap_when_total_is_unknown() {
+        // An un-upgraded core doesn't send `total` at all (`None`, not `0`).
+        // Loading exactly NOTE_WINDOW rows is the ambiguous case: the true
+        // store could be bigger. Silently reading `None` as "not truncated"
+        // is exactly the bug this notice exists to prevent, so the unknown
+        // case must still warn once the window cap is hit.
+        assert!(notes_truncated(None, NOTE_WINDOW));
+        assert!(!notes_truncated(None, NOTE_WINDOW - 1));
+    }
+
+    // ── stage_raw_export ─────────────────────────────────────────────────────
+
+    fn raw_row(id: &str) -> RawMemory {
+        RawMemory {
+            id: id.into(),
+            agent_id: "main".into(),
+            user_input: "q".into(),
+            ai_output: "a".into(),
+            session_id: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn stage_raw_export_drops_ids_not_on_the_current_page() {
+        // 50 ids selected across two pages of raw rows, but only the second
+        // page's 25 rows are loaded right now (raw is server-paginated and
+        // `selected` is never cleared on page change) -- the other 25 must be
+        // reported as dropped, not silently omitted from an export that still
+        // claims success.
+        let page: Vec<RawMemory> = (25..50).map(|i| raw_row(&format!("r{i}"))).collect();
+        let selected: HashSet<String> = (0..50).map(|i| format!("r{i}")).collect();
+        let (staged, dropped) = stage_raw_export(&selected, &page);
+        assert_eq!(staged.len(), 25);
+        assert_eq!(dropped, 25);
+    }
+
+    #[test]
+    fn stage_raw_export_no_drop_when_the_whole_selection_is_on_page() {
+        let page: Vec<RawMemory> = (0..10).map(|i| raw_row(&format!("r{i}"))).collect();
+        let selected: HashSet<String> = (0..5).map(|i| format!("r{i}")).collect();
+        let (staged, dropped) = stage_raw_export(&selected, &page);
+        assert_eq!(staged.len(), 5);
+        assert_eq!(dropped, 0);
     }
 }

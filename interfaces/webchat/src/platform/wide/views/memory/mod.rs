@@ -26,9 +26,9 @@ mod toast;
 use batch_bar::BatchBar;
 use cards::{CardListShell, NoteCard, RawCard};
 use data::{
-    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, page_slice,
-    raws_to_markdown, Loadable, MemoryFacet, NoteExport, RawExport, EXPORT_MAX, NOTE_WINDOW,
-    PAGE_SIZE,
+    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, notes_truncated,
+    page_slice, raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport,
+    EXPORT_MAX, NOTE_WINDOW, PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
@@ -129,6 +129,31 @@ pub fn Memory() -> impl IntoView {
         load_raw(state, agent, q, size, p * size, raws);
     });
 
+    // ── Cross-agent selection safety (C1) ───────────────────────────────────
+    // `selected`, `drawer_target`, and `highlight_id` all key off note *paths*
+    // — `category/filename` over a small, fixed category set, so a collision
+    // like `preference/coding-style` across two agents is entirely plausible.
+    // `on_delete`/`on_copy_md` resolve the agent at click time
+    // (`mem.agent_id.get_untracked()`), so a selection made under agent A that
+    // survives a switch to agent B gets sent to B's store on the next batch
+    // action: a colliding path silently deletes/exports B's note under A's
+    // stale checkbox state. Whenever the agent actually changes -- not on
+    // every unrelated refresh, which must leave an in-progress selection
+    // alone -- drop all cross-agent-unsafe UI state computed against the old
+    // agent. `agent_switched` is the pure "did it actually change" decision;
+    // see its unit tests below.
+    let last_agent = StoredValue::new(mem.agent_id.get_untracked());
+    Effect::new(move || {
+        let agent = mem.agent_id.get();
+        if !agent_switched(&last_agent.get_value(), &agent) {
+            return;
+        }
+        last_agent.set_value(agent);
+        selected.set(HashSet::new());
+        drawer_target.set(None);
+        highlight_id.set(None);
+    });
+
     // ── Dual-track search ───────────────────────────────────────────────────
     // Track 1: every keystroke debounce-filters the LOADED window. `filter_notes`
     // has existed (and been unit-tested) since the phone list shipped; the
@@ -185,13 +210,19 @@ pub fn Memory() -> impl IntoView {
     // touching `facet`/`page`: unlike the Track 2 effect above (which owns
     // "should Enter switch us into SearchHits"), a background refresh must
     // never yank the user back into a facet they've since navigated away from.
+    //
+    // `mem.agent_id` is read (tracked) unconditionally, before the
+    // `search_live` early return, for the same reason: an agent switch bumps
+    // neither `refresh_nonce` nor `search_nonce`, so this effect must
+    // resubscribe to the agent every run or it will never notice a switch
+    // that happens while `search_live` is false and then becomes true again.
     Effect::new(move || {
         refresh_nonce.get();
+        let agent = mem.agent_id.get();
         if !search_live.get_untracked() {
             return;
         }
         let q = mem.search_query.get_untracked();
-        let agent = mem.agent_id.get_untracked();
         load_search_hits(state, agent, q, SEARCH_HITS_LIMIT, hits);
     });
 
@@ -229,7 +260,7 @@ pub fn Memory() -> impl IntoView {
     let location = use_location();
     let note_param_consumed = RwSignal::new(false);
     Effect::new(move || {
-        notes.get(); // re-run when the window lands; the value itself is read untracked below
+        notes.track(); // re-run when the window lands; the value itself is read untracked below
         if note_param_consumed.get_untracked() {
             // Short-circuit before touching `notes` again: past this point the
             // window can hold up to `NOTE_WINDOW` (1000) facts, and every future
@@ -365,8 +396,8 @@ pub fn Memory() -> impl IntoView {
                 })
                 exporting=exporting
                 on_copy_md=move || {
-                    let ids: Vec<String> = selected.get_untracked().into_iter().collect();
-                    if ids.is_empty() || ids.len() > EXPORT_MAX {
+                    let sel = selected.get_untracked();
+                    if sel.is_empty() || sel.len() > EXPORT_MAX {
                         return;
                     }
                     let agent = mem.agent_id.get_untracked();
@@ -374,7 +405,7 @@ pub fn Memory() -> impl IntoView {
                         let rows: Vec<CompressedFact> = note_rows
                             .get_untracked()
                             .into_iter()
-                            .filter(|f| ids.contains(&f.path))
+                            .filter(|f| sel.contains(&f.path))
                             .collect();
                         let total = rows.len();
                         exporting.set(Some((0, total)));
@@ -395,12 +426,19 @@ pub fn Memory() -> impl IntoView {
                                 });
                                 exporting.set(Some((i + 1, total)));
                             }
-                            write_clipboard(&notes_to_markdown(&staged));
+                            let copied = write_clipboard(&notes_to_markdown(&staged)).await;
                             exporting.set(None);
                             // A green success tone under-signals a partial failure at a
                             // glance even with accurate text next to it, so the tone
-                            // itself carries the "something didn't fully work" signal.
-                            let (msg, kind) = if failures > 0 {
+                            // itself carries the "something didn't fully work" signal. A
+                            // rejected clipboard write overrides that: nothing reached
+                            // the clipboard at all, regardless of how many bodies loaded.
+                            let (msg, kind) = if !copied {
+                                (
+                                    t_string!(i18n, memory.toast_copy_failed).to_string(),
+                                    ToastKind::Error,
+                                )
+                            } else if failures > 0 {
                                 (
                                     format!(
                                         "{} — {}",
@@ -418,10 +456,15 @@ pub fn Memory() -> impl IntoView {
                             push_toast(toast_slot, msg, kind);
                         });
                     } else {
-                        let staged: Vec<RawExport> = raw_rows
-                            .get_untracked()
+                        // Raw rows are server-paginated and `sel` is never cleared on
+                        // page change, so a selection built across two pages can
+                        // outlive the page it was made on — `stage_raw_export` reports
+                        // how many selected ids are not on the currently loaded page
+                        // rather than silently exporting only what's on screen.
+                        let (staged_raws, dropped) =
+                            stage_raw_export(&sel, &raw_rows.get_untracked());
+                        let staged: Vec<RawExport> = staged_raws
                             .into_iter()
-                            .filter(|r| ids.contains(&r.id))
                             .map(|r| RawExport {
                                 id: r.id,
                                 agent_id: r.agent_id,
@@ -431,8 +474,30 @@ pub fn Memory() -> impl IntoView {
                                 ai_output: r.ai_output,
                             })
                             .collect();
-                        write_clipboard(&raws_to_markdown(&staged));
-                        push_toast(toast_slot, t_string!(i18n, memory.toast_copied).to_string(), ToastKind::Success);
+                        spawn_local(async move {
+                            let copied = write_clipboard(&raws_to_markdown(&staged)).await;
+                            let (msg, kind) = if !copied {
+                                (
+                                    t_string!(i18n, memory.toast_copy_failed).to_string(),
+                                    ToastKind::Error,
+                                )
+                            } else if dropped > 0 {
+                                (
+                                    format!(
+                                        "{} — {}",
+                                        t_string!(i18n, memory.toast_copied),
+                                        t_string!(i18n, memory.batch_export_partial)
+                                    ),
+                                    ToastKind::Error,
+                                )
+                            } else {
+                                (
+                                    t_string!(i18n, memory.toast_copied).to_string(),
+                                    ToastKind::Success,
+                                )
+                            };
+                            push_toast(toast_slot, msg, kind);
+                        });
                     }
                 }
                 on_delete=move || {
@@ -519,8 +584,14 @@ pub fn Memory() -> impl IntoView {
                                             mem.memory_view.set(MemoryView::Graph);
                                         }
                                         on_copy_link=move || {
-                                            copy_note_link(&p_link);
-                                            push_toast(toast_slot, t_string!(i18n, memory.toast_link_copied).to_string(), ToastKind::Success);
+                                            let path = p_link.clone();
+                                            spawn_local(async move {
+                                                if copy_note_link(&path).await {
+                                                    push_toast(toast_slot, t_string!(i18n, memory.toast_link_copied).to_string(), ToastKind::Success);
+                                                } else {
+                                                    push_toast(toast_slot, t_string!(i18n, memory.toast_copy_failed).to_string(), ToastKind::Error);
+                                                }
+                                            });
                                         }
                                     />
                                 }
@@ -534,7 +605,7 @@ pub fn Memory() -> impl IntoView {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_hits_capped)}</p>
                         })}
                     {move || notes.get().as_ready()
-                        .map(|w| w.total as usize > w.facts.len())
+                        .map(|w| notes_truncated(w.total, w.facts.len()))
                         .unwrap_or(false)
                         .then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
@@ -598,7 +669,7 @@ pub fn Memory() -> impl IntoView {
                     <Pager
                         page=page
                         page_size=page_size
-                        total=Signal::derive(move || raws.get().as_ready().map(|w| w.total))
+                        total=Signal::derive(move || raws.get().as_ready().and_then(|w| w.total))
                         current_len=Signal::derive(move || raw_rows.get().len())
                     />
                 }.into_any()
@@ -662,6 +733,17 @@ fn note_param_decision(has_path: bool, window_ready: bool) -> (bool, bool) {
     (true, true)
 }
 
+/// Whether the agent actually changed since the last time the cross-agent
+/// selection-safety Effect ran (C1). Split out so the "did it change" decision
+/// is unit-tested without a Leptos runtime, mirroring `note_param_decision`.
+/// Deliberately not tied to any particular agent id shape (including the
+/// empty-string starting value before the first agent list loads) — only
+/// equality matters.
+#[must_use]
+fn agent_switched(previous: &str, current: &str) -> bool {
+    previous != current
+}
+
 /// Drop `note=` from the address bar after consuming it, so a reload does not
 /// force the drawer open again. Reuses `context::strip_params` (the same
 /// rebuild-the-query-string logic already covers `?token=`/`?bt=` there) and
@@ -690,19 +772,29 @@ fn scrub_note_param() {
     let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
 }
 
-/// Write `text` to the system clipboard. Mirrors `chat/messages.rs`.
-fn write_clipboard(text: &str) {
-    if let Some(win) = web_sys::window() {
-        let _promise = win.navigator().clipboard().write_text(text);
-    }
+/// Write `text` to the system clipboard, returning whether it succeeded.
+///
+/// `navigator.clipboard.write_text` returns a promise that can reject (lost
+/// user activation after an awaited fetch loop, an insecure context, a denied
+/// permission) — discarding it, as the old code did, means a rejected write
+/// still falls through to a "Copied to clipboard" success toast.
+async fn write_clipboard(text: &str) -> bool {
+    let Some(win) = web_sys::window() else {
+        return false;
+    };
+    let promise = win.navigator().clipboard().write_text(text);
+    wasm_bindgen_futures::JsFuture::from(promise).await.is_ok()
 }
 
 /// Build a shareable deep link to one note and put it on the clipboard.
-fn copy_note_link(path: &str) {
-    let Some(win) = web_sys::window() else { return };
+/// Returns whether the clipboard write succeeded.
+async fn copy_note_link(path: &str) -> bool {
+    let Some(win) = web_sys::window() else {
+        return false;
+    };
     let origin = win.location().origin().unwrap_or_default();
     let encoded: String = js_sys::encode_uri_component(path).into();
-    write_clipboard(&format!("{origin}/memory?view=table&note={encoded}"));
+    write_clipboard(&format!("{origin}/memory?view=table&note={encoded}")).await
 }
 
 #[cfg(test)]
@@ -767,5 +859,18 @@ mod tests {
     #[test]
     fn path_present_and_window_ready_processes_exactly_once() {
         assert_eq!(note_param_decision(true, true), (true, true));
+    }
+
+    // ── agent_switched (C1) ──────────────────────────────────────────────────
+
+    #[test]
+    fn agent_switched_true_when_the_id_differs() {
+        assert!(agent_switched("agent-a", "agent-b"));
+    }
+
+    #[test]
+    fn agent_switched_false_when_the_id_is_unchanged() {
+        assert!(!agent_switched("agent-a", "agent-a"));
+        assert!(!agent_switched("", ""));
     }
 }

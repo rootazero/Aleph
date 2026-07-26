@@ -20,8 +20,10 @@ use crate::context::DashboardState;
 pub struct NotesWindow {
     pub facts: Vec<CompressedFact>,
     /// Total notes for this agent, independent of the window cap — lets the
-    /// pager size itself and the truncation notice tell the truth.
-    pub total: u64,
+    /// pager size itself and the truncation notice tell the truth. `None`
+    /// when an un-upgraded core didn't report one at all — genuinely
+    /// unknown, not zero.
+    pub total: Option<u64>,
 }
 
 pub fn load_notes(
@@ -40,7 +42,9 @@ pub fn load_notes(
 /// Pure mapping step of [`load_notes`], split out so `total`'s source is
 /// unit-testable without a transport mock: it must come from the RPC's
 /// second tuple element (the agent's full count), never from `facts.len()`.
-fn to_notes_window(res: Result<(Vec<CompressedFact>, u64), String>) -> Result<NotesWindow, String> {
+fn to_notes_window(
+    res: Result<(Vec<CompressedFact>, Option<u64>), String>,
+) -> Result<NotesWindow, String> {
     res.map(|(facts, total)| NotesWindow { facts, total })
 }
 
@@ -50,8 +54,10 @@ pub struct RawWindow {
     pub raws: Vec<RawMemory>,
     /// Rows matching the active filter, independent of `limit`/`offset` — this
     /// is what lets the pager stop at the last page of a *filtered* result
-    /// instead of sizing itself to the whole store.
-    pub total: u64,
+    /// instead of sizing itself to the whole store. `None` when an
+    /// un-upgraded core didn't report one at all, which the pager reads as
+    /// genuinely unknown rather than "no more rows".
+    pub total: Option<u64>,
 }
 
 pub fn load_raw(
@@ -74,7 +80,7 @@ pub fn load_raw(
 /// second tuple element (rows matching the active filter), never from
 /// `raws.len()` — conflating the two is exactly what revives the phantom
 /// trailing page under an active query.
-fn to_raw_window(res: Result<(Vec<RawMemory>, u64), String>) -> Result<RawWindow, String> {
+fn to_raw_window(res: Result<(Vec<RawMemory>, Option<u64>), String>) -> Result<RawWindow, String> {
     res.map(|(raws, total)| RawWindow { raws, total })
 }
 
@@ -145,15 +151,25 @@ mod tests {
     fn notes_window_total_comes_from_the_tuple_not_row_count() {
         // 2 rows but a total of 7: a `facts.len() as u64` implementation
         // would report 2 here, so this pins the real contract.
-        let res = Ok((vec![fact("a"), fact("b")], 7u64));
+        let res = Ok((vec![fact("a"), fact("b")], Some(7u64)));
         let window = to_notes_window(res).expect("Ok input stays Ok");
-        assert_eq!(window.total, 7);
+        assert_eq!(window.total, Some(7));
         assert_eq!(window.facts.len(), 2);
     }
 
     #[test]
+    fn notes_window_total_is_none_when_the_core_never_sent_it() {
+        // Version skew: an un-upgraded core omits the field entirely. `None`
+        // must survive here, not fold into `0` (which the truncation notice
+        // would read as "the store is empty").
+        let res = Ok((vec![fact("a")], None));
+        let window = to_notes_window(res).expect("Ok input stays Ok");
+        assert_eq!(window.total, None);
+    }
+
+    #[test]
     fn notes_window_err_stays_err_with_its_message() {
-        let res: Result<(Vec<CompressedFact>, u64), String> = Err("gateway timeout".into());
+        let res: Result<(Vec<CompressedFact>, Option<u64>), String> = Err("gateway timeout".into());
         assert_eq!(
             to_notes_window(res),
             Err("gateway timeout".to_string()),
@@ -169,15 +185,24 @@ mod tests {
         // match set): a `raws.len() as u64` implementation would report 3
         // here, which is exactly the phantom-page bug this window exists to
         // prevent.
-        let res = Ok((vec![raw("r1"), raw("r2"), raw("r3")], 41u64));
+        let res = Ok((vec![raw("r1"), raw("r2"), raw("r3")], Some(41u64)));
         let window = to_raw_window(res).expect("Ok input stays Ok");
-        assert_eq!(window.total, 41);
+        assert_eq!(window.total, Some(41));
         assert_eq!(window.raws.len(), 3);
     }
 
     #[test]
+    fn raw_window_total_is_none_when_the_core_never_sent_it() {
+        // Version skew: `None` (unknown), not `0` (which the pager would
+        // read as "no more rows" and hide the next-page control entirely).
+        let res = Ok((vec![raw("r1")], None));
+        let window = to_raw_window(res).expect("Ok input stays Ok");
+        assert_eq!(window.total, None);
+    }
+
+    #[test]
     fn raw_window_err_stays_err_with_its_message() {
-        let res: Result<(Vec<RawMemory>, u64), String> = Err("gateway timeout".into());
+        let res: Result<(Vec<RawMemory>, Option<u64>), String> = Err("gateway timeout".into());
         assert_eq!(
             to_raw_window(res),
             Err("gateway timeout".to_string()),

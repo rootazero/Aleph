@@ -98,9 +98,12 @@ impl CompressedFact {
 struct BackendListFactsResponse {
     #[serde(default)]
     facts: Vec<CompressedFact>,
-    /// Total notes for the agent, independent of `limit`/`offset`.
+    /// Total notes for the agent, independent of `limit`/`offset`. `None`
+    /// when an un-upgraded core doesn't send the field at all — NOT the same
+    /// as `0`, which would read as "the store is empty" and silently hide
+    /// the 1000-note truncation notice.
     #[serde(default)]
-    total: u64,
+    total: Option<u64>,
 }
 
 /// Backend `memory.search` response wrapper.
@@ -108,10 +111,13 @@ struct BackendListFactsResponse {
 struct BackendSearchResponse {
     #[serde(default)]
     memories: Vec<BackendMemoryEntry>,
-    /// Rows matching the same filter, independent of `limit`/`offset`. Defaults
-    /// to 0 against an un-upgraded core, which the pager reads as "unknown".
+    /// Rows matching the same filter, independent of `limit`/`offset`. `None`
+    /// when an un-upgraded core doesn't send the field at all, which the
+    /// pager reads as genuinely unknown. Defaulting this to `0` instead would
+    /// read as "there are no more rows" and make the raw pager's prev/next
+    /// controls vanish entirely against a skewed core.
     #[serde(default)]
-    total: u64,
+    total: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,14 +198,16 @@ impl MemoryApi {
     /// `query` is a substring filter over raw content. This never returns
     /// notes — note full-text search is `GraphApi::search`.
     /// Returns the page plus the **filtered** row count, so a pager over a
-    /// query result sizes itself to the matches rather than to the whole store.
+    /// query result sizes itself to the matches rather than to the whole
+    /// store. `None` when an un-upgraded core didn't report a total at all —
+    /// the pager falls back to its own "this page came back full" heuristic.
     pub async fn browse_raw(
         state: &DashboardState,
         agent_id: &str,
         query: String,
         limit: u32,
         offset: u32,
-    ) -> Result<(Vec<RawMemory>, u64), String> {
+    ) -> Result<(Vec<RawMemory>, Option<u64>), String> {
         let params = serde_json::json!({
             "agent_id": agent_id,
             "query": query,
@@ -236,13 +244,14 @@ impl MemoryApi {
         Ok(())
     }
 
-    /// List knowledge notes (Layer 2). Returns the page plus the agent's total.
+    /// List knowledge notes (Layer 2). Returns the page plus the agent's
+    /// total; `None` when an un-upgraded core didn't send one.
     pub async fn list_facts(
         state: &DashboardState,
         agent_id: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<(Vec<CompressedFact>, u64), String> {
+    ) -> Result<(Vec<CompressedFact>, Option<u64>), String> {
         let params = serde_json::json!({
             "agent_id": agent_id,
             "limit": limit,
@@ -298,7 +307,9 @@ fn format_timestamp_secs(ts: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompressedFact, MemoryStats, RawMemory};
+    use super::{
+        BackendListFactsResponse, BackendSearchResponse, CompressedFact, MemoryStats, RawMemory,
+    };
     use crate::canvas_engine::adapter::SearchResultDto;
 
     /// The server sends `null` graph counts when they cannot be computed
@@ -335,6 +346,31 @@ mod tests {
         assert_eq!(stats.total_graph_nodes, Some(7));
         assert_eq!(stats.total_graph_edges, Some(9));
         assert_eq!(stats.scope, "agent");
+    }
+
+    // ── Version skew: `total` absent, not zero ──────────────────────────────
+    //
+    // Mirrors `canvas_engine::adapter::search_result_dto_deserializes_without_
+    // the_new_fields`: a narrow response from an un-upgraded core (Panel
+    // connected to an older gateway over LAN) must still parse, and the
+    // missing `total` must come back `None` — deserialization already
+    // succeeded before this fix (that's exactly why a `u64` default of `0`
+    // hid as "the store is empty" instead of "unknown").
+
+    #[test]
+    fn list_facts_response_total_is_none_when_the_core_never_sent_it() {
+        let json = r#"{"facts": []}"#;
+        let resp: BackendListFactsResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
+        assert_eq!(resp.total, None);
+    }
+
+    #[test]
+    fn search_response_total_is_none_when_the_core_never_sent_it() {
+        let json = r#"{"memories": []}"#;
+        let resp: BackendSearchResponse =
+            serde_json::from_str(json).expect("Failed to deserialize");
+        assert_eq!(resp.total, None);
     }
 
     #[test]

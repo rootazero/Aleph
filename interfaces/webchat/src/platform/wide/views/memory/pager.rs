@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 
-use super::data::{page_count, PAGE_SIZES};
+use super::data::{has_next_page, page_count, PAGE_SIZES};
 use crate::i18n::{t, t_string, use_i18n};
 
 /// `total` is `None` when the row count is unknown; the next button then falls
@@ -22,9 +22,13 @@ pub fn Pager(
     let total_pages =
         Signal::derive(move || total.get().map(|t| page_count(t as usize, page_size.get())));
     let has_prev = Signal::derive(move || page.get() > 0);
-    let has_next = Signal::derive(move || match total_pages.get() {
-        Some(tp) => page.get() + 1 < tp,
-        None => current_len.get() as u32 >= page_size.get(),
+    let has_next = Signal::derive(move || {
+        has_next_page(
+            page.get(),
+            total_pages.get(),
+            current_len.get(),
+            page_size.get(),
+        )
     });
 
     view! {

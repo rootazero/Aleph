@@ -45,6 +45,31 @@ pub fn MemoryHeader(on_refresh: impl Fn() + Clone + Send + 'static) -> impl Into
     }
 }
 
+/// What `MemoryStats::scope` honestly says about the population the numbers
+/// describe. Only `"agent"` and `"global"` are contracts the server documents
+/// (`handle_stats`) and the CLI's unscoped call is the one path that still
+/// reaches `"global"` — the Panel's three callers all pass an agent id, so
+/// `"global"` is unreachable here today but stays a real, testable case
+/// rather than a wildcard. `Unknown` is everything else, including the
+/// empty-string default an un-upgraded core sends when it never set the
+/// field: that response is actually store-wide, so it must not be asserted
+/// as `Agent` just because it isn't literally `"global"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeLabel {
+    Agent,
+    Global,
+    Unknown,
+}
+
+#[must_use]
+fn classify_scope(scope: &str) -> ScopeLabel {
+    match scope {
+        "agent" => ScopeLabel::Agent,
+        "global" => ScopeLabel::Global,
+        _ => ScopeLabel::Unknown,
+    }
+}
+
 #[component]
 pub fn StatCards(stats: Signal<Loadable<MemoryStats>>) -> impl IntoView {
     let i18n = use_i18n();
@@ -76,14 +101,18 @@ pub fn StatCards(stats: Signal<Loadable<MemoryStats>>) -> impl IntoView {
             },
         })
     };
-    let scope_label =
-        Signal::derive(
-            move || match stats.get().as_ready().map(|s| s.scope.as_str()) {
-                Some("global") => t_string!(i18n, memory.scope_global).to_string(),
-                Some(_) => t_string!(i18n, memory.scope_agent).to_string(),
-                None => String::new(),
-            },
-        );
+    let scope_label = Signal::derive(move || {
+        match stats.get().as_ready().map(|s| classify_scope(&s.scope)) {
+            Some(ScopeLabel::Global) => t_string!(i18n, memory.scope_global).to_string(),
+            Some(ScopeLabel::Agent) => t_string!(i18n, memory.scope_agent).to_string(),
+            // `Unknown` covers the empty-string default an un-upgraded core
+            // sends when it never set the field — that response is actually
+            // store-wide (the one shape version skew can produce here), so
+            // asserting "current agent" would be the one lie this component
+            // can tell that's actually reachable. Say nothing instead.
+            Some(ScopeLabel::Unknown) | None => String::new(),
+        }
+    });
 
     let facts = num(|s| Some(s.total_facts));
     let raws = num(|s| Some(s.total_memories));
@@ -119,5 +148,26 @@ fn StatCard(tone: &'static str, label: String, value: Signal<String>) -> impl In
             <span class=format!("text-[10px] font-bold {fg} uppercase tracking-widest mb-1.5")>{label}</span>
             <span class="text-3xl font-bold font-mono">{move || value.get()}</span>
         </Card>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_scope_recognizes_the_two_documented_values() {
+        assert_eq!(classify_scope("agent"), ScopeLabel::Agent);
+        assert_eq!(classify_scope("global"), ScopeLabel::Global);
+    }
+
+    #[test]
+    fn classify_scope_treats_anything_else_as_unknown_not_agent() {
+        // This is the actual bug: an un-upgraded core that never sets `scope`
+        // sends the empty-string default, and that response is store-wide
+        // (the one shape version skew can produce here) -- it must not be
+        // classified the same as a real, agent-scoped response.
+        assert_eq!(classify_scope(""), ScopeLabel::Unknown);
+        assert_eq!(classify_scope("something-else"), ScopeLabel::Unknown);
     }
 }

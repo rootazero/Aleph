@@ -17,6 +17,18 @@ use crate::api::{EvidenceItem, MemoryApi, TraceKind, TraceResult};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
+/// Whether the "notes" section of a trace result should render.
+///
+/// Only for `TraceKind::Raw`: `memory_trace.rs` fills `notes` with
+/// `notes_citing(raw_id)` in that direction (a real relationship — which
+/// notes cite this raw row), but with exactly `[target]` for `TraceKind::Note`
+/// (the note tracing itself). Rendering that under a "cited by" header would
+/// show every note its own path, not evidence about it.
+#[must_use]
+fn show_notes_section(kind: TraceKind, notes_len: usize) -> bool {
+    matches!(kind, TraceKind::Raw) && notes_len > 0
+}
+
 #[component]
 #[must_use]
 pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind) -> impl IntoView {
@@ -57,15 +69,22 @@ pub fn ProvenanceSection(agent: Signal<String>, target: String, kind: TraceKind)
                 }.into_any(),
 
                 Loadable::Ready(res) => {
-                    // The server also answers "which notes did the walk visit"
-                    // (`notes_citing`, for `TraceKind::Raw`) separately from the
-                    // evidence rows themselves — render it too rather than
-                    // dropping a populated response field. Not filtered/deduped:
-                    // whatever the server sent is what shows up here.
+                    // For `TraceKind::Raw`, `notes` is `notes_citing(raw_id)` —
+                    // the notes that cite this raw row, a real relationship the
+                    // user has no other way to see. For `TraceKind::Note` it is
+                    // always exactly `[target]` (the note tracing itself — see
+                    // `memory_trace.rs`'s `TraceKind::Note` arm): rendering that
+                    // verbatim would show every note's own path under this
+                    // header, which is not "which notes cite this" but "what did
+                    // I just ask about". Gate on the direction, not just
+                    // emptiness — mirrors the Delete-verb split elsewhere in this
+                    // console (notes vs. raw use different server calls; this is
+                    // the same "the two directions carry different meaning"
+                    // reasoning applied to a display field).
                     let capped = res.evidence.len() >= TRACE_MAX_RESULTS;
                     let notes = res.notes;
                     let evidence = res.evidence;
-                    let has_notes = !notes.is_empty();
+                    let has_notes = show_notes_section(kind, notes.len());
                     let has_evidence = !evidence.is_empty();
                     view! {
                         <div>
@@ -167,5 +186,31 @@ fn EvidenceRow(item: EvidenceItem, expanded: RwSignal<Option<String>>) -> impl I
                 </pre>
             })}
         </li>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shows_notes_for_raw_direction_when_the_server_returned_some() {
+        // `TraceKind::Raw` is the direction where `notes` carries a real
+        // relationship (`notes_citing`) rather than the target echoed back.
+        assert!(show_notes_section(TraceKind::Raw, 1));
+        assert!(show_notes_section(TraceKind::Raw, 3));
+    }
+
+    #[test]
+    fn hides_notes_for_raw_direction_when_empty() {
+        assert!(!show_notes_section(TraceKind::Raw, 0));
+    }
+
+    #[test]
+    fn hides_notes_for_note_direction_even_when_populated() {
+        // For `TraceKind::Note`, `memory_trace.rs` fills `notes` with exactly
+        // `[target]` -- always non-empty, and always the note tracing itself.
+        // A non-empty count here must not flip this on.
+        assert!(!show_notes_section(TraceKind::Note, 1));
     }
 }

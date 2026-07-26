@@ -180,7 +180,7 @@ pub fn NoteCard(
                     })}
                     <span class="text-[10px] text-text-tertiary font-mono tabular-nums">
                         {move || t_string!(i18n, memory.created).to_string()}" "{created.clone()}
-                        {updated.clone().map(|u| format!(" · {} {u}", t_string!(i18n, memory.updated)))}
+                        {move || updated.clone().map(|u| format!(" · {} {u}", t_string!(i18n, memory.updated)))}
                     </span>
                 </div>
             </div>

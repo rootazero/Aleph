@@ -337,7 +337,7 @@
     "provenance_failed": "证据链加载失败。",
     "provenance_pruned": "已清理",
     "provenance_via": "经由",
-    "provenance_notes": "已遍历的笔记",
+    "provenance_notes": "引用它的笔记",
     "provenance_capped": "仅显示部分证据链，可能还有更多。",
     "connect_to_view_facts": "连接网关以查看编译记忆",
     "connect_to_view_raw": "连接网关以查看原始记忆",

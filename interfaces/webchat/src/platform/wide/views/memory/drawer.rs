@@ -142,6 +142,9 @@ fn NoteDetail(
                             t_string!(i18n, memory.toast_saved).to_string(),
                             ToastKind::Success,
                         );
+                        // The card list's `updated_at` would otherwise sit stale
+                        // until an unrelated refresh; a save changes it for real.
+                        on_mutated.run(());
                     }
                     Err(e) => {
                         is_saving.set(false);
@@ -180,6 +183,12 @@ fn NoteDetail(
                             t_string!(i18n, memory.toast_renamed).to_string(),
                             ToastKind::Success,
                         );
+                        // Without this, the card list still keys off the old
+                        // path: it stays clickable (opening a drawer whose
+                        // `graph.node_detail` fails against the renamed path)
+                        // and selectable (its delete would target a path that
+                        // no longer exists) until an unrelated refresh happens.
+                        on_mutated.run(());
                     }
                     Err(e) => {
                         is_saving.set(false);

@@ -337,7 +337,7 @@
     "provenance_failed": "Couldn't load the evidence chain.",
     "provenance_pruned": "pruned",
     "provenance_via": "via",
-    "provenance_notes": "Notes visited",
+    "provenance_notes": "Cited by",
     "provenance_capped": "Showing only part of the evidence chain; there may be more.",
     "connect_to_view_facts": "Connect to Gateway to view note memory",
     "connect_to_view_raw": "Connect to Gateway to view raw memory",
