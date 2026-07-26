@@ -468,6 +468,34 @@ plus those two. Since `subagent` spawns a differently-scoped agent, treat
 surface from it would be keyword matching, which P8 forbids. Declaration is
 explicit or absent.
 
+**Built-in templates: two declare, two do not.** `strategy-room` (moderator +
+bull/bear/contrarian) and `code-review` (lead-reviewer + four lens reviewers)
+declare a surface; `software-dev` and `research-paper` deliberately do not.
+Two reasons line up. Fit: the build/run roles genuinely need a broad dev
+surface, and §"Not exhaustive" means guessing narrow is unrecoverable — a
+`tools` list is a `retain`, so an excluded tool cannot be promoted back with
+`tool_search` the way a mode-deferred one can. Blast radius: template member
+ids are **global agent ids**, and the generic ones (`lead`, `backend`,
+`frontend`, `qa`, `pi`, `reviewer`, `analyst`, `writer`) all live in the two
+undeclared templates.
+
+`team_*` is never globbed in a declaration — the family contains
+`team_disband` / `team_create` / `team_from_template` / `team_member_remove`.
+Enumerate `team_status` and `team_delegate`. `task_*` is safe to glob.
+
+For code-review the surface keeps `bash` (reading a diff needs `git diff`) and
+drops `file_write` / `file_edit` / `file_ops` / `apply_patch`. Since bash can
+write, that is attention scoping — it targets the reviewer who "helpfully"
+edits the code it was asked to review, not an attacker.
+
+**When a declaration is dropped.** `provision_member` reuses an existing agent
+by id and skips `tools` entirely (an existing agent keeps its own surface), and
+a `self` leader is the caller's own agent. Both cases are reported:
+`MaterializedTeam.tools_ignored_for` → `TeamFromTemplateOutput.tools_ignored_for`,
+omitted from the output when empty. Guards live in `templates/materialize.rs`
+tests: every built-in role satisfies its contract, only the two reasoning
+templates declare, no reviewer carries an edit tool, nothing globs `team_*`.
+
 #### Live surface: the `team.<id>.*` topic family
 
 Everything the Panel's group-chat view knows in real time arrives on five
