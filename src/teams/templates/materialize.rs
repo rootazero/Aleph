@@ -56,6 +56,13 @@ pub struct MaterializedTeam {
     /// surface a "what got scheduled" report.
     pub task_ids: Vec<(String, String)>,
     pub message: String,
+    /// Member ids whose template `tools` / `tools_denied` declaration had no
+    /// effect — an agent with that id already existed and was reused (or the
+    /// leader is `self`), and an existing agent keeps its own surface.
+    ///
+    /// Silence here would be a lie: the caller asked for a team of narrowed
+    /// members and got something else. Empty in the common case.
+    pub tools_ignored_for: Vec<String>,
 }
 
 /// Materializer execution context. Captures the shared dependencies so callers
@@ -107,6 +114,8 @@ pub async fn materialize_template(
         ("leader", leader_label.as_str()),
     ]);
 
+    let mut tools_ignored_for: Vec<String> = Vec::new();
+
     // --- 1. Resolve / create the leader ---------------------------------
     let leader_id = if tpl.leader.id == LEADER_SELF_ID {
         if req.current_agent_id.is_empty() {
@@ -118,6 +127,16 @@ pub async fn materialize_template(
         if let Some(addendum) = &tpl.leader.prompt_addendum {
             let rendered = substitute(addendum, &vars);
             inject_role_prompt(deps, &req.current_agent_id, "leader", &rendered).await;
+        }
+        if !MemberToolset::new(tpl.leader.tools.clone(), tpl.leader.tools_denied.clone())
+            .is_unrestricted()
+        {
+            info!(
+                leader = %req.current_agent_id,
+                "team_template: leader is `self`; the template's `tools` declaration \
+                 does not apply (the calling agent keeps its own surface)"
+            );
+            tools_ignored_for.push(req.current_agent_id.clone());
         }
         req.current_agent_id.clone()
     } else {
@@ -131,20 +150,24 @@ pub async fn materialize_template(
             tools: tpl.leader.tools.clone(),
             tools_denied: tpl.leader.tools_denied.clone(),
         };
-        provision_member(
+        let provisioned = provision_member(
             deps,
             &pseudo_member,
             &req.current_agent_id,
             &vars,
             MemberContract::Leader,
         )
-        .await?
+        .await?;
+        if provisioned.tools_ignored {
+            tools_ignored_for.push(provisioned.agent_id.clone());
+        }
+        provisioned.agent_id
     };
 
     // --- 2. Resolve / create each worker member -------------------------
     let mut enrolled_members: Vec<String> = Vec::with_capacity(tpl.members.len());
     for m in &tpl.members {
-        let agent_id = provision_member(
+        let provisioned = provision_member(
             deps,
             m,
             &req.current_agent_id,
@@ -152,7 +175,10 @@ pub async fn materialize_template(
             MemberContract::Worker,
         )
         .await?;
-        enrolled_members.push(agent_id);
+        if provisioned.tools_ignored {
+            tools_ignored_for.push(provisioned.agent_id.clone());
+        }
+        enrolled_members.push(provisioned.agent_id);
     }
 
     // --- 3. Create team record -------------------------------------------
@@ -275,6 +301,7 @@ pub async fn materialize_template(
         member_ids: enrolled_members,
         task_ids,
         message,
+        tools_ignored_for,
     })
 }
 
@@ -349,6 +376,14 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
     Ok(out)
 }
 
+/// Outcome of resolving one template member to a live agent id.
+struct ProvisionedMember {
+    agent_id: String,
+    /// The spec declared a tool surface that had no effect, because an
+    /// existing agent was reused.
+    tools_ignored: bool,
+}
+
 /// Look up an agent by id; if missing, create it inline with the given
 /// prompt addendum.
 ///
@@ -362,7 +397,7 @@ async fn provision_member(
     caller_agent_id: &str,
     vars: &HashMap<&str, &str>,
     contract: MemberContract,
-) -> Result<String, TeamTemplateError> {
+) -> Result<ProvisionedMember, TeamTemplateError> {
     // Reuse existing agent when present.
     if deps.registry.get(&member.id).await.is_some() {
         if let Some(addendum) = &member.prompt_addendum {
@@ -370,7 +405,19 @@ async fn provision_member(
             let role = member.role.as_deref().unwrap_or("worker");
             inject_role_prompt(deps, &member.id, role, &rendered).await;
         }
-        return Ok(member.id.clone());
+        let declared = !MemberToolset::new(member.tools.clone(), member.tools_denied.clone())
+            .is_unrestricted();
+        if declared {
+            info!(
+                member = %member.id,
+                "team_template: reusing an existing agent; the template's `tools` \
+                 declaration does not apply (an existing agent keeps its own surface)"
+            );
+        }
+        return Ok(ProvisionedMember {
+            agent_id: member.id.clone(),
+            tools_ignored: declared,
+        });
     }
 
     // Create inline. Mirrors team_create::create_inline_agent's I/O steps but
@@ -477,7 +524,10 @@ async fn provision_member(
     .await
     .map_err(TeamTemplateError::Materialize)?;
 
-    Ok(member.id.clone())
+    Ok(ProvisionedMember {
+        agent_id: member.id.clone(),
+        tools_ignored: false,
+    })
 }
 
 /// Append a team-strategy section to an existing agent's SOUL.md,
