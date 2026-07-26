@@ -89,8 +89,9 @@ pub fn Memory() -> impl IntoView {
     Effect::new(move || {
         if state.is_connected.get() {
             let state = state;
+            let agent = mem.agent_id.get();
             leptos::task::spawn_local(async move {
-                if let Ok(s) = MemoryApi::stats(&state).await {
+                if let Ok(s) = MemoryApi::stats(&state, &agent).await {
                     stats.set(Some(s));
                 }
             });
@@ -106,7 +107,8 @@ pub fn Memory() -> impl IntoView {
             let agent = mem.agent_id.get();
             leptos::task::spawn_local(async move {
                 notes_loaded.set(false);
-                if let Ok(facts) = MemoryApi::list_facts(&state, &agent, Some(NOTE_WINDOW), 0).await
+                if let Ok((facts, _total)) =
+                    MemoryApi::list_facts(&state, &agent, NOTE_WINDOW, 0).await
                 {
                     notes_window.set(facts);
                 }
@@ -129,9 +131,8 @@ pub fn Memory() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 is_searching.set(true);
                 raw_loaded.set(false);
-                if let Ok(results) =
-                    MemoryApi::search(&state, &agent, query, Some(PAGE_SIZE), page * PAGE_SIZE)
-                        .await
+                if let Ok((results, _total)) =
+                    MemoryApi::browse_raw(&state, &agent, query, PAGE_SIZE, page * PAGE_SIZE).await
                 {
                     raw_memories.set(results);
                 }
@@ -193,14 +194,14 @@ pub fn Memory() -> impl IntoView {
     let refresh_raw = move || {
         let state = state;
         leptos::task::spawn_local(async move {
-            if let Ok(s) = MemoryApi::stats(&state).await {
+            let agent = mem.agent_id.get_untracked();
+            if let Ok(s) = MemoryApi::stats(&state, &agent).await {
                 stats.set(Some(s));
             }
             let page = raw_page.get_untracked();
             let query = applied_query.get_untracked();
-            let agent = mem.agent_id.get_untracked();
-            if let Ok(results) =
-                MemoryApi::search(&state, &agent, query, Some(PAGE_SIZE), page * PAGE_SIZE).await
+            if let Ok((results, _total)) =
+                MemoryApi::browse_raw(&state, &agent, query, PAGE_SIZE, page * PAGE_SIZE).await
             {
                 if results.is_empty() && page > 0 {
                     raw_page.set(page - 1);
@@ -298,13 +299,13 @@ pub fn Memory() -> impl IntoView {
                 <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_nodes)}</span>
                     <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().map(|s| s.total_graph_nodes.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
+                        {move || stats.get().and_then(|s| s.total_graph_nodes).map(|n| n.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
                     </span>
                 </Card>
                 <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_edges)}</span>
                     <span class="text-3xl font-bold font-mono">
-                        {move || stats.get().map(|s| s.total_graph_edges.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
+                        {move || stats.get().and_then(|s| s.total_graph_edges).map(|n| n.to_string()).unwrap_or_else(|| "\u{2014}".to_string())}
                     </span>
                 </Card>
             </div>
@@ -613,7 +614,7 @@ fn RawTable(
                                         let entry_id_sel = entry.id.clone();
                                         let entry_id_toggle = entry.id.clone();
                                         let agent_id = entry.agent_id.clone();
-                                        let content = entry.content.clone();
+                                        let content = entry.display_text();
                                         let entry_for_open = entry.clone();
                                         let on_open = on_open.clone();
                                         let on_delete = on_delete.clone();

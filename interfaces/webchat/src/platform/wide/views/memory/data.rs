@@ -270,8 +270,11 @@ mod tests {
             content: "c".into(),
             fact_type: cat.into(),
             created_at: 0,
+            updated_at: 0,
             category: cat.into(),
             path: format!("{cat}/x"),
+            tags: Vec::new(),
+            link_count: 0,
         }
     }
 
@@ -282,8 +285,11 @@ mod tests {
             content: "c".into(),
             fact_type: cat.into(),
             created_at: 0,
+            updated_at: 0,
             category: cat.into(),
             path: p.into(),
+            tags: Vec::new(),
+            link_count: 0,
         }
     }
 
@@ -353,8 +359,11 @@ mod tests {
             content: content.into(),
             fact_type: "preference".into(),
             created_at: 0,
+            updated_at: 0,
             category: "preference".into(),
             path: content.into(),
+            tags: Vec::new(),
+            link_count: 0,
         }
     }
 

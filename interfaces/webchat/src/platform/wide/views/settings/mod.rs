@@ -97,7 +97,7 @@ pub fn Settings() -> impl IntoView {
             }
 
             // Step 3 — memory backend online (any stat row returns).
-            match MemoryApi::stats(&state).await {
+            match MemoryApi::stats(&state, "main").await {
                 Ok(_) => memory_ready.set(Some(true)),
                 Err(_) => memory_ready.set(Some(false)),
             }

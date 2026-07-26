@@ -1,8 +1,7 @@
 //! Right-side detail drawer for the memory console. Note rows fetch full
 //! markdown + backlinks via `graph.node_detail` and can be edited inline via
 //! `graph.update_note` (mirrors the canvas node detail panel). Raw rows show
-//! their stored Q/A and, when from a search, the similarity score. Pure I/O —
-//! all persistence is JSON-RPC (R4).
+//! their stored Q/A. Pure I/O — all persistence is JSON-RPC (R4).
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -406,20 +405,13 @@ fn navigate_drawer(
 #[component]
 fn RawDetail(raw: RawMemory) -> impl IntoView {
     let i18n = use_i18n();
-    let sim = raw.similarity;
     view! {
         <div>
             <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-2">
                 {t!(i18n, memory.facet_raw)}
             </div>
-            {sim.map(|s| view! {
-                <div class="mb-3 text-xs">
-                    <span class="text-text-tertiary">{t!(i18n, memory.similarity)}": "</span>
-                    <span class="font-mono text-primary">{format!("{s:.3}")}</span>
-                </div>
-            })}
             <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary font-sans">
-                {raw.content}
+                {raw.display_text()}
             </pre>
         </div>
     }

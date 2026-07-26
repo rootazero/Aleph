@@ -221,7 +221,7 @@ pub fn Home() -> impl IntoView {
             let state_clone = state;
             leptos::task::spawn_local(async move {
                 // Fetch memory stats
-                match MemoryApi::stats(&state_clone).await {
+                match MemoryApi::stats(&state_clone, "main").await {
                     Ok(stats) => memory_stats.set(Some(Some(stats))),
                     Err(_) => memory_stats.set(Some(None)),
                 }
@@ -365,8 +365,8 @@ pub fn Home() -> impl IntoView {
         let state = state;
         leptos::task::spawn_local(async move {
             web_sys::console::log_1(&"Exporting memory...".into());
-            match MemoryApi::list_facts(&state, "main", Some(1000), 0).await {
-                Ok(facts) => {
+            match MemoryApi::list_facts(&state, "main", 1000, 0).await {
+                Ok((facts, _total)) => {
                     let export_data = serde_json::json!({
                         "export_type": "memory_facts",
                         "exported_at": js_sys::Date::new_0().to_iso_string().as_string(),
@@ -538,7 +538,7 @@ pub fn Home() -> impl IntoView {
                 </StatCard>
                 <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.memory_vault).to_string()) value=Signal::derive(move || {
                     match memory_stats.get() {
-                        Some(Some(ref stats)) => format!("{} entries", stats.total_facts + stats.total_memories + stats.total_graph_nodes),
+                        Some(Some(ref stats)) => format!("{} entries", stats.total_facts + stats.total_memories + stats.total_graph_nodes.unwrap_or(0)),
                         Some(None) => "\u{2014}".to_string(),
                         None => "\u{2014}".to_string(),
                     }
