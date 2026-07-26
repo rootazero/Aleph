@@ -724,118 +724,143 @@ The prompt system lives entirely in `src/thinker/`. The sole public entry point 
 // agent-dir SOUL.md (persona), AGENTS.md (project context), etc. ride in via
 // `with_identity_files`; `SoulLayer` / `ProfileLayer` render them.
 let builder = PromptBuilder::new(config).with_identity_files(identity_files);
-let prompt = builder.build_system_prompt(&tools);
 
 // Production main-loop entry point — two-part split (cacheable stable prefix +
 // per-request dynamic suffix) on `AssemblyPath::Cached`. This is what the
 // harness bridge calls.
 let parts = builder.build_system_prompt_cached_with_mode(&tools, mode);
 
-// Sub-agent usage
-let prompt = builder.build_for_agent_basic(&agent_def, &tools);
-
-// Context-aware (channel paradigm + security envelope)
-let prompt = builder.build_system_prompt_with_context(&resolved_context);
+// Sub-agent inline prompt — one flat string, no cache split, on
+// `AssemblyPath::Basic`. This is what `subagent_spawner` calls.
+let prompt = builder.build_system_prompt(&tools);
 ```
 
-> The legacy `SoulManifest`→prompt builders (`build_system_prompt_with_soul` /
-> `build_for_agent` / `build_with_budget` / `build_system_prompt_with_mode` /
-> `build_system_prompt_with_full_context`) were removed together with the dead
-> System-B identity injection. Identity now flows exclusively from the
-> agent-dir files threaded via `with_identity_files`; the `SoulManifest` struct
-> survives only as the parser behind the `identity.get` RPC.
+> **Two entry points, two assembly paths, and nothing else.** The legacy
+> `SoulManifest`→prompt builders (`build_system_prompt_with_soul` /
+> `build_for_agent` / `build_for_agent_basic` / `build_with_budget` /
+> `build_system_prompt_with_mode` / `build_system_prompt_with_full_context` /
+> `build_system_prompt_with_context`) and the fork-snapshot cluster
+> (`capture_snapshot` / `execute_stable_only` / `build_from_snapshot`) were all
+> removed as dead entry points. Identity flows exclusively from the agent-dir
+> files threaded via `with_identity_files`; the `SoulManifest` struct survives
+> only as the parser behind the `identity.get` RPC.
 
-### 29 Layers (sorted by priority)
+### Layers
 
-**Stable zone** — content rarely changes, eligible for section-level caching (priorities 50–1600):
+**The registration block in `PromptPipeline::default_layers()` is the only
+authoritative list** — layer set, priorities, and assembly order all live there,
+and each layer self-declares its `priority()`, `stability()`, `paths()` and
+`supports_mode()`. This document deliberately does **not** reproduce that list.
 
-| Priority | Layer | Notes |
-|----------|-------|-------|
-| 50 | `SoulLayer` | Renders agent-dir SOUL.md (identity / personality); participates in the live `Cached` main-loop path |
-| 55 | `AgentRoleLayer` | Sub-agent role header + protocol blocks (NEW) |
-| 75 | `ProfileLayer` | Workspace profile overlay |
-| 100 | `RoleLayer` | Base assistant role |
-| 300 | `EnvironmentLayer` | OS, date, working directory |
-| 400 | `RuntimeCapabilitiesLayer` | Python, Node.js, FFmpeg, etc. |
-| 500 | `ToolsLayer` | Tool definitions (text schema) |
-| 501 | `HydratedToolsLayer` | Semantic-retrieval tool definitions |
-| 550 | `ToolUsageGrammarLayer` | Data-driven tool usage conventions (NEW) |
-| 600 | `SecurityLayer` | Safety / security guidelines |
-| 700 | `ProtocolTokensLayer` | JSON-RPC protocol tokens |
-| 710 | `HeartbeatLayer` | Session keep-alive instructions |
-| 800 | `OperationalGuidelinesLayer` | Operational rules |
-| 900 | `CitationStandardsLayer` | Citation formatting |
-| 1000 | `GenerationModelsLayer` | Available image/video/audio models |
-| 1050 | `SkillInstructionsLayer` | Active skill instructions |
-| 1100 | `SpecialActionsLayer` | Special action syntax |
-| 1200 | `ResponseFormatLayer` | Response structure |
-| 1300 | `GuidelinesLayer` | General guidelines |
-| 1350 | `ThinkingGuidanceLayer` | Structured reasoning guidance |
-| 1400 | `SkillModeLayer` | Strict skill workflow enforcement |
-| 1500 | `CustomInstructionsLayer` | User custom instructions |
-| 1600 | `LanguageLayer` | Response language |
+A hand-maintained priority table used to live here, and by 2026-07-26 it named
+eight layers that no longer existed (`HydratedToolsLayer`, `HeartbeatLayer`,
+`ResponseFormatLayer`, `SkillModeLayer`, `InboundContextLayer`,
+`MemoryAugmentationLayer`, and more), three assembly paths that had been
+deleted, and a `TokenBudget` mechanism that had been replaced. The same table
+was removed from `prompt_pipeline.rs` years earlier for the same reason. A
+duplicated list of a thing that changes is a list that will be wrong.
 
-**Dynamic zone** — per-request, never cached (priorities 1700–1750):
+To see the current set, with sizes, run:
 
-| Priority | Layer | Notes |
-|----------|-------|-------|
-| 1700 | `InboundContextLayer` | Sender, channel, session metadata |
-| 1710 | `VoiceModeLayer` | Voice-specific response instructions |
-| 1720 | `RuntimeContextLayer` | Current time, session info |
-| 1730 | `IdentityFilesLayer` | SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, HEARTBEAT.md identity files |
-| 1740 | `MemoryAugmentationLayer` | Dual-path memory injection (ENHANCED) |
-| 1750 | `SessionContextGuideLayer` | Compressed session context guidance |
+```bash
+aleph-server prompt-size --path cached --paradigm background
+```
+
+It prints every contributing layer (bytes / chars / tokens / zone / priority)
+plus, by name, every layer that stayed silent and why that is possible.
+
+**Invariants** (each locked by a test, not by prose):
+
+| Invariant | Guard |
+|---|---|
+| Priorities are unique and ascending | `default_layers_have_unique_priorities`, `test_default_layers_sorted` |
+| Every Stable layer precedes every Dynamic one (this boundary *is* the prompt-cache breakpoint) | `stable_layers_come_before_dynamic` |
+| Stable + Dynamic concatenate back to the full assembly | `stable_plus_dynamic_reconstructs_full` |
+| Every layer can actually speak in production, or is declared conditionally-silent with a reason | `prompt_contract::reachable_layers` |
+| The fixed scaffold does not grow | `prompt_contract::scaffold_bytes_ratchet` |
+| No sentence is emitted by two layers | `prompt_contract::no_sentence_is_stated_twice` |
 
 ### Assembly Paths
 
-Each layer declares which paths it participates in; the pipeline filters by path at assembly time:
+Exactly one variant per entry point — a path no caller requests is a trap,
+because a layer listing only that path renders nowhere and the omission is
+invisible. Three such phantoms (`Context`, `Hydration`, `Soul`) have been
+removed for precisely that reason.
 
-| Path | Description |
+| Path | Entry point |
 |------|-------------|
-| `Basic` | Minimal — config + tool list only |
-| `Hydration` | Tools come from semantic retrieval (`HydrationResult`) |
-| `Soul` | Soul-enriched — includes identity / personality |
-| `Context` | Context-aware — uses `ResolvedContext` |
-| `Cached` | Pre-cached stable prefix |
+| `Basic` | `build_system_prompt` — sub-agent inline prompt, one flat string |
+| `Cached` | `build_system_prompt_cached_with_mode` — main loop, stable/dynamic split |
 
 ### Prompt Modes
 
+`[execution] prompt_mode` picks the verbosity tier; each layer opts out via
+`supports_mode()`.
+
 | Mode | Behavior |
 |------|----------|
-| `Full` (default) | All 29 layers participate |
-| `Compact` | Excludes 14 heavy layers (runtime_context, environment, runtime_capabilities, protocol_tokens, heartbeat, operational_guidelines, citation_standards, generation_models, skill_instructions, special_actions, guidelines, thinking_guidance, skill_mode, poe_success_criteria) |
-| `Minimal` | Only 5 core layers: soul, tools, hydrated_tools, response_format, language |
+| `Full` (default) | Every layer participates |
+| `Compact` | Sheds the heavy guidance layers (see `compact_mode_excludes_heavy_layers`) |
+| `Minimal` | Persona / curated memory / language only (see `minimal_mode_only_core_layers`) |
 
 ### Stable-Prefix Reuse
 
-The prompt is partitioned by each layer's `LayerStability` into a cacheable **Stable** prefix (persona, tools, security, skills …) and a per-request **Dynamic** suffix (inbound / session / memory / runtime context). Two mechanisms reuse the stable prefix, both keyed by the *actual input* rather than a layer name:
+The prompt is partitioned by each layer's `LayerStability` into a cacheable
+**Stable** prefix (persona, security, skills …) and a per-request **Dynamic**
+suffix (session / memory / runtime context).
+`build_system_prompt_cached_with_mode()` returns
+`[SystemPromptPart { cache: true, .. }, SystemPromptPart { cache: false, .. }]`,
+so the provider (e.g. Anthropic) caches the prefix; the breakpoint sits exactly
+at the Stable→Dynamic boundary.
 
-- **Two-part split** — `PromptBuilder::build_system_prompt_cached_with_mode()` returns `[SystemPromptPart { cache: true, .. }, SystemPromptPart { cache: false, .. }]` so the provider (e.g. Anthropic) caches the stable prefix; the cache breakpoint sits exactly at the Stable→Dynamic boundary.
-- **Fork snapshot** — `capture_snapshot()` records `execute_stable_only()` for a given input; subagents prepend it and rebuild only the dynamic layers via `build_from_snapshot()`.
+A fresh `PromptBuilder` (and pipeline) is constructed per build, so there is no
+in-pipeline mutable cache to invalidate. Layer renders are deterministic
+functions of their inputs, so rebuilding stays byte-stable when nothing changed
+— which is what keeps the provider-side prefix cache warm. (An earlier
+name-keyed `execute_cached()` and a session-level stable-prompt LRU were both
+removed: keyed by layer name with no input fingerprint, they could only ever
+serve stale sections.)
 
-A fresh `PromptBuilder` (and pipeline) is constructed per build, so there is no in-pipeline mutable cache to invalidate. (An earlier name-keyed `execute_cached()` cache was removed: per-build builders meant it never served a cross-call hit, and being keyed by layer name with no input fingerprint it could only ever return stale sections if a builder were reused.)
+**Corollary that governs what may be added:** anything whose bytes change per
+run must NOT enter the system prompt, or it re-keys the whole conversation
+prefix. Per-run content travels as a transient trailing message instead
+(`HarnessDeps::recall_context`). This is why `RuntimeContextLayer` coarsens its
+timestamp to the hour and why per-query memory recall left the prompt entirely.
 
 ### AgentRoleLayer
 
-Replaces the old `prompt_sections::resolve()` function. When `LayerInput.agent_def` is set, this layer injects:
+Replaces the old `prompt_sections::resolve()` function. When
+`LayerInput.agent_def` is set, this layer injects:
 - Role header from `AgentDef.role`
-- Protocol blocks declared in `AgentDef.prompt_sections` (e.g. `explore_constraints`, `coder_guidelines`, `researcher_protocol`, `verify_protocol`, `plan_protocol`)
+- Protocol blocks declared in `AgentDef.prompt_sections` (e.g.
+  `explore_constraints`, `coder_guidelines`, `researcher_protocol`,
+  `verify_protocol`, `plan_protocol`)
 
-### ToolUsageGrammarLayer
+### What belongs in the system prompt
 
-Reads `ToolInfo.usage_hint` fields (`prefer_for`, `prefer_over`) and generates data-driven "use X instead of Y" guidelines for the LLM. No hardcoded conventions — all tool usage rules come from tool definitions.
+Two filters, both enforced by tests rather than by review discipline
+(see [HARNESS_PHILOSOPHY.md §8](HARNESS_PHILOSOPHY.md)):
 
-### MemoryAugmentationLayer (Hybrid Injection)
-
-Supports dual-path memory injection:
-1. **Structured index** — reads `.aleph/MEMORY.md`, truncated to 200 lines
-2. **Vector retrieval** — top-K semantic search results from sqlite-vec (ANN index)
-3. **Wikilink graph** — Obsidian-compatible `[[note]]` links form a traversable knowledge graph; `memory_explore` performs multi-hop Ripple traversal
-4. Includes memory taxonomy guidelines for how to interpret and use memories
+1. **Runtime fact, not instruction.** Time, cwd, active goal, security posture,
+   identity files — things the model cannot know. Not "how to think".
+2. **No single tool owns it.** If one tool owns the sentence, it belongs in that
+   tool's `DESCRIPTION`, which ships with its schema and only reaches requests
+   that can actually call it. The system prompt carries only what no tool can
+   state: cross-tool routing, runtime facts, safety boundaries.
 
 ### TokenBudget
 
-Default `max_total_chars` is 80,000. When the assembled prompt exceeds the budget, lower-priority layers are dropped. Protected priorities (50, 55, 75, 100, 500, 501, 1200) always survive enforcement. `PromptResult` includes `truncation_stats` listing which sections were removed.
+`TokenBudget` caps the assembled prompt in characters (`max_total_chars`,
+window-scaled via `window_char_budget`). Enforcement is `fit_dynamic_suffix`:
+the **stable prefix is a protected floor** and is never trimmed, so the cache
+breakpoint stays valid; only the per-request dynamic suffix is head/tail
+truncated, with a model-visible notice appended. A no-op for prompts under
+budget.
+
+This is an overflow backstop, not a leanness measure — the fixed scaffold is
+two orders of magnitude below the cap, so only
+`prompt_contract::SCAFFOLD_CEILING_BYTES` can detect prompt bloat. See
+FEATURE_LOCATOR §1.2 for the distinction.
 
 ---
 

@@ -16,7 +16,7 @@ Claude Code solves this by injecting skills lists, agent lists, MCP instructions
 ## Design Approach
 
 **Lightweight Catalog + On-Demand Deep-Dive** — consistent with Aleph's existing patterns:
-- ToolsLayer + tool_index (two-stage tool discovery)
+- native `tool_use` schemas + `tool_search` / `get_tool_schema` (progressive tool disclosure)
 - SkillInstructionsLayer + skill_read (deferred loading)
 
 Inject a compact index via prompt layers; provide tools for detailed queries.
@@ -292,17 +292,19 @@ Stable Zone (cached):
   55   AgentRoleLayer
   75   ProfileLayer
   ...
-  500  ToolsLayer
-  505  AgentCatalogLayer          ← NEW (Stable)
-  501  HydratedToolsLayer
+  505  AgentCatalogLayer          ← added by this design (Stable)
   ...
   1050 SkillInstructionsLayer
   ─── cache boundary ───
 Dynamic Zone (per-request):
   1060 McpInstructionsLayer
-  1065 McpToolIndexLayer          ← NEW (Dynamic)
   ...
 ```
+
+> Illustrative, not authoritative — `PromptPipeline::default_layers()` is the
+> only current list, and `aleph-server prompt-size` prints it. (`ToolsLayer` /
+> `HydratedToolsLayer` / `McpToolIndexLayer`, named in the original sketch, have
+> since been deleted.)
 
 AgentCatalogLayer is Stable — agent list doesn't change mid-session. Participates in prompt cache, no extra cost per request.
 

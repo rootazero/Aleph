@@ -181,37 +181,47 @@ fn reachable_layers() {
 ///   3. Would a stronger model still need it next quarter? If not it is a cage,
 ///      and cages get worse as models improve.
 ///
-/// History: 4,904 B measured 2026-07-26 (`aleph-server prompt-size --path
-/// cached --paradigm background`, same shape as the test below). The
-/// pi-leanness round that set it removed 2,597 B net — `special_actions`
-/// 1,234 → 313 and `memory_protocol` 2,938 → 1,187, both by moving per-tool
-/// how-to into the tool `DESCRIPTION`s that already stated it, less 75 B for
-/// the parallel-dispatch fact rescued into `role`.
-const SCAFFOLD_CEILING_BYTES: usize = 4_904;
-
-/// The fixed Background-paradigm scaffold must not grow past the ceiling.
+/// History: 5,140 B measured 2026-07-26 — the **worst paradigm**, WebRich
+/// (`aleph-server prompt-size --path cached --paradigm webrich`); Background,
+/// the daemon default, is 4,904 B. The ceiling is the max rather than one
+/// chosen paradigm because no paradigm dominates: Background alone gets
+/// `protocol_tokens` + `operational_guidelines`, WebRich alone gets
+/// `multi_step_conduct` + `doctor_repair_hint` and a fuller `environment`. Any
+/// fixed pick would let growth hide in the paradigms it does not measure.
 ///
-/// Background is the measurement paradigm: it is the always-on daemon default
-/// and the widest, enabling protocol tokens *and* operational awareness.
+/// The pi-leanness round that set this removed 2,597 B net —
+/// `special_actions` 1,234 → 313 and `memory_protocol` 2,938 → 1,187, both by
+/// moving per-tool how-to into the tool `DESCRIPTION`s that already stated it,
+/// less 75 B for the parallel-dispatch fact rescued into `role`.
+const SCAFFOLD_CEILING_BYTES: usize = 5_140;
+
+/// No paradigm's fixed scaffold may grow past the ceiling.
 #[test]
 fn scaffold_bytes_ratchet() {
     let pipeline = PromptPipeline::default_layers();
     let config = PromptConfig::default();
-    let context = resolve(InteractionParadigm::Background);
-    let input = production_shaped(&config, &context);
 
-    let breakdown = pipeline.layer_breakdown(AssemblyPath::Cached, &input, PromptMode::Full);
-    let total: usize = breakdown.iter().map(|l| l.bytes).sum();
+    let mut worst: Option<(InteractionParadigm, usize, Vec<(&str, usize)>)> = None;
+    for &paradigm in PARADIGMS {
+        let context = resolve(paradigm);
+        let input = production_shaped(&config, &context);
+        let breakdown = pipeline.layer_breakdown(AssemblyPath::Cached, &input, PromptMode::Full);
+        let total: usize = breakdown.iter().map(|l| l.bytes).sum();
+        if worst.as_ref().is_none_or(|(_, w, _)| total > *w) {
+            let mut largest: Vec<(&str, usize)> =
+                breakdown.iter().map(|l| (l.name, l.bytes)).collect();
+            largest.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+            largest.truncate(5);
+            worst = Some((paradigm, total, largest));
+        }
+    }
 
-    let mut largest: Vec<(&str, usize)> = breakdown.iter().map(|l| (l.name, l.bytes)).collect();
-    largest.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
-    largest.truncate(5);
-
+    let (paradigm, total, largest) = worst.expect("PARADIGMS is non-empty");
     assert!(
         total <= SCAFFOLD_CEILING_BYTES,
-        "always-on prompt scaffold grew to {total} B (ceiling {SCAFFOLD_CEILING_BYTES}). \
-         Largest layers: {largest:?}. Answer the three questions documented on \
-         SCAFFOLD_CEILING_BYTES before raising it."
+        "always-on prompt scaffold grew to {total} B under {paradigm:?} \
+         (ceiling {SCAFFOLD_CEILING_BYTES}). Largest layers: {largest:?}. Answer the three \
+         questions documented on SCAFFOLD_CEILING_BYTES before raising it."
     );
 }
 

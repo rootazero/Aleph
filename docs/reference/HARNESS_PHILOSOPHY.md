@@ -306,7 +306,7 @@ dissolution 过程中识别并删除了 **~5,200 行无消费者的死代码**�
 
 ### 8.1 Aleph 的落地 (Application)
 
-prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Harness）/ P6（KISS）在**提示词层**的自然延伸。2026-07-20 的**精简轮**把它作用到 [FEATURE_LOCATOR.md §1.1](FEATURE_LOCATOR.md) 的 40 层提示词流水线：
+prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Harness）/ P6（KISS）在**提示词层**的自然延伸。2026-07-20 的**精简轮**把它作用到 [FEATURE_LOCATOR.md §1.1](FEATURE_LOCATOR.md) 的提示词流水线（当时 40 层，2026-07-26 后为 35）：
 
 - 测得 Aleph 曾向 Claude **无差别注入 ~4,500 token 手写手册**（如何思考/跑循环/验证/收尾/说话/自我配速），对齐到 hermes 的 lean-Claude 基线（~1,100 token）。
 - 删 5 份子代理 playbook + **VERDICT 输出模板笼子**、loop-mechanics 规则、持久化教条、few-shot 措辞；**保留**全部运行时事实、协议 token、安全铁律，以及用户明确要求的 D4 确认契约。
@@ -314,6 +314,25 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 - 熵减 **−533 行**、层数 **40→39**、alephcore lib **13905 测试绿**。
 
 **判定尺（加 prompt 字节前必答）**：这是模型**做不到的运行时事实**（时间/cwd/工具 schema/活跃目标/身份文件/安全上下文），还是我在**教强模型怎么思考**？前者=脚手架，保留；后者=枷锁，删或迁进架构。
+
+### 8.2 第二把尺：工具语义住在工具里 (pi 之镜，2026-07-26)
+
+第一轮砍的是"手写手册"。但砍完之后仍然剩下一类膨胀，**它长得不像手册，所以第一把尺量不出来**：一段完全正确、完全必要、只是**放错了地方**的文字。
+
+参考项目 [pi](https://github.com/badlogic/pi)（`packages/coding-agent/src/core/system-prompt.ts`，162 行，实际发给模型 ~15 行散文）把这条规律做到了极致：**system prompt 里每个工具只占一行摘要，而且只有 caller 显式给了这一行时才出现**；工具怎么用、参数什么意思、失败了怎么恢复——全部住在工具自己的 description 与 schema 里。skills 同理，只给 name/description/location 三元组，用到时才读全文。
+
+对照下来 Aleph 有两处典型违反，都是**逐句重复**（部分甚至一字不差）：
+
+| 系统提示词里的段落 | 真正的单一真源 |
+|---|---|
+| `special_actions` 的 `## Self-correction Logging`（何时调用 / 三个参数 / low·med·high·critical 阶梯 / D4 确认契约） | `FlagUserCorrectionTool::DESCRIPTION` + `FlagUserCorrectionArgs` 字段文档 |
+| `memory_protocol` 三分之二篇幅（HOT tier 定位 / 满了要 demote / D4 确认契约 / 软拒绝恢复） | `RememberTool::DESCRIPTION` |
+
+两处都是**每个请求都付费**，而且是**漂移源**——D4 确认契约一度同时存在于 4 个地方。处置不是删语义，而是**归位**：跨工具的取舍（目的地阶梯）留在 prompt，单个工具的语义回到那个工具的 `DESCRIPTION`（它随 schema 一起发，而且只发给真能调它的请求）。`memory_protocol` 从 ~1,150 token 降到 ~336，语义零丢失。
+
+**第二把尺（与第一把并用）**：这句话**有没有一个工具拥有它**？有 → 写进那个工具的 `DESCRIPTION`，不要写进 system prompt。system prompt 只承载**没有任何单个工具能说出口的东西**：跨工具取舍、运行时事实、安全边界。
+
+同轮还确认了一件事：**"这一层写得对不对"和"这一层根本会不会说话"是两个问题，而单层的单元测试只能回答前一个**——层的测试会精确构造出让它开口的输入，所以生产里没人喂的层照样全绿。故把两把尺**建进架构**（§8 主旨的自指应用）：`thinker::prompt_contract` 的 `reachable_layers`（每层必须在某个 paradigm 下开口，否则必须带理由进 `CONDITIONALLY_SILENT` 白名单）、`scaffold_bytes_ratchet`（实测棘轮，只减不增）、`no_sentence_is_stated_twice`（跨层重复句守卫）。本轮实测：Background **4,904 B / ~1,428 token**（此前 7,501 B），棘轮取五个 paradigm 的最大值 **5,140 B**（WebRich），层数 **40→35**。
 
 ---
 
