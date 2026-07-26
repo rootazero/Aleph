@@ -111,6 +111,13 @@ impl Default for SearchParams {
 /// filenames dressed as conversation records and the row delete button targeted
 /// `delete_raw_memory` with a note path (always `Ok(false)` → error → swallowed).
 /// Note search belongs to `graph.search`; keep it there.
+///
+/// The response carries `total`, the row count under the *same* `(agent_id,
+/// query)` filter as `memories` (via [`MemoryBackend::count_raw_memories`]),
+/// not the whole-store total. The panel's pager sizes itself from this field;
+/// a store-wide total would leave "next" enabled past the last match once a
+/// query narrows the list — the B4 phantom-page bug, resurrected for the
+/// filtered case.
 pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: SearchParams = request
         .params
@@ -131,33 +138,50 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(str::trim)
         .filter(|q| !q.is_empty());
 
-    match db.get_raw_memories_dashboard(
+    let memories = match db.get_raw_memories_dashboard(
         Some(agent_id),
         query,
         params.limit as usize,
         params.offset as usize,
     ) {
-        Ok(memories) => {
-            let entries: Vec<MemoryEntry> = memories
-                .into_iter()
-                .map(|m| MemoryEntry {
-                    id: m.id,
-                    agent_id: m.agent_id,
-                    window_title: String::new(),
-                    user_input: m.content,
-                    ai_output: String::new(),
-                    session_id: m.session_id,
-                    timestamp: m.created_at,
-                })
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "memories": entries }))
+        Ok(memories) => memories,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Search raw memories failed: {e}"),
+            )
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Search raw memories failed: {e}"),
-        ),
-    }
+    };
+
+    // Same (agent_id, query) as the list above, so `total` describes exactly
+    // that filtered set — not the whole store. A pager sized to the store
+    // total would keep "next" enabled past the last match (B4 phantom-page,
+    // resurrected for the filtered case).
+    let total = match db.count_raw_memories(Some(agent_id), query) {
+        Ok(total) => total,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Count raw memories failed: {e}"),
+            )
+        }
+    };
+
+    let entries: Vec<MemoryEntry> = memories
+        .into_iter()
+        .map(|m| MemoryEntry {
+            id: m.id,
+            agent_id: m.agent_id,
+            window_title: String::new(),
+            user_input: m.content,
+            ai_output: String::new(),
+            session_id: m.session_id,
+            timestamp: m.created_at,
+        })
+        .collect();
+    JsonRpcResponse::success(request.id, json!({ "memories": entries, "total": total }))
 }
 
 // ============================================================================
@@ -1093,5 +1117,76 @@ mod search_tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    /// B4 phantom-page regression, filtered case: `total` must be the
+    /// FILTERED row count (`count_raw_memories(agent, query)`), not the
+    /// whole-store count and not the page size. Seed count (5) and match
+    /// count (2) are deliberately different numbers so a store-total
+    /// implementation cannot pass by coincidence, and the page is capped
+    /// below the match count so `memories.len()` can't be mistaken for it
+    /// either.
+    #[tokio::test]
+    async fn total_reflects_filtered_count_not_store_count() {
+        let db = db();
+
+        for (i, content) in [
+            "apple pie recipe",
+            "banana bread recipe",
+            "apple crumble recipe",
+            "cherry tart recipe",
+            "date squares recipe",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let raw = RawMemory {
+                id: format!("raw-{i}"),
+                content: content.to_string(),
+                source: RawMemorySource::Transcript,
+                agent_id: "main".to_string(),
+                session_id: None,
+                path: None,
+                layer: None,
+                attachment_text: None,
+                is_processed: false,
+                created_at: 1_700_000_000 + i as i64,
+            };
+            db.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "apple",
+                "limit": 1
+            })),
+            db.clone(),
+        )
+        .await;
+
+        let result = resp.result.expect("success");
+        assert_eq!(
+            result["memories"].as_array().unwrap().len(),
+            1,
+            "page is capped by limit"
+        );
+        assert_eq!(
+            result["total"], 2,
+            "total must be the filtered count (2 rows contain 'apple'), not \
+             the store total (5 seeded) and not the page size (1)"
+        );
+
+        // Empty query: total covers all (non-telemetry) rows.
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+        assert_eq!(resp.result.expect("success")["total"], 5);
     }
 }
