@@ -13,6 +13,7 @@ pub mod data;
 mod drawer;
 mod facets;
 mod pager;
+mod toast;
 
 use data::{
     bucket_counts, facet_slice, format_ts, locate_note, page_slice, MemoryFacet, NOTE_WINDOW,
