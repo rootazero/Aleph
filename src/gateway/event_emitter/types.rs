@@ -387,6 +387,11 @@ pub struct RunSummary {
     pub tool_summaries: Vec<ToolSummaryItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<ToolErrorItem>,
+    /// Terminal state of the session's execution list (todo/plan). Mirrors
+    /// `aleph_protocol::RunSummary::plan`; see that field for why it is
+    /// authoritative rather than decorative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<aleph_protocol::plan::PlanSnapshot>,
 }
 
 /// Tool execution summary item

@@ -5,12 +5,12 @@
 
 use leptos::prelude::*;
 
-use super::plan::{PlanItemStatusView, PlanView};
+use super::plan::{archive_summary, PlanItemStatusView, PlanView};
 
 #[component]
 pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
     let expanded = RwSignal::new(false);
-    let (glyph, label) = plan.archive_summary();
+    let (glyph, label) = archive_summary(&plan);
     let objective = plan.objective.clone().unwrap_or_default();
     let complete = plan.complete;
     let items = StoredValue::new(plan.items.clone());
@@ -26,11 +26,15 @@ pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
             <Show when=move || expanded.get()>
                 <ul class="aleph-plan-cap-rows">
                     <For
-                        each=move || items.get_value()
-                        key=|it| (it.text.clone(), it.status.clone())
-                        let:it
+                        // Index, not (text, status): a plan may legitimately
+                        // repeat a step's wording, and this archived list is
+                        // immutable so positions never shift.
+                        each=move || items.get_value().into_iter().enumerate()
+                        key=|(i, _)| *i
+                        let:entry
                     >
                         {
+                            let it = entry.1;
                             let (cls, mark) = match it.status {
                                 PlanItemStatusView::Completed => ("done", "✓"),
                                 PlanItemStatusView::InProgress => ("active", "◗"),

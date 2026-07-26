@@ -206,7 +206,7 @@ pub struct ResolvedContext {
     pub sandbox_summary: Option<crate::sandbox::SandboxSummary>,
     /// Compact progress snapshot of the session's active scratchpad
     /// execution list (objective + checklist + current step), rendered by
-    /// `ExecutionPlanLayer` (priority 1755) as `<execution_plan>`. Populated
+    /// `ExecutionPlanLayer` (priority 1756) as `<execution_plan>`. Populated
     /// by the orchestrator from `scratchpad_registry::active` before prompt
     /// assembly so the live plan stays in context across long tool-only
     /// stretches where the model never re-calls the `scratchpad` tool —
@@ -216,12 +216,12 @@ pub struct ResolvedContext {
     #[serde(skip, default)]
     pub execution_plan: Option<String>,
     /// Active standing-goal summary, rendered by `StandingGoalLayer`
-    /// (priority 1754) as `<standing_goal>`. Populated from `GoalStore` in
+    /// (priority 1755) as `<standing_goal>`. Populated from `GoalStore` in
     /// the harness bridge; `None` (no active goal) emits nothing.
     #[serde(skip, default)]
     pub standing_goal: Option<String>,
     /// Governance-topology context for a session that is a registered node
-    /// in the loop graph. Rendered by `GraphTopologyLayer` (priority 1753)
+    /// in the loop graph. Rendered by `GraphTopologyLayer` (priority 1754)
     /// as `<loop_graph_context>`. Populated from `LoopGraphStore` in
     /// `harness_bridge::prompt_build`; `None` (the common case) leaves the
     /// prompt byte-identical.
@@ -239,7 +239,7 @@ pub struct ResolvedContext {
     /// the cacheable stable prefix byte-identical.
     #[serde(skip, default)]
     pub strategy: Option<String>,
-    /// Guardrail lines for `StrategyPointerLayer` (priority 1756, Dynamic),
+    /// Guardrail lines for `StrategyPointerLayer` (priority 1757, Dynamic),
     /// rendered from the same `Strategy` via `render_guardrails_only` and
     /// echoed near the read head every turn to fight goal-drift. Populated in
     /// the harness bridge; `None` emits nothing (byte-identical tail).

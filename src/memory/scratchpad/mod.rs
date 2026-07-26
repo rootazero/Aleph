@@ -23,7 +23,7 @@
 //! let manager = ScratchpadManager::with_dir(temp_dir, "session-id");
 //!
 //! manager.initialize(Some("Build auth module")).await?;
-//! manager.set_plan(&["Design API", "Implement", "Test"]).await?;
+//! manager.set_plan(Some("Ship auth"), &[PlanItem::pending("Design API"), PlanItem::pending("Implement")]).await?;
 //! manager.complete_item(0).await?;
 //! ```
 

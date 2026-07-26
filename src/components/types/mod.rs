@@ -23,8 +23,6 @@ pub use parts::{
     FileChangeType,
     FileSnapshot,
     PatchPart,
-    PlanPart,
-    PlanStep,
     ReasoningPart,
     // Core part type enum
     SessionPart,
@@ -32,7 +30,6 @@ pub use parts::{
     StepFinishPart,
     StepFinishReason,
     StepStartPart,
-    StepStatus,
     StepTokenUsage,
     StreamingTextPart,
     SubAgentPart,

@@ -673,6 +673,27 @@ impl ChatState {
         }
     }
 
+    /// Settle the Todo strip at run end — the plan-shaped twin of
+    /// [`Self::reconcile_tools`] + [`Self::settle_orphan_tools`].
+    ///
+    /// Two jobs, in order:
+    /// 1. **Reconcile** against `summary.plan`, the authoritative terminal
+    ///    snapshot the core latches in its own (unbounded, in-process) event
+    ///    drain. The live projection rides the deliberately lossy `agent_trace`
+    ///    mirror, so without this a single dropped `complete_item` frame left
+    ///    the strip stuck at e.g. 2/5 forever with no repair path.
+    /// 2. **Sink a finished plan immediately**, instead of waiting for the next
+    ///    run to start. A completed list has nothing left to steer, and leaving
+    ///    it mounted kept a pulsing "current step" row on screen across the
+    ///    user's next message.
+    ///
+    /// An unfinished plan deliberately stays mounted: the objective is still
+    /// open and the user should keep seeing what is left.
+    pub fn settle_plan(&self, summary_plan: Option<&PlanView>) {
+        self.apply_plan_update(super::plan::plan_settlement(summary_plan));
+        self.archive_active_plan(ArchiveGate::Completed);
+    }
+
     /// Which sink trigger is calling — decides the archive gate.
     pub fn archive_active_plan(&self, gate: ArchiveGate) {
         let Some(p) = self.plan.get_untracked() else {
@@ -1273,6 +1294,7 @@ impl ChatState {
             run_costs: self.run_costs.get_untracked(),
             session_exec_tier: self.session_exec_tier.get_untracked(),
             session_mode: self.session_mode.get_untracked(),
+            plan: self.plan.get_untracked(),
         }
     }
 
@@ -1305,10 +1327,14 @@ impl ChatState {
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).
         self.context_usage.set(snap.context_usage);
-        // Ephemeral (not in the snapshot): reset so the outgoing tab's
-        // collapse choices / Todo panel don't leak into the restored session.
+        // The execution list belongs to the conversation, so it rides the
+        // snapshot: it used to be blanked here, which meant switching tabs and
+        // back — even mid-run — silently destroyed the Todo strip until the
+        // model happened to touch the scratchpad again.
+        self.plan.set(snap.plan);
+        // Collapse choices stay ephemeral: they are view state about rows that
+        // may not even exist in the restored transcript.
         self.strip_open.set(std::collections::HashMap::new());
-        self.plan.set(None);
         // Team mode is ephemeral (not in the snapshot, re-entered via compose) —
         // reset so the outgoing tab's team view/routing never leaks into the
         // restored single-agent session across a tab swap or close.
@@ -1346,6 +1372,9 @@ pub struct SessionSnapshot {
     /// Per-session usage-mode override (mode pill) — same carrier contract as
     /// `session_exec_tier`.
     pub session_mode: Option<String>,
+    /// The session's live execution list, so the Todo strip survives a tab
+    /// swap the same way the context gauge and per-run costs do.
+    pub plan: Option<PlanView>,
 }
 
 #[cfg(test)]
@@ -1772,6 +1801,108 @@ mod step_tests {
         assert!(
             chat.context_usage.get_untracked().is_none(),
             "restoring an empty snapshot must leave the gauge hidden"
+        );
+    }
+
+    fn plan_of(items: &[(&str, super::super::plan::PlanItemStatusView)], complete: bool) -> PlanView {
+        PlanView {
+            objective: Some("Ship".into()),
+            items: items
+                .iter()
+                .map(|(t, s)| super::super::plan::PlanItemView {
+                    text: (*t).into(),
+                    status: *s,
+                })
+                .collect(),
+            complete,
+        }
+    }
+
+    #[test]
+    fn plan_survives_a_tab_swap() {
+        use super::super::plan::PlanItemStatusView::{InProgress, Pending};
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.apply_plan_update(PlanUpdate::Show(plan_of(
+            &[("a", InProgress), ("b", Pending)],
+            false,
+        )));
+
+        // Tab swap = capture outgoing → restore incoming.
+        let snap = chat.capture_snapshot();
+        chat.plan.set(None);
+        chat.restore_from(snap);
+
+        let restored = chat.plan.get_untracked().expect("plan rides the snapshot");
+        assert_eq!(restored.current_step(), Some("a"));
+
+        // A fresh tab still shows nothing.
+        chat.restore_from(SessionSnapshot::default());
+        assert!(chat.plan.get_untracked().is_none());
+    }
+
+    #[test]
+    fn settle_plan_reconciles_a_stale_live_checklist() {
+        use super::super::plan::PlanItemStatusView::{Completed, InProgress, Pending};
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        // Live projection lost the last two ticks (dropped agent_trace frames).
+        chat.apply_plan_update(PlanUpdate::Show(plan_of(
+            &[("a", Completed), ("b", InProgress), ("c", Pending)],
+            false,
+        )));
+
+        let authoritative = plan_of(&[("a", Completed), ("b", Completed), ("c", Completed)], true);
+        chat.settle_plan(Some(&authoritative));
+
+        // Complete → sunk into the transcript, strip cleared.
+        assert!(
+            chat.plan.get_untracked().is_none(),
+            "a finished plan sinks at run end instead of staying mounted"
+        );
+        let archived = chat.messages.with_untracked(|m| {
+            m.iter()
+                .filter_map(|x| x.plan_archive.clone())
+                .last()
+                .expect("an archive capsule")
+        });
+        assert_eq!(archived.done_count(), 3, "the sunk capsule shows 3/3, not 1/3");
+    }
+
+    #[test]
+    fn settle_plan_keeps_an_unfinished_list_mounted() {
+        use super::super::plan::PlanItemStatusView::{Completed, Pending};
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.apply_plan_update(PlanUpdate::Show(plan_of(
+            &[("a", Completed), ("b", Pending)],
+            false,
+        )));
+        chat.settle_plan(Some(&plan_of(&[("a", Completed), ("b", Pending)], false)));
+        assert!(
+            chat.plan.get_untracked().is_some(),
+            "the objective is still open — the user must keep seeing what is left"
+        );
+    }
+
+    #[test]
+    fn settle_plan_without_a_summary_leaves_the_live_plan_alone() {
+        use super::super::plan::PlanItemStatusView::{Completed, Pending};
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.apply_plan_update(PlanUpdate::Show(plan_of(
+            &[("a", Completed), ("b", Pending)],
+            false,
+        )));
+        chat.settle_plan(None);
+        assert_eq!(
+            chat.plan.get_untracked().map(|p| p.done_count()),
+            Some(1),
+            "an older core with no summary.plan must not blank the strip"
         );
     }
 

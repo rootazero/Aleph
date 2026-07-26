@@ -34,17 +34,37 @@ pub fn TodoPanel() -> impl IntoView {
                 let pct = plan.percent();
                 let done = plan.done_count();
                 let total = plan.total();
-                let current = plan.current_step().map(str::to_string);
                 let complete = plan.complete;
                 let ring_style = format!(
                     "background: conic-gradient(var(--color-success) {pct}%, var(--color-border-subtle) 0);"
                 );
-                let header_label = current
-                    .clone()
-                    .map(|c| format!("正在：{c}"))
-                    .unwrap_or_else(|| if complete { "✓ 已完成".into() } else { "待开始".into() });
+                // A list between steps used to read "not started" at 4/5 done,
+                // because only an explicit `[~]` produced a label. Fall back to
+                // the next unfinished step.
+                let header_label = if complete {
+                    format!("\u{2713} {}", t_string!(i18n, chat.todo_done))
+                } else if let Some(step) = plan.current_step() {
+                    format!("{}{step}", t_string!(i18n, chat.todo_current))
+                } else if let Some(step) = plan.focus_step() {
+                    format!("{}{step}", t_string!(i18n, chat.todo_next))
+                } else {
+                    t_string!(i18n, chat.todo_not_started).to_string()
+                };
+                let title = t_string!(i18n, chat.todo_title).to_string();
+                // The strip lives in the ResizeObserver-measured composer stack,
+                // whose height pads the transcript. Without a cap a 20-item plan
+                // shoves the whole conversation off-screen when expanded.
+                let run_active = chat.active_run_id.get().is_some();
                 view! {
-                    <div class="aleph-todo-wrap" class:done=move || complete>
+                    <div
+                        class="aleph-todo-wrap"
+                        class:done=move || complete
+                        // Freeze the in-progress pulse once the run is over:
+                        // an unfinished plan stays mounted on purpose, but a
+                        // perpetually animating "current step" reads as live
+                        // work that is not happening.
+                        class:settled=move || !run_active
+                    >
                         // ── header row (always visible): toggle + ↗ open-in-panel ──
                         // Slim single line: 18px ring (same size as ContextGauge)
                         // + percentage to its right + one-line summary that
@@ -60,7 +80,7 @@ pub fn TodoPanel() -> impl IntoView {
                             </span>
                             <span class="aleph-todo-pct">{format!("{pct}%")}</span>
                             <span class="aleph-todo-line">
-                                {format!("任务计划 · {done}/{total} · {header_label}")}
+                                {format!("{title} · {done}/{total} · {header_label}")}
                             </span>
                             <span class="aleph-todo-chev" class:open=move || expanded.get()>"▾"</span>
                         </button>
@@ -87,11 +107,20 @@ pub fn TodoPanel() -> impl IntoView {
                         <Show when=move || expanded.get()>
                             <ul class="aleph-todo-rows">
                                 <For
-                                    each=move || chat.plan.get().map(|p| p.items).unwrap_or_default()
-                                    key=|it| (it.text.clone(), it.status.clone())
-                                    let:it
+                                    // Keyed by position, not (text, status):
+                                    // a plan may legitimately repeat a step's
+                                    // wording, and duplicate keys make a keyed
+                                    // <For> drop rows.
+                                    each=move || chat.plan.get()
+                                        .map(|p| p.items)
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .enumerate()
+                                    key=|(i, it)| (*i, it.status)
+                                    let:entry
                                 >
                                     {
+                                        let it = entry.1;
                                         let (cls, glyph) = match it.status {
                                             PlanItemStatusView::Completed => ("done", "✓"),
                                             PlanItemStatusView::InProgress => ("active", ""),
@@ -130,7 +159,8 @@ const TODO_PANEL_CSS: &str = r#"
 .aleph-todo-chev{flex:0 0 auto;margin-left:auto;font-size:11px;transition:transform .18s;
   color:var(--color-text-secondary,#888)}
 .aleph-todo-chev.open{transform:rotate(180deg)}
-.aleph-todo-rows{list-style:none;margin:0;padding:4px 8px 8px}
+.aleph-todo-rows{list-style:none;margin:0;padding:4px 8px 8px;max-height:38vh;overflow-y:auto;
+  overscroll-behavior:contain}
 .aleph-todo-row{display:flex;align-items:flex-start;gap:10px;padding:6px 8px;border-radius:9px;line-height:1.45}
 .aleph-todo-box{flex:0 0 auto;width:17px;height:17px;border-radius:6px;border:1.6px solid var(--color-border);
   display:grid;place-items:center;margin-top:1px;font-size:11px;color:#fff}
@@ -142,6 +172,7 @@ const TODO_PANEL_CSS: &str = r#"
 .aleph-todo-row.active .aleph-todo-box{border-color:var(--color-primary)}
 .aleph-todo-row.active .aleph-todo-box::after{content:"";width:9px;height:9px;border-radius:3px;
   background:var(--color-primary);animation:aleph-todo-pulse 1.2s ease-in-out infinite}
+.aleph-todo-wrap.settled .aleph-todo-row.active .aleph-todo-box::after{animation:none;opacity:.55}
 .aleph-todo-row.active .aleph-todo-txt{font-weight:600}
 @keyframes aleph-todo-draw{from{transform:scale(.5);opacity:.3}to{transform:scale(1);opacity:1}}
 @keyframes aleph-todo-flash{0%{background:var(--color-success-subtle)}100%{background:transparent}}

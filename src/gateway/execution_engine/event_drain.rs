@@ -30,6 +30,17 @@ use aleph_protocol::TokenBreakdownView;
 #[derive(Debug, Default)]
 pub(crate) struct DrainState {
     assembler: crate::gateway::message_assembly::MessageAssembler,
+    /// `scratchpad` invocations seen this run: call id → "this call clears the
+    /// plan". Populated on `ToolCallStart` because that is the only event
+    /// carrying the tool name and its arguments.
+    scratchpad_calls: std::collections::HashMap<String, bool>,
+    /// Terminal execution list for this run, latched from the last
+    /// `scratchpad` result. Stamped onto `RunSummary.plan` so renderers can
+    /// reconcile a checklist whose live frames the lossy `agent_trace` WS
+    /// mirror dropped — the same authoritative-terminal-state contract
+    /// `tool_summaries` already provides for tool rows. `Some(empty)` after a
+    /// `clear`, so the panel hides rather than freezing on the last checklist.
+    plan: Option<aleph_protocol::plan::PlanSnapshot>,
 }
 
 /// Map one `FlowStreamEvent` to the appropriate `EventEmitter` call(s).
@@ -104,6 +115,11 @@ pub(crate) async fn emit_flow_event(
             {
                 let mut s = state.lock().await;
                 s.assembler.reset_iteration();
+                if name == SCRATCHPAD_TOOL {
+                    let clears =
+                        args.get("action").and_then(serde_json::Value::as_str) == Some("clear");
+                    s.scratchpad_calls.insert(id.clone(), clears);
+                }
             }
             let seq = emitter.next_seq();
             emitter
@@ -123,6 +139,19 @@ pub(crate) async fn emit_flow_event(
             error,
             duration_ms,
         } => {
+            {
+                // Latch the terminal execution list. This drain is in-process
+                // and unbounded — unlike the WS `agent_trace` mirror it feeds —
+                // so what we capture here is authoritative.
+                let mut s = state.lock().await;
+                if let Some(clears) = s.scratchpad_calls.remove(&id) {
+                    if clears {
+                        s.plan = Some(aleph_protocol::plan::PlanSnapshot::default());
+                    } else if let Some(plan) = result.as_ref().and_then(extract_plan_snapshot) {
+                        s.plan = Some(plan);
+                    }
+                }
+            }
             let tool_result = if let Some(err) = error {
                 crate::gateway::event_emitter::ToolResult::error(err)
             } else {
@@ -176,7 +205,8 @@ pub(crate) async fn emit_flow_event(
             // before the terminal summary, so a trailing non-fence fragment
             // isn't lost.
             flush_text_boundary(emitter, run_id, state).await?;
-            emit_complete(emitter, run_id, &outcome).await?;
+            let plan = state.lock().await.plan.clone();
+            emit_complete(emitter, run_id, &outcome, plan).await?;
         }
     }
     Ok(())
@@ -231,8 +261,9 @@ async fn emit_complete(
     emitter: &Arc<dyn EventEmitter>,
     run_id: &str,
     outcome: &FlowOutcome,
+    plan: Option<aleph_protocol::plan::PlanSnapshot>,
 ) -> Result<(), EventEmitError> {
-    let summary = build_run_summary(outcome);
+    let summary = build_run_summary(outcome, plan);
     let seq = emitter.next_seq();
     emitter
         .emit(StreamEvent::RunComplete {
@@ -246,7 +277,10 @@ async fn emit_complete(
 
 /// Build a wire-format [`RunSummary`] from a [`FlowOutcome`]. Extracted so
 /// tests can assert mapping without spinning up an emitter.
-pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
+pub(crate) fn build_run_summary(
+    outcome: &FlowOutcome,
+    plan: Option<aleph_protocol::plan::PlanSnapshot>,
+) -> RunSummary {
     let tool_summaries: Vec<ToolSummaryItem> = outcome
         .tool_timeline
         .iter()
@@ -338,7 +372,21 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
         cost_status,
         tool_summaries,
         errors,
+        plan,
     }
+}
+
+/// Tool whose result carries the execution list.
+const SCRATCHPAD_TOOL: &str = "scratchpad";
+
+/// Read the `snapshot` the `scratchpad` tool attaches to its output.
+///
+/// One known shape — the raw `ScratchpadOutput` JSON that `act.rs` hands to
+/// `on_tool_call_done` — deliberately enumerated rather than searched for at
+/// any depth, so a future tool that happens to have a `snapshot` field cannot
+/// silently hijack the plan slot.
+fn extract_plan_snapshot(result: &serde_json::Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
+    serde_json::from_value(result.get("snapshot")?.clone()).ok()
 }
 
 /// Per-tool emoji used by [`build_run_summary`] when constructing
@@ -610,6 +658,118 @@ mod tests {
         );
     }
 
+    /// Drive one scratchpad call through the drain and return the run's
+    /// latched terminal plan.
+    async fn drain_scratchpad(
+        action: &str,
+        result: serde_json::Value,
+    ) -> Option<aleph_protocol::plan::PlanSnapshot> {
+        let (_inner, emitter) = make_emitter();
+        let state = make_state();
+        emit_flow_event(
+            FlowStreamEvent::ToolCallStart {
+                id: "sp-1".to_string(),
+                name: "scratchpad".to_string(),
+                args: serde_json::json!({ "action": action }),
+            },
+            &emitter,
+            "run-plan",
+            &state,
+        )
+        .await
+        .expect("start ok");
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "sp-1".to_string(),
+                result: Some(result),
+                error: None,
+                duration_ms: 3,
+            },
+            &emitter,
+            "run-plan",
+            &state,
+        )
+        .await
+        .expect("done ok");
+        let plan = state.lock().await.plan.clone();
+        plan
+    }
+
+    #[tokio::test]
+    async fn scratchpad_result_latches_the_terminal_plan_onto_the_summary() {
+        let plan = drain_scratchpad(
+            "complete_item",
+            serde_json::json!({
+                "success": true,
+                "message": "ok",
+                "snapshot": {
+                    "objective": "Ship auth",
+                    "complete": false,
+                    "items": [
+                        {"text": "Design", "status": "completed"},
+                        {"text": "Build", "status": "in_progress"},
+                    ]
+                }
+            }),
+        )
+        .await
+        .expect("a latched plan");
+        assert_eq!(plan.done_count(), 1);
+        assert_eq!(plan.current_step(), Some("Build"));
+
+        let summary = super::build_run_summary(&FlowOutcome::default(), Some(plan));
+        let carried = summary.plan.expect("summary carries the plan");
+        assert_eq!(
+            carried.total(),
+            2,
+            "run_complete is the authoritative source"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clear_latches_an_empty_plan_rather_than_the_stale_one() {
+        // Without this the panel would freeze on the last checklist forever:
+        // `clear` returns no snapshot, so "keep the last one" is wrong.
+        let plan = drain_scratchpad("clear", serde_json::json!({"success": true}))
+            .await
+            .expect("an explicit empty plan");
+        assert!(!plan.has_content());
+    }
+
+    #[tokio::test]
+    async fn a_non_scratchpad_tool_never_writes_the_plan_slot() {
+        let (_inner, emitter) = make_emitter();
+        let state = make_state();
+        emit_flow_event(
+            FlowStreamEvent::ToolCallStart {
+                id: "t-1".to_string(),
+                name: "note_manage".to_string(),
+                args: serde_json::json!({ "action": "clear" }),
+            },
+            &emitter,
+            "run-x",
+            &state,
+        )
+        .await
+        .unwrap();
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "t-1".to_string(),
+                result: Some(serde_json::json!({
+                    "snapshot": {"objective": "hijack", "items": [], "complete": false}
+                })),
+                error: None,
+                duration_ms: 1,
+            },
+            &emitter,
+            "run-x",
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(state.lock().await.plan.is_none());
+    }
+
     #[tokio::test]
     async fn tool_call_start_and_done_pair() {
         let (inner, emitter) = make_emitter();
@@ -769,7 +929,7 @@ mod tests {
             serving_provider: None,
         };
 
-        let summary = super::build_run_summary(&outcome);
+        let summary = super::build_run_summary(&outcome, None);
 
         assert_eq!(summary.context_tokens, 1234);
         assert_eq!(summary.context_window, 200_000);
@@ -822,7 +982,7 @@ mod tests {
             tool_calls_made: 0,
             ..Default::default()
         };
-        let summary = super::build_run_summary(&outcome);
+        let summary = super::build_run_summary(&outcome, None);
         assert_eq!(summary.duration_ms, None, "zero duration → omitted");
         assert!(
             summary.token_breakdown.is_none(),
@@ -858,7 +1018,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let summary = super::build_run_summary(&outcome);
+        let summary = super::build_run_summary(&outcome, None);
         assert_eq!(
             summary.terminate_reason.as_deref(),
             Some("budget_exhausted_partial_result"),
@@ -892,7 +1052,7 @@ mod tests {
                 terminate_reason: reason,
                 ..Default::default()
             };
-            let summary = super::build_run_summary(&outcome);
+            let summary = super::build_run_summary(&outcome, None);
             assert_eq!(
                 summary.terminate_detail, None,
                 "terminate_detail must be None for {label}",

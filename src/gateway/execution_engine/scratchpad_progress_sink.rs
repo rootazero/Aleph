@@ -36,15 +36,15 @@ use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 
 /// Scratchpad actions whose completion is worth surfacing to the user.
-/// Excludes `read` (pull, not progress) and `append_note` (internal scratch).
-const PROGRESS_ACTIONS: &[&str] = &[
-    "initialize",
-    "set_objective",
-    "set_plan",
-    "start_item",
-    "complete_item",
-    "clear",
-];
+///
+/// These are exactly the actions whose `content` is a `render_progress`
+/// checklist. Deliberately excluded:
+/// * `read` / `initialize` — `content` is the **raw markdown document**, not a
+///   checklist, so pushing it would dump the whole file under a "任务进度"
+///   header (`initialize` used to be listed and did exactly that);
+/// * `append_note` — internal scratch;
+/// * `clear` — returns no `content` at all, so its arm could never fire.
+const PROGRESS_ACTIONS: &[&str] = &["set_objective", "set_plan", "start_item", "complete_item"];
 
 /// Translate a trace event into a human-readable progress line for the user's
 /// channel, or `None` when the event carries no surfaceable progress.

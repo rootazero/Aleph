@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 mod ai_response;
 mod markers;
 mod patch;
-mod plan;
 mod reasoning;
 mod snapshot;
 mod steps;
@@ -20,7 +19,6 @@ mod user_input;
 pub use ai_response::AiResponsePart;
 pub use markers::CompactionMarker;
 pub use patch::{FileChange, FileChangeType, PatchPart};
-pub use plan::{PlanPart, PlanStep, StepStatus};
 pub use reasoning::ReasoningPart;
 pub use snapshot::{FileSnapshot, SnapshotPart};
 pub use steps::{StepFinishPart, StepFinishReason, StepStartPart, StepTokenUsage};
@@ -40,7 +38,6 @@ pub enum SessionPart {
     AiResponse(AiResponsePart),
     ToolCall(ToolCallPart),
     Reasoning(ReasoningPart),
-    PlanCreated(PlanPart),
     SubAgentCall(SubAgentPart),
     Summary(SummaryPart),
     /// Marker for compaction boundary - used by `filter_compacted()` to find
@@ -68,7 +65,6 @@ impl SessionPart {
             Self::AiResponse(_) => "ai_response",
             Self::ToolCall(_) => "tool_call",
             Self::Reasoning(_) => "reasoning",
-            Self::PlanCreated(_) => "plan_created",
             Self::SubAgentCall(_) => "sub_agent_call",
             Self::Summary(_) => "summary",
             Self::CompactionMarker(_) => "compaction_marker",

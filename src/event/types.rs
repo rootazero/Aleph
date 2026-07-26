@@ -34,10 +34,6 @@ pub enum EventType {
     // Input
     InputReceived,
 
-    // Planning
-    PlanRequested,
-    PlanCreated,
-
     // Tool execution
     ToolCallRequested,
     ToolCallStarted,
@@ -87,10 +83,6 @@ pub enum EventType {
 pub enum AlephEvent {
     // Input events
     InputReceived(InputEvent),
-
-    // Planning events
-    PlanRequested(PlanRequest),
-    PlanCreated(TaskPlan),
 
     // Tool execution events
     ToolCallRequested(ToolCallRequest),
@@ -175,8 +167,6 @@ impl AlephEvent {
     pub const fn event_type(&self) -> EventType {
         match self {
             Self::InputReceived(_) => EventType::InputReceived,
-            Self::PlanRequested(_) => EventType::PlanRequested,
-            Self::PlanCreated(_) => EventType::PlanCreated,
             Self::ToolCallRequested(_) => EventType::ToolCallRequested,
             Self::ToolCallStarted(_) => EventType::ToolCallStarted,
             Self::ToolCallCompleted(_) => EventType::ToolCallCompleted,
@@ -210,8 +200,6 @@ impl AlephEvent {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::InputReceived(_) => "InputReceived",
-            Self::PlanRequested(_) => "PlanRequested",
-            Self::PlanCreated(_) => "PlanCreated",
             Self::ToolCallRequested(_) => "ToolCallRequested",
             Self::ToolCallStarted(_) => "ToolCallStarted",
             Self::ToolCallCompleted(_) => "ToolCallCompleted",
@@ -263,48 +251,6 @@ pub struct InputContext {
 }
 
 // ============================================================================
-// Planning Event Types
-// ============================================================================
-
-/// Request to create a task plan
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanRequest {
-    pub input: InputEvent,
-    pub intent_type: Option<String>,
-    pub detected_steps: Vec<String>,
-}
-
-/// Generated task plan
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskPlan {
-    pub id: String,
-    pub steps: Vec<PlanStep>,
-    pub parallel_groups: Vec<Vec<String>>,
-    pub current_step_index: usize,
-}
-
-/// Single step in a task plan
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanStep {
-    pub id: String,
-    pub description: String,
-    pub tool: String,
-    pub parameters: Value,
-    pub depends_on: Vec<String>,
-    pub status: StepStatus,
-}
-
-/// Status of a plan step
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StepStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed(String),
-    Skipped,
-}
-
-// ============================================================================
 // Tool Execution Event Types
 // ============================================================================
 
@@ -313,7 +259,6 @@ pub enum StepStatus {
 pub struct ToolCallRequest {
     pub tool: String,
     pub parameters: Value,
-    pub plan_step_id: Option<String>,
 }
 
 /// Tool call has started
@@ -338,9 +283,6 @@ pub struct ToolCallResult {
     pub started_at: i64,
     pub completed_at: i64,
     pub token_usage: TokenUsage,
-    /// Plan step ID this tool call corresponds to (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_step_id: Option<String>,
     /// Session ID for sub-agent correlation (optional for backwards compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -421,8 +363,6 @@ pub enum StopReason {
     UserAborted,
     /// Unrecoverable error
     Error(String),
-    /// No steps to execute
-    EmptyPlan,
 }
 
 // ============================================================================
@@ -542,7 +482,6 @@ mod tests {
             started_at: 1000,
             completed_at: 2000,
             token_usage: TokenUsage::default(),
-            plan_step_id: Some("step_1".to_string()),
             session_id: None,
         });
 

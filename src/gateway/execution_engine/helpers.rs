@@ -316,7 +316,9 @@ pub async fn run_dispatch_and_drain_classified(
     let complete_forwarded = drain.await.unwrap_or(false);
     propagate.abort();
     if !complete_forwarded {
-        let summary = super::event_drain::build_run_summary(&outcome);
+        // No plan: this fallback fires precisely when the drain never saw the
+        // `Complete` frame, so its latched execution list is unavailable here.
+        let summary = super::event_drain::build_run_summary(&outcome, None);
         let seq = emitter.next_seq();
         // Run-skeleton event → `warn` on send failure, matching the emit-tier
         // policy the trait's default `emit_run_complete` applies (decorative

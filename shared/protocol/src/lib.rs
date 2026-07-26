@@ -22,6 +22,7 @@ pub mod events;
 pub mod invitation;
 mod ids;
 pub mod jsonrpc;
+pub mod plan;
 pub mod subagent_tree;
 pub mod thinking;
 pub mod trace_presentation;

@@ -278,7 +278,12 @@
     "unpin": "取消置顶",
     "status_online": "在线",
     "status_reconnecting": "重连中",
-    "status_offline": "离线"
+    "status_offline": "离线",
+    "todo_title": "任务计划",
+    "todo_current": "正在：",
+    "todo_next": "下一步：",
+    "todo_done": "已完成",
+    "todo_not_started": "待开始"
   },
   "memory": {
     "title": "记忆库",

@@ -31,17 +31,12 @@ pub use types::{
     InputEvent,
     // Loop control
     LoopState,
-    // Planning events
-    PlanRequest,
-    PlanStep,
     SessionDiff,
     // Session events
     SessionInfo,
-    StepStatus,
     StopReason,
     // Sub-agent events
     SubAgentCompletionEvent,
-    TaskPlan,
     TimestampedEvent,
     // Token usage
     TokenUsage,

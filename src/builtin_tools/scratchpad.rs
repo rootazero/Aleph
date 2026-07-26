@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::builtin_tools::scratchpad_registry;
 use crate::error::Result;
-use crate::memory::scratchpad::{PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
+use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -52,10 +52,20 @@ impl std::fmt::Display for ScratchpadAction {
     }
 }
 
-/// Serde-friendly mirror of `PlanItemStatus` (which derives no serde).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Wire status, re-exported from the protocol crate so the tool result, the
+/// `run_complete` summary and the Panel all speak one shape.
+pub use aleph_protocol::plan::PlanItemStatus as PlanItemStatusDto;
+
+/// Schema-only mirror of [`PlanItemStatusDto`].
+///
+/// `schemars` cannot derive `JsonSchema` for a type owned by another crate,
+/// and the protocol crate has no business depending on `schemars` for a tool
+/// argument shape. This exists **only** to describe the `status` field of a
+/// `set_plan` argument to the model; the wire/output side uses the protocol
+/// type directly. Kept honest by `status_dto_and_arg_schema_agree`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PlanItemStatusDto {
+pub enum PlanItemStatusArg {
     Pending,
     InProgress,
     Completed,
@@ -71,36 +81,105 @@ impl From<PlanItemStatus> for PlanItemStatusDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlanItemDto {
-    pub text: String,
-    pub status: PlanItemStatusDto,
+impl From<PlanItemStatusArg> for PlanItemStatus {
+    fn from(s: PlanItemStatusArg) -> Self {
+        match s {
+            PlanItemStatusArg::Pending => Self::Pending,
+            PlanItemStatusArg::InProgress => Self::InProgress,
+            PlanItemStatusArg::Completed => Self::Done,
+        }
+    }
 }
+
+/// One entry of a `set_plan` call.
+///
+/// Two accepted shapes, so the model can write the whole checklist —
+/// statuses included — in a single call (codex `update_plan` /
+/// kimi `SetTodoList` / hermes `todo` parity):
+///
+/// * `"Design the API"` — bare text. Status is **inherited** from the item of
+///   the same text in the current plan when one exists, else `pending`. That
+///   inheritance is what makes "add one more step" idempotent: the old
+///   text-only signature forced every item back to `[ ]`, wiping the run's
+///   progress and then getting the stop vetoed for work already done.
+/// * `{"text": "Design the API", "status": "completed"}` — explicit status,
+///   always honored verbatim.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PlanItemArg {
+    /// Bare step text; status inherited from the current plan, else pending.
+    Text(String),
+    /// Step text with an explicit lifecycle status.
+    Detailed {
+        /// Step text.
+        text: String,
+        /// `pending` / `in_progress` / `completed`. Omitted behaves like the
+        /// bare-text form.
+        #[serde(default)]
+        status: Option<PlanItemStatusArg>,
+    },
+}
+
+impl PlanItemArg {
+    fn text(&self) -> &str {
+        match self {
+            Self::Text(t) => t,
+            Self::Detailed { text, .. } => text,
+        }
+    }
+
+    fn explicit_status(&self) -> Option<PlanItemStatus> {
+        match self {
+            Self::Text(_) => None,
+            Self::Detailed { status, .. } => status.map(Into::into),
+        }
+    }
+}
+
+/// Resolve incoming `set_plan` args against the plan already on disk.
+///
+/// Explicit statuses win; a bare-text item inherits the status of the item
+/// with the same (trimmed) text in `current`, else starts `pending`.
+fn resolve_plan_items(args: &[PlanItemArg], current: &[PlanItem]) -> Vec<PlanItem> {
+    args.iter()
+        .map(|arg| {
+            let text = arg.text().trim().to_string();
+            let status = arg.explicit_status().unwrap_or_else(|| {
+                current
+                    .iter()
+                    .find(|existing| existing.text == text)
+                    .map_or(PlanItemStatus::Pending, |existing| existing.status)
+            });
+            PlanItem { text, status }
+        })
+        .collect()
+}
+
+pub use aleph_protocol::plan::PlanItem as PlanItemDto;
 
 /// Structured snapshot of the scratchpad plan, attached to `ScratchpadOutput`
 /// so the Panel can render a live Todo widget (rides the existing
-/// `tool_call_completed` event; no new protocol variant — R4/R10).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlanSnapshotDto {
-    pub objective: Option<String>,
-    pub items: Vec<PlanItemDto>,
-    pub complete: bool,
-}
+/// `tool_call_completed` event; no new protocol variant — R4/R10) **and**
+/// carried on `RunSummary` so the Panel can reconcile a checklist whose live
+/// frames the lossy trace mirror dropped.
+pub use aleph_protocol::plan::PlanSnapshot as PlanSnapshotDto;
 
-impl From<&ScratchpadSnapshot> for PlanSnapshotDto {
-    fn from(s: &ScratchpadSnapshot) -> Self {
-        Self {
-            objective: s.objective.clone(),
-            items: s
-                .items
-                .iter()
-                .map(|i| PlanItemDto {
-                    text: i.text.clone(),
-                    status: i.status.into(),
-                })
-                .collect(),
-            complete: s.is_objective_complete(),
-        }
+/// Project the on-disk scratchpad into the wire shape.
+///
+/// `From<Local> for Foreign` is legal here (the parameter type is local) and
+/// keeps the conversion next to the thing being converted.
+pub fn plan_snapshot_dto(s: &ScratchpadSnapshot) -> PlanSnapshotDto {
+    PlanSnapshotDto {
+        objective: s.objective.clone(),
+        items: s
+            .items
+            .iter()
+            .map(|i| PlanItemDto {
+                text: i.text.clone(),
+                status: i.status.into(),
+            })
+            .collect(),
+        complete: s.is_objective_complete(),
     }
 }
 
@@ -115,10 +194,15 @@ pub struct ScratchpadArgs {
     pub project_id: Option<String>,
     /// Action to perform
     pub action: ScratchpadAction,
-    /// Value for Initialize (objective), `SetObjective`, `AppendNote`
+    /// Value for Initialize (objective), `SetObjective`, `AppendNote`.
+    /// On `SetPlan` it optionally sets the objective in the same call — do
+    /// that on the first `set_plan`, because a plan with no objective is not
+    /// surfaced to you next turn and does not hold the session open.
     pub value: Option<String>,
-    /// Plan items for `SetPlan`
-    pub items: Option<Vec<String>>,
+    /// Plan items for `SetPlan` — replaces the whole list. Each entry is
+    /// either a step string (status inherited from the current plan, else
+    /// pending) or `{"text": "...", "status": "pending|in_progress|completed"}`.
+    pub items: Option<Vec<PlanItemArg>>,
     /// Item index for `StartItem` / `CompleteItem` (0-based)
     pub item_index: Option<usize>,
 }
@@ -189,6 +273,17 @@ impl ScratchpadTool {
 /// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
 /// structural (the model's own checkboxes), so the model stays sovereign over
 /// completion (R7); the progress sink mirrors it to the user channel (R5).
+/// Panel-facing DTO only, with no model-facing echo — for read-shaped actions
+/// whose `content` is already the raw markdown. Fail-soft to `None`; an empty
+/// plan yields `None` so a read never blanks a widget it did not produce.
+async fn plan_snapshot(manager: &ScratchpadManager) -> Option<PlanSnapshotDto> {
+    let snap = manager.snapshot().await.ok()?;
+    if snap.objective.is_none() && snap.items.is_empty() {
+        return None;
+    }
+    Some(plan_snapshot_dto(&snap))
+}
+
 async fn progress_parts(manager: &ScratchpadManager) -> (Option<String>, Option<PlanSnapshotDto>) {
     match manager.snapshot().await {
         Ok(s) => {
@@ -197,7 +292,7 @@ async fn progress_parts(manager: &ScratchpadManager) -> (Option<String>, Option<
             } else {
                 s.render_progress()
             };
-            (Some(text), Some(PlanSnapshotDto::from(&s)))
+            (Some(text), Some(plan_snapshot_dto(&s)))
         }
         Err(_) => (None, None),
     }
@@ -209,23 +304,32 @@ impl AlephTool for ScratchpadTool {
     const DESCRIPTION: &'static str =
         "Manage your working memory (scratchpad) for a multi-step task: set an \
          objective, lay out a plan as an execution list, then work the list one \
-         step at a time. Mark the step you are about to work with \
-         action='start_item' (it becomes the single in-progress step), and \
-         action='complete_item' when it is done; both echo the updated list back \
-         to you so you always see current progress. The scratchpad persists \
-         across sessions. While an objective is set and plan items remain \
-         unfinished, the goal-loop keeps this session running so you work through \
-         them step by step — call action='clear' once the objective is fully \
-         achieved. The project_id is optional — omit it to use the current chat's scratchpad.";
+         step at a time. Use it for work with 3+ non-trivial steps; skip it for \
+         a single-step answer. \
+         Arm both at once with action='set_plan', value='<the objective>', \
+         items=[...] — a plan with no objective is not re-surfaced to you next \
+         turn and does not hold the session open. \
+         set_plan replaces the whole list: send every step each time. A step \
+         given as plain text keeps whatever status it already had, so adding or \
+         re-wording steps mid-run never resets your progress; send \
+         {text, status} to set a status explicitly. Exactly one step may be \
+         in_progress. \
+         action='start_item' / 'complete_item' (0-based item_index) move a \
+         single step and echo the updated list back to you. The scratchpad \
+         persists across sessions. While an objective is set and plan items \
+         remain unfinished, the goal-loop keeps this session running so you work \
+         through them step by step — call action='clear' once the objective is \
+         fully achieved. The project_id is optional — omit it to use the current \
+         chat's scratchpad.";
 
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "scratchpad(project_id='blog-redesign', action='initialize', value='Redesign the blog layout with modern CSS')"
+            "scratchpad(action='set_plan', value='Redesign the blog layout with modern CSS', items=['Design mockup', 'Implement header', 'Add responsive styles'])"
                 .to_string(),
-            "scratchpad(project_id='blog-redesign', action='set_plan', items=['Design mockup', 'Implement header', 'Add responsive styles'])"
+            "scratchpad(project_id='blog-redesign', action='set_plan', items=[{'text': 'Design mockup', 'status': 'completed'}, {'text': 'Implement header', 'status': 'in_progress'}, 'Add responsive styles', 'Cross-browser pass'])"
                 .to_string(),
             "scratchpad(project_id='blog-redesign', action='start_item', item_index=0)"
                 .to_string(),
@@ -277,24 +381,25 @@ impl AlephTool for ScratchpadTool {
 
         match args.action {
             ScratchpadAction::Initialize => {
-                if manager.exists() {
-                    let content = manager.read().await?;
-                    Ok(ScratchpadOutput {
-                        success: true,
-                        message: "Scratchpad already exists, returning current content".to_string(),
-                        content: Some(content),
-                        snapshot: None,
-                    })
-                } else {
+                let existed = manager.exists();
+                if !existed {
                     manager.initialize(args.value.as_deref()).await?;
-                    let content = manager.read().await?;
-                    Ok(ScratchpadOutput {
-                        success: true,
-                        message: "Scratchpad initialized".to_string(),
-                        content: Some(content),
-                        snapshot: None,
-                    })
                 }
+                let content = manager.read().await?;
+                Ok(ScratchpadOutput {
+                    success: true,
+                    message: if existed {
+                        "Scratchpad already exists, returning current content".to_string()
+                    } else {
+                        "Scratchpad initialized".to_string()
+                    },
+                    content: Some(content),
+                    // Read-shaped actions carry the snapshot too, so the Panel
+                    // Todo widget rehydrates on reconnect / a fresh session
+                    // attaching to an existing project — it used to stay hidden
+                    // until the next mutating call.
+                    snapshot: plan_snapshot(&manager).await,
+                })
             }
 
             ScratchpadAction::Read => {
@@ -311,7 +416,7 @@ impl AlephTool for ScratchpadTool {
                     success: true,
                     message: "Scratchpad content loaded".to_string(),
                     content: Some(content),
-                    snapshot: None,
+                    snapshot: plan_snapshot(&manager).await,
                 })
             }
 
@@ -328,13 +433,29 @@ impl AlephTool for ScratchpadTool {
             }
 
             ScratchpadAction::SetPlan => {
-                let items = args.items.unwrap_or_default();
-                let items_ref: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
-                manager.set_plan(&items_ref).await?;
+                let incoming = args.items.unwrap_or_default();
+                let current = manager.snapshot().await.unwrap_or_default();
+                let items = resolve_plan_items(&incoming, &current.items);
+                let objective = args
+                    .value
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty());
+                let written = manager.set_plan(objective, &items).await?;
                 let (content, snapshot) = progress_parts(&manager).await;
+                let inert = objective.is_none() && current.objective.is_none() && written > 0;
+                let message = if inert {
+                    format!(
+                        "Plan set with {written} item(s), but no objective is set — so this plan \
+                         is NOT re-surfaced to you next turn and does NOT hold the session open. \
+                         Pass `value` (the objective) on set_plan, or call action='set_objective'."
+                    )
+                } else {
+                    format!("Plan set with {written} item(s)")
+                };
                 Ok(ScratchpadOutput {
                     success: true,
-                    message: format!("Plan set with {} items", items.len()),
+                    message,
                     content,
                     snapshot,
                 })
@@ -449,7 +570,7 @@ mod tests {
                 },
             ],
         };
-        let dto = PlanSnapshotDto::from(&snap);
+        let dto = plan_snapshot_dto(&snap);
         assert_eq!(dto.objective.as_deref(), Some("Ship auth"));
         assert_eq!(dto.items.len(), 3);
         assert!(!dto.complete); // not all done
@@ -469,7 +590,7 @@ mod tests {
                 status: PlanItemStatus::Done,
             }],
         };
-        assert!(PlanSnapshotDto::from(&snap).complete);
+        assert!(plan_snapshot_dto(&snap).complete);
     }
 
     #[test]
@@ -543,6 +664,110 @@ mod tests {
         let args: ScratchpadArgs = serde_json::from_str(json).unwrap();
         assert!(matches!(args.action, ScratchpadAction::SetPlan));
         assert_eq!(args.items.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn status_dto_and_arg_schema_agree() {
+        // `PlanItemStatusArg` exists only because schemars cannot derive for a
+        // foreign type. If the two ever drift, the model would be shown an
+        // enum the wire cannot express. Compare the serde forms, both ways.
+        for (arg, dto) in [
+            (PlanItemStatusArg::Pending, PlanItemStatusDto::Pending),
+            (PlanItemStatusArg::InProgress, PlanItemStatusDto::InProgress),
+            (PlanItemStatusArg::Completed, PlanItemStatusDto::Completed),
+        ] {
+            assert_eq!(
+                serde_json::to_value(arg).unwrap(),
+                serde_json::to_value(dto).unwrap()
+            );
+        }
+        // And the schema the model reads lists exactly those three values —
+        // no variant added to one side only.
+        let json = serde_json::to_value(schemars::schema_for!(PlanItemStatusArg)).unwrap();
+        assert_eq!(
+            json["enum"],
+            serde_json::json!(["pending", "in_progress", "completed"]),
+            "schema drifted from the wire enum: {json}"
+        );
+    }
+
+    #[test]
+    fn set_plan_accepts_mixed_string_and_object_items() {
+        let json = r#"{
+            "action": "set_plan",
+            "value": "Ship auth",
+            "items": [
+                {"text": "Design", "status": "completed"},
+                {"text": "Build", "status": "in_progress"},
+                "Test"
+            ]
+        }"#;
+        let args: ScratchpadArgs = serde_json::from_str(json).unwrap();
+        let items = args.items.unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].explicit_status(), Some(PlanItemStatus::Done));
+        assert_eq!(items[1].explicit_status(), Some(PlanItemStatus::InProgress));
+        assert_eq!(items[2].text(), "Test");
+        assert_eq!(items[2].explicit_status(), None);
+        assert_eq!(args.value.as_deref(), Some("Ship auth"));
+    }
+
+    #[test]
+    fn bare_text_items_inherit_status_from_the_current_plan() {
+        // The core regression: refining a plan (adding a step, re-ordering)
+        // must not reset the run's progress.
+        let current = vec![
+            PlanItem {
+                text: "Design".into(),
+                status: PlanItemStatus::Done,
+            },
+            PlanItem {
+                text: "Build".into(),
+                status: PlanItemStatus::InProgress,
+            },
+        ];
+        let incoming = vec![
+            PlanItemArg::Text("Design".into()),
+            PlanItemArg::Text("Build".into()),
+            PlanItemArg::Text("Test".into()),
+        ];
+        let resolved = resolve_plan_items(&incoming, &current);
+        assert_eq!(resolved[0].status, PlanItemStatus::Done);
+        assert_eq!(resolved[1].status, PlanItemStatus::InProgress);
+        assert_eq!(
+            resolved[2].status,
+            PlanItemStatus::Pending,
+            "a genuinely new step starts pending"
+        );
+    }
+
+    #[test]
+    fn explicit_status_overrides_inheritance() {
+        let current = vec![PlanItem {
+            text: "Build".into(),
+            status: PlanItemStatus::Done,
+        }];
+        let incoming = vec![PlanItemArg::Detailed {
+            text: "Build".into(),
+            status: Some(PlanItemStatusArg::Pending),
+        }];
+        // Re-opening a finished step is the model's call, not ours (R7).
+        assert_eq!(
+            resolve_plan_items(&incoming, &current)[0].status,
+            PlanItemStatus::Pending
+        );
+    }
+
+    #[test]
+    fn item_text_is_trimmed_so_inheritance_matches() {
+        let current = vec![PlanItem {
+            text: "Build".into(),
+            status: PlanItemStatus::Done,
+        }];
+        let incoming = vec![PlanItemArg::Text("  Build  ".into())];
+        let resolved = resolve_plan_items(&incoming, &current);
+        assert_eq!(resolved[0].text, "Build");
+        assert_eq!(resolved[0].status, PlanItemStatus::Done);
     }
 
     #[test]

@@ -830,18 +830,30 @@ impl ContextCompactor {
 
 // === Helper functions ===
 
-/// Replace `range` with `[preserved user turns…, summary]` — the single shape
-/// every compaction drain site produces. The user's own words stay verbatim and
-/// chronological ABOVE the summary that swallows everything else, so a
-/// head-anchored window can no longer summarize the original instruction away
-/// on its very first pass.
+/// Replace `range` with `[preserved user turns…, summary, execution list?]` —
+/// the single shape every compaction drain site produces. The user's own words
+/// stay verbatim and chronological ABOVE the summary that swallows everything
+/// else, so a head-anchored window can no longer summarize the original
+/// instruction away on its very first pass.
+///
+/// The execution list rides *below* the summary because it is live state the
+/// model acts on next turn, not history: it belongs as close to the read head
+/// as the drained region allows. It is `None` whenever the drained range held
+/// no unfinished plan, which is the common case.
 fn splice_preserved(
     messages: &mut Vec<UnifiedMessage>,
     range: std::ops::Range<usize>,
     preserved: Vec<UnifiedMessage>,
     summary: UnifiedMessage,
 ) {
-    messages.splice(range, preserved.into_iter().chain(std::iter::once(summary)));
+    let carry = super::plan_carry::plan_carry_message(&messages[range.clone()]);
+    messages.splice(
+        range,
+        preserved
+            .into_iter()
+            .chain(std::iter::once(summary))
+            .chain(carry),
+    );
 }
 
 /// Advance a proposed cut index forward past any contiguous run of `ToolResult`

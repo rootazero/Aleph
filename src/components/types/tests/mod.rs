@@ -18,21 +18,6 @@ fn test_part_id_trait() {
     assert_eq!(tool_call.part_id(), "call-123");
     assert_eq!(tool_call.type_name(), "tool_call");
 
-    // Test PlanPart ID extraction
-    let plan = SessionPart::PlanCreated(PlanPart {
-        plan_id: "plan-456".to_string(),
-        steps: vec![crate::components::types::PlanStep {
-            step_id: "step-1".to_string(),
-            description: "Step 1".to_string(),
-            status: crate::components::types::StepStatus::Pending,
-            dependencies: vec![],
-        }],
-        requires_confirmation: false,
-        created_at: 2000,
-    });
-    assert_eq!(plan.part_id(), "plan-456");
-    assert_eq!(plan.type_name(), "plan_created");
-
     // Test UserInputPart ID (uses timestamp with hash suffix for uniqueness)
     let input = SessionPart::UserInput(UserInputPart {
         text: "Hello".to_string(),

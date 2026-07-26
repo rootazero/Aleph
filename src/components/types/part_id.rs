@@ -31,7 +31,6 @@ impl PartId for SessionPart {
             Self::Reasoning(p) => {
                 format!("reasoning_{}_{:x}", p.timestamp, hash_suffix(&p.content))
             }
-            Self::PlanCreated(p) => p.plan_id.clone(),
             Self::SubAgentCall(p) => {
                 format!("subagent_{}_{:x}", p.agent_id, hash_suffix(&p.prompt))
             }

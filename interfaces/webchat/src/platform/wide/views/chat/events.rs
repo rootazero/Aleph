@@ -497,6 +497,14 @@ fn apply_run_cost(chat: ChatState, run_id: &str, summary: &serde_json::Value) {
     );
 }
 
+/// Read `run_complete`'s authoritative `summary.plan`. `None` for a core that
+/// predates the field or a run that never touched the scratchpad — both mean
+/// "leave the live projection alone". Pure, so the wire-shape contract is
+/// host-testable.
+fn parse_summary_plan(summary: &serde_json::Value) -> Option<super::plan::PlanView> {
+    serde_json::from_value(summary.get("plan")?.clone()).ok()
+}
+
 /// Project `run_complete`'s authoritative `summary.tool_summaries[]` into the
 /// panel's settlement shape. Pure so the wire-shape contract is host-testable.
 ///
@@ -866,6 +874,14 @@ pub fn subscribe_run_events(
                     // `agent_trace` mirror dropped (see `reconcile_tools`).
                     chat.reconcile_tools(run_id, &parse_tool_settlements(summary));
                     backfill_tool_errors(workspace, run_id, summary);
+                    // Same contract for the Todo strip: `summary.plan` is the
+                    // core-latched terminal execution list, so a dropped
+                    // `complete_item` frame no longer strands it mid-plan.
+                    chat.settle_plan(parse_summary_plan(summary).as_ref());
+                } else {
+                    // No summary at all (older core): still sink a finished
+                    // plan so it does not stay mounted into the next turn.
+                    chat.settle_plan(None);
                 }
                 // Anything the summary did not name (older core, a run with no
                 // timeline) still has to leave `running` — the run is over.
@@ -889,6 +905,10 @@ pub fn subscribe_run_events(
                 // reconcile against — but the run is over, so any row still
                 // `running` must stop pulsing (and stop ticking).
                 chat.settle_orphan_tools(run_id);
+                // A plan the failed run happened to finish still sinks; an
+                // unfinished one stays mounted, which is what the user needs
+                // to see after an error.
+                chat.settle_plan(None);
                 if is_foreground {
                     workspace.end_follow();
                 }

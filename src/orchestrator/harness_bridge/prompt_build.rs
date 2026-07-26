@@ -765,7 +765,7 @@ async fn resolve_prompt_context(
     // `scratchpad_registry` binding the tool / steering / stop-verifier
     // already key off — a mechanical lookup, no reasoning. `None` (no
     // active plan with pending work) leaves the prompt byte-identical;
-    // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
+    // `ExecutionPlanLayer` @1756 renders it as `<execution_plan>`.
     //
     // The execution-plan, standing-goal, and strategy lookups are
     // independent session-keyed reads (a scratchpad file read, a goal-store

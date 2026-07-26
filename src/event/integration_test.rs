@@ -31,7 +31,6 @@ mod tests {
                 Ok(vec![AlephEvent::ToolCallRequested(ToolCallRequest {
                     tool: "search".to_string(),
                     parameters: serde_json::json!({"query": input.text}),
-                    plan_step_id: None,
                 })])
             } else {
                 Ok(vec![])
@@ -66,7 +65,6 @@ mod tests {
                     started_at: chrono::Utc::now().timestamp_millis(),
                     completed_at: chrono::Utc::now().timestamp_millis(),
                     token_usage: TokenUsage::default(),
-                    plan_step_id: req.plan_step_id.clone(),
                     session_id: None,
                 })])
             } else {

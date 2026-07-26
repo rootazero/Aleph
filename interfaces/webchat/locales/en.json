@@ -278,7 +278,12 @@
     "unpin": "Unpin",
     "status_online": "Online",
     "status_reconnecting": "Reconnecting",
-    "status_offline": "Offline"
+    "status_offline": "Offline",
+    "todo_title": "Task plan",
+    "todo_current": "On: ",
+    "todo_next": "Next: ",
+    "todo_done": "Done",
+    "todo_not_started": "Not started"
   },
   "memory": {
     "title": "Memory Vault",

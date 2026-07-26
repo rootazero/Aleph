@@ -2,85 +2,33 @@
 //!
 //! Lives here (not in `state.rs`) so the projection logic is unit-testable
 //! without a Leptos reactive runtime. `events.rs` is the only caller.
+//!
+//! The plan itself is `aleph_protocol::plan::PlanSnapshot` — the same struct
+//! the `scratchpad` tool emits and `RunSummary.plan` carries. This file used
+//! to declare a hand-kept mirror of it (`PlanView` / `PlanItemView` /
+//! `PlanItemStatusView`); the mirror is gone, so a field added on the core
+//! side can no longer arrive here as silently-dropped JSON.
 
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum PlanItemStatusView {
-    Pending,
-    InProgress,
-    Completed,
-}
+pub use aleph_protocol::plan::PlanSnapshot as PlanView;
+pub use aleph_protocol::plan::{PlanItem as PlanItemView, PlanItemStatus as PlanItemStatusView};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PlanItemView {
-    pub text: String,
-    pub status: PlanItemStatusView,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PlanView {
-    pub objective: Option<String>,
-    pub items: Vec<PlanItemView>,
-    pub complete: bool,
-}
-
-impl PlanView {
-    pub fn done_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|i| i.status == PlanItemStatusView::Completed)
-            .count()
-    }
-    pub fn total(&self) -> usize {
-        self.items.len()
-    }
-    pub fn percent(&self) -> u32 {
-        if self.items.is_empty() {
-            return 0;
-        }
-        ((self.done_count() as f64 / self.total() as f64) * 100.0).round() as u32
-    }
-    pub fn current_step(&self) -> Option<&str> {
-        self.items
-            .iter()
-            .find(|i| i.status == PlanItemStatusView::InProgress)
-            .map(|i| i.text.as_str())
-    }
-    /// The panel renders only when there is something to show.
-    pub fn has_content(&self) -> bool {
-        self.objective.is_some() || !self.items.is_empty()
-    }
-
-    /// `true` when the plan was actually worked on (≥1 done/in-progress) or is
-    /// marked complete — the gate for archiving a superseded/cleared plan. A
-    /// pristine just-set plan (all pending, not complete) returns `false`, so a
-    /// quick re-`set_plan` refinement is silently replaced, not archived.
-    #[must_use]
-    pub fn has_activity(&self) -> bool {
-        self.complete
-            || self.items.iter().any(|i| {
-                matches!(
-                    i.status,
-                    PlanItemStatusView::InProgress | PlanItemStatusView::Completed
-                )
-            })
-    }
-
-    /// Glyph + label for the sunk archive capsule: `("✓", "tasksDone · d/t")`
-    /// when complete, else `("◗", "未Done · d/t")`.
-    #[must_use]
-    pub fn archive_summary(&self) -> (&'static str, String) {
-        let (glyph, word) = if self.complete {
-            ("✓", "任务完成")
-        } else {
-            ("◗", "未完成")
-        };
-        (
-            glyph,
-            format!("{word} · {}/{}", self.done_count(), self.total()),
-        )
-    }
+/// Glyph + label for the sunk archive capsule.
+///
+/// UI copy, so it stays panel-side rather than moving to the protocol crate
+/// with the rest of the (deterministic, language-free) plan arithmetic.
+#[must_use]
+pub fn archive_summary(plan: &PlanView) -> (&'static str, String) {
+    let (glyph, word) = if plan.complete {
+        ("✓", "任务完成")
+    } else {
+        ("◗", "未完成")
+    };
+    (
+        glyph,
+        format!("{word} · {}/{}", plan.done_count(), plan.total()),
+    )
 }
 
 /// What the Todo panel should do in response to a completed scratchpad call.
@@ -104,37 +52,26 @@ pub fn scratchpad_plan_update(action: &str, snapshot: Option<&Value>) -> PlanUpd
     }
 }
 
-fn parse_plan_view(snapshot: &Value) -> Option<PlanView> {
-    let obj = snapshot.as_object()?;
-    let objective = obj
-        .get("objective")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let complete = obj
-        .get("complete")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let items = obj
-        .get("items")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(parse_item).collect())
-        .unwrap_or_default();
-    Some(PlanView {
-        objective,
-        items,
-        complete,
-    })
+/// Terminal reconciliation against `run_complete`'s authoritative
+/// `summary.plan` — the plan-shaped twin of `reconcile_tools`.
+///
+/// The live projection above rides `tool_call_completed` on the deliberately
+/// lossy `agent_trace` mirror, so a dropped frame would otherwise strand the
+/// Todo strip on a stale checklist with no repair path. An empty snapshot
+/// means the run ended with the plan cleared → hide.
+#[must_use]
+pub fn plan_settlement(summary_plan: Option<&PlanView>) -> PlanUpdate {
+    match summary_plan {
+        Some(plan) if plan.has_content() => PlanUpdate::Show(plan.clone()),
+        Some(_) => PlanUpdate::Hide,
+        // Legacy core with no `plan` field, or a run that never touched the
+        // scratchpad: leave whatever the live frames produced.
+        None => PlanUpdate::NoChange,
+    }
 }
 
-fn parse_item(v: &Value) -> Option<PlanItemView> {
-    let o = v.as_object()?;
-    let text = o.get("text")?.as_str()?.to_string();
-    let status = match o.get("status").and_then(|s| s.as_str()) {
-        Some("in_progress") => PlanItemStatusView::InProgress,
-        Some("completed") => PlanItemStatusView::Completed,
-        _ => PlanItemStatusView::Pending,
-    };
-    Some(PlanItemView { text, status })
+fn parse_plan_view(snapshot: &Value) -> Option<PlanView> {
+    serde_json::from_value(snapshot.clone()).ok()
 }
 
 #[cfg(test)]
@@ -179,6 +116,16 @@ mod tests {
         assert_eq!(scratchpad_plan_update("read", None), PlanUpdate::NoChange);
     }
 
+    #[test]
+    fn a_malformed_snapshot_leaves_the_panel_alone() {
+        // Defensive: a shape change on the core side must not blank a live plan.
+        let bad = json!({"items": "not an array"});
+        assert_eq!(
+            scratchpad_plan_update("set_plan", Some(&bad)),
+            PlanUpdate::NoChange
+        );
+    }
+
     fn pv(items: &[(&str, PlanItemStatusView)], complete: bool) -> PlanView {
         PlanView {
             objective: Some("Ship".into()),
@@ -186,7 +133,7 @@ mod tests {
                 .iter()
                 .map(|(t, s)| PlanItemView {
                     text: (*t).into(),
-                    status: s.clone(),
+                    status: *s,
                 })
                 .collect(),
             complete,
@@ -212,9 +159,9 @@ mod tests {
     fn archive_summary_glyph_and_label() {
         use PlanItemStatusView::*;
         let done = pv(&[("a", Completed), ("b", Completed)], true);
-        assert_eq!(done.archive_summary(), ("✓", "任务完成 · 2/2".to_string()));
+        assert_eq!(archive_summary(&done), ("✓", "任务完成 · 2/2".to_string()));
         let partial = pv(&[("a", Completed), ("b", Pending)], false);
-        assert_eq!(partial.archive_summary(), ("◗", "未完成 · 1/2".to_string()));
+        assert_eq!(archive_summary(&partial), ("◗", "未完成 · 1/2".to_string()));
     }
 
     #[test]
@@ -223,5 +170,33 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         let back: PlanView = serde_json::from_str(&s).unwrap();
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn settlement_overrides_a_stale_live_plan() {
+        let authoritative = pv(
+            &[
+                ("a", PlanItemStatusView::Completed),
+                ("b", PlanItemStatusView::Completed),
+            ],
+            true,
+        );
+        match plan_settlement(Some(&authoritative)) {
+            PlanUpdate::Show(v) => assert_eq!(v.done_count(), 2),
+            other => panic!("expected Show, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn settlement_with_a_cleared_plan_hides() {
+        assert_eq!(
+            plan_settlement(Some(&PlanView::default())),
+            PlanUpdate::Hide
+        );
+    }
+
+    #[test]
+    fn settlement_without_a_summary_plan_changes_nothing() {
+        assert_eq!(plan_settlement(None), PlanUpdate::NoChange);
     }
 }

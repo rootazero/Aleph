@@ -9,7 +9,6 @@ use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
 #[serde(rename_all = "snake_case")]
 pub enum RoutingMethod {
     ExactName,
-    ExactSkill,
     LlmSemantic,
 }
 
@@ -33,7 +32,18 @@ pub trait LlmMatcher: Send + Sync {
     ) -> Option<RoutingDecision>;
 }
 
-/// Three-tier smart router: exact name -> exact skill -> LLM semantic
+/// Two-tier smart router: **explicitly quoted** agent name → LLM semantic match.
+///
+/// There is deliberately no keyword tier. A previous Tier 2 lowercased the
+/// caller's free-text intent and word-boundary-matched it against every skill
+/// id / name / alias, returning confidence 0.8 *before* the LLM matcher was
+/// ever consulted — i.e. a rules engine deciding a routing question from
+/// natural-language prose. CLAUDE.md R7 forbids exactly that
+/// ("严禁用确定性代码替代 LLM 擅长的推理判断（…路由决策…）", and the
+/// Do-NOT list names "正则 / 规则引擎做意图识别或路由"), which is why Tier 1
+/// already restricted itself to *quoted* names. With no matcher configured the
+/// router now returns `None` for unquoted prose rather than guessing —
+/// failing visibly beats routing to the wrong agent with 0.8 confidence.
 pub struct SmartRouter {
     resolver: Arc<dyn AgentResolver>,
     llm_matcher: Option<Arc<dyn LlmMatcher>>,
@@ -74,12 +84,7 @@ impl SmartRouter {
             return Ok(Some(decision));
         }
 
-        // Tier 2: Exact skill match
-        if let Some(decision) = self.try_exact_skill(intent, &healthy_agents) {
-            return Ok(Some(decision));
-        }
-
-        // Tier 3: LLM semantic match
+        // Tier 2: LLM semantic match
         if let Some(ref matcher) = self.llm_matcher {
             if let Some(decision) = matcher.match_intent(intent, &healthy_agents).await {
                 return Ok(Some(decision));
@@ -120,62 +125,6 @@ impl SmartRouter {
         }
 
         None
-    }
-
-    /// Tier 2: Match by skill ID, skill name, or skill alias.
-    ///
-    /// Uses word-boundary matching to avoid false positives
-    /// (e.g. "code" should not match inside "decode").
-    fn try_exact_skill(&self, intent: &str, agents: &[RegisteredAgent]) -> Option<RoutingDecision> {
-        let intent_lower = intent.to_lowercase();
-        for agent in agents {
-            for skill in &agent.card.skills {
-                let skill_id_lower = skill.id.to_lowercase();
-                let skill_name_lower = skill.name.to_lowercase();
-                let aliases_lower: Vec<String> = skill
-                    .aliases
-                    .as_ref()
-                    .map(|a| a.iter().map(|s| s.to_lowercase()).collect())
-                    .unwrap_or_default();
-                if Self::has_word_match(&intent_lower, &skill_id_lower)
-                    || Self::has_word_match(&intent_lower, &skill_name_lower)
-                    || aliases_lower
-                        .iter()
-                        .any(|alias| Self::has_word_match(&intent_lower, alias))
-                {
-                    return Some(RoutingDecision {
-                        agent: agent.clone(),
-                        confidence: 0.8,
-                        method: RoutingMethod::ExactSkill,
-                        reason: Some(format!("Skill match: {}", skill.name)),
-                    });
-                }
-            }
-        }
-        None
-    }
-
-    /// Return true if `needle` appears as a whole word inside `haystack`.
-    /// A "word" is defined as a maximal contiguous run of alphanumeric chars.
-    fn has_word_match(haystack: &str, needle: &str) -> bool {
-        if needle.is_empty() {
-            return false;
-        }
-        // Word-boundary substring match: `needle` may be multi-word (e.g. a skill
-        // id "code-review" or name "code review"), so a plain token-split equality
-        // check cannot match it. Require `needle` to appear in `haystack` delimited
-        // by non-alphanumeric boundaries on both sides.
-        haystack.match_indices(needle).any(|(start, matched)| {
-            let before_ok = haystack[..start]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_alphanumeric());
-            let after_ok = haystack[start + matched.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| !c.is_alphanumeric());
-            before_ok && after_ok
-        })
     }
 }
 
@@ -386,18 +335,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_skill_match() {
+    async fn unquoted_skill_words_do_not_route_without_an_llm_matcher() {
+        // R7 regression: prose that merely *mentions* a skill must not be
+        // keyword-routed. With no matcher configured the router says "I don't
+        // know" instead of picking Dev Agent at 0.8 confidence.
         let skill = make_skill("code-review", "Code Review", None);
         let agent = make_agent("Dev Agent", vec![skill], AgentHealth::Healthy);
         let resolver = Arc::new(MockResolver::new(vec![agent]));
         let router = SmartRouter::new(resolver);
 
-        // "code review" won't match the agent name "Dev Agent", so it falls to tier 2
-        let result = router.route("do a code review").await.unwrap();
-        assert!(result.is_some());
-        let decision = result.unwrap();
-        assert_eq!(decision.confidence, 0.8);
-        assert_eq!(decision.method, RoutingMethod::ExactSkill);
+        assert!(router.route("do a code review").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unquoted_skill_words_go_to_the_llm_matcher() {
+        struct RecordingLlm;
+        #[async_trait::async_trait]
+        impl LlmMatcher for RecordingLlm {
+            async fn match_intent(
+                &self,
+                _intent: &str,
+                agents: &[RegisteredAgent],
+            ) -> Option<RoutingDecision> {
+                agents.first().map(|a| RoutingDecision {
+                    agent: a.clone(),
+                    confidence: 0.7,
+                    method: RoutingMethod::LlmSemantic,
+                    reason: None,
+                })
+            }
+        }
+        let skill = make_skill("code-review", "Code Review", None);
+        let agent = make_agent("Dev Agent", vec![skill], AgentHealth::Healthy);
+        let resolver = Arc::new(MockResolver::new(vec![agent]));
+        let router = SmartRouter::new(resolver).with_llm_matcher(Arc::new(RecordingLlm));
+
+        let decision = router.route("do a code review").await.unwrap().unwrap();
+        assert_eq!(
+            decision.method,
+            RoutingMethod::LlmSemantic,
+            "the semantic tier owns unquoted intent"
+        );
     }
 
     #[tokio::test]

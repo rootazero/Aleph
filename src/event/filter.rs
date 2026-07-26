@@ -335,17 +335,10 @@ mod tests {
         assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
         // Non-matching event type
-        let plan_event = AlephEvent::PlanRequested(crate::event::types::PlanRequest {
-            input: InputEvent {
-                text: "test".to_string(),
-                session_id: None,
-                context: None,
-                timestamp: 0,
-            },
-            intent_type: None,
-            detected_steps: vec![],
-        });
-        assert!(!filter.matches(&make_global_event("s1", None, plan_event)));
+        let other_event = AlephEvent::TeamDisbanded {
+            team_id: "t1".to_string(),
+        };
+        assert!(!filter.matches(&make_global_event("s1", None, other_event)));
     }
 
     #[test]
@@ -355,17 +348,10 @@ mod tests {
         assert!(filter.matches(&make_global_event("s1", None, make_input_event())));
         assert!(filter.matches(&make_global_event("s1", None, make_loop_stop_event())));
 
-        let plan_event = AlephEvent::PlanRequested(crate::event::types::PlanRequest {
-            input: InputEvent {
-                text: "test".to_string(),
-                session_id: None,
-                context: None,
-                timestamp: 0,
-            },
-            intent_type: None,
-            detected_steps: vec![],
-        });
-        assert!(filter.matches(&make_global_event("s1", None, plan_event)));
+        let other_event = AlephEvent::TeamDisbanded {
+            team_id: "t1".to_string(),
+        };
+        assert!(filter.matches(&make_global_event("s1", None, other_event)));
     }
 
     #[test]

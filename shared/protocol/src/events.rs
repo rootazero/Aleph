@@ -686,6 +686,17 @@ pub struct RunSummary {
     /// Errors that surfaced during the run; one per failed tool call.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<ToolErrorItem>,
+    /// Terminal state of the session's execution list (todo/plan), when one
+    /// was active.
+    ///
+    /// Authoritative, for the same reason `tool_summaries` is: the live plan
+    /// frames ride `tool_call_completed` on the deliberately-lossy
+    /// `agent_trace` mirror (bounded mpsc + `try_send`), so a dropped frame
+    /// would otherwise leave a renderer stuck on a stale checklist forever
+    /// with no repair path. Consumers reconcile against this at `run_complete`
+    /// exactly as they do for tool rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::plan::PlanSnapshot>,
 }
 
 /// Lightweight view of `alephcore::orchestrator::dispatch::TokenBreakdown`

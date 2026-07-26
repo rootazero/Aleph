@@ -1,16 +1,22 @@
 //! `ExecutionPlanLayer` — emits `<execution_plan>` at priority 1756 (Dynamic).
 //!
-//! Re-surfaces the session's active scratchpad execution list (objective +
-//! checklist + current step) into the system prompt **every turn** while
-//! work remains. This closes the one gap Aleph's scratchpad had vs the
-//! reference agents: codex `update_plan` keeps the plan persistently visible
-//! in its UI, opencode `todowrite` and Claude Code's `TodoWrite` re-inject the
-//! list as a per-turn reminder, and hermes-agent's `/goal` loop re-states the
-//! goal in every continuation. Aleph previously only echoed progress inside
-//! the `scratchpad` tool's own result (i.e. only on turns the model called
-//! it) plus a stop-time verifier — so across a long run of bash/edit/read
-//! tool calls the plan dropped out of context and the model could lose the
-//! thread.
+//! Surfaces the session's active scratchpad execution list (objective +
+//! checklist + current step) into the system prompt at **run start**, so a run
+//! that resumes an unfinished plan opens already knowing it — codex
+//! `update_plan` keeps the plan persistently visible in its UI, and
+//! hermes-agent's `/goal` loop re-states the goal in every continuation.
+//!
+//! **Scope, precisely** (the doc here used to claim "every turn", which the
+//! call chain never did): the content comes from `ResolvedContext`, resolved
+//! once per run by `harness_bridge::prompt_build::resolve_prompt_context` and
+//! then frozen into `HarnessDeps::system_prompt` for the whole Think→Act loop.
+//! Mid-run ticks do **not** refresh this block. They do not need to: the
+//! `scratchpad` tool echoes the updated checklist in its own result on every
+//! mutating call, and `context::compact::plan_carry` re-injects the list when
+//! compaction would otherwise drain those echoes. Those two carry intra-run
+//! freshness; this layer carries the cold-start anchor. Do not "fix" the
+//! staleness by recomputing per turn — that buys nothing the echo does not
+//! already provide and would cost lines in `src/harness/` (R10).
 //!
 //! R10-safe: pure scaffolding. The content is the model's *own* checklist
 //! (the boxes it ticked), rendered verbatim — the harness makes no
