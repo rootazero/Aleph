@@ -375,7 +375,10 @@ pub struct StatsParams {
 ///
 /// The note graph is inherently per-agent, so an unscoped request returns
 /// `null` for the graph counts rather than passing the default agent's graph
-/// off as everyone's.
+/// off as everyone's. A failed graph fetch for a *scoped* request also
+/// returns `null`, not `0` — a failure to count is not "counted zero", and
+/// padding it with a plausible-looking `0` would tell the panel something
+/// false with total confidence.
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
@@ -397,7 +400,10 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let (graph_nodes, graph_edges) = match agent {
         Some(a) => match db.get_graph_data(a, 10000).await {
             Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
-            Err(_) => (Some(0), Some(0)),
+            // A failed fetch is "we could not count", not "this agent has
+            // zero nodes" — report the same `null` an unscoped request gets,
+            // not a confident-looking zero.
+            Err(_) => (None, None),
         },
         None => (None, None),
     };
@@ -1325,5 +1331,28 @@ mod stats_tests {
         let v = r.result.expect("success");
         assert_eq!(v["totalGraphNodes"], 2, "alpha's two notes are two nodes");
         assert!(v["totalGraphEdges"].is_i64());
+    }
+
+    /// `null` means "could not count", not "counted zero". An agent that
+    /// genuinely has no notes must still get back a real `0`, not `null` —
+    /// otherwise the fix that makes a *failed* graph fetch report `null`
+    /// (see `handle_stats`) would also blur an empty-but-successful fetch
+    /// into "unanswerable".
+    #[tokio::test]
+    async fn scoped_stats_zero_notes_reports_real_zero_not_null() {
+        let db = db();
+        seed(&db).await; // "gamma" is never seeded — zero notes, not an error
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "gamma" }))), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "agent");
+        assert_eq!(
+            v["totalGraphNodes"], 0,
+            "gamma has zero notes, but zero is a real, known count"
+        );
+        assert_eq!(v["totalGraphEdges"], 0);
+        assert!(!v["totalGraphNodes"].is_null());
+        assert!(!v["totalGraphEdges"].is_null());
     }
 }
