@@ -548,16 +548,11 @@ impl StateDatabase {
         if row.0 == 0 {
             return Ok(None);
         }
-        let to_u64 = |v: i64, col: &str| -> Result<u64, rusqlite::Error> {
+        let to_u64 = |v: i64, col: &str| -> Result<u64, AlephError> {
             if v < 0 {
-                Err(rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Integer,
-                    Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("{col} must be non-negative, got {v}"),
-                    )),
-                ))
+                Err(AlephError::config(format!(
+                    "{col} must be non-negative, got {v}"
+                )))
             } else {
                 Ok(v as u64)
             }

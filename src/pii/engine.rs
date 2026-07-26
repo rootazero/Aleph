@@ -262,6 +262,7 @@ impl PiiEngine {
         for detection in &sorted {
             let action = Self::action_for_rule(config, &detection.rule_name);
             match action {
+                PiiAction::Off => {}
                 PiiAction::Block => {
                     if detection.start < detection.end
                         && detection.end <= result.len()
