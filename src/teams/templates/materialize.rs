@@ -784,27 +784,90 @@ mod tests {
         }
     }
 
-    /// The point of narrowing code-review: a reviewer must not have edit tools
-    /// within reach. (`bash` stays — reading a diff needs `git diff` — so this
-    /// is accident scoping, not enforcement.)
+    /// The point of narrowing both declared templates: neither's roles may
+    /// have an edit tool within reach, and strategy-room additionally bans
+    /// `bash`/`code_exec` per spec §3.2 ("Everything else — bash, code
+    /// execution, all file writes ... is out"). `bash` stays for code-review
+    /// — reading a diff needs `git diff` — so that half is attention
+    /// scoping, not enforcement.
     #[test]
-    fn code_review_roles_carry_no_edit_tools() {
+    fn declared_templates_carry_no_banned_tools() {
         let registry = builtins();
-        let tpl = registry.get("code-review").expect("built-in present");
-        let surfaces = std::iter::once((
-            "lead-reviewer",
-            tpl.leader.tools.as_ref().expect("declared"),
-        ))
-        .chain(
-            tpl.members
+        let edit_tools = ["file_write", "file_edit", "file_ops", "apply_patch"];
+        // (template, tools banned on top of the edit set, declared roles).
+        let per_template: &[(&str, &[&str], usize)] = &[
+            ("code-review", &[], 5),
+            ("strategy-room", &["bash", "code_exec"], 4),
+        ];
+        for (name, extra, roles) in per_template {
+            let tpl = registry.get(name).expect("built-in present");
+            let banned: Vec<&str> = edit_tools
                 .iter()
-                .map(|m| (m.id.as_str(), m.tools.as_ref().expect("declared"))),
-        );
-        for (id, tools) in surfaces {
-            for banned in ["file_write", "file_edit", "file_ops", "apply_patch"] {
+                .copied()
+                .chain(extra.iter().copied())
+                .collect();
+            let surfaces = std::iter::once((
+                tpl.leader.id.as_str(),
+                tpl.leader.tools.as_ref().expect("declared"),
+            ))
+            .chain(
+                tpl.members
+                    .iter()
+                    .map(|m| (m.id.as_str(), m.tools.as_ref().expect("declared"))),
+            );
+            let mut checked = 0;
+            for (id, tools) in surfaces {
+                checked += 1;
+                for banned_tool in &banned {
+                    assert!(
+                        !tools.iter().any(|t| t == banned_tool),
+                        "`{banned_tool}` must stay out of `{name}` role `{id}`'s surface"
+                    );
+                }
+            }
+            // Without this the guard goes quiet instead of failing when a
+            // template loses roles: `members` is `#[serde(default)]`, so an
+            // emptied list still loads and leaves only the leader to check.
+            assert_eq!(
+                checked, *roles,
+                "`{name}` should declare {roles} roles — fewer means this guard stopped checking them"
+            );
+        }
+    }
+
+    /// `team_delegate` is leader-only (`LEADER_ESSENTIAL_TOOLS`): a worker
+    /// gaining it via copy-paste would let it delegate on the leader's
+    /// behalf. Both declared templates must keep it exclusively on the
+    /// leader's declaration.
+    #[test]
+    fn only_the_leader_declares_team_delegate() {
+        let registry = builtins();
+        for (name, members) in [("strategy-room", 3), ("code-review", 4)] {
+            let tpl = registry.get(name).expect("built-in present");
+            // Same anti-vacuity pin as above: no members, nothing checked.
+            assert_eq!(
+                tpl.members.len(),
+                members,
+                "`{name}` should have {members} members — fewer means this guard stopped checking them"
+            );
+            assert!(
+                tpl.leader
+                    .tools
+                    .as_ref()
+                    .expect("declared")
+                    .iter()
+                    .any(|t| t == "team_delegate"),
+                "`{name}` leader must declare `team_delegate`"
+            );
+            for m in &tpl.members {
                 assert!(
-                    !tools.iter().any(|t| t == banned),
-                    "`{banned}` must stay out of reviewer `{id}`'s surface"
+                    !m.tools
+                        .as_ref()
+                        .expect("declared")
+                        .iter()
+                        .any(|t| t == "team_delegate"),
+                    "`{name}` member `{}` must not declare `team_delegate`",
+                    m.id
                 );
             }
         }
