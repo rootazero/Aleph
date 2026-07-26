@@ -182,6 +182,82 @@ pub fn locate_note(window: &[CompressedFact], path: &str) -> Option<(MemoryFacet
     Some((facet, (pos as u32) / PAGE_SIZE))
 }
 
+// ─── Markdown export ────────────────────────────────────────────────────────
+
+/// Maximum entries one clipboard export may carry.
+///
+/// Each note needs its own `graph.node_detail` round trip, so an unbounded
+/// "select all → copy" would fan out arbitrarily. The batch bar disables the
+/// button above this and says the limit out loud — a silent truncation would
+/// hand the user a partial export that looks complete.
+pub const EXPORT_MAX: usize = 50;
+
+/// One note staged for export. `body` is `Err` when its full text could not be
+/// fetched; the renderer keeps the entry and records the reason rather than
+/// dropping it.
+#[derive(Debug, Clone)]
+pub struct NoteExport {
+    pub title: String,
+    pub path: String,
+    pub body: Result<String, String>,
+}
+
+/// One raw conversation row staged for export.
+#[derive(Debug, Clone)]
+pub struct RawExport {
+    pub id: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    /// Already-formatted display timestamp (see [`format_ts`]).
+    pub created_at: String,
+    pub user_input: String,
+    pub ai_output: String,
+}
+
+/// Render staged notes as a markdown document, one `#` section per note.
+#[must_use]
+pub fn notes_to_markdown(items: &[NoteExport]) -> String {
+    let mut out = String::new();
+    for item in items {
+        out.push_str(&format!("# {}\n\n`{}`\n\n", item.title, item.path));
+        match &item.body {
+            Ok(body) => out.push_str(body.trim_end()),
+            Err(e) => out.push_str(&format!("<!-- body unavailable: {e} -->")),
+        }
+        out.push_str("\n\n");
+    }
+    // One trailing newline, not two, so round-tripping the text is stable.
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
+/// Render staged raw rows as a markdown document, one `#` section per turn.
+#[must_use]
+pub fn raws_to_markdown(items: &[RawExport]) -> String {
+    let mut out = String::new();
+    for item in items {
+        let session = item
+            .session_id
+            .as_deref()
+            .map(|s| format!(" · session {s}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "# {}\n\n`{}` · {}{}\n\n",
+            item.created_at, item.id, item.agent_id, session
+        ));
+        if !item.user_input.trim().is_empty() {
+            out.push_str(&format!("**Q** {}\n\n", item.user_input.trim()));
+        }
+        if !item.ai_output.trim().is_empty() {
+            out.push_str(&format!("**A** {}\n\n", item.ai_output.trim()));
+        }
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +439,97 @@ mod tests {
         // hit count is reported separately by the hits signal.
         let facts = vec![fact("feedback"), fact("preference")];
         assert_eq!(bucket_counts(&facts), [2, 1, 1, 0]);
+    }
+
+    // ── Markdown export ─────────────────────────────────────────────────────
+
+    #[test]
+    fn notes_export_writes_title_path_and_body() {
+        let items = vec![NoteExport {
+            title: "deploy-notes".into(),
+            path: "facts/deploy-notes".into(),
+            body: Ok("- smoke test first\n".into()),
+        }];
+        let md = notes_to_markdown(&items);
+        assert!(md.contains("# deploy-notes"));
+        assert!(md.contains("`facts/deploy-notes`"));
+        assert!(md.contains("- smoke test first"));
+    }
+
+    #[test]
+    fn notes_export_marks_unfetchable_bodies_instead_of_dropping_them() {
+        // A note whose body failed to load must still appear, with the reason
+        // visible. Silently omitting it would make the export look complete.
+        let items = vec![NoteExport {
+            title: "broken".into(),
+            path: "facts/broken".into(),
+            body: Err("node_detail: timeout".into()),
+        }];
+        let md = notes_to_markdown(&items);
+        assert!(md.contains("# broken"));
+        assert!(md.contains("<!-- body unavailable: node_detail: timeout -->"));
+    }
+
+    #[test]
+    fn notes_export_separates_entries_with_a_blank_line() {
+        let items = vec![
+            NoteExport {
+                title: "a".into(),
+                path: "facts/a".into(),
+                body: Ok("x".into()),
+            },
+            NoteExport {
+                title: "b".into(),
+                path: "facts/b".into(),
+                body: Ok("y".into()),
+            },
+        ];
+        let md = notes_to_markdown(&items);
+        assert_eq!(md.matches("# ").count(), 2);
+        assert!(
+            md.contains("x\n\n# b"),
+            "entries must be blank-line separated: {md:?}"
+        );
+    }
+
+    #[test]
+    fn raws_export_labels_both_halves_and_keeps_session() {
+        let items = vec![RawExport {
+            id: "raw-1".into(),
+            agent_id: "main".into(),
+            session_id: Some("s-77".into()),
+            created_at: "2026-07-24 14:02".into(),
+            user_input: "why phantom pages?".into(),
+            ai_output: "the total was global".into(),
+        }];
+        let md = raws_to_markdown(&items);
+        assert!(md.contains("2026-07-24 14:02"));
+        assert!(md.contains("main"));
+        assert!(md.contains("s-77"));
+        assert!(md.contains("**Q** why phantom pages?"));
+        assert!(md.contains("**A** the total was global"));
+    }
+
+    #[test]
+    fn raws_export_omits_an_empty_half() {
+        // Raw rows built from a single-sided record must not emit a bare "**A**".
+        let items = vec![RawExport {
+            id: "raw-2".into(),
+            agent_id: "main".into(),
+            session_id: None,
+            created_at: "2026-07-24 14:03".into(),
+            user_input: "only a question".into(),
+            ai_output: String::new(),
+        }];
+        let md = raws_to_markdown(&items);
+        assert!(md.contains("**Q** only a question"));
+        assert!(!md.contains("**A**"));
+    }
+
+    #[test]
+    fn export_cap_is_fifty() {
+        // The batch bar disables itself above this and says so; the constant is
+        // the single source both the guard and the message read.
+        assert_eq!(EXPORT_MAX, 50);
     }
 }
