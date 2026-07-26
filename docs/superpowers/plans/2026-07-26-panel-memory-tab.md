@@ -2730,6 +2730,14 @@ pub enum ToastKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToastMsg {
+    /// Monotonic per-push identity. Two toasts with the same text and kind are
+    /// still two different toasts — this field is what lets a stale timer tell
+    /// "mine is still up" from "an identical-looking newer one replaced it".
+    /// Content equality cannot do that job: the real call sites push the same
+    /// static string every time (`toast_deleted` on each single-row delete,
+    /// `toast_copied` on each copy), so two consecutive toasts are routinely
+    /// indistinguishable by content.
+    pub seq: u64,
     pub text: String,
     pub kind: ToastKind,
 }
@@ -2748,16 +2756,39 @@ const TOAST_MS: u64 = 2_400;
 /// one before the timeout fires, the stale timer must not blank the new
 /// message, so it checks before clearing.
 pub fn push_toast(slot: ToastSlot, text: String, kind: ToastKind) {
-    let msg = ToastMsg { text, kind };
-    slot.set(Some(msg.clone()));
+    let seq = next_seq();
+    slot.set(Some(ToastMsg { seq, text, kind }));
     set_timeout(
         move || {
-            if slot.get_untracked().as_ref() == Some(&msg) {
+            if should_clear(slot.get_untracked().map(|m| m.seq), seq) {
                 slot.set(None);
             }
         },
         std::time::Duration::from_millis(TOAST_MS),
     );
+}
+
+/// Next per-push identity. WASM is single-threaded, so a thread-local counter
+/// is a real monotonic sequence here — and unlike a timestamp it cannot collide
+/// for two pushes landing in the same tick.
+fn next_seq() -> u64 {
+    use std::cell::Cell;
+    thread_local!(static SEQ: Cell<u64> = const { Cell::new(0) });
+    SEQ.with(|s| {
+        let n = s.get().wrapping_add(1);
+        s.set(n);
+        n
+    })
+}
+
+/// Whether an expiring timer owns the toast currently on screen.
+///
+/// Split out from the timer closure so the decision is testable without a
+/// browser event loop. The test that matters is the one where two pushes carry
+/// identical text and kind: their `seq` differ, so the older timer must not
+/// clear the newer toast.
+const fn should_clear(current: Option<u64>, expected: u64) -> bool {
+    current == Some(expected)
 }
 
 #[component]
