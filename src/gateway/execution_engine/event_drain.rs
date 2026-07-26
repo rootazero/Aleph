@@ -144,11 +144,15 @@ pub(crate) async fn emit_flow_event(
                 // and unbounded — unlike the WS `agent_trace` mirror it feeds —
                 // so what we capture here is authoritative.
                 let mut s = state.lock().await;
+                // A failed call changed nothing on disk, so it must not move
+                // the latch either — a rejected `clear` used to blank the strip.
                 if let Some(clears) = s.scratchpad_calls.remove(&id) {
-                    if clears {
-                        s.plan = Some(aleph_protocol::plan::PlanSnapshot::default());
-                    } else if let Some(plan) = result.as_ref().and_then(extract_plan_snapshot) {
-                        s.plan = Some(plan);
+                    if error.is_none() {
+                        if clears {
+                            s.plan = Some(aleph_protocol::plan::PlanSnapshot::default());
+                        } else if let Some(plan) = result.as_ref().and_then(extract_plan_snapshot) {
+                            s.plan = Some(plan);
+                        }
                     }
                 }
             }
@@ -734,6 +738,41 @@ mod tests {
             .await
             .expect("an explicit empty plan");
         assert!(!plan.has_content());
+    }
+
+    #[tokio::test]
+    async fn a_failed_scratchpad_call_does_not_move_the_latch() {
+        let (_inner, emitter) = make_emitter();
+        let state = make_state();
+        emit_flow_event(
+            FlowStreamEvent::ToolCallStart {
+                id: "sp-1".to_string(),
+                name: "scratchpad".to_string(),
+                args: serde_json::json!({ "action": "clear" }),
+            },
+            &emitter,
+            "run-err",
+            &state,
+        )
+        .await
+        .unwrap();
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "sp-1".to_string(),
+                result: None,
+                error: Some("permission denied".to_string()),
+                duration_ms: 1,
+            },
+            &emitter,
+            "run-err",
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            state.lock().await.plan.is_none(),
+            "a rejected clear changed nothing on disk, so it must not blank the strip"
+        );
     }
 
     #[tokio::test]
