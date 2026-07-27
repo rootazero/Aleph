@@ -113,11 +113,6 @@ impl ConfigWatcher {
         })
     }
 
-    /// Create a `ConfigWatcher` with default path
-    pub fn with_default_path() -> Result<Self, ConfigWatcherError> {
-        Self::new(ConfigWatcherConfig::default())
-    }
-
     /// Subscribe to configuration events
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<ConfigEvent> {
