@@ -64,6 +64,40 @@ pub(crate) fn type_args(text: &str) -> Vec<String> {
     vec!["type".into(), "--".into(), text.to_string()]
 }
 
+/// `ydotool mousemove --wheel -x H -y V` — emit wheel clicks.
+///
+/// ydotool models the wheel as a relative pointer move on the wheel axes, so a
+/// scroll is a `mousemove` with `--wheel`, not a `click`. The sign convention
+/// matches `enigo`'s: positive Y is down, positive X is right.
+///
+/// `amount` is clamped by the caller (see `input::scroll`) before it gets here.
+///
+/// # Errors
+///
+/// [`DesktopError::InputFailed`] for an unknown direction — the same vocabulary
+/// and the same message as the enigo path, so the two rails cannot drift.
+pub(crate) fn scroll_args(direction: &str, amount: i32) -> Result<Vec<String>> {
+    let (x, y) = match direction {
+        "down" => (0, amount),
+        "up" => (0, amount.saturating_neg()),
+        "right" => (amount, 0),
+        "left" => (amount.saturating_neg(), 0),
+        other => {
+            return Err(DesktopError::InputFailed(format!(
+                "Unknown scroll direction: '{other}'. Expected up, down, left, or right"
+            )));
+        }
+    };
+    Ok(vec![
+        "mousemove".into(),
+        "--wheel".into(),
+        "-x".into(),
+        x.to_string(),
+        "-y".into(),
+        y.to_string(),
+    ])
+}
+
 /// `ydotool key M:1 … K:1 K:0 … M:0` — press modifiers, tap the main key, then
 /// release modifiers in reverse order, using Linux evdev keycodes.
 ///
@@ -242,30 +276,14 @@ const fn ascii_char_keycode(ch: char) -> Option<u16> {
 ///
 /// True only on a Wayland session with the `ydotool` client on `PATH`. On X11
 /// (or when `ydotool` is absent) this is false and the caller keeps `enigo`.
+///
+/// Both facts come from `crate::linux::session`, the single source of truth.
+/// This module used to carry its own copy of the session rules, which is how
+/// the clipboard and the permission layer ended up with three subtly different
+/// answers to "is this Wayland?".
 #[cfg(target_os = "linux")]
 pub(crate) fn should_use_ydotool() -> bool {
-    is_wayland_session() && ydotool_available()
-}
-
-#[cfg(target_os = "linux")]
-fn is_wayland_session() -> bool {
-    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
-        if t.eq_ignore_ascii_case("wayland") {
-            return true;
-        }
-        if t.eq_ignore_ascii_case("x11") {
-            return false;
-        }
-    }
-    std::env::var_os("WAYLAND_DISPLAY").is_some()
-}
-
-#[cfg(target_os = "linux")]
-fn ydotool_available() -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join("ydotool").is_file())
+    crate::linux::session().kind.is_wayland() && crate::linux::tools().has("ydotool")
 }
 
 #[cfg(target_os = "linux")]
@@ -355,6 +373,14 @@ pub(crate) fn key_button(keys: &[String], action: PressAction) -> Result<()> {
     let args = key_button_args(keys, action)?;
     run_ydotool(&args)?;
     tracing::info!(keys = ?keys, action = ?action, "Key button action performed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn scroll(direction: &str, amount: i32) -> Result<()> {
+    let args = scroll_args(direction, amount)?;
+    run_ydotool(&args)?;
+    tracing::info!(direction, amount, "Scroll performed (ydotool/Wayland)");
     Ok(())
 }
 
@@ -471,6 +497,39 @@ mod tests {
         assert_eq!(evdev_modifier("ALT"), Some(56));
         assert_eq!(evdev_modifier("option"), Some(56));
         assert_eq!(evdev_modifier("capslock"), None);
+    }
+
+    #[test]
+    fn scroll_args_use_the_wheel_axes_with_enigo_sign_convention() {
+        assert_eq!(
+            scroll_args("down", 3).unwrap(),
+            vec!["mousemove", "--wheel", "-x", "0", "-y", "3"]
+        );
+        assert_eq!(
+            scroll_args("up", 3).unwrap(),
+            vec!["mousemove", "--wheel", "-x", "0", "-y", "-3"]
+        );
+        assert_eq!(
+            scroll_args("right", 2).unwrap(),
+            vec!["mousemove", "--wheel", "-x", "2", "-y", "0"]
+        );
+        assert_eq!(
+            scroll_args("left", 2).unwrap(),
+            vec!["mousemove", "--wheel", "-x", "-2", "-y", "0"]
+        );
+    }
+
+    #[test]
+    fn scroll_args_reject_an_unknown_direction_like_the_enigo_path() {
+        let err = scroll_args("diagonal", 1).unwrap_err();
+        assert!(err.to_string().contains("diagonal"), "{err}");
+    }
+
+    #[test]
+    fn scroll_args_do_not_overflow_at_the_i32_boundary() {
+        // `up` negates; a naive `-amount` would panic in debug on i32::MIN.
+        assert!(scroll_args("up", i32::MIN).is_ok());
+        assert!(scroll_args("left", i32::MIN).is_ok());
     }
 
     #[test]

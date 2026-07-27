@@ -19,6 +19,12 @@ pub mod wayland_input;
 pub mod window;
 #[cfg(target_os = "macos")]
 mod window_ax;
+// Linux window management (native X11/EWMH + sway/Hyprland IPC). The backend
+// selection and the compositor argv/JSON parsers are pure and host-testable;
+// only the X11 arm is Linux-gated. `window.rs` calls in under `cfg(linux)`, so
+// on other platforms the module has no non-test consumer.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub mod window_linux;
 
 pub use app_launch::{launch_app, quit_app};
 pub use input::{

@@ -336,6 +336,87 @@ pub fn take_screenshot_display(
     })
 }
 
+/// Capture one window, cropped to its own frame, without raising it.
+///
+/// This is the `screenshot { window_id }` path: the model sees a single
+/// application instead of the whole desktop, so nothing else on screen leaks
+/// into the transcript, and an occluded or background window is still legible.
+///
+/// The returned [`WindowShot`] carries the window's origin and size in the
+/// global coordinate space alongside the pixels. Without that, a crop is a
+/// targeting regression — the model would reason in window pixels and click in
+/// global ones.
+///
+/// `window_id` is the id from `window_list`. On Linux that is the X11 window
+/// (`_NET_CLIENT_LIST`) or the compositor's own handle, and `xcap` keys its
+/// window list by the same X11 id, so the two agree on X11. Under a Wayland
+/// compositor `xcap` cannot enumerate windows at all, which surfaces as "no
+/// window with that id" rather than a wrong capture.
+///
+/// # Errors
+///
+/// - [`DesktopError::ScreenCapture`] if windows cannot be enumerated, the id
+///   does not match a capturable window, or the capture/encoding fails.
+pub fn take_screenshot_window(window_id: u64) -> Result<crate::WindowShot> {
+    debug!("Capturing window {window_id}");
+
+    let windows = xcap::Window::all()
+        .map_err(|e| DesktopError::ScreenCapture(format!("Failed to enumerate windows: {e}")))?;
+
+    let window = windows
+        .into_iter()
+        .find(|w| w.id().is_ok_and(|id| u64::from(id) == window_id))
+        .ok_or_else(|| {
+            DesktopError::ScreenCapture(format!(
+                "No capturable window with id {window_id}. Re-run window_list for a current id;                  on a Wayland session single-window capture is not available at all — capture the                  screen instead."
+            ))
+        })?;
+
+    // Read the frame before capturing: a window that moves between the two is
+    // better described by where it was when its pixels were taken than by a
+    // rectangle read afterwards.
+    let bounds = match (window.x(), window.y(), window.width(), window.height()) {
+        (Ok(x), Ok(y), Ok(w), Ok(h)) => Some(crate::BoundingBox {
+            x: f64::from(x),
+            y: f64::from(y),
+            w: f64::from(w),
+            h: f64::from(h),
+        }),
+        // Not told is not zero: a shot whose origin is unknown must say so, so
+        // the caller does not map its pixels against a fabricated (0,0).
+        _ => None,
+    };
+
+    let scale_factor = window
+        .current_monitor()
+        .ok()
+        .and_then(|m| m.scale_factor().ok())
+        .map(f64::from);
+
+    let image = window
+        .capture_image()
+        .map_err(|e| DesktopError::ScreenCapture(format!("Window capture failed: {e}")))?;
+
+    let (width, height) = (image.width(), image.height());
+    let mut buf = Cursor::new(Vec::new());
+    image
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| DesktopError::ScreenCapture(format!("PNG encoding failed: {e}")))?;
+
+    debug!("Window {window_id} captured: {width}x{height}");
+
+    Ok(crate::WindowShot {
+        image: Screenshot {
+            image_base64: general_purpose::STANDARD.encode(buf.into_inner()),
+            width,
+            height,
+            format: "png".to_string(),
+            scale_factor,
+        },
+        window_bounds: bounds,
+    })
+}
+
 /// Number of pixels the uniformity probe reads before declaring a frame flat.
 const UNIFORMITY_SAMPLES: u64 = 4096;
 

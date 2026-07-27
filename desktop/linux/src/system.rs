@@ -26,116 +26,75 @@ impl Default for LinuxSystem {
 #[async_trait]
 impl SystemCapability for LinuxSystem {
     async fn launch_app(&self, app_name: &str) -> Result<()> {
+        // One launch implementation for both capability surfaces — see
+        // `aleph_desktop::linux::app`. This used to be a second, weaker copy
+        // (`gtk-launch <human name>` → `xdg-open <human name>`), which meant the
+        // `system` tool and the `desktop` tool could disagree about whether an
+        // app could be started at all.
         let app_name = app_name.to_string();
-        tokio::task::spawn_blocking(move || {
-            // Prefer gtk-launch (GNOME/GTK environments) for .desktop files.
-            let status = std::process::Command::new("gtk-launch")
-                .arg(&app_name)
-                .status();
-
-            let status = match status {
-                Ok(s) if s.success() => return Ok(()),
-                _ => std::process::Command::new("xdg-open")
-                    .arg(&app_name)
-                    .status()
-                    .map_err(|e| {
-                        DesktopError::InputFailed(format!("Failed to launch app '{app_name}': {e}"))
-                    })?,
-            };
-
-            if status.success() {
-                Ok(())
-            } else {
-                Err(DesktopError::InputFailed(format!(
-                    "Failed to launch '{app_name}'"
-                )))
-            }
-        })
-        .await
-        .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+        tokio::task::spawn_blocking(move || aleph_desktop::linux::app::launch(&app_name))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
     async fn quit_app(&self, app_name: &str) -> Result<()> {
+        // Windows-close first, then SIGTERM on an exact executable-name match.
+        // The previous `killall` → `pkill -f` pair matched the whole command
+        // line, so quitting one app could take unrelated processes with it.
         let app_name = app_name.to_string();
-        tokio::task::spawn_blocking(move || {
-            // Try killall first (safer than pkill -f).
-            let status = std::process::Command::new("killall")
-                .arg(&app_name)
-                .status();
-
-            let status = match status {
-                Ok(s) if s.success() => return Ok(()),
-                _ => std::process::Command::new("pkill")
-                    .args(["-f", &app_name])
-                    .status()
-                    .map_err(|e| {
-                        DesktopError::InputFailed(format!("Failed to quit app '{app_name}': {e}"))
-                    })?,
-            };
-
-            if status.success() {
-                Ok(())
-            } else {
-                Err(DesktopError::InputFailed(format!(
-                    "No running application found matching '{app_name}'"
-                )))
-            }
-        })
-        .await
-        .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+        tokio::task::spawn_blocking(move || aleph_desktop::linux::app::quit(&app_name))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
         tokio::task::spawn_blocking(|| {
-            let output = std::process::Command::new("ps")
-                .args(["-eo", "comm,pid", "--no-headers"])
-                .output()
-                .map_err(|e| {
-                    DesktopError::PlatformError(format!("Failed to list running apps: {e}"))
-                })?;
+            // `/proc` instead of `ps -eo comm`: the kernel truncates `comm` to 15
+            // bytes, so the old listing reported `gnome-calculator` as
+            // `gnome-calculato` — a name nothing could then be launched or quit
+            // by. `/proc/<pid>/exe` is the real binary.
+            let procs = aleph_desktop::linux::proc::snapshot();
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(DesktopError::PlatformError(format!(
-                    "ps failed: {}",
-                    stderr.trim()
-                )));
-            }
+            // Which processes own a window, and which one is in front. A GUI
+            // application is exactly one that has a window, so this replaces the
+            // old hand-maintained deny-list of daemon name prefixes — and it
+            // finally lets `is_active` be true for something.
+            let windows = aleph_desktop::action::window_linux::window_list().unwrap_or_default();
+            let active_pid = aleph_desktop::action::window_linux::active_window()
+                .ok()
+                .flatten()
+                .and_then(|id| windows.iter().find(|w| w.id == id))
+                .map(|w| w.pid);
+            let windowed: std::collections::HashSet<u64> =
+                windows.iter().map(|w| w.pid).collect();
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
             let mut apps = Vec::new();
             let mut seen = std::collections::HashSet::new();
-
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() < 2 {
+            for proc in procs {
+                if proc.is_kernel_thread() {
                     continue;
                 }
-
-                let name = parts[0].trim_start_matches("./").to_string();
-                let pid = parts[1].parse::<u64>().unwrap_or(0);
-
-                if name.is_empty()
-                    || seen.contains(&name)
-                    || name.starts_with('[')
-                    || name.starts_with("kworker")
-                    || name.starts_with("systemd-")
-                    || name == "ps"
-                    || name == "bash"
-                    || name == "sh"
-                {
+                let name = proc.best_name().to_string();
+                let pid = u64::from(proc.pid);
+                // One row per application, not per process: a browser is dozens
+                // of processes sharing one executable name.
+                if name.is_empty() || !seen.insert(name.clone()) {
                     continue;
                 }
-
-                seen.insert(name.clone());
                 apps.push(AppInfo {
-                    name,
-                    bundle_id: parts[0].to_string(),
+                    name: name.clone(),
+                    bundle_id: name,
                     pid: Some(pid),
-                    is_active: false,
+                    is_active: active_pid == Some(pid),
                 });
             }
 
+            // Windowed applications first: when a caller asks "what is running",
+            // the things the user can see are the answer they meant.
+            apps.sort_by_key(|a| {
+                let windowed_rank = u8::from(!a.pid.is_some_and(|p| windowed.contains(&p)));
+                (windowed_rank, a.name.to_lowercase())
+            });
             Ok(apps)
         })
         .await
@@ -168,16 +127,17 @@ impl SystemCapability for LinuxSystem {
     }
 
     async fn clipboard_read(&self) -> Result<ClipboardContent> {
-        // Delegates to the `clipboard` module, which reads text plus an
-        // optional image (base64 PNG) — see desktop/linux/src/clipboard.rs.
-        tokio::task::spawn_blocking(crate::clipboard::read)
+        // Delegates to the one Linux clipboard implementation, which reads text
+        // plus an optional image (base64 PNG) — see
+        // `aleph_desktop::linux::clipboard`.
+        tokio::task::spawn_blocking(aleph_desktop::linux::clipboard::read_content)
             .await
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
     async fn clipboard_write(&self, text: &str) -> Result<()> {
         let text = text.to_string();
-        tokio::task::spawn_blocking(move || crate::clipboard::write(&text))
+        tokio::task::spawn_blocking(move || aleph_desktop::linux::clipboard::write_text(&text))
             .await
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }

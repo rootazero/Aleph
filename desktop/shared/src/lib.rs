@@ -25,6 +25,11 @@ pub mod automation_types;
 pub mod bridge;
 pub mod coord;
 pub mod error;
+// Linux session/tool detection plus the Linux-only clipboard and app-launch
+// implementations. Compiled everywhere so its pure logic stays host-testable;
+// its consumers are all Linux-gated.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub mod linux;
 pub mod media_types;
 pub mod native_screen;
 pub mod perception;

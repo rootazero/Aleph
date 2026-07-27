@@ -42,6 +42,11 @@ image = { workspace = true }
 # Input automation
 enigo = { version = "0.3", features = ["serde"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native X11/EWMH window management. Pure-Rust connection (no libxcb needed);
+# already in the dependency graph via xcap's Linux backend.
+x11rb = "0.13"
+
 [target.'cfg(unix)'.dependencies]
 # setpgid on helper spawn so signals propagate when aleph-server exits.
 libc = "0.2"

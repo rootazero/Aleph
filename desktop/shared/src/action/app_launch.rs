@@ -1,13 +1,20 @@
 //! Application launch (platform-specific).
 
+// Only the macOS and Windows arms log inline; the Linux arms delegate to
+// `crate::linux::app` / `crate::action::window_linux`, which own their own logging.
+#[cfg(not(target_os = "linux"))]
 use tracing::info;
 
-use crate::error::{DesktopError, Result};
+#[cfg(not(target_os = "linux"))]
+use crate::error::DesktopError;
+use crate::error::Result;
 
 /// Launch an application by name or bundle ID.
 ///
 /// - **macOS**: `open -b <bundle_id>` (or `open -a <app_name>` if not a bundle ID)
-/// - **Linux**: `xdg-open <app_name>`
+/// - **Linux**: Resolves a `.desktop` entry (by id, `Name=`, or `Exec=`), else a
+///   `PATH` executable, else `xdg-open` for URLs and real paths — see
+///   [`crate::linux::app::launch`].
 /// - **Windows**: `ShellExecuteW` with verb `"open"` (no cmd.exe)
 ///
 /// # Errors
@@ -47,22 +54,10 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        let output = std::process::Command::new("xdg-open")
-            .arg(app_name)
-            .output()
-            .map_err(|e| DesktopError::InputFailed(format!("Failed to launch app: {e}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DesktopError::InputFailed(format!(
-                "Failed to launch '{}': {}",
-                app_name,
-                stderr.trim()
-            )));
-        }
-
-        info!(app_name, "App launched (Linux)");
-        Ok(())
+        // Desktop-entry resolution → PATH executable → xdg-open, in that order.
+        // This arm used to hand a bare application name to `xdg-open`, which
+        // opens *files and URLs*; see `crate::linux::app`.
+        crate::linux::app::launch(app_name)
     }
 
     #[cfg(target_os = "windows")]
@@ -118,7 +113,9 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 /// Quit/close an application by name or bundle ID.
 ///
 /// - **macOS**: Uses `NSRunningApplication` to find and terminate the app by bundle ID.
-/// - **Linux**: Uses `pkill -x <app_name>` (exact process-name match).
+/// - **Linux**: Asks the window manager to close the app's windows, then falls back
+///   to `SIGTERM` on processes whose executable name matches exactly — never a
+///   command-line match. See [`crate::linux::app::quit`].
 /// - **Windows**: Matches running processes by executable name (not window
 ///   title) and posts `WM_CLOSE` to each of their visible windows.
 ///
@@ -149,17 +146,9 @@ pub fn quit_app(app_name: &str) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("pkill")
-            .args(["-x", "--", app_name])
-            .status()
-            .map_err(|e| DesktopError::InputFailed(format!("Failed to quit app: {e}")))?;
-        if !status.success() {
-            return Err(DesktopError::InputFailed(format!(
-                "Failed to quit '{app_name}'"
-            )));
-        }
-        info!(app_name, "App quit requested (Linux)");
-        Ok(())
+        // Ask the windows to close first, then SIGTERM the exactly-matching
+        // processes — never a command-line match; see `crate::linux::app`.
+        crate::linux::app::quit(app_name)
     }
 
     #[cfg(target_os = "windows")]
