@@ -107,10 +107,13 @@ mode/exec_tier 覆盖值回写 `chat.session_mode`/`session_exec_tier`（`sessio
 `run.session_updated` → 列表刷新 → pill 与右栏读到真值）。**侧栏**：会话行显式覆盖时渲染 mode 徽标；
 重选还原不变。**team chat**：mode/tier 两 pill 隐藏（team send 不携带、session_key 已清、写不进）。
 **Settings→Policies**：全局 `[policies] mode` 三卡选择器（`ToolPermissionsApi::set_mode`，tier 孪生面板面）。
-右栏：`state/layout.rs::follow_plan`（work 模式 live-follow 变体，同 pin 契约）+
-`views/chat/events.rs` 的 `tool_call_started` 前台分支按**有效模式**分派——会话覆盖 else
-`chat.global_mode`（v1 已知限制已修：跟随全局的会话同样享受模式化右栏行为；None=旧核/未连接→
-旧默认 follow 工具）（chat=不驱动 / work=有计划后 follow Plan / code=follow 工具）。
+**右栏：模式不再分派（锚点订正 2026-07-27）**——此处此前写「`state/layout.rs::follow_plan` +
+`events.rs` 的 `tool_call_started` 按有效模式分派（chat=不驱动 / work=有计划后 follow Plan /
+code=follow 工具）」。那套 live-follow 是**上下文检查器**时代的东西，随 `components/inspector/`
+在产物面板重构（§6.8）中整体删除，`follow_plan` / `follow_tool` 现在**在代码里一个都不存在**。
+右栏是产物面板，内容＝「这次会话产出了什么」，与会话模式正交：模式只做**工具呈现面**的静态分区，
+不改右栏。`events.rs` 的 `tool_call_started` 也不再碰右栏状态（2026-07-27 round-3 一并撤掉了它
+残留的徽标计数，见 FEATURE_LOCATOR §6.8）。
 
 **团队 run 钉 Work，不继承全局。** 成员 run 不是用户会话（无 composer、无 pill），
 留空会落到全局 `[policies] mode`——`chat` 档把 `task`/`team` 整族 defer 掉，正好是
