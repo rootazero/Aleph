@@ -193,8 +193,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Now build the tokio runtime in the (potentially forked) child process
-    let rt = tokio::runtime::Runtime::new()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(worker_stack_size())
+        .build()?;
     rt.block_on(async_main(args))
+}
+
+/// Stack size for tokio's worker and blocking threads.
+///
+/// The agent run path is one deep chain of `async fn`s — `engine.execute`'s
+/// future alone measures ~350 KB — and an unoptimized build allocates a
+/// full-size stack temporary for every nested future it constructs, with none
+/// of the slot reuse LLVM applies at `opt-level > 0`. Measured on the minimal
+/// `chat.send` path (2026-07-27): a debug build overflows at both the 2 MB
+/// platform default and at 4 MB, and clears at 8 MB; a release build fits in
+/// the default. Real runs go deeper than that measurement (tool execution,
+/// larger contexts, sub-agents), so the floor below is the value the manual
+/// `RUST_MIN_STACK=33554432` workaround had already proven in daily use.
+///
+/// Applied unconditionally rather than under `debug_assertions`: thread stacks
+/// are reserved address space, committed lazily page by page, so an untouched
+/// 32 MB reservation costs a release build nothing while giving it the same
+/// headroom against a future layer being added to the chain.
+///
+/// One setting covers both thread kinds — tokio launches multi-thread workers
+/// through the blocking pool's spawner, which is where `thread_stack_size` is
+/// consumed.
+///
+/// `RUST_MIN_STACK` still wins when it asks for more: `thread_stack_size`
+/// overrides std's default outright, so taking the max keeps that escape hatch
+/// from silently becoming a downgrade.
+fn worker_stack_size() -> usize {
+    const FLOOR: usize = 32 * 1024 * 1024;
+    std::env::var("RUST_MIN_STACK")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map_or(FLOOR, |requested| requested.max(FLOOR))
 }
 
 /// Async entry point — runs inside a tokio runtime that was created AFTER
