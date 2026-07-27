@@ -133,11 +133,3 @@ examples/*
 !examples/plugins/
 !examples/protocols/
 !examples/protocols/**
-
-# Windows test litter: `mcp::transport::stdio` spawn tests mangle the temp path
-# (drive colon -> fullwidth, separators dropped), so the spawned child writes its
-# probe file into the repo root instead of %TEMP%. Those two tests are already
-# among the known-failing Windows set; this keeps `git add -A` from sweeping the
-# debris into a commit.
-/C*UsersAppDataLocalTemp.tmp*
-/C*AppDataLocalTemp.tmp*
