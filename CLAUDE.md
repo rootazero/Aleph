@@ -241,7 +241,7 @@
 
 > **分发形态**: Aleph 同一 tag 发三产物——完整桌面 App（内置 `aleph-server`，单机零配置）、Aleph Panel 纯壳 App（连局域网 server）、独立 `aleph-server` 二进制（`install.sh` / `install.ps1`）。详见 [PRODUCT_TOPOLOGY.md](docs/reference/PRODUCT_TOPOLOGY.md)。
 >
-> **信任模型 = 网络边界**: 默认只绑 `127.0.0.1`；`[gateway] host = "0.0.0.0"` 显式开放局域网。方法级门槛是 device tier（远程 Panel 默认 Chat tier，config 类 RPC 须 operator 提权），协议护栏是 WS Origin 校验。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
+> **信任模型 = 网络边界 + 登录墙**: 默认只绑 `127.0.0.1`；`[gateway] host = "0.0.0.0"` 显式开放局域网。loopback 免凭据恒 operator；远程须在 `connect` 出示 device token / 一次性配对票 / 共享 token 之一，**过了就是 operator，与本地完全一致——单层，没有 Chat/Config 子层**（`method_authz.rs` 只剩 channel tier 闸，Panel 天然全过）。没过则被登录墙挡在 `connect` 之外。协议护栏是 WS Origin 校验。⚠️ **跨子系统地雷**：`devices` 是 **panel 与 cluster 节点共用的一张表**，两边的 `device_id` 都是**对端自报**的——任何「按 id 认领一行」的新路径都必须先拒掉属于另一半命名空间的行，否则会造出一枚 roster 列不出、`revoke_all_panel_devices` 与 `gateway.token.rotate` 都够不到的 operator 凭据（守卫两侧对称，判据单一源 `PANEL_DEVICE_TYPE`）。详见 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux) 与 `src/gateway/CLAUDE.md`。
 
 > **执行档位 (Exec Tier)**: 工具执行权限有一根面向用户的旋钮——`Ask` / `Auto`（默认）/ `Full`，Panel composer pill 选（本会话，随第一条消息生效）或 Settings → Policies 设（全局）。规则读工具**声明的元数据**（幂等 / destructive），不认名字；未知工具在 `Ask` 档 fail-closed；`[sandbox.command_policy]` 硬底线任何档位都压不下去。**唯一强制点是 `src/tools/scoped/`——任何新的能执行工具的 surface（新 RPC / 新快路径 / 新后台产地）不经过它就自带旁路**（已堵：斜杠快路径 / `tools.invoke` / 后台续跑）。详见 [SECURITY.md](docs/reference/SECURITY.md) 与 FEATURE_LOCATOR §5.12。
 
