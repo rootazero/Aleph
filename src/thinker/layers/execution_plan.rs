@@ -97,7 +97,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.execution_plan = plan.map(|s| s.to_string());
         ctx

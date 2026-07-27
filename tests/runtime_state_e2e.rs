@@ -39,7 +39,6 @@ fn empty_context() -> ResolvedContext {
     ContextAggregator::resolve(
         &InteractionManifest::new(InteractionParadigm::Background),
         &SecurityContext::permissive(),
-        &[],
     )
 }
 

@@ -212,7 +212,6 @@ mod tests {
         let mut ctx: ResolvedContext = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.strategy = Some(
             "Objective: ship the strategic planner\nApproach: plan-first, adapt as you learn"
@@ -353,7 +352,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.strategy = Some("Objective: from resolved context".to_string());
         let body = "Objective: from with_strategy body — must be skipped";

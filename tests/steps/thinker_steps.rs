@@ -4,8 +4,8 @@ use crate::world::{AlephWorld, ThinkerContext};
 use alephcore::agent_loop::ToolInfo;
 // TODO: removed — types deleted: Observation, StepSummary
 use alephcore::thinker::{
-    Capability, ContextAggregator, DisableReason, InteractionManifest, InteractionParadigm,
-    PromptConfig, SecurityContext,
+    Capability, ContextAggregator, InteractionManifest, InteractionParadigm, PromptConfig,
+    SecurityContext,
 };
 // TODO: removed — types deleted: MessageRole
 use cucumber::{gherkin::Step, given, then, when};
@@ -389,9 +389,8 @@ async fn when_aggregate(w: &mut AlephWorld) {
     let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
     let interaction = ctx.interaction.as_ref().expect("No interaction manifest");
     let security = ctx.security.as_ref().expect("No security context");
-    let tools = &ctx.tools;
 
-    ctx.resolved = Some(ContextAggregator::resolve(interaction, security, tools));
+    ctx.resolved = Some(ContextAggregator::resolve(interaction, security));
 }
 
 #[when("I build the system prompt with context")]
@@ -401,8 +400,7 @@ async fn when_build_prompt_with_context(w: &mut AlephWorld) {
     // First aggregate context
     let interaction = ctx.interaction.as_ref().expect("No interaction manifest");
     let security = ctx.security.as_ref().expect("No security context");
-    let tools = &ctx.tools;
-    let resolved = ContextAggregator::resolve(interaction, security, tools);
+    let resolved = ContextAggregator::resolve(interaction, security);
 
     // Build prompt with context
     ctx.init_builder();
@@ -426,79 +424,6 @@ async fn then_paradigm(w: &mut AlephWorld, expected: String) {
         "Expected paradigm to contain '{}', got '{}'",
         expected,
         paradigm
-    );
-}
-
-#[then(expr = "{string} should be available")]
-async fn then_tool_available(w: &mut AlephWorld, tool_name: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let resolved = ctx.resolved.as_ref().expect("No resolved context");
-    assert!(
-        resolved.available_tools.iter().any(|t| t.name == tool_name),
-        "Expected tool '{}' to be available, but it wasn't. Available: {:?}",
-        tool_name,
-        resolved
-            .available_tools
-            .iter()
-            .map(|t| &t.name)
-            .collect::<Vec<_>>()
-    );
-}
-
-#[then(expr = "{string} should require approval")]
-async fn then_requires_approval(w: &mut AlephWorld, tool_name: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let resolved = ctx.resolved.as_ref().expect("No resolved context");
-    assert!(
-        resolved
-            .disabled_tools
-            .iter()
-            .any(|d| d.name == tool_name
-                && matches!(d.reason, DisableReason::RequiresApproval { .. })),
-        "Expected tool '{}' to require approval, but it didn't. Disabled tools: {:?}",
-        tool_name,
-        resolved
-            .disabled_tools
-            .iter()
-            .map(|d| (&d.name, &d.reason))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[then(expr = "{string} should be blocked by policy")]
-async fn then_blocked(w: &mut AlephWorld, tool_name: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let resolved = ctx.resolved.as_ref().expect("No resolved context");
-    assert!(
-        resolved
-            .disabled_tools
-            .iter()
-            .any(|d| d.name == tool_name
-                && matches!(d.reason, DisableReason::BlockedByPolicy { .. })),
-        "Expected tool '{}' to be blocked by policy, but it wasn't. Disabled tools: {:?}",
-        tool_name,
-        resolved
-            .disabled_tools
-            .iter()
-            .map(|d| (&d.name, &d.reason))
-            .collect::<Vec<_>>()
-    );
-}
-
-#[then(expr = "{string} should be unsupported by channel")]
-async fn then_unsupported_by_channel(w: &mut AlephWorld, tool_name: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let resolved = ctx.resolved.as_ref().expect("No resolved context");
-    assert!(
-        resolved.disabled_tools.iter().any(|d| d.name == tool_name
-            && matches!(d.reason, DisableReason::UnsupportedByChannel)),
-        "Expected tool '{}' to be unsupported by channel, but it wasn't. Disabled tools: {:?}",
-        tool_name,
-        resolved
-            .disabled_tools
-            .iter()
-            .map(|d| (&d.name, &d.reason))
-            .collect::<Vec<_>>()
     );
 }
 

@@ -725,7 +725,7 @@ async fn resolve_prompt_context(
     let security_ctx =
         crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
     let mut resolved_context =
-        crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
+        crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx);
     // Populate `runtime_context` — the single source of the environment
     // envelope's facts, split across the two prompt zones that own them:
     // `EnvironmentLayer` (Stable @300) renders the process-invariant half

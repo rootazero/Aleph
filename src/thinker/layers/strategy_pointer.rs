@@ -77,7 +77,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.strategy_guardrails = guardrails.map(|s| s.to_string());
         ctx

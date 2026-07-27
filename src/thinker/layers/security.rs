@@ -1,6 +1,5 @@
 //! `SecurityLayer` — security constraints injection (priority 600)
 
-use crate::thinker::context::DisableReason;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
@@ -29,7 +28,6 @@ impl PromptLayer for SecurityLayer {
             None => return,
         };
 
-        let disabled_tools = &ctx.disabled_tools;
         let security_notes = &ctx.environment_contract.security_notes;
         let sandbox_summary = ctx.sandbox_summary.as_ref();
 
@@ -44,24 +42,8 @@ impl PromptLayer for SecurityLayer {
             .then_some(ctx.environment_contract.elevated_policy_note.as_deref())
             .flatten();
 
-        // Only add the section if something below can actually render. The gate
-        // used to admit ANY non-empty `disabled_tools`, including the
-        // `UnsupportedByChannel` / `Unhealthy` reasons that have no render arm —
-        // which would emit a bare header with no body.
-        let blocked_by_policy: Vec<_> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::BlockedByPolicy { .. }))
-            .collect();
-        let requires_approval: Vec<_> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::RequiresApproval { .. }))
-            .collect();
-        if security_notes.is_empty()
-            && blocked_by_policy.is_empty()
-            && requires_approval.is_empty()
-            && sandbox_summary.is_none()
-            && elevated_note.is_none()
-        {
+        // Only emit the header when something below it can actually render.
+        if security_notes.is_empty() && sandbox_summary.is_none() && elevated_note.is_none() {
             return;
         }
 
@@ -89,32 +71,6 @@ impl PromptLayer for SecurityLayer {
             output.push_str(&format!("- {note}\n"));
         }
         if !security_notes.is_empty() || elevated_note.is_some() {
-            output.push('\n');
-        }
-
-        if !blocked_by_policy.is_empty() {
-            output.push_str("**Disabled by Policy**:\n");
-            for tool in blocked_by_policy {
-                if let DisableReason::BlockedByPolicy { ref reason } = tool.reason {
-                    output.push_str(&format!("- `{}` — {}\n", tool.name, reason));
-                }
-            }
-            output.push('\n');
-        }
-
-        if !requires_approval.is_empty() {
-            output.push_str("**Requires User Approval**:\n");
-            for tool in requires_approval {
-                if let DisableReason::RequiresApproval {
-                    prompt: ref approval_prompt,
-                } = tool.reason
-                {
-                    output.push_str(&format!(
-                        "- `{}` — available, but each invocation requires user confirmation ({})\n",
-                        tool.name, approval_prompt
-                    ));
-                }
-            }
             output.push('\n');
         }
     }
@@ -172,7 +128,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.sandbox_summary = Some(SandboxSummary {
             backend: "macos/seatbelt",
@@ -210,7 +165,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.approval_tier = Some(ExecTier::Ask);
         ctx.session_mode = Some(SessionMode::Code);
@@ -243,7 +197,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Messaging),
             &SecurityContext::for_paradigm(InteractionParadigm::Messaging),
-            &[],
         );
 
         // No tier resolved (internal / sub-agent dispatch) → the paradigm note is
@@ -273,11 +226,11 @@ mod tests {
         );
     }
 
-    /// The section gate must agree with the body: a `disabled_tools` list holding
-    /// only reasons the body cannot render must not emit a bare header.
+    /// The section gate must agree with the body: when every source this layer
+    /// can render is absent, it must emit nothing rather than a bare header.
     #[test]
-    fn unrenderable_disable_reasons_do_not_emit_a_bare_header() {
-        use crate::thinker::context::{ContextAggregator, DisableReason, DisabledTool};
+    fn no_renderable_source_emits_nothing_not_a_bare_header() {
+        use crate::thinker::context::ContextAggregator;
         use crate::thinker::security_context::SecurityContext;
         use crate::thinker::InteractionManifest;
         use crate::thinker::InteractionParadigm;
@@ -285,14 +238,10 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.environment_contract.security_notes.clear();
         ctx.environment_contract.elevated_policy_note = None;
-        ctx.disabled_tools = vec![DisabledTool {
-            name: "canvas".to_string(),
-            reason: DisableReason::UnsupportedByChannel,
-        }];
+        // `sandbox_summary` is already None.
 
         let layer = SecurityLayer;
         let config = PromptConfig::default();
@@ -314,7 +263,6 @@ mod tests {
         let ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         // sandbox_summary defaults to None; security_notes is still
         // populated by `permissive` (one note), so the section still emits.

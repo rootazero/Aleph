@@ -56,7 +56,6 @@ pub fn run(path: &str, mode: &str, paradigm: &str, bare: bool, json: bool) -> Cm
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(paradigm_enum),
             &SecurityContext::for_paradigm(paradigm_enum),
-            &[],
         );
         // `resolve_prompt_context` populates this on EVERY production route, so a
         // report that leaves it `None` silently omits `RuntimeContextLayer` and

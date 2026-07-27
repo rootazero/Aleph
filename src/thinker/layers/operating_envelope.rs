@@ -99,7 +99,6 @@ mod tests {
         ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         )
     }
 

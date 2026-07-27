@@ -29,7 +29,7 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
 
     let interaction = InteractionManifest::new(InteractionParadigm::Background);
     let security = SecurityContext::permissive();
-    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let resolved = ContextAggregator::resolve(&interaction, &security);
 
     let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
     let prompt = builder.build_system_prompt(&[]);
@@ -119,7 +119,7 @@ fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path
 
     let interaction = InteractionManifest::new(InteractionParadigm::Background);
     let security = SecurityContext::permissive();
-    let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let mut resolved = ContextAggregator::resolve(&interaction, &security);
     resolved.runtime_context = Some(RuntimeContext {
         os: "linux".to_string(),
         arch: "aarch64".to_string(),
@@ -183,7 +183,7 @@ fn phase4_channel_aware_resolved_context_messaging_paradigm() {
 
     let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
     let security = SecurityContext::permissive();
-    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let resolved = ContextAggregator::resolve(&interaction, &security);
 
     let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
     let prompt = builder.build_system_prompt(&[]);
@@ -218,7 +218,7 @@ fn phase5_messaging_paradigm_security_context_announces_approval_required() {
 
     let interaction = InteractionManifest::new(InteractionParadigm::Messaging);
     let security = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
-    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let resolved = ContextAggregator::resolve(&interaction, &security);
 
     let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
     let prompt = builder.build_system_prompt(&[]);
@@ -244,7 +244,7 @@ fn phase5_cli_paradigm_security_context_stays_permissive() {
 
     let interaction = InteractionManifest::new(InteractionParadigm::CLI);
     let security = SecurityContext::for_paradigm(InteractionParadigm::CLI);
-    let resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let resolved = ContextAggregator::resolve(&interaction, &security);
 
     let builder = PromptBuilder::new(PromptConfig::default()).with_resolved_context(resolved);
     let prompt = builder.build_system_prompt(&[]);
@@ -295,7 +295,7 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
     // Build a ResolvedContext with runtime_context set
     let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
     let security = SecurityContext::permissive();
-    let mut ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+    let mut ctx = ContextAggregator::resolve(&interaction, &security);
 
     ctx.runtime_context = Some(crate::thinker::runtime_context::RuntimeContext {
         os: "linux".to_string(),
@@ -339,7 +339,7 @@ fn test_build_system_prompt_with_context_no_runtime_context() {
 
     let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
     let security = SecurityContext::permissive();
-    let ctx = ContextAggregator::resolve(&interaction, &security, &[]);
+    let ctx = ContextAggregator::resolve(&interaction, &security);
 
     // runtime_context should be None by default
     assert!(ctx.runtime_context.is_none());
@@ -362,7 +362,7 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
     // Build a Background-mode context (should trigger all 4 enhancements)
     let interaction = InteractionManifest::new(InteractionParadigm::Background);
     let security = SecurityContext::permissive();
-    let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let mut resolved = ContextAggregator::resolve(&interaction, &security);
 
     // Add RuntimeContext
     resolved.runtime_context = Some(RuntimeContext {
@@ -516,7 +516,7 @@ fn test_interactive_prompt_minimal_token_overhead() {
     // Build a WebRich-mode context (interactive, not background)
     let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
     let security = SecurityContext::permissive();
-    let mut resolved = ContextAggregator::resolve(&interaction, &security, &[]);
+    let mut resolved = ContextAggregator::resolve(&interaction, &security);
 
     // Add RuntimeContext (should still be included for interactive)
     resolved.runtime_context = Some(RuntimeContext {

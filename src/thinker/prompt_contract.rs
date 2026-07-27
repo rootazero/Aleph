@@ -94,7 +94,6 @@ fn resolve(paradigm: InteractionParadigm) -> ResolvedContext {
     let mut ctx = ContextAggregator::resolve(
         &InteractionManifest::new(paradigm),
         &SecurityContext::for_paradigm(paradigm),
-        &[],
     );
     // The four fields below are present on EVERY gateway turn, so a guard that
     // leaves them unset is not measuring the always-on prompt. `runtime_context`
@@ -249,6 +248,7 @@ fn reachable_layers() {
 ///      "this whole session is in Ask mode".
 ///   3. **A stronger model still needs them.** They are environment state, not
 ///      scaffolding for weak reasoning; a better model uses them better.
+///
 /// The ceiling is now honest, so the next real growth is catchable. Prior entry:
 /// 5,140 B measured 2026-07-26 — the **worst paradigm**, WebRich
 /// (`aleph-server prompt-size --path cached --paradigm webrich`); Background,
