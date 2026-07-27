@@ -53,9 +53,9 @@ where
             // No per-run thinking directive on this path — the provider keeps its
             // own default, which is what every release before this field sent.
             think_level: None,
-            // Legacy `run_flow` helper resolves no exec tier — no approval line.
-            exec_tier: None,
-            session_mode: None,
+            // Legacy `run_flow` helper resolves no tier / mode / workspace, so
+            // the approval, usage-mode, and `cwd=` lines all stay absent.
+            envelope: crate::thinker::TurnEnvelope::none(),
         };
 
         let handle = orchestrator

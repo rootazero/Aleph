@@ -747,6 +747,38 @@ mod tests {
         transport.close().await.unwrap();
     }
 
+    /// Render a native path for interpolation into a POSIX `sh` script.
+    ///
+    /// The path lands in shell *source text*, which is hostile to native paths
+    /// in two independent ways:
+    ///
+    /// - `sh` consumes `\` as an escape, so a Windows path arrives at the child
+    ///   as `C:UserszouAppDataLocalTemp.tmpXXXX` — a *relative* name. The
+    ///   redirect then writes into the child's cwd (the repo root) while the
+    ///   test waits on a `NamedTempFile` that never grows.
+    /// - An unquoted space splits the redirect target, which breaks any host
+    ///   whose temp path contains one (`C:\Users\First Last\...`).
+    ///
+    /// Slash-separate first, then single-quote.
+    fn sh_path(path: &std::path::Path) -> String {
+        let slashed = path.to_string_lossy().replace('\\', "/");
+        format!("'{}'", slashed.replace('\'', r"'\''"))
+    }
+
+    #[test]
+    fn sh_path_survives_separators_and_spaces() {
+        assert_eq!(
+            sh_path(std::path::Path::new(
+                r"C:\Users\zou\AppData\Local\Temp\.tmpAb"
+            )),
+            "'C:/Users/zou/AppData/Local/Temp/.tmpAb'"
+        );
+        assert_eq!(
+            sh_path(std::path::Path::new("/tmp/first last/report")),
+            "'/tmp/first last/report'"
+        );
+    }
+
     /// Inherited secret-bearing env vars must not reach the spawned child —
     /// same rule `PlaywrightCliDriver` already enforces. The child reports its
     /// view via a temp file (stdout is consumed by the JSON-RPC reader loop,
@@ -756,7 +788,7 @@ mod tests {
     #[serial_test::serial]
     async fn test_spawn_strips_inherited_secret_env() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let path = tmp.path().to_str().expect("path utf8").to_string();
+        let path = sh_path(tmp.path());
 
         std::env::set_var("ALEPH_TEST_STDIO_API_KEY", "topsecret_value");
 
@@ -804,7 +836,7 @@ mod tests {
     #[serial_test::serial]
     async fn test_spawn_preserves_non_secret_inherited_env() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let path = tmp.path().to_str().expect("path utf8").to_string();
+        let path = sh_path(tmp.path());
 
         std::env::set_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC", "passthrough_value");
 

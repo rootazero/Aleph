@@ -25,6 +25,7 @@ use alephcore::thinker::interaction::{InteractionManifest, InteractionParadigm};
 use alephcore::thinker::prompt_layer::{AssemblyPath, LayerInput};
 use alephcore::thinker::prompt_mode::PromptMode;
 use alephcore::thinker::prompt_pipeline::{LayerSize, PromptPipeline};
+use alephcore::thinker::runtime_context::RuntimeContext;
 use alephcore::thinker::security_context::SecurityContext;
 use alephcore::thinker::PromptConfig;
 
@@ -52,11 +53,19 @@ pub fn run(path: &str, mode: &str, paradigm: &str, bare: bool, json: bool) -> Cm
     let context: Option<ResolvedContext> = if bare {
         None
     } else {
-        Some(ContextAggregator::resolve(
+        let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(paradigm_enum),
             &SecurityContext::for_paradigm(paradigm_enum),
-            &[],
-        ))
+        );
+        // `resolve_prompt_context` populates this on EVERY production route, so a
+        // report that leaves it `None` silently omits `RuntimeContextLayer` and
+        // shrinks `EnvironmentLayer` to its no-context fallback — i.e. it
+        // under-reports the always-on prompt it claims to measure. Collected live
+        // (not a fixed stand-in) because this command reports the real size on
+        // this machine; the byte *ratchet* uses a frozen stand-in instead so its
+        // ceiling stays machine-independent.
+        ctx.runtime_context = Some(RuntimeContext::collect(SAMPLE_BEHAVIOR));
+        Some(ctx)
     };
 
     let mut input = LayerInput::basic(&config, &tools)

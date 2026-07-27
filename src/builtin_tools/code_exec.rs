@@ -82,6 +82,21 @@ pub enum Language {
     Shell,
 }
 
+/// The interpreter every shell / `bash` tool call is spawned under.
+///
+/// Exposed so the prompt's environment envelope
+/// ([`RuntimeContext`](crate::thinker::runtime_context::RuntimeContext)) can
+/// state the shell the model will actually get, instead of guessing from the
+/// operator's `$SHELL` (a login shell the agent never uses, and unset on
+/// Windows). Single source with [`Language::runtime`] **and** with both
+/// `ExecInvocation`s in `build_shell_invocation`, which call this instead of
+/// repeating the literal — so the advertised shell cannot drift from the spawned
+/// one. Pinned by `advertised_shell_is_the_spawned_shell`.
+#[must_use]
+pub const fn shell_interpreter() -> &'static str {
+    Language::Shell.runtime()
+}
+
 impl Language {
     const fn runtime(&self) -> &'static str {
         match self {
@@ -472,16 +487,39 @@ fn build_shell_invocation(code: &str) -> ExecInvocation {
             "code_exec: shell script exceeds threshold — piping via bash -s + stdin"
         );
         ExecInvocation {
-            program: "bash".to_string(),
+            // The same expression the prompt advertises through
+            // `shell_interpreter()`, not a second "bash" literal that could drift
+            // from it — the doc on `shell_interpreter` promises they are one.
+            program: shell_interpreter().to_string(),
             args: vec!["-s".to_string()],
             stdin: Some(script.into_bytes()),
         }
     } else {
         ExecInvocation {
-            program: "bash".to_string(),
+            program: shell_interpreter().to_string(),
             args: vec!["-c".to_string(), script],
             stdin: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_interpreter_tests {
+    use super::{build_shell_invocation, shell_interpreter, SHELL_STDIN_PIPE_THRESHOLD};
+
+    /// The prompt tells the model `- **Shell**: <shell_interpreter()>`. That claim
+    /// is only true if the spawn path uses the same value — on BOTH branches,
+    /// including the over-threshold stdin-pipe one.
+    #[test]
+    fn advertised_shell_is_the_spawned_shell() {
+        assert_eq!(
+            build_shell_invocation("echo hi").program,
+            shell_interpreter()
+        );
+        let big = "x".repeat(SHELL_STDIN_PIPE_THRESHOLD + 1);
+        let piped = build_shell_invocation(&big);
+        assert_eq!(piped.program, shell_interpreter());
+        assert!(piped.stdin.is_some(), "over-threshold must pipe via stdin");
     }
 }
 

@@ -58,7 +58,10 @@ impl PromptLayer for StrategyLayer {
             return;
         }
         output.push_str("<strategy>\n");
-        output.push_str(strategy);
+        // Escaped at the seam: objective / phases / guardrails are authored from
+        // user input, so an unescaped closing tag would break out of this element
+        // and forge top-level prompt sections. Single source: `xml_util`.
+        output.push_str(&crate::thinker::xml_util::escape_xml(strategy));
         output.push_str("\n</strategy>\n\n");
     }
 }
@@ -76,7 +79,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.strategy = strategy.map(|s| s.to_string());
         ctx

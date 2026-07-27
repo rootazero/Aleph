@@ -35,7 +35,11 @@ impl PromptLayer for RuntimeContextLayer {
             None => return,
         };
         if let Some(ref runtime_ctx) = ctx.runtime_context {
-            output.push_str(&runtime_ctx.to_prompt_section());
+            // Only the per-run / per-hour half: cwd, repo, branch, model, time.
+            // The process-invariant half (OS/arch, shell, host) is rendered once
+            // by `EnvironmentLayer` in the Stable prefix — see
+            // `RuntimeContext`'s module docs for the split.
+            output.push_str(&runtime_ctx.to_dynamic_line());
             output.push_str("\n\n");
         }
     }

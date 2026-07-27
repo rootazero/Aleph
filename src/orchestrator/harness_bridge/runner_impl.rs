@@ -79,8 +79,7 @@ impl HarnessRunner for AgentHarnessRunner {
         max_iterations_override: Option<u32>,
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
-        exec_tier: Option<crate::config::types::policies::ExecTier>,
-        session_mode: Option<crate::config::types::policies::SessionMode>,
+        envelope: crate::thinker::TurnEnvelope,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -368,8 +367,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 workspace_override.as_deref(),
                 routing_text,
                 has_session_summaries,
-                exec_tier,
-                session_mode,
+                &envelope,
             )
             .await
         {
@@ -955,8 +953,12 @@ impl HarnessRunner for AgentHarnessRunner {
         use crate::orchestrator::harness_bridge::context_estimate as est;
 
         // 1. Resolve agent_id + session id straight from the key (no store hit).
+        //    Re-render the canonical key form once: it is both the model-pin
+        //    lookup key and the overhead-cache key, and a caller's spelling of
+        //    the same session must not open a second cache entry.
         let session_id = crate::routing::session_key::SessionKey::from_key_string(session_key)?;
         let agent_id = session_id.agent_id().to_string();
+        let canonical_key = session_id.to_key_string();
 
         // 2. Resolve the model the next turn would use: session pin → agent
         //    hint → the default provider chain's serving-model hint. The last
@@ -968,7 +970,7 @@ impl HarnessRunner for AgentHarnessRunner {
         //    chat presets use `brain = default`, and the `≈` label plus the
         //    first real turn self-correct the narrow mismatch.)
         let model: String =
-            crate::providers::session_model_handle::get_session_model(&session_id.to_key_string())
+            crate::providers::session_model_handle::get_session_model(&canonical_key)
                 .map(|p| p.model)
                 .or_else(|| {
                     self.agent_registry
@@ -992,8 +994,11 @@ impl HarnessRunner for AgentHarnessRunner {
 
         let ratio = est::ESTIMATE_RATIO;
 
-        // 4. Static overhead (system prompt + tool schemas), cached per (agent, model).
-        let overhead = if let Some(o) = self.estimate_overhead_cache.get(&agent_id, &model) {
+        // 4. Prompt overhead (system prompt + tool schemas), cached per
+        //    (session, model). Session-keyed because the assembly below reads
+        //    this session's plan / goal / loop / strategy / topology — see
+        //    `OverheadCache`'s docs for why an agent key cross-contaminated.
+        let overhead = if let Some(o) = self.estimate_overhead_cache.get(&canonical_key, &model) {
             o
         } else {
             // user_query="" skips the expensive memory recall (prompt_build.rs:181)
@@ -1015,11 +1020,10 @@ impl HarnessRunner for AgentHarnessRunner {
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
-                    // No resolved tier on the estimate path — an approval line
-                    // here would pollute the cached per-(agent, model) overhead.
-                    None,
-                    // Same for the usage-mode line.
-                    None,
+                    // Empty envelope on the estimate path: an approval / usage-mode
+                    // line or a run-specific cwd here would pollute the cached
+                    // per-(agent, model) overhead with another run's facts.
+                    &crate::thinker::TurnEnvelope::none(),
                 )
                 .await
                 .map(|(s, _parts, _recall)| s)
@@ -1029,7 +1033,8 @@ impl HarnessRunner for AgentHarnessRunner {
             let tools = self.tool_service.metadata_schema();
             let tool_tokens = est::tool_schema_tokens(&tools, ratio);
             let o = sp_tokens + tool_tokens;
-            self.estimate_overhead_cache.insert(&agent_id, &model, o);
+            self.estimate_overhead_cache
+                .insert(&canonical_key, &model, o);
             o
         };
 

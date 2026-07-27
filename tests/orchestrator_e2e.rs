@@ -31,8 +31,7 @@ async fn default_agent_roundtrip() {
             max_iterations_override: None,
             transient_context: None,
             think_level: None,
-            exec_tier: None,
-            session_mode: None,
+            envelope: alephcore::thinker::TurnEnvelope::none(),
         })
         .await
         .expect("dispatch");

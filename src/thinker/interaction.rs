@@ -243,18 +243,6 @@ impl InteractionManifest {
         self.constraints = constraints;
         self
     }
-
-    /// Check if a tool is supported based on capabilities
-    ///
-    /// Some tools require specific capabilities:
-    /// - Canvas tool requires Canvas capability
-    #[must_use]
-    pub fn supports_tool(&self, tool_name: &str) -> bool {
-        match tool_name {
-            "canvas" => self.has_capability(&Capability::Canvas),
-            _ => true,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -308,19 +296,13 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_tool_canvas() {
+    fn canvas_capability_tracks_the_paradigm() {
+        // The capability itself still drives what the prompt advertises; only
+        // the `supports_tool` name-match that consumed it is gone.
         let web_manifest = InteractionManifest::new(InteractionParadigm::WebRich);
         let cli_manifest = InteractionManifest::new(InteractionParadigm::CLI);
-
-        // WebRich has Canvas capability
-        assert!(web_manifest.supports_tool("canvas"));
-
-        // CLI doesn't have Canvas capability
-        assert!(!cli_manifest.supports_tool("canvas"));
-
-        // Other tools are always supported
-        assert!(cli_manifest.supports_tool("web_search"));
-        assert!(web_manifest.supports_tool("read_file"));
+        assert!(web_manifest.has_capability(&Capability::Canvas));
+        assert!(!cli_manifest.has_capability(&Capability::Canvas));
     }
 
     #[test]

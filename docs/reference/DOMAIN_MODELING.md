@@ -166,37 +166,37 @@ impl AggregateRoot for MyAggregate {}
 impl ValueObject for MyValue {}
 ```
 
-### 步骤 3：添加 BDD 测试
+### 步骤 3：添加测试
 
-在 `tests/features/domain/` 或 `tests/specs/` 中添加行为规范：
+不变量测试与聚合根同文件，放在 `#[cfg(test)] mod tests`：
 
-```yaml
-# tests/specs/my_context/my_aggregate.spec.yaml
-scenarios:
-  - name: "MyAggregate maintains identity"
-    given:
-      - my_aggregate: { id: "agg-001" }
-    then:
-      - assertion_type: "deterministic"
-        check: "has_identity"
-        expected: true
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn my_aggregate_maintains_identity() {
+        let agg = MyAggregate::new("agg-001");
+        assert_eq!(agg.id(), "agg-001");
+    }
+}
 ```
+
+跨模块的行为验证放到顶层 `tests/<name>.rs`（**必须是顶层** —— cargo 只自动发现
+`tests/*.rs`，子目录需要某个 target 显式 `mod` 才会被编译）。
 
 ---
 
-## 与 BDD 的集成
+## 测试形态说明 (Historical note)
 
-领域模型与 BDD 测试紧密集成：
+本文档此前指向 `tests/features/domain/`（Gherkin）与 `tests/specs/`（YAML +
+LlmJudge）两套 BDD 设施。**两者均已于 2026-07-27 删除**：承载它们的 runner
+target 早在 `6e7ab1303`（2026-05-05）就被删掉，此后 66 个 `.feature` / step /
+world 文件与 `cucumber` 依赖再未参与任何编译 —— 零执行断言，且其中多数针对的是
+已被红线禁止或早已移除的子系统（`dispatcher` 意图分析、lancedb 后端等）。
 
-1. **Gherkin 测试** (`tests/features/domain/`)
-   - 验证领域行为的确定性逻辑
-   - 使用 cucumber-rs 运行
-
-2. **YAML Spec 测试** (`tests/specs/`)
-   - 验证 AI 相关的语义行为
-   - 使用 LlmJudge 进行评估
-
-详见：[DDD+BDD 双轮驱动设计](plans/2026-02-06-ddd-bdd-dual-wheel-design.md)
+领域不变量现在一律用上面的普通 Rust 测试表达。
 
 ---
 
@@ -204,4 +204,3 @@ scenarios:
 
 - [Domain-Driven Design](https://martinfowler.com/bliki/DomainDrivenDesign.html) - Martin Fowler
 - [Implementing Domain-Driven Design](https://www.amazon.com/Implementing-Domain-Driven-Design-Vaughn-Vernon/dp/0321834577) - Vaughn Vernon
-- [DDD+BDD 设计文档](plans/2026-02-06-ddd-bdd-dual-wheel-design.md)

@@ -4,35 +4,34 @@
 //! by security policy, orthogonal to `InteractionManifest` which describes what is
 //! technically possible.
 //!
-//! # Architecture
+//! # Prompt text, not a gate
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                    SecurityContext                          │
-//! │  ┌─────────────────┐  ┌──────────────┐  ┌───────────────┐  │
-//! │  │  SandboxLevel   │  │ Tool Lists   │  │  Policies     │  │
-//! │  │                 │  │              │  │               │  │
-//! │  │ • None          │  │ allowed_tools│  │ filesystem    │  │
-//! │  │ • Standard      │  │ denied_tools │  │ network       │  │
-//! │  │ • Strict        │  │              │  │ elevated      │  │
-//! │  │ • Untrusted     │  │              │  │               │  │
-//! │  └─────────────────┘  └──────────────┘  └───────────────┘  │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
+//! Everything here exists to *describe* the posture to the model — the bullets
+//! [`SecurityContext::security_notes`] and
+//! [`SecurityContext::elevated_policy_note`] produce. It does not decide whether
+//! a call runs: that is declared tool metadata × exec tier × the sandbox floor,
+//! enforced in `src/tools/scoped/`.
+//!
+//! A `check_tool` / `ToolPermission` pair used to live here and answer "may this
+//! tool run?" by matching hardcoded tool-name substrings. Its only caller was
+//! `ContextAggregator`'s two-phase filter, which production fed an empty slice;
+//! both were removed 2026-07-27 rather than wired up, because a name-matched
+//! verdict printed beside the enforced tier is a second voice on a question that
+//! must have exactly one — see [`SecurityContext::elevated_policy_note`].
 //!
 //! # Examples
 //!
 //! ```
 //! use std::path::PathBuf;
-//! use alephcore::thinker::security_context::{SecurityContext, ToolPermission};
+//! use alephcore::thinker::security_context::SecurityContext;
 //!
-//! // Create a permissive context for trusted environments
+//! // A permissive context imposes nothing worth telling the model.
 //! let ctx = SecurityContext::permissive();
-//! assert!(matches!(ctx.check_tool("bash"), ToolPermission::Allowed));
+//! assert!(ctx.elevated_policy_note().is_none());
 //!
-//! // Create a strict context for untrusted inputs
+//! // A strict context spells out its restrictions.
 //! let ctx = SecurityContext::strict_readonly(PathBuf::from("/workspace"));
-//! assert!(matches!(ctx.check_tool("exec"), ToolPermission::Denied { .. }));
+//! assert!(ctx.security_notes().iter().any(|n| n.contains("Network Access: Disabled")));
 //! ```
 
 use std::collections::HashSet;
@@ -70,38 +69,6 @@ impl SandboxLevel {
     }
 }
 
-/// Permission result for a tool check
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "status")]
-pub enum ToolPermission {
-    /// Tool is allowed to execute
-    Allowed,
-    /// Tool is denied with a reason
-    Denied {
-        /// Reason for denial
-        reason: String,
-    },
-    /// Tool requires user approval before execution
-    RequiresApproval {
-        /// Prompt to display for approval
-        prompt: String,
-    },
-}
-
-impl ToolPermission {
-    /// Check if the permission allows execution
-    #[must_use]
-    pub const fn is_allowed(&self) -> bool {
-        matches!(self, Self::Allowed)
-    }
-
-    /// Check if the permission requires approval
-    #[must_use]
-    pub const fn requires_approval(&self) -> bool {
-        matches!(self, Self::RequiresApproval { .. })
-    }
-}
-
 /// Policy for elevated/privileged operations (exec, bash, etc.)
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -126,9 +93,8 @@ pub enum ElevatedPolicy {
 pub struct SecurityContext {
     /// The sandbox isolation level
     pub sandbox_level: SandboxLevel,
-    /// Whitelist of allowed tools (None means all tools allowed)
-    pub allowed_tools: Option<HashSet<String>>,
-    /// Blacklist of denied tools (takes precedence over whitelist)
+    /// Tool names the prompt should report as denied (a `Denied Tools:` note).
+    /// Descriptive only — the enforcement allow/deny list is `tool_permissions`.
     pub denied_tools: HashSet<String>,
     /// Filesystem scope restriction (None means no restriction)
     pub filesystem_scope: Option<PathBuf>,
@@ -152,7 +118,6 @@ impl SecurityContext {
     pub fn permissive() -> Self {
         Self {
             sandbox_level: SandboxLevel::None,
-            allowed_tools: None,
             denied_tools: HashSet::new(),
             filesystem_scope: None,
             network_allowed: true,
@@ -170,7 +135,6 @@ impl SecurityContext {
     pub fn standard_sandbox(workspace: PathBuf) -> Self {
         Self {
             sandbox_level: SandboxLevel::Standard,
-            allowed_tools: None,
             denied_tools: HashSet::new(),
             filesystem_scope: Some(workspace),
             network_allowed: true,
@@ -203,7 +167,6 @@ impl SecurityContext {
             | InteractionParadigm::Embedded => Self::permissive(),
             InteractionParadigm::Messaging => Self {
                 sandbox_level: SandboxLevel::Standard,
-                allowed_tools: None,
                 denied_tools: HashSet::new(),
                 filesystem_scope: None,
                 network_allowed: true,
@@ -230,83 +193,10 @@ impl SecurityContext {
 
         Self {
             sandbox_level: SandboxLevel::Strict,
-            allowed_tools: None,
             denied_tools,
             filesystem_scope: Some(workspace),
             network_allowed: false,
             elevated_policy: ElevatedPolicy::Off,
-        }
-    }
-
-    /// Check if a tool is allowed by this security context
-    ///
-    /// The check follows this precedence:
-    /// 1. If tool is in `denied_tools` -> Denied
-    /// 2. If `allowed_tools` is Some and tool not in it -> Denied
-    /// 3. If tool is exec/bash -> check `elevated_policy`
-    /// 4. If `network_allowed` is false and tool is network tool -> Denied
-    /// 5. Otherwise -> Allowed
-    #[must_use]
-    pub fn check_tool(&self, tool_name: &str) -> ToolPermission {
-        // 1. Check blacklist first (highest priority)
-        if self.denied_tools.contains(tool_name) {
-            return ToolPermission::Denied {
-                reason: format!("Tool '{tool_name}' is explicitly denied by security policy"),
-            };
-        }
-
-        // 2. Check whitelist if set
-        if let Some(ref allowed) = self.allowed_tools {
-            if !allowed.contains(tool_name) {
-                return ToolPermission::Denied {
-                    reason: format!("Tool '{tool_name}' is not in the allowed tools list"),
-                };
-            }
-        }
-
-        // 3. Check elevated policy for exec/bash tools
-        if is_exec_tool(tool_name) {
-            return self.check_exec_permission(tool_name);
-        }
-
-        // 4. Check network policy for network tools
-        if !self.network_allowed && is_network_tool(tool_name) {
-            return ToolPermission::Denied {
-                reason: format!("Tool '{tool_name}' requires network access which is not allowed"),
-            };
-        }
-
-        // 5. Default: allowed
-        ToolPermission::Allowed
-    }
-
-    /// Check execution permission based on elevated policy
-    fn check_exec_permission(&self, tool_name: &str) -> ToolPermission {
-        match &self.elevated_policy {
-            ElevatedPolicy::Off => ToolPermission::Denied {
-                reason: format!(
-                    "Tool '{tool_name}' requires elevated permissions which are disabled"
-                ),
-            },
-            ElevatedPolicy::Ask => ToolPermission::RequiresApproval {
-                prompt: format!(
-                    "Tool '{tool_name}' requires elevated permissions. Allow execution?"
-                ),
-            },
-            ElevatedPolicy::AllowList(allowed) => {
-                // For exec tools, check if the tool itself is in the allowlist
-                // (in practice, this would check the command being executed)
-                if allowed.iter().any(|a| a == tool_name) {
-                    ToolPermission::Allowed
-                } else {
-                    ToolPermission::RequiresApproval {
-                        prompt: format!(
-                            "Tool '{tool_name}' is not in the elevated allowlist. Allow execution?"
-                        ),
-                    }
-                }
-            }
-            ElevatedPolicy::Full => ToolPermission::Allowed,
         }
     }
 
@@ -343,26 +233,10 @@ impl SecurityContext {
             notes.push("Network Access: Disabled".to_string());
         }
 
-        // Elevated policy note
-        match &self.elevated_policy {
-            ElevatedPolicy::Off => {
-                notes.push("Elevated Operations: Disabled (exec, bash not available)".to_string());
-            }
-            ElevatedPolicy::Ask => {
-                notes.push(
-                    "Elevated Operations: Require user approval before execution".to_string(),
-                );
-            }
-            ElevatedPolicy::AllowList(list) => {
-                notes.push(format!(
-                    "Elevated Operations: Limited to allowlist ({} entries)",
-                    list.len()
-                ));
-            }
-            ElevatedPolicy::Full => {
-                // No note needed for full access
-            }
-        }
+        // NOTE: the elevated-policy note is deliberately NOT here — see
+        // `elevated_policy_note`. It describes the same thing as the resolved
+        // `ExecTier` (does a mutating call pause for the human?) and only one of
+        // the two may speak per prompt.
 
         // Denied tools note (sorted for deterministic output)
         if !self.denied_tools.is_empty() {
@@ -373,176 +247,44 @@ impl SecurityContext {
 
         notes
     }
-}
 
-/// Check if a tool is a network-related tool
-///
-/// Network tools include:
-/// - `web_search`: Performs web searches
-/// - `web_fetch`: Fetches web pages
-/// - `http_request`: Makes HTTP requests
-#[must_use]
-pub fn is_network_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "web_search" | "web_fetch" | "http_request" | "search"
-    )
-}
-
-/// Check if a tool is an exec/shell-related tool
-fn is_exec_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "exec" | "bash" | "bash_exec" | "shell" | "code_exec"
-    )
+    /// The paradigm-derived approval posture, as a prompt bullet — or `None` when
+    /// the policy imposes nothing worth saying (`Full`).
+    ///
+    /// Split out of [`Self::security_notes`] because it is a **second voice on the
+    /// same question** as the resolved [`ExecTier`](crate::config::types::policies::ExecTier)
+    /// that `SecurityLayer` renders as `Approval mode:`. They disagreed in the
+    /// default install: a Messaging paradigm derives `ElevatedPolicy::Ask`, so a
+    /// Telegram turn at `exec_tier = auto` was told both "Approval mode: auto —
+    /// routine tool calls run without interruption" *and* "Elevated Operations:
+    /// Require user approval before execution", in one bullet list, three lines
+    /// apart. Only the tier is enforced (`src/tools/scoped/`), and the unenforced
+    /// line came second — winning on recency.
+    ///
+    /// `SecurityLayer` therefore renders this only when no tier was resolved, so
+    /// the prompt always carries exactly one approval regime, and it is the
+    /// enforced one.
+    #[must_use]
+    pub fn elevated_policy_note(&self) -> Option<String> {
+        match &self.elevated_policy {
+            ElevatedPolicy::Off => {
+                Some("Elevated Operations: Disabled (exec, bash not available)".to_string())
+            }
+            ElevatedPolicy::Ask => {
+                Some("Elevated Operations: Require user approval before execution".to_string())
+            }
+            ElevatedPolicy::AllowList(list) => Some(format!(
+                "Elevated Operations: Limited to allowlist ({} entries)",
+                list.len()
+            )),
+            ElevatedPolicy::Full => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_permissive_allows_all() {
-        let ctx = SecurityContext::permissive();
-
-        // All tools should be allowed
-        assert!(matches!(ctx.check_tool("bash"), ToolPermission::Allowed));
-        assert!(matches!(ctx.check_tool("exec"), ToolPermission::Allowed));
-        assert!(matches!(
-            ctx.check_tool("web_search"),
-            ToolPermission::Allowed
-        ));
-        assert!(matches!(
-            ctx.check_tool("file_ops"),
-            ToolPermission::Allowed
-        ));
-        assert!(matches!(
-            ctx.check_tool("any_random_tool"),
-            ToolPermission::Allowed
-        ));
-    }
-
-    #[test]
-    fn test_strict_denies_exec() {
-        let ctx = SecurityContext::strict_readonly(PathBuf::from("/workspace"));
-
-        // Exec tools should be denied
-        assert!(matches!(
-            ctx.check_tool("exec"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("bash"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("bash_exec"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("code_exec"),
-            ToolPermission::Denied { .. }
-        ));
-
-        // file_ops should also be denied in strict mode
-        assert!(matches!(
-            ctx.check_tool("file_ops"),
-            ToolPermission::Denied { .. }
-        ));
-    }
-
-    #[test]
-    fn test_network_blocked() {
-        let ctx = SecurityContext::strict_readonly(PathBuf::from("/workspace"));
-
-        // Network tools should be denied when network is not allowed
-        assert!(!ctx.network_allowed);
-        assert!(matches!(
-            ctx.check_tool("web_search"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("web_fetch"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("http_request"),
-            ToolPermission::Denied { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("search"),
-            ToolPermission::Denied { .. }
-        ));
-
-        // Non-network tools should still be allowed (if not in denied list)
-        assert!(matches!(
-            ctx.check_tool("read_skill"),
-            ToolPermission::Allowed
-        ));
-    }
-
-    #[test]
-    fn test_standard_sandbox_requires_approval() {
-        let ctx = SecurityContext::standard_sandbox(PathBuf::from("/workspace"));
-
-        // Exec tools should require approval in standard mode
-        assert!(matches!(
-            ctx.check_tool("bash"),
-            ToolPermission::RequiresApproval { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("exec"),
-            ToolPermission::RequiresApproval { .. }
-        ));
-
-        // Other tools should be allowed
-        assert!(matches!(
-            ctx.check_tool("web_search"),
-            ToolPermission::Allowed
-        ));
-        assert!(matches!(
-            ctx.check_tool("file_ops"),
-            ToolPermission::Allowed
-        ));
-    }
-
-    #[test]
-    fn test_blacklist_priority() {
-        // Create a context with both whitelist and blacklist
-        let mut allowed = HashSet::new();
-        allowed.insert("bash".to_string());
-        allowed.insert("web_search".to_string());
-
-        let mut denied = HashSet::new();
-        denied.insert("bash".to_string()); // bash is in both lists
-
-        let ctx = SecurityContext {
-            sandbox_level: SandboxLevel::Standard,
-            allowed_tools: Some(allowed),
-            denied_tools: denied,
-            filesystem_scope: None,
-            network_allowed: true,
-            elevated_policy: ElevatedPolicy::Full,
-        };
-
-        // bash should be denied because blacklist takes priority
-        assert!(matches!(
-            ctx.check_tool("bash"),
-            ToolPermission::Denied { .. }
-        ));
-
-        // web_search should be allowed (in whitelist, not in blacklist)
-        assert!(matches!(
-            ctx.check_tool("web_search"),
-            ToolPermission::Allowed
-        ));
-
-        // file_ops should be denied (not in whitelist)
-        assert!(matches!(
-            ctx.check_tool("file_ops"),
-            ToolPermission::Denied { .. }
-        ));
-    }
 
     #[test]
     fn test_security_notes() {
@@ -561,10 +303,13 @@ mod tests {
         // Should mention network disabled
         assert!(notes.iter().any(|n| n.contains("Network Access: Disabled")));
 
-        // Should mention elevated operations disabled
-        assert!(notes
-            .iter()
-            .any(|n| n.contains("Elevated Operations: Disabled")));
+        // The elevated-policy posture is NOT in `security_notes`: it answers the
+        // same question as the enforced `ExecTier`, so it lives in its own
+        // accessor and `SecurityLayer` renders it only when no tier was resolved.
+        assert!(!notes.iter().any(|n| n.contains("Elevated Operations")));
+        assert!(ctx
+            .elevated_policy_note()
+            .is_some_and(|n| n.contains("Elevated Operations: Disabled")));
 
         // Should mention denied tools
         assert!(notes.iter().any(|n| n.contains("Denied Tools")));
@@ -581,54 +326,21 @@ mod tests {
         assert!(SandboxLevel::Untrusted.description().contains("Untrusted"));
     }
 
+    /// `AllowList` is the one `ElevatedPolicy` arm no constructor produces, so
+    /// its note is only reachable from a hand-built context — keep it pinned.
     #[test]
-    fn test_tool_permission_helpers() {
-        let allowed = ToolPermission::Allowed;
-        assert!(allowed.is_allowed());
-        assert!(!allowed.requires_approval());
-
-        let denied = ToolPermission::Denied {
-            reason: "test".to_string(),
-        };
-        assert!(!denied.is_allowed());
-        assert!(!denied.requires_approval());
-
-        let requires = ToolPermission::RequiresApproval {
-            prompt: "test".to_string(),
-        };
-        assert!(!requires.is_allowed());
-        assert!(requires.requires_approval());
-    }
-
-    #[test]
-    fn test_elevated_allowlist() {
+    fn elevated_allowlist_note_reports_its_size() {
         let ctx = SecurityContext {
             sandbox_level: SandboxLevel::Standard,
-            allowed_tools: None,
             denied_tools: HashSet::new(),
             filesystem_scope: None,
             network_allowed: true,
             elevated_policy: ElevatedPolicy::AllowList(vec!["bash".to_string()]),
         };
 
-        // bash is in allowlist - should be allowed
-        assert!(matches!(ctx.check_tool("bash"), ToolPermission::Allowed));
-
-        // exec is not in allowlist - should require approval
-        assert!(matches!(
-            ctx.check_tool("exec"),
-            ToolPermission::RequiresApproval { .. }
-        ));
-    }
-
-    #[test]
-    fn test_is_network_tool() {
-        assert!(is_network_tool("web_search"));
-        assert!(is_network_tool("web_fetch"));
-        assert!(is_network_tool("http_request"));
-        assert!(is_network_tool("search"));
-        assert!(!is_network_tool("file_ops"));
-        assert!(!is_network_tool("bash"));
+        assert!(ctx
+            .elevated_policy_note()
+            .is_some_and(|n| n.contains("Limited to allowlist (1 entries)")));
     }
 
     #[test]
@@ -637,7 +349,8 @@ mod tests {
         assert_eq!(ctx.sandbox_level, SandboxLevel::None);
         assert!(ctx.network_allowed);
         assert!(matches!(ctx.elevated_policy, ElevatedPolicy::Full));
-        assert!(matches!(ctx.check_tool("bash"), ToolPermission::Allowed));
+        // `Full` imposes nothing worth telling the model.
+        assert!(ctx.elevated_policy_note().is_none());
     }
 
     #[test]
@@ -661,16 +374,12 @@ mod tests {
         assert!(matches!(ctx.elevated_policy, ElevatedPolicy::Ask));
         assert!(ctx.filesystem_scope.is_none());
 
-        // bash/exec must require approval — that's the entire point of
-        // the channel-aware posture
-        assert!(matches!(
-            ctx.check_tool("bash"),
-            ToolPermission::RequiresApproval { .. }
-        ));
-        assert!(matches!(
-            ctx.check_tool("exec"),
-            ToolPermission::RequiresApproval { .. }
-        ));
+        // The cautious posture must reach the model — that is the entire point
+        // of deriving a policy from the channel. (Whether a call is actually
+        // held for approval is the exec tier's job, not this type's.)
+        assert!(ctx
+            .elevated_policy_note()
+            .is_some_and(|n| n.contains("Require user approval")));
     }
 
     #[test]
@@ -678,10 +387,15 @@ mod tests {
         let ctx = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
         let notes = ctx.security_notes();
         assert!(
-            notes
-                .iter()
-                .any(|n| n.contains("Elevated Operations: Require user approval")),
-            "messaging paradigm must surface approval-required posture, got: {notes:?}"
+            ctx.elevated_policy_note()
+                .is_some_and(|n| n.contains("Elevated Operations: Require user approval")),
+            "messaging paradigm must surface approval-required posture"
+        );
+        // …but not inside `security_notes`, where it would render unconditionally
+        // and contradict the enforced `Approval mode:` line.
+        assert!(
+            !notes.iter().any(|n| n.contains("Elevated Operations")),
+            "elevated posture must not ride security_notes, got: {notes:?}"
         );
         assert!(
             notes.iter().any(|n| n.contains("Standard")),

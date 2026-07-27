@@ -47,7 +47,12 @@ impl PromptLayer for TimerLoopLayer {
             return;
         }
         output.push_str("<timer_loop>\n");
-        output.push_str(timer_loop);
+        // Escaped at the seam: this body carries the user's own `loop(prompt=…)`
+        // text, so an unescaped `</timer_loop>` in it would close this element and
+        // let the payload forge top-level prompt sections (e.g. a fake
+        // `Approval mode: full` bullet). `xml_util` is the single source of truth
+        // for that defense — see its module docs.
+        output.push_str(&crate::thinker::xml_util::escape_xml(timer_loop));
         output.push_str("\n</timer_loop>\n\n");
     }
 }
@@ -65,7 +70,6 @@ mod tests {
         let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
-            &[],
         );
         ctx.timer_loop = summary.map(|s| s.to_string());
         ctx

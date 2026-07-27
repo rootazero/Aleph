@@ -27,8 +27,7 @@ use super::super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToolRef
 
 // Free helpers carved into the sibling project_context module.
 use super::project_context::{
-    collect_project_context_blocks, collect_project_skill_block, lifecycle_hook_context,
-    workspace_directive,
+    collect_project_skill_block, lifecycle_hook_context, workspace_directive,
 };
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -360,41 +359,42 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Project-mode context: when the run is scoped to a user-picked
-        // project folder, surface its `AGENTS.md` and `CLAUDE.md` (Claude
-        // Code parity) to the model the same way UserPromptSubmit hooks do
-        // — as `<system-reminder>` blocks in the transient trailing context.
-        // This is intentionally a one-shot inline read rather than a new
-        // PromptLayer: project files vary per run, so they cannot live in
-        // the cached stable prefix anyway, and the read cost is dwarfed by
-        // the LLM call that follows.
+        // Project-mode context: advertise the project's own skills so the model
+        // knows to `skill_read` them (the tool itself is project-aware).
+        //
+        // The project's `AGENTS.md` / `CLAUDE.md` / rules are NOT pushed here.
+        // They used to be — and the orchestrator ALSO loads the exact same set
+        // through the exact same discovery function
+        // (`prompt_build.rs` → `project_instructions::load_project_instructions`,
+        // gated on the same `workspace_override.is_some()`), so every turn of a
+        // project session shipped the whole file set TWICE: once sanitized and
+        // budgeted inside `ExtraFilesLayer`, once verbatim here. On a repo with a
+        // 30 KB `CLAUDE.md` that is ~15k wasted tokens per turn, and the copy that
+        // skipped the sanitizer was the one framed as durable context. The
+        // orchestrator presenter is the surviving owner: it sanitizes, it counts
+        // against the prompt budget, and it shows up in `aleph-server prompt-size`.
         if request.workspace_override.is_some() {
-            let mut blocks = collect_project_context_blocks(&effective_workspace);
-            // Round 3: advertise the project's own skills so the model knows
-            // to `skill_read` them (the tool itself is project-aware now).
             if let Some(skills_block) = collect_project_skill_block(&effective_workspace) {
-                blocks.push(skills_block);
-            }
-            for b in blocks {
                 transient_blocks.push(format!(
                     "<system-reminder>\n{}\n</system-reminder>",
-                    b.trim()
+                    skills_block.trim()
                 ));
             }
         }
 
-        // Always surface the effective working directory to the model — for
-        // both default `~/.aleph/workspaces/{agent_id}` runs and project-scoped
-        // runs. The path-selection logic above already picks the right
-        // directory; this is the missing half (R7/R9): without it the model
-        // has no way to know where it is and, when asked to save a file,
-        // invents an arbitrary absolute path under the user's home instead of
-        // writing into its workspace. Delivered as a transient trailing
-        // reminder (never baked into the persisted user message) so the stored
-        // message and its derived session title stay equal to the raw input.
+        // Always remind the model to write into its working directory — for both
+        // default `~/.aleph/workspaces/{agent_id}` runs and project-scoped runs.
+        // Without it the model, asked to save a file, invents an arbitrary
+        // absolute path under the user's home instead of writing into its
+        // workspace. The *path itself* is not repeated here: the system prompt's
+        // `## Runtime Environment` line states it once as `cwd=` (fed by the same
+        // `effective_workspace`), so this carries only the behavioural half.
+        // Delivered as a transient trailing reminder (never baked into the
+        // persisted user message) so the stored message — and the session title
+        // derived from it — stays equal to the raw input.
         transient_blocks.push(format!(
             "<system-reminder>\n{}\n</system-reminder>",
-            workspace_directive(&effective_workspace)
+            workspace_directive()
         ));
 
         // Join the per-turn reminders into the ephemeral trailing context the
@@ -1175,17 +1175,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // the harness bridge, and finally stamped onto every
                 // `RequestPayload` in `think.rs`.
                 think_level,
-                // This turn's resolved exec tier — the same value fed to the
-                // `ScopedToolService` gate above — surfaced to the model as the
-                // `Approval mode:` line so it can pace itself against the
-                // approval regime it will actually meet (codex `<approval_policy>`
-                // parity, R9).
-                exec_tier: Some(exec_tier),
-                // This turn's resolved usage mode — the same value that
-                // partitioned the tool surface above — surfaced to the model
-                // as the `Usage mode:` line (R9: the mode's behavioral half
-                // lives in the prompt, the code only partitions).
-                session_mode: Some(session_mode),
+                // This turn's operating envelope. Every field is the SAME value
+                // already fed to the machinery it describes, so the prompt can
+                // never advertise a regime the runtime does not apply:
+                //   - `exec_tier` is the tier handed to the `ScopedToolService`
+                //     gate above (codex `<approval_policy>` parity, R9);
+                //   - `session_mode` is the mode that partitioned the tool
+                //     surface above (R9: behavioural half in the prompt, code
+                //     only partitions);
+                //   - `cwd` is `effective_workspace`, the same path given to the
+                //     tool adapters as `default_working_dir` — i.e. where a shell
+                //     call actually runs, and the anchor for `repo=` / `git=`.
+                envelope: crate::thinker::TurnEnvelope {
+                    exec_tier: Some(exec_tier),
+                    session_mode: Some(session_mode),
+                    // rust-doctor-disable-next-line excessive-clone
+                    cwd: Some(effective_workspace.clone()),
+                },
             };
 
             // Dispatch via the orchestrator

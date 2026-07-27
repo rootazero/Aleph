@@ -48,6 +48,10 @@ pub use strategy::StrategyLayer;
 mod strategy_pointer;
 pub use strategy_pointer::StrategyPointerLayer;
 
+// --- Operating envelope (approval tier + usage mode, Dynamic, prio 1758) ---
+mod operating_envelope;
+pub use operating_envelope::OperatingEnvelopeLayer;
+
 // --- Context layers ---
 mod chain_context;
 mod doctor_repair_hint;
@@ -99,6 +103,11 @@ pub use curated_memory::CuratedMemoryLayer;
 pub use doctor_repair_hint::DoctorRepairHintLayer;
 pub use environment::EnvironmentLayer;
 pub use extra_files::ExtraFilesLayer;
+/// The injection-pattern + invisible-Unicode scanner every prompt surface that
+/// carries **files from a folder the user opened** must pass its text through.
+/// Re-exported so the gateway's project-skill advertiser uses the same one as
+/// `ExtraFilesLayer`, instead of a weaker local sanitizer.
+pub(crate) use identity_files::sanitize_identity_content;
 pub use identity_files::IdentityFilesLayer;
 pub use memory_protocol::MemoryProtocolLayer;
 pub use multi_step_conduct::MultiStepConductLayer;

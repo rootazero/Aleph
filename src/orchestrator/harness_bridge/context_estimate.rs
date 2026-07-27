@@ -1,12 +1,14 @@
 //! Context-occupancy estimation for sessions that never ran an LLM turn.
 //!
-//! Pure token arithmetic + a per-(agent, model) static-overhead cache, so a
+//! Pure token arithmetic + a per-(session, model) prompt-overhead cache, so a
 //! freshly-opened conversation can show a `≈N%` gauge before its first reply.
 //! No LLM call, no decision — scaffolding only (R7/R10). Reuses the
 //! `budget::pressure` estimators so the whole estimate is self-consistent.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
+
+use lru::LruCache;
 
 use crate::context::budget::pressure::{
     estimate_message_tokens_aware, estimate_tokens_aware, DEFAULT_PROSE_RATIO,
@@ -24,30 +26,61 @@ pub struct ContextEstimate {
     pub window_tokens: u32,
 }
 
-/// Per-(agent_id, model_id) cache of the static prompt overhead
-/// (system prompt + tool schemas) in tokens. Keyed so a model change is a
-/// natural miss; no eviction (overhead drifts only on tool/skill/identity
-/// edits, where a slightly stale `≈` estimate is acceptable — spec D5).
-#[derive(Debug, Default)]
+/// How many (session, model) overhead entries to retain. Sessions are
+/// unbounded — agents were not — so the map that used to hold this needs a
+/// ceiling. Sized for a plausible sidebar-switching working set; an entry is
+/// two short strings plus a `usize`, so the whole cache is a few KB.
+const OVERHEAD_CACHE_CAPACITY: usize = 64;
+
+/// Per-(session_key, model_id) cache of the assembled prompt overhead
+/// (system prompt + tool schemas) in tokens.
+///
+/// **Keyed by session, not by agent.** The measured prompt is assembled from a
+/// *real* `SessionId`, and `prompt_build::resolve_prompt_context` fills it from
+/// session-scoped reads: the execution plan, standing goal, timer loop, welded
+/// strategy, governance topology, voice flag, and the curated-memory freeze
+/// point. Keying that value by `(agent, model)` served one conversation's
+/// overhead as another's — the Panel gauge showed session A's plan/strategy
+/// bytes while sitting in session B. A session key is strictly more
+/// discriminating *and* one field smaller: `SessionKey` already encodes the
+/// agent id.
+///
+/// Model stays in the key so a model change is a natural miss. No TTL —
+/// overhead drifts only on tool/skill/identity edits, where a slightly stale
+/// `≈` estimate is acceptable (spec D5) — but the map is now a bounded LRU.
+#[derive(Debug)]
 pub struct OverheadCache {
-    inner: Mutex<HashMap<(String, String), usize>>,
+    inner: Mutex<LruCache<(String, String), usize>>,
+}
+
+impl Default for OverheadCache {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(LruCache::new(
+                NonZeroUsize::new(OVERHEAD_CACHE_CAPACITY)
+                    .unwrap_or_else(|| unreachable!("OVERHEAD_CACHE_CAPACITY > 0")),
+            )),
+        }
+    }
 }
 
 impl OverheadCache {
+    /// Read the cached overhead for this session under `model`, marking the
+    /// entry most-recently-used.
     #[must_use]
-    pub fn get(&self, agent_id: &str, model: &str) -> Option<usize> {
+    pub fn get(&self, session_key: &str, model: &str) -> Option<usize> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&(agent_id.to_string(), model.to_string()))
+            .get(&(session_key.to_string(), model.to_string()))
             .copied()
     }
 
-    pub fn insert(&self, agent_id: &str, model: &str, overhead: usize) {
+    pub fn insert(&self, session_key: &str, model: &str, overhead: usize) {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert((agent_id.to_string(), model.to_string()), overhead);
+            .put((session_key.to_string(), model.to_string()), overhead);
     }
 }
 
@@ -174,10 +207,56 @@ mod tests {
     #[test]
     fn cache_round_trips_and_model_change_misses() {
         let cache = OverheadCache::default();
-        assert_eq!(cache.get("agentA", "kimi"), None);
-        cache.insert("agentA", "kimi", 12_345);
-        assert_eq!(cache.get("agentA", "kimi"), Some(12_345));
+        assert_eq!(cache.get("agent:main:s1", "kimi"), None);
+        cache.insert("agent:main:s1", "kimi", 12_345);
+        assert_eq!(cache.get("agent:main:s1", "kimi"), Some(12_345));
         // Model change = different key = natural miss (D5).
-        assert_eq!(cache.get("agentA", "claude"), None);
+        assert_eq!(cache.get("agent:main:s1", "claude"), None);
+    }
+
+    #[test]
+    fn two_sessions_of_one_agent_do_not_share_an_entry() {
+        // The cached value is measured from a prompt assembled with a REAL
+        // session (execution plan, standing goal, strategy, graph topology and
+        // the curated freeze point are all session-scoped). An agent-scoped key
+        // leaked session A's overhead into session B's gauge.
+        let cache = OverheadCache::default();
+        cache.insert("agent:main:s1", "kimi", 40_000);
+        assert_eq!(cache.get("agent:main:s2", "kimi"), None);
+        cache.insert("agent:main:s2", "kimi", 9_000);
+        assert_eq!(cache.get("agent:main:s1", "kimi"), Some(40_000));
+        assert_eq!(cache.get("agent:main:s2", "kimi"), Some(9_000));
+    }
+
+    #[test]
+    fn capacity_is_bounded_and_evicts_least_recently_used() {
+        // Sessions are unbounded, so the old never-evicted HashMap grew with
+        // every conversation ever gauged.
+        let cache = OverheadCache::default();
+        for i in 0..OVERHEAD_CACHE_CAPACITY {
+            cache.insert(&format!("agent:main:s{i}"), "kimi", i);
+        }
+        // Touch the oldest so it is no longer the eviction victim.
+        assert_eq!(cache.get("agent:main:s0", "kimi"), Some(0));
+        cache.insert("agent:main:overflow", "kimi", 999);
+
+        assert_eq!(
+            cache.get("agent:main:s0", "kimi"),
+            Some(0),
+            "recently-read entry must survive"
+        );
+        assert_eq!(
+            cache.get("agent:main:s1", "kimi"),
+            None,
+            "least-recently-used entry must be the one evicted"
+        );
+        assert_eq!(
+            cache
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            OVERHEAD_CACHE_CAPACITY
+        );
     }
 }

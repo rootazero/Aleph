@@ -33,7 +33,7 @@ pub(crate) mod xml_util;
 
 use crate::sync_primitives::Arc;
 
-pub use context::ContextAggregator;
+pub use context::{ContextAggregator, TurnEnvelope};
 pub use interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,
 };

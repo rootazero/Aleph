@@ -140,8 +140,7 @@ impl HarnessRunner for StubHarnessRunner {
         _max_iterations_override: Option<u32>,
         _transient_context: Option<String>,
         _think_level: Option<alephcore::agents::thinking::ThinkLevel>,
-        _exec_tier: Option<alephcore::orchestrator::ExecTier>,
-        _session_mode: Option<alephcore::orchestrator::SessionMode>,
+        _envelope: alephcore::thinker::TurnEnvelope,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -254,7 +253,6 @@ pub fn basic_request() -> FlowRequest {
         max_iterations_override: None,
         transient_context: None,
         think_level: None,
-        exec_tier: None,
-        session_mode: None,
+        envelope: alephcore::thinker::TurnEnvelope::none(),
     }
 }
