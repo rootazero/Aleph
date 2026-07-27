@@ -299,8 +299,12 @@ impl AgentTask {
 ///
 /// Records a single structured execution event in task execution,
 /// enabling deterministic replay without rebuilding semantics from flat logs.
+///
+/// Deliberately NOT `#[non_exhaustive]`: `alephcore` is workspace-internal, so
+/// the attribute buys no semver protection and only locks out in-repo consumers
+/// that are separate crates — `tests/gateway_trace_replay_rpc.rs` builds these
+/// with explicit ids/timestamps that `new()` cannot express.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct TaskTrace {
     /// Auto-incremented ID
     pub id: i64,
@@ -343,7 +347,6 @@ impl TaskTrace {
 
 /// Summary info for trace listing
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct TaskTraceInfo {
     pub task_id: String,
     pub event_count: i64,
@@ -359,7 +362,6 @@ pub struct TaskTraceInfo {
 /// Structural events (skeleton) are persisted immediately.
 /// Streaming events (pulse) are batched before persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct AgentEvent {
     /// Auto-incremented ID
     pub id: i64,
