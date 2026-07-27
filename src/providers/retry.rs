@@ -11,8 +11,10 @@
 //! how long" is not free — the dead `parse_retry_after` here handled HTTP-date
 //! `Retry-After` values *correctly* while the live path silently misread them
 //! as a delay in seconds, and nobody noticed precisely because this file looked
-//! like the module that owned the question. Only the jitter helper had real
-//! consumers, so only the jitter helper remains.
+//! like the module that owned the question. That form is now normalised where
+//! production reads the header ([`crate::providers::llm_retry::retry_after_header_secs`],
+//! pinned by tests there and in `protocols::http_client`). Only the jitter
+//! helper had real consumers, so only the jitter helper remains.
 use rand::RngExt;
 use std::time::Duration;
 

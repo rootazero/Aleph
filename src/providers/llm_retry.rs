@@ -428,6 +428,49 @@ mod tests {
     }
 
     #[test]
+    fn retry_after_header_reads_the_delay_seconds_form() {
+        assert_eq!(retry_after_header_secs("120"), Some(120));
+        assert_eq!(retry_after_header_secs(" 0 "), Some(0));
+    }
+
+    /// RFC 7231's second form. These assertions used to live on a parser with
+    /// no callers (`providers::retry::parse_retry_after`) — which is exactly how
+    /// the live path went on reading a date as its day-of-month unnoticed. They
+    /// belong on the function production calls.
+    ///
+    /// The date is built from `now`, so what is pinned is the delta, not a
+    /// fixed clock.
+    #[test]
+    fn retry_after_header_converts_an_http_date_to_a_delay() {
+        const THREE_HOURS: u64 = 3 * 3600;
+        let at = std::time::SystemTime::now() + Duration::from_secs(THREE_HOURS);
+        let secs = retry_after_header_secs(&httpdate::fmt_http_date(at))
+            .expect("an HTTP-date is a valid Retry-After");
+        assert!(
+            (THREE_HOURS - 5..=THREE_HOURS).contains(&secs),
+            "expected ~3h, got {secs}s"
+        );
+    }
+
+    #[test]
+    fn retry_after_header_date_in_the_past_means_retry_now() {
+        let at = std::time::SystemTime::now() - Duration::from_secs(3600);
+        assert_eq!(
+            retry_after_header_secs(&httpdate::fmt_http_date(at)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn retry_after_header_rejects_what_it_cannot_read() {
+        // No guess is better than a wrong one: the caller falls back to a
+        // suggestion that carries no number at all.
+        assert_eq!(retry_after_header_secs("soon"), None);
+        assert_eq!(retry_after_header_secs("-1"), None);
+        assert_eq!(retry_after_header_secs(""), None);
+    }
+
+    #[test]
     fn test_classify_overloaded() {
         let err = anyhow::anyhow!("HTTP 529 overloaded");
         assert_eq!(
