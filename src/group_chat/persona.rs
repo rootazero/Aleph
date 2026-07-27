@@ -76,11 +76,7 @@ impl PersonaRegistry {
         self.presets.clear();
         for cfg in configs {
             let persona = persona_from_config(cfg);
-            if self
-                .presets
-                .insert(cfg.id.clone(), persona)
-                .is_some()
-            {
+            if self.presets.insert(cfg.id.clone(), persona).is_some() {
                 tracing::warn!(
                     subsystem = "group_chat",
                     persona_id = %cfg.id,

@@ -28,9 +28,7 @@ pub(crate) mod test_hook {
 
     impl ResolverScope {
         pub(crate) fn install(map: HashMap<String, Vec<IpAddr>>) -> Self {
-            let guard = RESOLVER_GUARD
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = RESOLVER_GUARD.lock().unwrap_or_else(|e| e.into_inner());
             let previous = {
                 let mut resolver = RESOLVER.lock().unwrap_or_else(|e| e.into_inner());
                 let prev = resolver.take();
@@ -87,8 +85,10 @@ pub(crate) async fn resolve_and_validate(
         #[cfg(test)]
         {
             if let Some(ips) = test_hook::lookup(host) {
-                let collected: Vec<SocketAddr> =
-                    ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect();
+                let collected: Vec<SocketAddr> = ips
+                    .into_iter()
+                    .map(|ip| SocketAddr::new(ip, port))
+                    .collect();
                 collected
             } else {
                 lookup(host, port).await?
@@ -237,7 +237,9 @@ mod tests {
         );
         let scope = test_hook::ResolverScope::install(map);
         assert_eq!(
-            test_hook::lookup("pinned.example").as_ref().map(|v| v.len()),
+            test_hook::lookup("pinned.example")
+                .as_ref()
+                .map(|v| v.len()),
             Some(1)
         );
         drop(scope);

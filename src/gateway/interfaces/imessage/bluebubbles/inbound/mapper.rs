@@ -76,9 +76,7 @@ pub fn map_webhook_record(payload: &serde_json::Value) -> Option<MappedMessage> 
     // BlueBubbles string ("love"); the shared reaction module handles both.
     let assoc = data.get("associatedMessageType");
     let is_tapback = assoc.is_some_and(reaction::is_reaction_type);
-    let reaction_emoji = assoc
-        .and_then(reaction::reaction_emoji)
-        .map(str::to_string);
+    let reaction_emoji = assoc.and_then(reaction::reaction_emoji).map(str::to_string);
 
     let chat_guid = first_str(&data, &["chatGuid", "chat_guid"])
         .map(str::to_string)
@@ -242,7 +240,10 @@ mod tests {
 
         let inbound = to_inbound(&m, vec![]);
         assert_eq!(inbound.text, "Reacted with: ❤️");
-        assert_eq!(inbound.reply_to.as_ref().map(|r| r.as_str()), Some("target-guid"));
+        assert_eq!(
+            inbound.reply_to.as_ref().map(|r| r.as_str()),
+            Some("target-guid")
+        );
         match &inbound.metadata[..] {
             [crate::gateway::channel::MessageMeta::Reaction { emojis }] => {
                 assert_eq!(emojis, &vec!["❤️".to_string()]);

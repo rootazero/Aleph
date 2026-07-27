@@ -272,9 +272,7 @@ pub async fn handle_update(
                 // Persist the new API key (if provided) only after confirming the
                 // provider exists — writing to the vault before this check would
                 // leave an orphaned secret for a non-existent id.
-                if let Some(api_key) =
-                    params.config.api_key.as_ref().filter(|k| !k.is_empty())
-                {
+                if let Some(api_key) = params.config.api_key.as_ref().filter(|k| !k.is_empty()) {
                     if let Err(e) = vault.store_secret(&vault_key(&params.id), api_key) {
                         error!(error = %e, "Failed to store embedding API key in vault");
                         return JsonRpcResponse::error(

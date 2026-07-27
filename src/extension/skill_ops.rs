@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use crate::extension::config;
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::types::{
-    ExtensionAgent, ExtensionCommand, ExtensionSkill, McpServerConfig, SkillToolResult,
-    SkillType,
+    ExtensionAgent, ExtensionCommand, ExtensionSkill, McpServerConfig, SkillToolResult, SkillType,
 };
 
 use super::ExtensionManager;

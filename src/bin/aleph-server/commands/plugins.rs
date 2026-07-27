@@ -103,7 +103,9 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     }
     let dest_path = plugins_dir.join(repo_name);
 
-    if let Err(reason) = alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path) {
+    if let Err(reason) =
+        alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path)
+    {
         eprintln!("Error: {reason}");
         std::process::exit(1);
     }
@@ -122,9 +124,10 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             .await?;
     match clone_result {
         Ok(_) => {
-            if let Err(reason) =
-                alephcore::extension::ensure_plugin_root_within_authoritative(&plugins_dir, &dest_path)
-            {
+            if let Err(reason) = alephcore::extension::ensure_plugin_root_within_authoritative(
+                &plugins_dir,
+                &dest_path,
+            ) {
                 eprintln!("Error: {reason}");
                 let _ = std::fs::remove_dir_all(&dest_path);
                 std::process::exit(1);

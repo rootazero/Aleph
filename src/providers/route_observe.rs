@@ -183,7 +183,8 @@ impl RouteObservability {
             .map(|name| {
                 let h = health_by.get(name.as_str()).copied();
                 let m = loads_by.get(name.as_str()).copied().unwrap_or_default();
-                let (util_permille, over_limit) = limits.assess(name.as_str(), m.rpm_used, m.tpm_used);
+                let (util_permille, over_limit) =
+                    limits.assess(name.as_str(), m.rpm_used, m.tpm_used);
                 let (rpm_limit, tpm_limit) = limits.ceiling(name.as_str()).unwrap_or((None, None));
                 // Cost-routing sort key (milli-USD/Mtok); `null` when the
                 // provider's first model is unknown or unpriced.

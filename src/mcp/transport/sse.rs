@@ -165,8 +165,8 @@ impl SseTransport {
         let (validated_url, sse_client) = Self::build_pinned_client(&self.config.url, None)
             .await
             .map_err(|e| {
-                AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
-            })?;
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
@@ -369,10 +369,7 @@ impl McpTransport for SseTransport {
             Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
-                    AlephError::IoError(format!(
-                        "SSRF blocked for '{}': {}",
-                        self.server_name, e
-                    ))
+                    AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
                 })?;
 
         let body = serde_json::to_string(request)
@@ -424,10 +421,7 @@ impl McpTransport for SseTransport {
             Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
-                    AlephError::IoError(format!(
-                        "SSRF blocked for '{}': {}",
-                        self.server_name, e
-                    ))
+                    AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
                 })?;
 
         let body = serde_json::to_string(notification)
@@ -538,10 +532,7 @@ impl SseTransport {
             Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
-                    AlephError::IoError(format!(
-                        "SSRF blocked for '{}': {}",
-                        self.server_name, e
-                    ))
+                    AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
                 })?;
 
         let response = serde_json::json!({
@@ -592,10 +583,7 @@ impl SseTransport {
             Self::build_pinned_client(&self.config.url, Some(self.config.timeout))
                 .await
                 .map_err(|e| {
-                    AlephError::IoError(format!(
-                        "SSRF blocked for '{}': {}",
-                        self.server_name, e
-                    ))
+                    AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
                 })?;
 
         let response = serde_json::json!({

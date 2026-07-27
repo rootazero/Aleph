@@ -677,7 +677,9 @@ mod tests {
         tokio::fs::write(dir.join("real.txt"), "inner-content\n")
             .await
             .unwrap();
-        tokio::fs::create_dir_all(dir.join("real_dir")).await.unwrap();
+        tokio::fs::create_dir_all(dir.join("real_dir"))
+            .await
+            .unwrap();
         tokio::fs::write(dir.join("real_dir/nested.txt"), "nested\n")
             .await
             .unwrap();
@@ -691,16 +693,16 @@ mod tests {
             .await;
         match read_link {
             HandlerOutcome::Result(v) => {
-                assert!(v["content"]
-                    .as_str()
-                    .unwrap()
-                    .contains("inner-content"));
+                assert!(v["content"].as_str().unwrap().contains("inner-content"));
             }
             other => panic!("inside-root symlink read should succeed, got {other:?}"),
         }
 
         let read_nested = h
-            .handle("fs/read_text_file", &json!({ "path": "link_dir/nested.txt" }))
+            .handle(
+                "fs/read_text_file",
+                &json!({ "path": "link_dir/nested.txt" }),
+            )
             .await;
         match read_nested {
             HandlerOutcome::Result(v) => {
@@ -787,10 +789,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("acp_dang_{}", unique_suffix()));
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        let bogus = format!(
-            "/definitely/does/not/exist/aleph_acp_{}",
-            unique_suffix()
-        );
+        let bogus = format!("/definitely/does/not/exist/aleph_acp_{}", unique_suffix());
         symlink(&bogus, dir.join("dangle")).unwrap();
         let file_link = format!(
             "/definitely/does/not/exist/aleph_acp_file_{}",
@@ -801,7 +800,10 @@ mod tests {
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
 
         let read = h
-            .handle("fs/read_text_file", &json!({ "path": "dangle/anything.txt" }))
+            .handle(
+                "fs/read_text_file",
+                &json!({ "path": "dangle/anything.txt" }),
+            )
             .await;
         match read {
             HandlerOutcome::Error { code, .. } => assert_eq!(code, PERMISSION_DENIED),
@@ -855,7 +857,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn tmp_style_root_resolves_through_symlink() {
-        let ws = std::path::PathBuf::from("/tmp").join(format!("aleph_acp_tmp_{}", unique_suffix()));
+        let ws =
+            std::path::PathBuf::from("/tmp").join(format!("aleph_acp_tmp_{}", unique_suffix()));
         let _ = tokio::fs::remove_dir_all(&ws).await;
         tokio::fs::create_dir_all(&ws).await.unwrap();
         tokio::fs::write(ws.join("hello.txt"), "via-tmp\n")
@@ -870,9 +873,7 @@ mod tests {
 
         let h = handler_at(&ws, PermissionPolicy::ApproveAll);
         let abs = ws.join("hello.txt").to_str().unwrap().to_string();
-        let read = h
-            .handle("fs/read_text_file", &json!({ "path": abs }))
-            .await;
+        let read = h.handle("fs/read_text_file", &json!({ "path": abs })).await;
         match read {
             HandlerOutcome::Result(v) => {
                 assert!(v["content"].as_str().unwrap().contains("via-tmp"));

@@ -284,7 +284,10 @@ fn cap_summary_lines(summary: String, max_lines: usize) -> String {
     }
     let dropped = total - max_lines;
     let kept: Vec<&str> = summary.lines().skip(dropped).collect();
-    format!("[{dropped} earlier summary lines elided]\n{}", kept.join("\n"))
+    format!(
+        "[{dropped} earlier summary lines elided]\n{}",
+        kept.join("\n")
+    )
 }
 
 /// Convert a single `SessionEvent` to a `UnifiedMessage` for summarization.

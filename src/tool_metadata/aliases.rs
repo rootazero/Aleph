@@ -90,9 +90,18 @@ pub const SHORTHAND_ALIASES: &[(&str, &str)] = &[
 /// Every entry MUST be a `SHORTHAND_ALIASES` target and MUST NOT be in
 /// `BUILTIN_TOOL_DEFINITIONS` — both directions are asserted by tests here.
 pub const RUNTIME_ONLY_ALIAS_TARGETS: &[(&str, &str)] = &[
-    ("video_generate", "Generate a short video from a text prompt"),
-    ("audio_generate", "Generate audio or music from a text prompt"),
-    ("speech_generate", "Convert text to spoken audio (text-to-speech)"),
+    (
+        "video_generate",
+        "Generate a short video from a text prompt",
+    ),
+    (
+        "audio_generate",
+        "Generate audio or music from a text prompt",
+    ),
+    (
+        "speech_generate",
+        "Convert text to spoken audio (text-to-speech)",
+    ),
 ];
 
 /// Returns the discovery description for a runtime-only shorthand target, if it
@@ -140,7 +149,10 @@ mod tests {
     #[test]
     fn reverse_lookup_matches_flat_table() {
         assert_eq!(shorthand_aliases_for("select_model"), vec!["model"]);
-        assert_eq!(shorthand_aliases_for("agent_switch"), vec!["agent", "agents"]);
+        assert_eq!(
+            shorthand_aliases_for("agent_switch"),
+            vec!["agent", "agents"]
+        );
         assert_eq!(
             shorthand_aliases_for("session_compact"),
             vec!["compact", "compress"]
@@ -210,7 +222,10 @@ mod tests {
                  seeds its alias — remove it from RUNTIME_ONLY_ALIAS_TARGETS to avoid \
                  a duplicate catalog entry."
             );
-            assert!(!description.is_empty(), "`{target}` needs a /help description");
+            assert!(
+                !description.is_empty(),
+                "`{target}` needs a /help description"
+            );
         }
     }
 

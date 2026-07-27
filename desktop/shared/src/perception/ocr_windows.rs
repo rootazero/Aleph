@@ -36,9 +36,7 @@ pub(super) fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
 /// Steps 1–2: write the PNG bytes into an in-memory stream and decode them into
 /// a `SoftwareBitmap` the OCR engine can consume.
 #[cfg(target_os = "windows")]
-fn decode_png_to_bitmap(
-    png_bytes: &[u8],
-) -> Result<windows::Graphics::Imaging::SoftwareBitmap> {
+fn decode_png_to_bitmap(png_bytes: &[u8]) -> Result<windows::Graphics::Imaging::SoftwareBitmap> {
     use windows::core::Interface;
     use windows::Graphics::Imaging::BitmapDecoder;
     use windows::Storage::Streams::{DataWriter, IRandomAccessStream, InMemoryRandomAccessStream};
@@ -119,9 +117,7 @@ fn create_ocr_engine() -> Result<windows::Media::Ocr::OcrEngine> {
 /// Step 5: walk the recognized lines, attaching each line's merged word
 /// bounding box.
 #[cfg(target_os = "windows")]
-fn extract_lines(
-    result: &windows::Media::Ocr::OcrResult,
-) -> Result<Vec<crate::OcrLine>> {
+fn extract_lines(result: &windows::Media::Ocr::OcrResult) -> Result<Vec<crate::OcrLine>> {
     use crate::OcrLine;
     use windows::Media::Ocr as WinOcr;
 
@@ -149,9 +145,7 @@ fn extract_lines(
 /// Merge the bounding boxes of every word in `line` into one enclosing box, or
 /// `None` when no word reports bounds.
 #[cfg(target_os = "windows")]
-fn merge_word_bounds(
-    line: &windows::Media::Ocr::OcrLine,
-) -> Result<Option<crate::BoundingBox>> {
+fn merge_word_bounds(line: &windows::Media::Ocr::OcrLine) -> Result<Option<crate::BoundingBox>> {
     use crate::BoundingBox;
     use windows::Media::Ocr as WinOcr;
 

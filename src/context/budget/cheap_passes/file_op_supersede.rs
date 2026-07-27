@@ -749,8 +749,8 @@ mod tests {
         ];
         let stage = FileOpSupersedeStage::default();
         let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
-        let expected = estimate_tokens_smart(&body)
-            - estimate_tokens_smart(&stub_message("file_write"));
+        let expected =
+            estimate_tokens_smart(&body) - estimate_tokens_smart(&stub_message("file_write"));
         assert_eq!(
             freed, expected,
             "freed must use the same estimator as ToolResultPruningStage"

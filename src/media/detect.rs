@@ -78,7 +78,10 @@ fn detect_document_extension(ext: &str) -> Option<MediaType> {
         "html" | "htm" => DocFormat::Html,
         _ => return None,
     };
-    Some(MediaType::Document { format, pages: None })
+    Some(MediaType::Document {
+        format,
+        pages: None,
+    })
 }
 
 /// Detect media type from file magic bytes (first 16 bytes).

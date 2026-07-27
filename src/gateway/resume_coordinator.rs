@@ -531,10 +531,9 @@ impl ResumeCoordinator {
         // `initialize_inbound_router`). Shared verbatim with the goal wake path
         // so both fail closed identically. Merges over `metadata` (its keys are
         // exactly the identity keys, overwriting any pre-stamped value).
-        metadata.extend(crate::gateway::channel_policy::system_continuation_identity(
-            &channel,
-            &conversation,
-        ));
+        metadata.extend(
+            crate::gateway::channel_policy::system_continuation_identity(&channel, &conversation),
+        );
     }
 }
 

@@ -70,9 +70,7 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
     }
 
     let matches_any = |path: &Path| -> bool {
-        let normalised = path
-            .to_string_lossy()
-            .replace('\\', "/");
+        let normalised = path.to_string_lossy().replace('\\', "/");
         regexes.iter().any(|re| re.is_match(&normalised))
     };
 

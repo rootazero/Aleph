@@ -74,7 +74,6 @@ pub struct PromptConfig {
     pub active_tool_names: Vec<String>,
 }
 
-
 /// Prompt builder for Agent Loop thinking
 pub struct PromptBuilder {
     config: PromptConfig,

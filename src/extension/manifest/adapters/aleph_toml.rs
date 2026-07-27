@@ -86,7 +86,8 @@ impl ManifestAdapter for AlephTomlAdapter {
                 Err(e) => tracing::debug!("Failed to parse [[tools]] for {}: {}", plugin_id, e),
             }
             for tool in &raw.tools {
-                let Some(handler) = tool.handler.clone().filter(|handler| !handler.is_empty()) else {
+                let Some(handler) = tool.handler.clone().filter(|handler| !handler.is_empty())
+                else {
                     continue;
                 };
                 capabilities.push(crate::extension::CapabilityDeclaration::Tool(

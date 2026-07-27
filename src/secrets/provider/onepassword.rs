@@ -139,11 +139,9 @@ impl SecretProvider for OnePasswordProvider {
             // classify_error logs the raw stderr via tracing::debug.
             let err = Self::classify_error(&String::from_utf8_lossy(&output.stderr));
             match &err {
-                SecretError::ProviderAuthRequired { .. } => {
-                    Ok(ProviderStatus::NeedsAuth {
-                        message: "Run `op signin` to authenticate with 1Password.".into(),
-                    })
-                }
+                SecretError::ProviderAuthRequired { .. } => Ok(ProviderStatus::NeedsAuth {
+                    message: "Run `op signin` to authenticate with 1Password.".into(),
+                }),
                 _ => Ok(ProviderStatus::Unavailable {
                     reason: format!("1Password CLI error: {err}"),
                 }),

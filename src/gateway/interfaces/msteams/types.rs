@@ -179,8 +179,10 @@ static QUOTE_SENDER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)</strong>"#)
         .expect("quote sender regex is valid")
 });
-static QUOTE_BODY_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r#"<p[^>]*itemprop=["']copy["'][^>]*>(.*?)</p>"#).expect("quote body regex is valid"));
+static QUOTE_BODY_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"<p[^>]*itemprop=["']copy["'][^>]*>(.*?)</p>"#)
+        .expect("quote body regex is valid")
+});
 
 const STATUS_TEXTS: &[&str] = &[
     "Thinking...",

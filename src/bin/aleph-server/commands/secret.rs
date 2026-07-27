@@ -76,8 +76,8 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
 /// `secret set`/`get` calls have a master key. The token itself is never
 /// returned — only the ready/no-op status is reported.
 fn init_locked(data_dir: &std::path::Path) -> Result<bool, Box<dyn Error>> {
-    use alephcore::gateway::security::SharedTokenManager;
     use alephcore::gateway::security::store::SecurityStore;
+    use alephcore::gateway::security::SharedTokenManager;
 
     let security_store_path = data_dir.join("security.db");
     let store = std::sync::Arc::new(

@@ -33,22 +33,19 @@ impl BuiltinToolRegistry {
     }
 
     /// Late-bind a `ConfigPatcher` into `self_config` and `moa_manage` tools.
-///
-/// `ConfigPatcher` is built by `register_agent_handlers` *after* the
-/// `BuiltinToolRegistry`, so the constructor cannot see it. Without this
-/// setter those tools ship permanently without a patcher and every write
-/// returns "patcher not available", even though their schema is advertised
-/// to the LLM.
-///
-/// Takes `&self` (not `&mut Arc<Self>`) so the call works through the
-/// already-shared `Arc` the boot path moves into `ExecutionEngine::new`.
-/// `Arc::get_mut` only succeeds on a sole-owner Arc and silently no-ops
-/// otherwise, so the tools' `config_patcher` field is `OnceLock`-backed to
-/// allow late binding through `&self`.
-    pub fn set_config_patcher(
-        &self,
-        patcher: Arc<crate::config::patcher::ConfigPatcher>,
-    ) {
+    ///
+    /// `ConfigPatcher` is built by `register_agent_handlers` *after* the
+    /// `BuiltinToolRegistry`, so the constructor cannot see it. Without this
+    /// setter those tools ship permanently without a patcher and every write
+    /// returns "patcher not available", even though their schema is advertised
+    /// to the LLM.
+    ///
+    /// Takes `&self` (not `&mut Arc<Self>`) so the call works through the
+    /// already-shared `Arc` the boot path moves into `ExecutionEngine::new`.
+    /// `Arc::get_mut` only succeeds on a sole-owner Arc and silently no-ops
+    /// otherwise, so the tools' `config_patcher` field is `OnceLock`-backed to
+    /// allow late binding through `&self`.
+    pub fn set_config_patcher(&self, patcher: Arc<crate::config::patcher::ConfigPatcher>) {
         self.self_config_tool.set_patcher(Arc::clone(&patcher));
         self.moa_manage_tool.set_patcher(Arc::clone(&patcher));
         tracing::info!("ConfigPatcher late-bound into self_config + moa tools");

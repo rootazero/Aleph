@@ -445,7 +445,9 @@ mod tests {
         let root = tmp.path().to_path_buf();
         tokio::fs::create_dir(root.join("alpha")).await.unwrap();
         tokio::fs::create_dir(root.join(".hidden")).await.unwrap();
-        tokio::fs::File::create(root.join("readme.txt")).await.unwrap();
+        tokio::fs::File::create(root.join("readme.txt"))
+            .await
+            .unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
         let r = req("fs.list_dir", json!({ "path": root.to_string_lossy() }));

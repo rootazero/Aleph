@@ -1,6 +1,5 @@
 //! Execution session types
 
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -105,4 +104,3 @@ pub struct ToolCallRecord {
     pub input: Value,
     pub timestamp: i64,
 }
-

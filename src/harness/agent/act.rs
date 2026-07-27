@@ -590,8 +590,7 @@ impl AgentHarness {
                     // set — the LLM has demonstrably pivoted to a working
                     // strategy.
                     self.clear_failures();
-                    let dur_ms: u64 =
-                        started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                    let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                     // Live "done" event — mirror of `on_tool_call_start`, fired
                     // before the transcript persists (same order as the
                     // parallel path's completion-time firing).
@@ -963,10 +962,8 @@ impl AgentHarness {
                     // Cross-batch dedup: any success clears the failure set —
                     // the LLM has demonstrably pivoted to a working strategy.
                     self.clear_failures();
-                    self.persist_tool_success(
-                        session_id, turn_id, call, output, dur_ms, iteration,
-                    )
-                    .await?;
+                    self.persist_tool_success(session_id, turn_id, call, output, dur_ms, iteration)
+                        .await?;
                 }
                 Err((error_msg, retryable)) => {
                     // Cross-batch dedup: record the (tool, args) signature so the

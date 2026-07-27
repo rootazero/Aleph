@@ -922,5 +922,4 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
-
 }

@@ -681,14 +681,14 @@ fn resolve_schema_ref(opts: &mut AgentOpts, raw: &str, consts: &ConstTable) {
         }
         // The name resolves, but not to an object/array — not a usable schema.
         Some(_) => {
-            opts.schema_dropped =
-                Some(format!("const '{raw}' is not an object/array schema — not imported"));
+            opts.schema_dropped = Some(format!(
+                "const '{raw}' is not an object/array schema — not imported"
+            ));
         }
         // A bare non-object literal (`schema: 42` / `true` / `null`) versus a
         // genuine unknown identifier — distinct diagnostics either way (P7).
         None => {
-            let is_literal =
-                raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
+            let is_literal = raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
             opts.schema_dropped = Some(if is_literal {
                 format!("non-object schema literal '{raw}' not imported")
             } else {
@@ -910,10 +910,7 @@ fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
                         "agent" => {
                             if let Some((prompt, end)) = read_agent_prompt(after, 0) {
                                 let opts = read_agent_opts(after, end, consts);
-                                events.push(ScanEvent::Agent(Box::new(AgentCall {
-                                    prompt,
-                                    opts,
-                                })));
+                                events.push(ScanEvent::Agent(Box::new(AgentCall { prompt, opts })));
                             } else {
                                 // A non-literal prompt (`agent(promptVar)`,
                                 // `buildPrompt(u)`, a `.map` expression) is

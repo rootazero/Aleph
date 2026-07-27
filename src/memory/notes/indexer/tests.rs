@@ -706,7 +706,10 @@ async fn write_note_backfills_dangling_links_in_other_notes() {
         ..Default::default()
     };
     // rust-doctor-disable-next-line unwrap-in-production
-    indexer.write_note(AGENT, "reference", &target).await.unwrap();
+    indexer
+        .write_note(AGENT, "reference", &target)
+        .await
+        .unwrap();
 
     let rows = db
         .get_outgoing_link_rows("other/Linker", AGENT)
@@ -1206,7 +1209,10 @@ async fn delete_note_removes_file_index_and_is_idempotent() {
         .is_some());
 
     // rust-doctor-disable-next-line unwrap-in-production
-    indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
+    indexer
+        .delete_note(AGENT, "plan", "old-plan")
+        .await
+        .unwrap();
     assert!(!file.exists());
     assert!(indexer
         .store()
@@ -1217,7 +1223,10 @@ async fn delete_note_removes_file_index_and_is_idempotent() {
 
     // Second delete of the same note is a no-op, not an error.
     // rust-doctor-disable-next-line unwrap-in-production
-    indexer.delete_note(AGENT, "plan", "old-plan").await.unwrap();
+    indexer
+        .delete_note(AGENT, "plan", "old-plan")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1255,15 +1264,10 @@ async fn append_relations_adds_typed_edge_and_indexes_it() {
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
 
-    let on_disk = fs::read_to_string(
-        memory_dir
-            .join(AGENT)
-            .join("reference")
-            .join("note-a.md"),
-    )
-    .await
-    // rust-doctor-disable-next-line unwrap-in-production
-    .unwrap();
+    let on_disk = fs::read_to_string(memory_dir.join(AGENT).join("reference").join("note-a.md"))
+        .await
+        // rust-doctor-disable-next-line unwrap-in-production
+        .unwrap();
     assert!(on_disk.contains("relations:"), "got:\n{on_disk}");
     assert!(on_disk.contains("to: reference/note-b"));
     assert!(on_disk.contains("type: supersedes"));
@@ -1366,7 +1370,10 @@ async fn dated_body_supersession_promotes_through_index_to_force_surface_edge() 
     // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
-    indexer.index_file(AGENT, "reference", &new_path).await.unwrap();
+    indexer
+        .index_file(AGENT, "reference", &new_path)
+        .await
+        .unwrap();
 
     // Superseded (older) note carries ONLY the dated body heading — no
     // `superseded_by:` frontmatter — exactly as `mark_superseded` writes it.
@@ -1382,7 +1389,10 @@ async fn dated_body_supersession_promotes_through_index_to_force_surface_edge() 
     // rust-doctor-disable-next-line unwrap-in-production
     .unwrap();
     // rust-doctor-disable-next-line unwrap-in-production
-    indexer.index_file(AGENT, "reference", &old_path).await.unwrap();
+    indexer
+        .index_file(AGENT, "reference", &old_path)
+        .await
+        .unwrap();
 
     // The dated heading promoted into a typed `superseded_by` edge in notes_links.
     let typed = db
@@ -1439,15 +1449,11 @@ async fn append_relations_is_noop_when_all_already_present() {
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
-    let after_first = fs::read_to_string(
-        memory_dir
-            .join(AGENT)
-            .join("reference")
-            .join("note-c.md"),
-    )
-    .await
-    // rust-doctor-disable-next-line unwrap-in-production
-    .unwrap();
+    let after_first =
+        fs::read_to_string(memory_dir.join(AGENT).join("reference").join("note-c.md"))
+            .await
+            // rust-doctor-disable-next-line unwrap-in-production
+            .unwrap();
 
     // Calling again with the same (to, rel_type) must not rewrite the file
     // (no duplicate relation entries, no spurious updated_at bump).
@@ -1456,15 +1462,11 @@ async fn append_relations_is_noop_when_all_already_present() {
         .await
         // rust-doctor-disable-next-line unwrap-in-production
         .unwrap();
-    let after_second = fs::read_to_string(
-        memory_dir
-            .join(AGENT)
-            .join("reference")
-            .join("note-c.md"),
-    )
-    .await
-    // rust-doctor-disable-next-line unwrap-in-production
-    .unwrap();
+    let after_second =
+        fs::read_to_string(memory_dir.join(AGENT).join("reference").join("note-c.md"))
+            .await
+            // rust-doctor-disable-next-line unwrap-in-production
+            .unwrap();
     assert_eq!(after_first, after_second, "no-op must not rewrite the file");
     assert_eq!(
         after_second.matches("to: reference/note-d").count(),

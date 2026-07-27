@@ -695,10 +695,10 @@ mod spec1_tests {
         let env = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": completed}).to_string();
         Mock::given(method("POST"))
             .and(path("/a2a/stream"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_raw(format!("event: status-update\ndata: {env}\n\n"), "text/event-stream"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("event: status-update\ndata: {env}\n\n"),
+                "text/event-stream",
+            ))
             .mount(&server)
             .await;
 

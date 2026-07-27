@@ -33,7 +33,10 @@ pub fn resolve_client(
     trusted_ips: &[IpAddr],
 ) -> ResolvedClient {
     if !enabled || !trusted_ips.contains(&peer) {
-        return ResolvedClient { ip: peer, secure: false };
+        return ResolvedClient {
+            ip: peer,
+            secure: false,
+        };
     }
     let ip = last_forwarded_for(headers).unwrap_or(peer);
     let secure = forwarded_proto_https(headers);
@@ -63,7 +66,9 @@ mod tests {
     use axum::http::HeaderMap;
     use std::net::IpAddr;
 
-    fn ip(s: &str) -> IpAddr { s.parse().unwrap() }
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
     fn hdrs(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
         for (k, v) in pairs {
@@ -76,7 +81,10 @@ mod tests {
     fn trusted_peer_uses_last_xff_and_proto() {
         let r = resolve_client(
             ip("127.0.0.1"),
-            &hdrs(&[("x-forwarded-for", "203.0.113.7"), ("x-forwarded-proto", "https")]),
+            &hdrs(&[
+                ("x-forwarded-for", "203.0.113.7"),
+                ("x-forwarded-proto", "https"),
+            ]),
             true,
             &[ip("127.0.0.1")],
         );
@@ -89,7 +97,10 @@ mod tests {
         // Peer is NOT in trusted_ips → XFF is ignored, raw peer wins, not secure.
         let r = resolve_client(
             ip("198.51.100.9"),
-            &hdrs(&[("x-forwarded-for", "127.0.0.1"), ("x-forwarded-proto", "https")]),
+            &hdrs(&[
+                ("x-forwarded-for", "127.0.0.1"),
+                ("x-forwarded-proto", "https"),
+            ]),
             true,
             &[ip("127.0.0.1")],
         );
@@ -101,7 +112,10 @@ mod tests {
     fn disabled_always_raw_peer() {
         let r = resolve_client(
             ip("127.0.0.1"),
-            &hdrs(&[("x-forwarded-for", "203.0.113.7"), ("x-forwarded-proto", "https")]),
+            &hdrs(&[
+                ("x-forwarded-for", "203.0.113.7"),
+                ("x-forwarded-proto", "https"),
+            ]),
             false,
             &[ip("127.0.0.1")],
         );

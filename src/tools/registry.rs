@@ -233,7 +233,9 @@ mod tests {
         let mut handles = Vec::with_capacity(THREADS);
         for _ in 0..THREADS {
             let r = Arc::clone(&reg);
-            handles.push(thread::spawn(move || r.register("race".into(), fake("race"))));
+            handles.push(thread::spawn(move || {
+                r.register("race".into(), fake("race"))
+            }));
         }
         let mut wins = 0usize;
         let mut dupes = 0usize;
@@ -244,8 +246,15 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e:?}"),
             }
         }
-        assert_eq!(wins, 1, "exactly one register may succeed for the same name");
-        assert_eq!(dupes, THREADS - 1, "every other register must report Duplicate");
+        assert_eq!(
+            wins, 1,
+            "exactly one register may succeed for the same name"
+        );
+        assert_eq!(
+            dupes,
+            THREADS - 1,
+            "every other register must report Duplicate"
+        );
         assert_eq!(reg.snapshot().len(), 1);
     }
 
@@ -267,7 +276,9 @@ mod tests {
             handles.push(thread::spawn(move || r.register(name.clone(), fake(&name))));
         }
         for h in handles {
-            h.join().expect("join").expect("distinct-name register must succeed");
+            h.join()
+                .expect("join")
+                .expect("distinct-name register must succeed");
         }
         assert_eq!(reg.snapshot().len(), THREADS);
     }

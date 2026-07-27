@@ -365,10 +365,9 @@ impl MemorySearchTool {
                 // than trusting the workspace handle (never populated at
                 // runtime) or the process-global agent handle (racy across
                 // concurrent runs).
-                let base_agent = crate::routing::session_key::SessionKey::from_key_string(
-                    &session_key,
-                )
-                .map_or_else(|| "default".to_string(), |k| k.agent_id().to_string());
+                let base_agent =
+                    crate::routing::session_key::SessionKey::from_key_string(&session_key)
+                        .map_or_else(|| "default".to_string(), |k| k.agent_id().to_string());
                 let agent_id = crate::memory::project_scope::scoped_or_base(
                     &base_agent,
                     self.project_scoped,
@@ -421,8 +420,12 @@ impl MemorySearchTool {
             // Keyed by the running agent's id (default_ws, resolved above from
             // the per-run task-local) so a concurrent run of another agent —
             // which writes its own map entry — cannot swap the profile mid-turn.
-            let smart_recall_cfg: Option<SmartRecallConfig> =
-                self.smart_recall_config.read().await.get(&default_ws).cloned();
+            let smart_recall_cfg: Option<SmartRecallConfig> = self
+                .smart_recall_config
+                .read()
+                .await
+                .get(&default_ws)
+                .cloned();
             let use_smart_recall = matches!(&workspace_filter, AgentEnvFilter::Single(_))
                 && args.cross_workspace.is_none()
                 && args.workspaces.is_none()

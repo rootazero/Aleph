@@ -415,16 +415,14 @@ impl SessionEventStore for SqliteEventStore {
         // or a partial failure (e.g. disk-full mid-statement) leaves the rows
         // marked retired while their content stays in the BM25 mirror — exactly
         // the leak this method exists to prevent.
-        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
-            SessionError::Storage(format!("retire_from BEGIN failed: {e}"))
-        })?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| SessionError::Storage(format!("retire_from BEGIN failed: {e}")))?;
 
-        let retired = match conn
-            .execute(
-                "UPDATE session_events SET retired_at = ?3
+        let retired = match conn.execute(
+            "UPDATE session_events SET retired_at = ?3
                  WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
-                params![session_key, from_val, at],
-            ) {
+            params![session_key, from_val, at],
+        ) {
             Ok(n) => n,
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");

@@ -148,7 +148,9 @@ mod tests {
         // The process runs detached; poll the log until it flushes the line.
         let mut contents = String::new();
         for _ in 0..40 {
-            contents = tokio::fs::read_to_string(&log_path).await.unwrap_or_default();
+            contents = tokio::fs::read_to_string(&log_path)
+                .await
+                .unwrap_or_default();
             if contents.contains("bg-hello") {
                 break;
             }

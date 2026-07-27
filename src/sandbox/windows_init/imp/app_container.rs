@@ -556,4 +556,3 @@ fn ensure_deny_read_globs(
     }
     denied
 }
-

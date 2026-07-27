@@ -248,7 +248,9 @@ impl ProtocolAdapter for AnthropicProtocol {
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
         self.stream_idle_timeout_secs.store(
-            config.stream_idle_timeout_secs.unwrap_or(crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS),
+            config
+                .stream_idle_timeout_secs
+                .unwrap_or(crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS),
             std::sync::atomic::Ordering::Relaxed,
         );
         // Cycle 4: resolve capability policy once at the top of build_request.

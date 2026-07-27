@@ -317,9 +317,8 @@ impl AlephTool for AgentCreateTool {
         }
 
         // 3. Determine paths
-        let home = dirs::home_dir().ok_or_else(|| {
-            crate::error::AlephError::other("Cannot determine home directory")
-        })?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| crate::error::AlephError::other("Cannot determine home directory"))?;
         let agents_state_root = home.join(".aleph/agents");
         let agent_state_dir = agents_state_root.join(&args.id);
 
@@ -616,7 +615,9 @@ mod tests {
 
         // llm_context carries the SSOT archetype catalog (from summary()) AND
         // the usage examples — both must be wired in.
-        let context = def.llm_context.expect("agent_create must inject llm_context");
+        let context = def
+            .llm_context
+            .expect("agent_create must inject llm_context");
         assert!(context.contains("## Soul Archetypes"));
         assert!(context.contains("expert:"));
         assert!(context.contains("companion:"));

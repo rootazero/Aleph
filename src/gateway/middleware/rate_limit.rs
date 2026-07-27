@@ -197,8 +197,7 @@ mod tests {
         CALLER_IS_LOOPBACK
             .scope(false, async {
                 for i in 0..5 {
-                    let req =
-                        JsonRpcRequest::with_id("connect", None, serde_json::json!(i));
+                    let req = JsonRpcRequest::with_id("connect", None, serde_json::json!(i));
                     let resp = svc.call(req).await.unwrap();
                     assert!(
                         resp.error.is_none(),

@@ -881,7 +881,11 @@ pub trait Channel: Send + Sync {
     /// and that is on purpose: a flag is a second place to state the same fact,
     /// and every one of the five above has been wrong in at least one adapter
     /// (see `unsupported_feature`). Overriding this method IS the declaration.
-    async fn list_conversations(&self, query: &str, limit: usize) -> ChannelResult<ConversationPage> {
+    async fn list_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> ChannelResult<ConversationPage> {
         let _ = (query, limit);
         Err(ChannelError::UnsupportedFeature(format!(
             "conversation directory (not supported by {})",
@@ -1087,7 +1091,10 @@ mod tests {
         let mut ch = OverclaimingChannel::new();
         ch.info.capabilities = ChannelCapabilities::default();
 
-        let err = ch.send_typing(&ConversationId::new("c1")).await.unwrap_err();
+        let err = ch
+            .send_typing(&ConversationId::new("c1"))
+            .await
+            .unwrap_err();
         match err {
             ChannelError::UnsupportedFeature(m) => {
                 assert!(m.contains("typing"), "{m}");

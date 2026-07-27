@@ -389,7 +389,7 @@ Examples:
                 message: Some(format!(
                     "Unknown action: '{unknown}'. Valid actions: run_script, \
                      run_background, list_shortcuts, run_shortcut"
-)),
+                )),
             }),
         }
     }

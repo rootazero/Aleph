@@ -579,10 +579,7 @@ mod tests {
             memory_dir: synth.memory_dir.clone(),
             provider,
             orientation: None,
-            last_update: Mutex::new(HashMap::from([(
-                "agent_d".to_string(),
-                Instant::now(),
-            )])),
+            last_update: Mutex::new(HashMap::from([("agent_d".to_string(), Instant::now())])),
             min_interval: Duration::from_secs(3600),
             max_bullets_per_section: 20,
             bootstrap_on_first_session_end: true,

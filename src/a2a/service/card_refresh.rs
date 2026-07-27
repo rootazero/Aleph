@@ -18,11 +18,7 @@ use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
 use crate::a2a::domain::AgentCard;
 use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
 
-fn rebuilt_agent(
-    agent: &RegisteredAgent,
-    card: AgentCard,
-    health: AgentHealth,
-) -> RegisteredAgent {
+fn rebuilt_agent(agent: &RegisteredAgent, card: AgentCard, health: AgentHealth) -> RegisteredAgent {
     RegisteredAgent {
         card,
         trust_level: agent.trust_level,

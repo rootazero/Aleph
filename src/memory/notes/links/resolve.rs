@@ -144,7 +144,6 @@ impl LinkResolveContext {
             normalized_to_paths,
         }
     }
-
 }
 
 /// Lowercase + fold full-width ASCII (U+FF01..=U+FF5E and ideographic space
@@ -155,9 +154,7 @@ pub fn normalize_link_key(s: &str) -> String {
         .chars()
         .map(|c| match c {
             '\u{3000}' => ' ',
-            '\u{FF01}'..='\u{FF5E}' => {
-                char::from_u32(c as u32 - 0xFF00 + 0x20).unwrap_or(c)
-            }
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFF00 + 0x20).unwrap_or(c),
             _ => c,
         })
         .collect::<String>()
@@ -205,7 +202,11 @@ mod tests {
     fn ctx() -> LinkResolveContext {
         LinkResolveContext::new(vec![
             ("reference/rust".into(), "rust".into(), vec![]),
-            ("personal/bob-smith".into(), "bob-smith".into(), vec!["Bob".into()]),
+            (
+                "personal/bob-smith".into(),
+                "bob-smith".into(),
+                vec!["Bob".into()],
+            ),
             ("project/API Design".into(), "API Design".into(), vec![]),
             // Two notes share filename "dup" → filename tier is ambiguous.
             ("a/dup".into(), "dup".into(), vec![]),
@@ -234,7 +235,10 @@ mod tests {
         let r = resolve("rust", &ctx());
         assert_eq!(r.target.as_deref(), Some("reference/rust"));
         assert!((r.confidence - 0.95).abs() < 1e-6);
-        assert!(matches!(r.resolved_by, Some(ResolveStrategy::ExactFilename)));
+        assert!(matches!(
+            r.resolved_by,
+            Some(ResolveStrategy::ExactFilename)
+        ));
     }
 
     #[test]

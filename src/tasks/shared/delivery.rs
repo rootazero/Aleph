@@ -236,10 +236,7 @@ impl DeliveryEngine {
 /// already handled it, and `NotDelivered` otherwise — the caller must then
 /// perform actual delivery and overwrite the status with the real outcome.
 #[must_use]
-pub const fn pre_delivery_status(
-    agent_already_sent: bool,
-    mode: &DeliveryMode,
-) -> DeliveryStatus {
+pub const fn pre_delivery_status(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
     if matches!(mode, DeliveryMode::None) {
         return DeliveryStatus::NotRequested;
     }

@@ -786,7 +786,10 @@ impl GatewayServer {
             let (cert_pem, key_pem, fp) = crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
-            info!("Aleph listening on https://{} (wss:// on /ws), cert fp {fp}", self.addr);
+            info!(
+                "Aleph listening on https://{} (wss:// on /ws), cert fp {fp}",
+                self.addr
+            );
             let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
                 .await
                 .map_err(|e| GatewayError::ConnectionError(format!("rustls config: {e}")))?;
@@ -838,10 +841,9 @@ impl GatewayServer {
             let tls_dir = crate::utils::paths::get_data_dir()
                 .map_err(|e| GatewayError::ConnectionError(format!("data dir: {e}")))?
                 .join("tls");
-            let (cert_pem, key_pem, fp) =
-                crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
-                    .await
-                    .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
+            let (cert_pem, key_pem, fp) = crate::gateway::tls::load_or_generate(&tls_cfg, &tls_dir)
+                .await
+                .map_err(|e| GatewayError::ConnectionError(format!("TLS material: {e}")))?;
             info!("Aleph listening on https://{}", self.addr);
             info!("  WebSocket: wss://{}/ws", self.addr);
             info!("  TLS cert SHA-256 fingerprint: {fp}");

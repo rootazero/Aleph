@@ -247,7 +247,8 @@ impl ConversationDirectory {
                 Some(ConversationRef {
                     id: ConversationId::new(id),
                     name: name.to_string(),
-                    kind: if c.get("is_private").and_then(serde_json::Value::as_bool) == Some(true) {
+                    kind: if c.get("is_private").and_then(serde_json::Value::as_bool) == Some(true)
+                    {
                         ConversationKind::Group
                     } else {
                         ConversationKind::Channel
@@ -473,7 +474,10 @@ mod tests {
     async fn sigils_are_stripped_before_matching() {
         for raw in ["#eng-releases", "@alice", "  #eng-releases  "] {
             let needle = raw.trim().trim_start_matches(['#', '@']).to_lowercase();
-            assert!(!needle.starts_with('#') && !needle.starts_with('@'), "{raw}");
+            assert!(
+                !needle.starts_with('#') && !needle.starts_with('@'),
+                "{raw}"
+            );
         }
     }
 
@@ -520,11 +524,7 @@ mod tests {
             .await;
 
         let page = dir_for(&server).await.list("eng", 10).await.unwrap();
-        let names: Vec<&str> = page
-            .conversations
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect();
+        let names: Vec<&str> = page.conversations.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["eng-releases", "eng-secret"]);
         assert!(page.conversations[0].is_member);
         assert!(!page.conversations[1].is_member);
@@ -643,11 +643,7 @@ mod tests {
             .await;
 
         let page = dir_for(&server).await.list("", 10).await.unwrap();
-        let names: Vec<&str> = page
-            .conversations
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect();
+        let names: Vec<&str> = page.conversations.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["Alice"]);
         assert_eq!(page.conversations[0].kind, ConversationKind::Direct);
     }

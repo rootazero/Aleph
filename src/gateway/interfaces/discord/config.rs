@@ -2,7 +2,6 @@
 //!
 //! Configuration types for the Discord Bot integration.
 
-
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

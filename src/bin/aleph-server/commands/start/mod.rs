@@ -27,14 +27,14 @@ mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
-    register_config_handlers,
-    register_core_handlers, register_cron_handlers, register_daemon_handlers,
-    register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
-    register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
-    register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
-    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
-    register_session_handlers, register_teams_handlers, register_voice_capability_handlers,
-    register_workspace_handlers, setup_config_watcher, start_webchat_server,
+    register_config_handlers, register_core_handlers, register_cron_handlers,
+    register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
+    register_fs_handlers, register_graph_handlers, register_group_chat_handlers,
+    register_heartbeat_handlers, register_identity_handlers, register_mcp_config_handlers,
+    register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
+    register_projects_handlers, register_session_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    start_webchat_server,
 };
 
 mod orchestrator_init;

@@ -47,7 +47,9 @@ impl AlephTool for HubFetchDocsTool {
         let ssrf_policy = SsrfPolicy::default();
         let (_url, _pinned) = validate_url_async(&args.url, &ssrf_policy)
             .await
-            .map_err(|e| AlephError::network(format!("SSRF blocked for URL '{}': {e}", args.url)))?;
+            .map_err(|e| {
+                AlephError::network(format!("SSRF blocked for URL '{}': {e}", args.url))
+            })?;
 
         // Build a short-timeout client, mirroring docker_mcp/mcp_registry providers.
         let client = reqwest::Client::builder()

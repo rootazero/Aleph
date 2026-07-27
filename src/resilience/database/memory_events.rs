@@ -229,11 +229,7 @@ impl StateDatabase {
         })?;
         let rows = stmt
             .query_map(
-                params![
-                    from_timestamp,
-                    to_timestamp,
-                    limit_i64
-                ],
+                params![from_timestamp, to_timestamp, limit_i64],
                 MemoryEventRow::from_row,
             )
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;

@@ -614,10 +614,8 @@ impl AiProvider for FailoverProvider {
         // C floor: derive the request's structural capability requirements once
         // (image blocks → vision, tools array → tool-calling, text size →
         // context window). Prompt-blind; shapes the candidate model set below.
-        let reqs = RequestRequirements::from_request(
-            messages,
-            tools.is_some_and(|t| !t.is_empty()),
-        );
+        let reqs =
+            RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
             let candidates = self.candidates();

@@ -1766,7 +1766,10 @@ mod clipboard_master_switch {
 
     #[async_trait]
     impl ScreenCapability for TrackingScreen {
-        async fn screenshot(&self, _r: Option<aleph_desktop::ScreenRegion>) -> DResult<aleph_desktop::Screenshot> {
+        async fn screenshot(
+            &self,
+            _r: Option<aleph_desktop::ScreenRegion>,
+        ) -> DResult<aleph_desktop::Screenshot> {
             unimplemented!()
         }
         async fn ocr(&self, _i: Option<&[u8]>) -> DResult<aleph_desktop::OcrResult> {
@@ -1812,7 +1815,11 @@ mod clipboard_master_switch {
             Ok("screen-text".into())
         }
         async fn clipboard_write(&self, text: &str) -> DResult<()> {
-            self.counts.screen_writes.lock().unwrap().push(text.to_string());
+            self.counts
+                .screen_writes
+                .lock()
+                .unwrap()
+                .push(text.to_string());
             Ok(())
         }
         async fn display_list(&self) -> DResult<Vec<aleph_desktop::DisplayInfo>> {
@@ -1847,7 +1854,11 @@ mod clipboard_master_switch {
             })
         }
         async fn clipboard_write(&self, text: &str) -> DResult<()> {
-            self.counts.system_writes.lock().unwrap().push(text.to_string());
+            self.counts
+                .system_writes
+                .lock()
+                .unwrap()
+                .push(text.to_string());
             Ok(())
         }
         async fn system_info(&self) -> DResult<aleph_desktop::system_types::SystemInfo> {
@@ -1920,15 +1931,25 @@ mod clipboard_master_switch {
     #[tokio::test]
     async fn read_is_refused_and_mock_records_zero_when_disabled() {
         let (tool, counts) = build(false);
-        let out = AlephTool::call(&tool, make_args("clipboard_read")).await.unwrap();
+        let out = AlephTool::call(&tool, make_args("clipboard_read"))
+            .await
+            .unwrap();
         assert!(!out.success, "clipboard_read must refuse when disabled");
         let msg = out.message.as_deref().unwrap_or("");
         assert!(
             msg.contains("disabled") || msg.contains("clipboard"),
             "refusal must explain the master switch: {msg}"
         );
-        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "screen clipboard_read must not be called");
-        assert_eq!(*counts.system_reads.lock().unwrap(), 0, "system clipboard_read must not be called");
+        assert_eq!(
+            *counts.screen_reads.lock().unwrap(),
+            0,
+            "screen clipboard_read must not be called"
+        );
+        assert_eq!(
+            *counts.system_reads.lock().unwrap(),
+            0,
+            "system clipboard_read must not be called"
+        );
     }
 
     #[tokio::test]
@@ -1965,10 +1986,24 @@ mod clipboard_master_switch {
             msg.contains("disabled") || msg.contains("clipboard"),
             "refusal must explain the master switch: {msg}"
         );
-        assert!(counts.screen_writes.lock().unwrap().is_empty(), "paste writes nothing when disabled");
-        assert!(counts.key_combos.lock().unwrap().is_empty(), "paste key_combo must not fire when disabled");
-        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "snapshot must not be taken when disabled");
-        assert_eq!(*counts.system_reads.lock().unwrap(), 0, "system read must not be taken when disabled");
+        assert!(
+            counts.screen_writes.lock().unwrap().is_empty(),
+            "paste writes nothing when disabled"
+        );
+        assert!(
+            counts.key_combos.lock().unwrap().is_empty(),
+            "paste key_combo must not fire when disabled"
+        );
+        assert_eq!(
+            *counts.screen_reads.lock().unwrap(),
+            0,
+            "snapshot must not be taken when disabled"
+        );
+        assert_eq!(
+            *counts.system_reads.lock().unwrap(),
+            0,
+            "system read must not be taken when disabled"
+        );
     }
 
     #[tokio::test]
@@ -1983,7 +2018,9 @@ mod clipboard_master_switch {
             },
         });
         let tool = DesktopTool::new().with_platform(platform);
-        let out = AlephTool::call(&tool, make_args("clipboard_read")).await.unwrap();
+        let out = AlephTool::call(&tool, make_args("clipboard_read"))
+            .await
+            .unwrap();
         assert!(
             out.success,
             "clipboard_read must work by default (current behavior), got: {:?}",
@@ -2011,7 +2048,10 @@ mod clipboard_master_switch {
             "clipboard_write must work by default, got: {:?}",
             out.message
         );
-        assert_eq!(counts.screen_writes.lock().unwrap().clone(), vec!["hi".to_string()]);
+        assert_eq!(
+            counts.screen_writes.lock().unwrap().clone(),
+            vec!["hi".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -2021,12 +2061,19 @@ mod clipboard_master_switch {
         leaf.text = Some("x".into());
         let batch = make_batch(vec![leaf, make_args("clipboard_read")]);
         let out = AlephTool::call(&tool, batch).await.unwrap();
-        assert!(!out.success, "batch with disabled clipboard action must refuse");
+        assert!(
+            !out.success,
+            "batch with disabled clipboard action must refuse"
+        );
         assert!(
             counts.screen_writes.lock().unwrap().is_empty(),
             "batch sub-action write must not reach the platform"
         );
-        assert_eq!(*counts.screen_reads.lock().unwrap(), 0, "batch sub-action read must not reach the platform");
+        assert_eq!(
+            *counts.screen_reads.lock().unwrap(),
+            0,
+            "batch sub-action read must not reach the platform"
+        );
         assert_eq!(*counts.system_reads.lock().unwrap(), 0);
     }
 }

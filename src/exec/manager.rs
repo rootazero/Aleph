@@ -710,8 +710,8 @@ impl Default for ExecApprovalManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::decision::ApprovalRequest;
     use crate::exec::analysis::CommandAnalysis;
+    use crate::exec::decision::ApprovalRequest;
 
     fn mock_request() -> ApprovalRequest {
         ApprovalRequest {

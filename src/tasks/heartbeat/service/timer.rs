@@ -212,7 +212,11 @@ async fn collect_due_tasks(
         let wake_reason = wake_requests
             .iter()
             .find(|w| w.task_id == task.id)
-            .map(|w| w.reason.clone().unwrap_or_else(|| "manual wake".to_string()));
+            .map(|w| {
+                w.reason
+                    .clone()
+                    .unwrap_or_else(|| "manual wake".to_string())
+            });
         if !is_due && wake_reason.is_none() {
             continue;
         }

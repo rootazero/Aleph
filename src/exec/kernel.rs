@@ -119,7 +119,10 @@ mod tests {
             ..Default::default()
         };
         let kernel = SecurityKernel::from_config(&config);
-        assert_eq!(kernel.assess_custom("danger-cmd arg"), Some(RiskLevel::Blocked));
+        assert_eq!(
+            kernel.assess_custom("danger-cmd arg"),
+            Some(RiskLevel::Blocked)
+        );
         assert!(kernel.assess_custom("safe-cmd arg").is_none());
     }
 

@@ -370,9 +370,13 @@ mod tests {
         db.index_note(&note("beta", "learning", &[]), "agent1", "learning")
             .await
             .unwrap();
-        db.index_note(&note("alpha", "reference", &["beta"]), "agent1", "reference")
-            .await
-            .unwrap();
+        db.index_note(
+            &note("alpha", "reference", &["beta"]),
+            "agent1",
+            "reference",
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

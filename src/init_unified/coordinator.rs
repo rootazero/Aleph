@@ -518,9 +518,9 @@ impl InitializationCoordinator {
         tokio::task::spawn_blocking(move || {
             migrate_from_legacy(&runtimes_dir).and_then(|l| l.persist())
         })
-            .await
-            .map_err(|e| join_error_to_init_error("runtimes", e))?
-            .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {e}")))?;
+        .await
+        .map_err(|e| join_error_to_init_error("runtimes", e))?
+        .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {e}")))?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");
         Ok(())

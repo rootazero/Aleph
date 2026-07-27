@@ -230,7 +230,8 @@ impl PairingStore for SqlitePairingStore {
         let created_at = DateTime::parse_from_rfc3339(&created_at)
             .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
         if self.expiry_secs > 0 {
-            let ttl = chrono::Duration::seconds(i64::try_from(self.expiry_secs).unwrap_or(i64::MAX));
+            let ttl =
+                chrono::Duration::seconds(i64::try_from(self.expiry_secs).unwrap_or(i64::MAX));
             if Utc::now().signed_duration_since(created_at) > ttl {
                 // Consume the stale row so a later retry can't approve it either.
                 conn.execute(

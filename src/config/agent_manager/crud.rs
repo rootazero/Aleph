@@ -96,7 +96,9 @@ impl AgentManager {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    tracing::warn!("Failed to read directory entry during orphan reconciliation: {e}");
+                    tracing::warn!(
+                        "Failed to read directory entry during orphan reconciliation: {e}"
+                    );
                     continue;
                 }
             };

@@ -431,13 +431,13 @@ impl McpServerConnection {
 
         let raw_templates = self
             .drain_paginated("resources/templates/list", |result| {
-                let page: mcp_types::ResourceTemplatesListResult =
-                    serde_json::from_value(result).map_err(|e| {
-                        AlephError::IoError(format!(
-                            "Failed to parse resource templates list from '{}': {}",
-                            self.name, e
-                        ))
-                    })?;
+                let page: mcp_types::ResourceTemplatesListResult = serde_json::from_value(result)
+                    .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "Failed to parse resource templates list from '{}': {}",
+                        self.name, e
+                    ))
+                })?;
                 Ok((page.resource_templates, page.next_cursor))
             })
             .await?;

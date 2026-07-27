@@ -191,19 +191,21 @@ mod tests {
 
     #[tokio::test]
     async fn call_reports_corrections_and_dreaming_from_backend() {
-        use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().unwrap();
-        let backend =
-            Arc::new(crate::memory::store::SqliteMemoryBackend::new(tmp.path()).unwrap());
+        let backend = Arc::new(crate::memory::store::SqliteMemoryBackend::new(tmp.path()).unwrap());
 
         // A very recent correction (created_at ≈ now) must fall inside a 7d window.
         let now = now_epoch_secs();
-        let mut corr = RawMemory::new("boss wants X".to_string(), RawMemorySource::SessionCompressed)
-            .with_path("aleph://correction/c1")
-            .with_agent("main");
+        let mut corr = RawMemory::new(
+            "boss wants X".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_path("aleph://correction/c1")
+        .with_agent("main");
         corr.created_at = now - 100;
         backend.insert_raw_memory(&corr).await.unwrap();
 

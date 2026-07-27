@@ -96,15 +96,11 @@ pub(crate) fn is_blocklisted(hostname: &str, blocked_hosts: &[String]) -> bool {
 pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
     let lower = hostname.to_lowercase();
 
-    is_hex_ip_literal(&lower)
-        || is_decimal_ip_literal(&lower)
-        || is_octal_or_short_ipv4(&lower)
+    is_hex_ip_literal(&lower) || is_decimal_ip_literal(&lower) || is_octal_or_short_ipv4(&lower)
 }
 
 fn is_hex_ip_literal(s: &str) -> bool {
-    s.starts_with("0x")
-        && s.len() > 2
-        && s[2..].chars().all(|c| c.is_ascii_hexdigit())
+    s.starts_with("0x") && s.len() > 2 && s[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn is_decimal_ip_literal(s: &str) -> bool {
@@ -137,9 +133,7 @@ fn is_octal_or_short_ipv4(s: &str) -> bool {
     // names — fall through to the short-form check below. Plain decimal IPv4
     // like "8.8.8.8" has no leading-zero parts and is correctly rejected here
     // so the caller can route it through normal IPv4 validation.
-    let has_octal_part = parts
-        .iter()
-        .any(|p| p.len() > 1 && p.starts_with('0'));
+    let has_octal_part = parts.iter().any(|p| p.len() > 1 && p.starts_with('0'));
     if parts.len() == 4 && all_numeric() && has_octal_part {
         return true;
     }

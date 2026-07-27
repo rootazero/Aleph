@@ -707,10 +707,7 @@ pub async fn handle_models_refresh(
                     .clone()
                     .or_else(|| preset.map(|p| p.protocol.to_string()))
                     .unwrap_or_else(|| "openai".to_string());
-                let api_key = pc
-                    .api_key
-                    .clone()
-                    .or_else(|| resolve_api_key(name, &vault));
+                let api_key = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault));
                 if api_key.is_none() {
                     warn!(
                         provider = %name,

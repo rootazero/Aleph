@@ -166,8 +166,7 @@ impl ScopedToolService {
         }
 
         // Config-tier authorization gate — suspended for live operator approval.
-        let approved_by_operator_gate =
-            self.check_operator_gate(name, &input).await?;
+        let approved_by_operator_gate = self.check_operator_gate(name, &input).await?;
 
         // Confirmation gate — user-approval for destructive / gated tools.
         // Skipped entirely when the operator gate above already approved this
@@ -185,27 +184,25 @@ impl ScopedToolService {
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
         let started = std::time::Instant::now();
-        let (effective_input, mut pre_hook_contexts) =
-            match self.run_before_tool_hooks(name, input.clone()).await {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    let duration_ms: u64 =
-                        started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-                    if let Some(ref l) = ledger {
-                        l.commit_refusal(
-                            &input,
-                            &format!("blocked by a BeforeToolCall hook: {err}"),
-                        )
+        let (effective_input, mut pre_hook_contexts) = match self
+            .run_before_tool_hooks(name, input.clone())
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+                if let Some(ref l) = ledger {
+                    l.commit_refusal(&input, &format!("blocked by a BeforeToolCall hook: {err}"))
                         .await;
-                    }
-                    let rejection: Result<ToolOutput, ToolError> = Err(err);
-                    if let Some(ref hook) = self.hook_decorator {
-                        hook.after_execute(name, &rejection);
-                        hook.after_execute_with_duration(name, &rejection, duration_ms);
-                    }
-                    return rejection;
                 }
-            };
+                let rejection: Result<ToolOutput, ToolError> = Err(err);
+                if let Some(ref hook) = self.hook_decorator {
+                    hook.after_execute(name, &rejection);
+                    hook.after_execute_with_duration(name, &rejection, duration_ms);
+                }
+                return rejection;
+            }
+        };
 
         // Cat-guard: when a raw `file_read` / shell read targets a file inside
         // an installed (or plugin-shipped) skill, append a non-blocking
@@ -309,11 +306,7 @@ impl ScopedToolService {
     /// Returns `Ok(true)` when the operator approved this specific call
     /// (skipping the subsequent confirmation gate), or `Ok(false)` when the
     /// gate isn't applicable (operator device / non-gated tool).
-    async fn check_operator_gate(
-        &self,
-        name: &str,
-        input: &Value,
-    ) -> Result<bool, ToolError> {
+    async fn check_operator_gate(&self, name: &str, input: &Value) -> Result<bool, ToolError> {
         if !crate::gateway::method_authz::tool_requires_operator(name) {
             return Ok(false);
         }
@@ -1049,8 +1042,12 @@ impl ScopedToolService {
         // gone. Read-only (the items stay in `out.value` for the existing
         // delivery path) and best-effort by construction: it returns `()`, so a
         // storage failure can never surface as a tool error.
-        super::artifact_harvest::harvest_outbound_media(name, &out.value, self.turn_context.as_ref())
-            .await;
+        super::artifact_harvest::harvest_outbound_media(
+            name,
+            &out.value,
+            self.turn_context.as_ref(),
+        )
+        .await;
 
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed

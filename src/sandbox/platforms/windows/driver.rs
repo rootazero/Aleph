@@ -329,8 +329,9 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 // SAFETY: The returned SandboxJob owns the job-object handle and closes it on Drop.
                 Some(
                     // rust-doctor-disable-next-line unsafe-block-audit
-                    unsafe { SandboxJob::new(active_limit, profile.max_memory_mb) }
-                    .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?,
+                    unsafe { SandboxJob::new(active_limit, profile.max_memory_mb) }.map_err(
+                        |e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")),
+                    )?,
                 )
             } else {
                 None

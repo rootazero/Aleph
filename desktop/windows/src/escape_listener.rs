@@ -102,8 +102,7 @@ impl EscapeAbort for WindowsEscapeListener {
                 ))
             })?;
 
-            let (tx, rx) =
-                std::sync::mpsc::channel::<std::result::Result<(isize, u32), String>>();
+            let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(isize, u32), String>>();
             let hmod_raw = hmod.0 as usize;
 
             // Spawn a dedicated thread to install the hook and pump Win32
@@ -170,14 +169,12 @@ impl EscapeAbort for WindowsEscapeListener {
                     *self
                         .hook
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(hook_addr);
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook_addr);
                     self.thread_id.store(tid, Ordering::SeqCst);
                     *self
                         .thread
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(worker);
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(worker);
                     Ok(())
                 }
                 Ok(Err(e)) => {

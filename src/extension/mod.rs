@@ -1200,12 +1200,9 @@ pub fn ensure_plugin_root_within_authoritative(
     root: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<(), String> {
-    let canonical_root = root.canonicalize().map_err(|e| {
-        format!(
-            "cannot canonicalize plugins root {}: {e}",
-            root.display()
-        )
-    })?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize plugins root {}: {e}", root.display()))?;
     let canonical_dest = dest.canonicalize().map_err(|e| {
         format!(
             "cannot canonicalize plugin destination {}: {e}",

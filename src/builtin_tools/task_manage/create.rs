@@ -211,10 +211,9 @@ mod tests {
     #[test]
     fn task_create_timeout_accepts_canonical_and_legacy_alias() {
         // New canonical spelling.
-        let a: TaskCreateArgs = serde_json::from_value(
-            serde_json::json!({ "subject": "x", "timeout_seconds": 45 }),
-        )
-        .unwrap();
+        let a: TaskCreateArgs =
+            serde_json::from_value(serde_json::json!({ "subject": "x", "timeout_seconds": 45 }))
+                .unwrap();
         assert_eq!(a.timeout_seconds, Some(45));
         // Legacy spelling still parses via alias (saved calls / prompts).
         let b: TaskCreateArgs =

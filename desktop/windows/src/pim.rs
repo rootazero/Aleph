@@ -16,9 +16,7 @@ fn ps_escape_dq(s: &str) -> String {
 /// inside `-like "*{query}*"` or `-Filter` is matched literally rather than
 /// treated as a wildcard pattern.
 fn escape_powershell_wildcards(s: &str) -> String {
-    s.replace('[', "`[")
-        .replace('*', "`*")
-        .replace('?', "`?")
+    s.replace('[', "`[").replace('*', "`*").replace('?', "`?")
 }
 
 pub struct WindowsPim;

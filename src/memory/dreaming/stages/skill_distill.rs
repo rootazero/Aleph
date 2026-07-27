@@ -201,9 +201,11 @@ impl DreamStage for SkillDistillStage {
                 // Destructive-edit budget: a Supersede replaces an existing
                 // skill note and spends the shared per-cycle budget; additive
                 // New/Strengthen are free.
-                if let Some(record) =
-                    super::charge_distill_budget(&mut ctx.evolution_budget, &action, "skill_distill")
-                {
+                if let Some(record) = super::charge_distill_budget(
+                    &mut ctx.evolution_budget,
+                    &action,
+                    "skill_distill",
+                ) {
                     ctx.report.distill_actions.push(record);
                     continue;
                 }
@@ -399,8 +401,14 @@ mod tests {
             prompt.contains("Previously REJECTED"),
             "prompt must replay rejected edits as negative feedback:\n{prompt}"
         );
-        assert!(prompt.contains("skill/retry-policy"), "must name the rejected target");
-        assert!(prompt.contains("retry-with-jitter"), "must include the proposed title (summary)");
+        assert!(
+            prompt.contains("skill/retry-policy"),
+            "must name the rejected target"
+        );
+        assert!(
+            prompt.contains("retry-with-jitter"),
+            "must include the proposed title (summary)"
+        );
     }
 
     #[test]

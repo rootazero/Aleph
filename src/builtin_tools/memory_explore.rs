@@ -252,11 +252,7 @@ impl MemoryExploreTool {
     /// Look up typed outgoing edges for a note path and format them as
     /// "`type→to_note`" labels. Best-effort: a lookup error yields no labels.
     async fn edge_labels(&self, note_path: &str, agent_id: &str) -> Vec<String> {
-        match self
-            .database
-            .get_typed_relations(note_path, agent_id)
-            .await
-        {
+        match self.database.get_typed_relations(note_path, agent_id).await {
             Ok(edges) => edges
                 .into_iter()
                 .map(|(to, ty)| format!("{ty}→{to}"))

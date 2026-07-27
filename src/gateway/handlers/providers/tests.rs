@@ -8,8 +8,6 @@ use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
 
-
-
 fn test_vault() -> Arc<SharedTokenManager> {
     let store = Arc::new(SecurityStore::in_memory().unwrap());
     let tmp = std::env::temp_dir().join(format!(
@@ -512,16 +510,14 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let prev_aleph_home = std::env::var_os("ALEPH_HOME");
-    let tmp = std::env::temp_dir()
-        .join(".aleph")
-        .join(format!(
-            "providers_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    let tmp = std::env::temp_dir().join(".aleph").join(format!(
+        "providers_test_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     tokio::fs::create_dir_all(&tmp)
         .await
         .expect("create test aleph home");

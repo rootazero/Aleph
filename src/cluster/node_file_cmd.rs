@@ -129,9 +129,7 @@ impl NodeCommand for FileWriteCommand {
         file.write_all(&bytes)
             .await
             .map_err(|e| format!("file.write: {e}"))?;
-        file.flush()
-            .await
-            .map_err(|e| format!("file.write: {e}"))?;
+        file.flush().await.map_err(|e| format!("file.write: {e}"))?;
         Ok(json!({ "written": bytes.len() }))
     }
 

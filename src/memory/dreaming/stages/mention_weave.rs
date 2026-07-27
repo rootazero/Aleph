@@ -92,10 +92,7 @@ impl DreamStage for MentionWeaveStage {
 /// dropped. `scan_mentions` returns pairs sorted by `(from, to)`, so the cut
 /// is deterministic across cycles (pathological-corpus guard, spec M1).
 #[must_use]
-fn apply_cycle_cap(
-    mut edges: Vec<(String, String)>,
-    cap: usize,
-) -> (Vec<(String, String)>, usize) {
+fn apply_cycle_cap(mut edges: Vec<(String, String)>, cap: usize) -> (Vec<(String, String)>, usize) {
     let dropped = edges.len().saturating_sub(cap);
     edges.truncate(cap);
     (edges, dropped)

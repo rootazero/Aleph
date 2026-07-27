@@ -367,7 +367,9 @@ impl ToolRegistrar {
                 tool = tool.with_routing_system_prompt(prompt.clone());
             }
 
-            conflict_resolver.register_with_conflict_resolution(tool).await;
+            conflict_resolver
+                .register_with_conflict_resolution(tool)
+                .await;
             count += 1;
         }
 

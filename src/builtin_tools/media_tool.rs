@@ -60,8 +60,7 @@ impl MediaTool {
         }
         let policy = self.approval_policy.as_ref()?;
 
-        let (agent_id, context) =
-            crate::approval::audit_identity("media", action, &display_target);
+        let (agent_id, context) = crate::approval::audit_identity("media", action, &display_target);
         let request = ActionRequest {
             action_type: ActionType::MediaCapture,
             target,
@@ -413,8 +412,8 @@ mod tests {
             captured: Mutex::new(Vec::new()),
         });
         let dyn_policy: Arc<dyn ApprovalPolicy> = policy.clone();
-        let tool = MediaTool::new(Arc::new(StubPlatform(StubMedia)))
-            .with_approval_policy(dyn_policy);
+        let tool =
+            MediaTool::new(Arc::new(StubPlatform(StubMedia))).with_approval_policy(dyn_policy);
         (tool, policy)
     }
 

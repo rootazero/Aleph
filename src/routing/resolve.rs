@@ -111,46 +111,53 @@ pub fn resolve_route(
     }
 
     if matched.is_none() {
-        matched = candidates.iter().find(|b| {
-            b.match_rule.account_id.as_ref().is_some_and(|a| a != "*")
-                && b.match_rule.peer.is_none()
-                && b.match_rule.guild_id.is_none()
-                && b.match_rule.team_id.is_none()
-        }).map(|&b| (b, MatchedBy::Account));
+        matched = candidates
+            .iter()
+            .find(|b| {
+                b.match_rule.account_id.as_ref().is_some_and(|a| a != "*")
+                    && b.match_rule.peer.is_none()
+                    && b.match_rule.guild_id.is_none()
+                    && b.match_rule.team_id.is_none()
+            })
+            .map(|&b| (b, MatchedBy::Account));
     }
 
     if matched.is_none() {
-        matched = candidates.iter().find(|b| {
-            b.match_rule.account_id.as_ref().is_none_or(|a| a == "*")
-                && b.match_rule.peer.is_none()
-                && b.match_rule.guild_id.is_none()
-                && b.match_rule.team_id.is_none()
-        }).map(|&b| (b, MatchedBy::Channel));
+        matched = candidates
+            .iter()
+            .find(|b| {
+                b.match_rule.account_id.as_ref().is_none_or(|a| a == "*")
+                    && b.match_rule.peer.is_none()
+                    && b.match_rule.guild_id.is_none()
+                    && b.match_rule.team_id.is_none()
+            })
+            .map(|&b| (b, MatchedBy::Channel));
     }
 
-    let build = |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
-        let agent_id = normalize_agent_id(agent_id);
-        let session_key = build_session_key(
-            &agent_id,
-            &channel,
-            input.peer.as_ref(),
-            session_cfg.dm_scope,
-            &session_cfg.identity_links,
-        );
-        ResolvedRoute {
-            agent_id: agent_id.clone(),
-            channel,
-            account_id: account_id.to_string(),
-            session_key,
-            main_session_key: SessionKey::Main {
-                agent_id,
-                main_key: DEFAULT_MAIN_KEY.to_string(),
-                epoch: 0,
-            },
-            matched_by,
-            workspace,
-        }
-    };
+    let build =
+        |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
+            let agent_id = normalize_agent_id(agent_id);
+            let session_key = build_session_key(
+                &agent_id,
+                &channel,
+                input.peer.as_ref(),
+                session_cfg.dm_scope,
+                &session_cfg.identity_links,
+            );
+            ResolvedRoute {
+                agent_id: agent_id.clone(),
+                channel,
+                account_id: account_id.to_string(),
+                session_key,
+                main_session_key: SessionKey::Main {
+                    agent_id,
+                    main_key: DEFAULT_MAIN_KEY.to_string(),
+                    epoch: 0,
+                },
+                matched_by,
+                workspace,
+            }
+        };
 
     match matched {
         Some((b, matched_by)) => build(&b.agent_id, matched_by, b.match_rule.workspace.clone()),

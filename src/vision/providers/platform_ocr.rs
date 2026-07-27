@@ -255,7 +255,9 @@ mod tests {
             data: "aGVsbG8=".to_string(),
             format: ImageFormat::Png,
         };
-        let result = PlatformOcrProvider::resolve_png_bytes(&image).await.unwrap();
+        let result = PlatformOcrProvider::resolve_png_bytes(&image)
+            .await
+            .unwrap();
         assert_eq!(result, b"hello");
     }
 
@@ -264,7 +266,9 @@ mod tests {
         let image = ImageInput::Url {
             url: "https://example.com/img.png".to_string(),
         };
-        let err = PlatformOcrProvider::resolve_png_bytes(&image).await.unwrap_err();
+        let err = PlatformOcrProvider::resolve_png_bytes(&image)
+            .await
+            .unwrap_err();
         assert!(matches!(err, VisionError::ImageError(_)));
     }
 

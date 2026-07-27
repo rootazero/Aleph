@@ -1027,7 +1027,10 @@ mod tests {
         let removed = root.sweep_stale(DEFAULT_TOOL_RESULT_RETENTION);
         assert_eq!(removed, 1, "the stale session dir should be removed");
         assert!(!sess_dir.exists());
-        assert!(base.exists(), "the live blob root must survive an all-stale sweep");
+        assert!(
+            base.exists(),
+            "the live blob root must survive an all-stale sweep"
+        );
         assert!(
             base.join(INDEX_DB_NAME).exists(),
             "index.db must survive the sweep"
@@ -1076,7 +1079,10 @@ mod tests {
             a.search("alphaonly", 5).is_empty(),
             "ctx_search must not surface hits whose backing blobs are gone"
         );
-        assert!(b.indexed_sections() > 0, "a live session's rows must survive");
+        assert!(
+            b.indexed_sections() > 0,
+            "a live session's rows must survive"
+        );
         assert!(!b.search("betaonly", 5).is_empty());
     }
 
@@ -1103,7 +1109,9 @@ mod tests {
         let child = ToolResultStore::for_session(&root, child_key.to_key_string());
 
         let text = "epochblob payload ".repeat(200);
-        assert!(parent.persist_if_large("call_p", "bash", &text, 1).is_some());
+        assert!(parent
+            .persist_if_large("call_p", "bash", &text, 1)
+            .is_some());
         let _ = parent.index_output("call_p", "bash", &text);
 
         assert!(

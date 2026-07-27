@@ -46,11 +46,8 @@ impl ImageMediaProvider {
             MediaInput::Url { url } => Ok(ImageInput::Url { url: url.clone() }),
             MediaInput::Base64 { data, media_type } => {
                 let format = match media_type {
-                    MediaType::Image { format, .. } => {
-                        Self::to_vision_format(format).ok_or_else(|| {
-                            MediaError::UnsupportedFormat(format!("{:?}", format))
-                        })?
-                    }
+                    MediaType::Image { format, .. } => Self::to_vision_format(format)
+                        .ok_or_else(|| MediaError::UnsupportedFormat(format!("{:?}", format)))?,
                     _ => VisionImageFormat::Png,
                 };
                 Ok(ImageInput::Base64 {

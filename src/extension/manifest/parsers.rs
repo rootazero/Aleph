@@ -920,11 +920,11 @@ mod tests {
                 assert_eq!(s.name, "deploy");
                 assert_eq!(s.description, "Deploy the app");
                 assert_eq!(s.content, "Run deployment.");
-                assert_eq!(
-                    s.skill_type,
-                    crate::extension::types::SkillType::Command
+                assert_eq!(s.skill_type, crate::extension::types::SkillType::Command);
+                assert!(
+                    !s.is_auto_invocable(),
+                    "commands are not model-auto-invocable"
                 );
-                assert!(!s.is_auto_invocable(), "commands are not model-auto-invocable");
             }
             other => panic!("Expected Command-typed Skill, got {:?}", other),
         }

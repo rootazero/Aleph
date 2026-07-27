@@ -881,7 +881,9 @@ mod tests {
         let dirs = get_plugin_skills_dirs(Some(&project));
         assert!(dirs.iter().any(|d| d == &direct));
         assert!(
-            !dirs.iter().any(|d| d == &direct.join("do-thing").join("skills")),
+            !dirs
+                .iter()
+                .any(|d| d == &direct.join("do-thing").join("skills")),
             "the direct branch must not descend into the skills dir's children"
         );
     }

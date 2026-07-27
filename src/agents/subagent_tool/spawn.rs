@@ -169,8 +169,7 @@ impl SubagentTool {
                 .await;
             let outcome = match result {
                 Ok(Ok(r)) => {
-                    let mut final_text =
-                        r.final_text.unwrap_or_else(|| "(no output)".to_string());
+                    let mut final_text = r.final_text.unwrap_or_else(|| "(no output)".to_string());
                     // R8 honesty: `CompletedOutcome` (background_tracker) has no
                     // structured hit_limit slot, so a capped run annotates its
                     // text — check_status / wait / list and the proactive
@@ -380,8 +379,8 @@ impl Drop for CancelGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     /// Normal scope exit must cancel the held token. The bridge watcher
     /// exits via its `token_clone.cancelled()` arm as a result.
@@ -405,12 +404,10 @@ mod tests {
     async fn cancel_guard_cancels_on_panic_unwind() {
         let token = CancellationToken::new();
         let probe = token.clone();
-        let outcome = futures::FutureExt::catch_unwind(
-            std::panic::AssertUnwindSafe(async move {
-                let _g = CancelGuard::new(token);
-                panic!("simulated panic in scope");
-            }),
-        )
+        let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async move {
+            let _g = CancelGuard::new(token);
+            panic!("simulated panic in scope");
+        }))
         .await;
         assert!(outcome.is_err(), "inner future must have panicked");
         assert!(
@@ -444,7 +441,7 @@ mod tests {
         let joined = tokio::time::timeout(std::time::Duration::from_millis(200), watcher)
             .await
             .expect("watcher must exit well before the timeout");
-            joined.expect("watcher task must not panic");
+        joined.expect("watcher task must not panic");
         assert!(
             probe.load(Ordering::SeqCst),
             "bridge watcher must exit when guard drops"

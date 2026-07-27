@@ -1182,7 +1182,10 @@ mod tests {
             .unwrap();
 
         // Fresh row starts at retry_count 0.
-        let pending = backend.list_pending_review("agent1", i64::MAX).await.unwrap();
+        let pending = backend
+            .list_pending_review("agent1", i64::MAX)
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].retry_count, 0);
 
@@ -1192,7 +1195,10 @@ mod tests {
         assert_eq!(backend.increment_review_retry(&id).await.unwrap(), 3);
 
         // And it is persisted on the row (so the stage can enforce a ceiling).
-        let pending = backend.list_pending_review("agent1", i64::MAX).await.unwrap();
+        let pending = backend
+            .list_pending_review("agent1", i64::MAX)
+            .await
+            .unwrap();
         assert_eq!(pending[0].retry_count, 3);
     }
 }

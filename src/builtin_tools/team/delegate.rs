@@ -526,6 +526,8 @@ mod tests {
                 model: None,
             },
         );
-        assert!(tracker.running_runs_of_session(leader).contains(&run_id.to_string()));
+        assert!(tracker
+            .running_runs_of_session(leader)
+            .contains(&run_id.to_string()));
     }
 }

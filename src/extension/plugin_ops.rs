@@ -113,11 +113,9 @@ impl ExtensionManager {
         let loader = self.plugin_loader.clone().read_owned().await;
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || {
-            loader.execute_hook(&plugin_id, &handler, event_data)
-        })
-        .await
-        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
+        tokio::task::spawn_blocking(move || loader.execute_hook(&plugin_id, &handler, event_data))
+            .await
+            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Execute a direct command on a runtime plugin.
@@ -139,11 +137,9 @@ impl ExtensionManager {
         let loader = self.plugin_loader.clone().read_owned().await;
         let plugin_id = plugin_id.to_string();
         let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || {
-            loader.execute_command(&plugin_id, &handler, args)
-        })
-        .await
-        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
+        tokio::task::spawn_blocking(move || loader.execute_command(&plugin_id, &handler, args))
+            .await
+            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
     }
 
     /// Get the plugin registry (read access).
@@ -334,9 +330,8 @@ impl ExtensionManager {
                 let _ = self.unload_runtime_plugin(plugin_id).await;
             }
             self.sync_runtime_snapshots().await;
-            *self.hook_executor.write().await =
-                crate::extension::hooks::HookExecutor::empty()
-                    .with_consent(crate::extension::hooks::ShellHookConsent::shared());
+            *self.hook_executor.write().await = crate::extension::hooks::HookExecutor::empty()
+                .with_consent(crate::extension::hooks::ShellHookConsent::shared());
             self.sync_hooks_from_registry().await;
             self.sync_user_hooks().await;
 

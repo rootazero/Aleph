@@ -594,8 +594,7 @@ mod tests {
     #[test]
     fn wizard_error_code_maps_client_errors_to_invalid_params() {
         use crate::wizard::WizardSessionError;
-        let invalid_answer =
-            WizardSessionError::InvalidAnswer("wrong step id".to_string());
+        let invalid_answer = WizardSessionError::InvalidAnswer("wrong step id".to_string());
         let step_missing = WizardSessionError::StepNotFound("s".to_string());
         let session_missing = WizardSessionError::SessionNotFound {
             session_id: "s".to_string(),

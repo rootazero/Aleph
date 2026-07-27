@@ -26,7 +26,10 @@ use std::sync::Arc;
 /// Prints the ticket, its expiry, and every URL the core is reachable on with
 /// the ticket already attached — paste one into a phone browser, or paste the
 /// bare ticket into the Panel's authorize box.
-pub fn handle_pair(config: Option<PathBuf>, ttl_seconds: Option<u64>) -> Result<(), Box<dyn Error>> {
+pub fn handle_pair(
+    config: Option<PathBuf>,
+    ttl_seconds: Option<u64>,
+) -> Result<(), Box<dyn Error>> {
     use alephcore::utils::paths;
 
     let db_path =

@@ -200,8 +200,14 @@ mod tests {
 
     #[test]
     fn classify_bare_name_is_marketplace() {
-        assert_eq!(classify_plugin_source("hello-world"), PluginSourceKind::Marketplace);
-        assert_eq!(classify_plugin_source("my_plugin"), PluginSourceKind::Marketplace);
+        assert_eq!(
+            classify_plugin_source("hello-world"),
+            PluginSourceKind::Marketplace
+        );
+        assert_eq!(
+            classify_plugin_source("my_plugin"),
+            PluginSourceKind::Marketplace
+        );
     }
 
     #[test]
@@ -210,16 +216,31 @@ mod tests {
             classify_plugin_source("https://github.com/x/y"),
             PluginSourceKind::GitUrl
         );
-        assert_eq!(classify_plugin_source("owner/repo"), PluginSourceKind::GitUrl);
-        assert_eq!(classify_plugin_source("git@github.com:x/y.git"), PluginSourceKind::GitUrl);
-        assert_eq!(classify_plugin_source("./local.thing"), PluginSourceKind::GitUrl);
+        assert_eq!(
+            classify_plugin_source("owner/repo"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(
+            classify_plugin_source("git@github.com:x/y.git"),
+            PluginSourceKind::GitUrl
+        );
+        assert_eq!(
+            classify_plugin_source("./local.thing"),
+            PluginSourceKind::GitUrl
+        );
     }
 
     #[test]
     fn install_source_prefers_source_then_url() {
         use serde_json::json;
-        assert_eq!(install_source(Some(&json!({"source":"a","url":"b"}))).as_deref(), Some("a"));
-        assert_eq!(install_source(Some(&json!({"url":"https://x/y"}))).as_deref(), Some("https://x/y"));
+        assert_eq!(
+            install_source(Some(&json!({"source":"a","url":"b"}))).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            install_source(Some(&json!({"url":"https://x/y"}))).as_deref(),
+            Some("https://x/y")
+        );
         assert_eq!(install_source(Some(&json!({}))), None);
         assert_eq!(install_source(None), None);
     }

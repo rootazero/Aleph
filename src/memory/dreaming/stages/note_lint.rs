@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::orientation::types::{LogAction, LogEntry};
-use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::rewrite_wikilinks;
+use crate::memory::notes::store::NoteStore;
 
 use super::DreamStage;
 
@@ -259,8 +259,7 @@ impl DreamStage for NoteLintStage {
         // elsewhere — orientation is a projection, never load-bearing).
         if let Some(orient) = ctx.orientation.as_ref() {
             let orphans = orphan_count(ctx.indexer.store().as_ref(), &ctx.agent_id).await;
-            let did_work =
-                format_fixed > 0 || broken_links_found > 0 || links_repaired > 0;
+            let did_work = format_fixed > 0 || broken_links_found > 0 || links_repaired > 0;
             // Skip wholly-clean passes (no fixes, no orphans) so log.md stays an
             // event timeline rather than filling with empty "nothing to do" rows.
             if did_work || orphans > 0 {
@@ -795,7 +794,12 @@ category: preference
         }];
         NoteLintStage.execute(lint_ctx).await.unwrap();
 
-        let body = tokio::fs::read_to_string(dir.join("keeper.md")).await.unwrap();
-        assert!(body.contains("[[gone]]"), "tombstoned link text must survive lint");
+        let body = tokio::fs::read_to_string(dir.join("keeper.md"))
+            .await
+            .unwrap();
+        assert!(
+            body.contains("[[gone]]"),
+            "tombstoned link text must survive lint"
+        );
     }
 }

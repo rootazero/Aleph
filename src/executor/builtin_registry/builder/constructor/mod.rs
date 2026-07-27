@@ -346,7 +346,11 @@ impl BuiltinToolRegistry {
         };
 
         let clipboard_enabled = match config.config {
-            Some(ref cfg) => cfg.read().await.get_effective_tools_config().is_clipboard_enabled(),
+            Some(ref cfg) => cfg
+                .read()
+                .await
+                .get_effective_tools_config()
+                .is_clipboard_enabled(),
             None => true,
         };
 

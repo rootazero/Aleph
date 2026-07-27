@@ -322,10 +322,7 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
     }
 }
 
-pub(crate) fn process_evaluate_result(
-    manager: &ProfileManager,
-    raw: &str,
-) -> serde_json::Value {
+pub(crate) fn process_evaluate_result(manager: &ProfileManager, raw: &str) -> serde_json::Value {
     let text = match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(serde_json::Value::String(s)) => s,
         Ok(other) => serde_json::to_string(&other).unwrap_or_else(|_| raw.to_string()),
@@ -592,24 +589,18 @@ mod tests {
         );
 
         // Public URL → allowed.
-        assert!(
-            current_page_block(&manager, "1: https://example.com/", "1")
-                .await
-                .is_none()
-        );
+        assert!(current_page_block(&manager, "1: https://example.com/", "1")
+            .await
+            .is_none());
 
         // Non-http schemes carry no network target → skipped.
-        assert!(
-            current_page_block(&manager, "1: about:blank", "1")
-                .await
-                .is_none()
-        );
+        assert!(current_page_block(&manager, "1: about:blank", "1")
+            .await
+            .is_none());
 
         // No matching tab → nothing to check.
-        assert!(
-            current_page_block(&manager, "1: http://127.0.0.1/", "2")
-                .await
-                .is_none()
-        );
+        assert!(current_page_block(&manager, "1: http://127.0.0.1/", "2")
+            .await
+            .is_none());
     }
 }

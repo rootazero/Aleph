@@ -281,19 +281,16 @@ impl GroupChatExecutor {
             // them; otherwise these resolve to `None` and the request is identical
             // to using the provider's defaults.
             let provider = self.resolve_provider(persona);
-            let think_level = persona
-                .thinking_level
-                .as_deref()
-                .map(|level| {
-                    level.parse::<ThinkLevel>().unwrap_or_else(|_| {
-                        tracing::warn!(
-                            persona = %persona.name,
-                            level = %level,
-                            "invalid thinking_level on persona; ignoring"
-                        );
-                        ThinkLevel::default()
-                    })
-                });
+            let think_level = persona.thinking_level.as_deref().map(|level| {
+                level.parse::<ThinkLevel>().unwrap_or_else(|_| {
+                    tracing::warn!(
+                        persona = %persona.name,
+                        level = %level,
+                        "invalid thinking_level on persona; ignoring"
+                    );
+                    ThinkLevel::default()
+                })
+            });
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
                 provider
@@ -327,7 +324,11 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona
-            let _ = writeln!(prior_discussion, "[{}]: {}\n", persona_name, persona_response);
+            let _ = writeln!(
+                prior_discussion,
+                "[{}]: {}\n",
+                persona_name, persona_response
+            );
 
             // Build output message
             let is_final = i == total_respondents - 1;

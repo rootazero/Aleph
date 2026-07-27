@@ -4,7 +4,7 @@ pub mod inbound;
 pub mod local_provider;
 pub mod outbound;
 pub mod sanitize;
-pub mod voice_mode;
 pub mod state;
 pub mod streaming;
+pub mod voice_mode;
 pub use state::VoiceState;

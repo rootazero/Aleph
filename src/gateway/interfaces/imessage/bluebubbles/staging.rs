@@ -56,7 +56,9 @@ fn sweep_stale_in(dir: &Path, max_age: Duration) -> usize {
         if stale {
             match std::fs::remove_file(&path) {
                 Ok(()) => removed += 1,
-                Err(e) => tracing::debug!("attachment sweep: remove {} failed: {e}", path.display()),
+                Err(e) => {
+                    tracing::debug!("attachment sweep: remove {} failed: {e}", path.display())
+                }
             }
         }
     }

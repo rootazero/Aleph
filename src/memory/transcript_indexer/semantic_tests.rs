@@ -102,4 +102,3 @@ async fn test_semantic_chunking_config() {
     // With high threshold, should create fewer chunks
     assert!(!chunks.is_empty());
 }
-

@@ -215,10 +215,7 @@ impl AlephTool for AgentDeleteTool {
                         ),
                     });
                 };
-                let agent_state_dir = home
-                    .join(".aleph")
-                    .join("agents")
-                    .join(&args.agent_id);
+                let agent_state_dir = home.join(".aleph").join("agents").join(&args.agent_id);
                 if agent_state_dir.exists() {
                     let archived_state = agent_state_dir.with_extension("archived");
                     if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {

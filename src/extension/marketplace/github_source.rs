@@ -105,8 +105,7 @@ pub fn sync_github_marketplace(
     }
 
     let final_dir = cache_dir.join(marketplace_name);
-    if std::fs::symlink_metadata(&final_dir)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    if std::fs::symlink_metadata(&final_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
         return Err(format!(
             "Marketplace cache path must not be a symlink: {}",

@@ -388,7 +388,11 @@ mod tests {
         assert!(verdict.is_continue(), "ceiling must unwedge the loop");
         // ...and the counter resets, so the NEXT run in this session gets a
         // fresh veto budget instead of a permanently-disabled gate.
-        assert_eq!(gate.veto_count("s4"), 0, "ceiling breach must reset the count");
+        assert_eq!(
+            gate.veto_count("s4"),
+            0,
+            "ceiling breach must reset the count"
+        );
         let verdict = gate.verify_with_executor(&executor, &ctx).await;
         assert!(verdict.is_veto(), "post-reset veto must be honored again");
     }

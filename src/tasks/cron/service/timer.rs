@@ -4,11 +4,11 @@
 //! finds due jobs (via phase1), executes them (via executor callback), and writes
 //! back results (via phase3).
 
+use futures::FutureExt;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use futures::FutureExt;
 use tracing::{debug, error, info};
 
 use crate::sync_primitives::Arc;

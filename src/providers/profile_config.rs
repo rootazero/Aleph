@@ -131,7 +131,8 @@ impl ProfileConfig {
     /// - `Err(ProfileConfigError::EnvVarNotFound)` - If env var not found
     pub fn resolve_api_key(&self) -> ProfileConfigResult<String> {
         if let Some(var_name) = self.api_key.strip_prefix("env:") {
-            env::var(var_name).map_err(|e| ProfileConfigError::EnvVarNotFound(format!("{var_name}: {e}")))
+            env::var(var_name)
+                .map_err(|e| ProfileConfigError::EnvVarNotFound(format!("{var_name}: {e}")))
         } else {
             // rust-doctor-disable-next-line excessive-clone
             Ok(self.api_key.clone())

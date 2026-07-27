@@ -514,7 +514,10 @@ mod tests {
         // `add_message_full` also accumulated each row (as it did until the rows
         // stopped being zeros), these would read 45+40 / 25+25.
         assert_eq!(meta.input_tokens, 45, "session input_tokens double-counted");
-        assert_eq!(meta.output_tokens, 25, "session output_tokens double-counted");
+        assert_eq!(
+            meta.output_tokens, 25,
+            "session output_tokens double-counted"
+        );
         assert_eq!(
             meta.model.as_deref(),
             Some("claude"),

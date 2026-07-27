@@ -142,7 +142,10 @@ impl SearchProvider for FirecrawlProvider {
         let response = check_status(response, NAME)?;
         let firecrawl_response: FirecrawlResponse = parse_json(response, NAME).await?;
 
-        Ok(Self::map_response(firecrawl_response, options.validated_max_results()))
+        Ok(Self::map_response(
+            firecrawl_response,
+            options.validated_max_results(),
+        ))
     }
 
     fn name(&self) -> &str {

@@ -172,7 +172,9 @@ fn canonical_args(tool: &str, input: &Value) -> Value {
                 .map(|(k, v)| (k.clone(), canonical_args(tool, v)))
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(|v| canonical_args(tool, v)).collect()),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| canonical_args(tool, v)).collect())
+        }
         // rust-doctor-disable-next-line excessive-clone
         other => other.clone(),
     }
@@ -225,7 +227,9 @@ fn preview(name: &str, input: &Value) -> String {
         return "(no arguments)".to_string();
     }
     if name == "file_ops" {
-        let op = obj.get("operation").map_or("?", |v| v.as_str().unwrap_or("?"));
+        let op = obj
+            .get("operation")
+            .map_or("?", |v| v.as_str().unwrap_or("?"));
         let path = ["path", "file_path", "source"]
             .iter()
             .find_map(|k| obj.get(*k).and_then(Value::as_str))
@@ -292,7 +296,8 @@ mod tests {
         // Same effective call, three spellings the model might emit. All must
         // hash to one fingerprint, or a refused/approved action re-prompts.
         let base = grant_fingerprint("file_ops", &json!({"operation": "delete", "path": "/a"}));
-        let reordered = grant_fingerprint("file_ops", &json!({"path": "/a", "operation": "delete"}));
+        let reordered =
+            grant_fingerprint("file_ops", &json!({"path": "/a", "operation": "delete"}));
         let null_padded = grant_fingerprint(
             "file_ops",
             &json!({"operation": "delete", "path": "/a", "destination": null}),
@@ -326,8 +331,14 @@ mod tests {
             &json!({"command": "curl example.com", "allow_network": true,
                     "justification": "totally different words here"}),
         );
-        assert_eq!(plain, justified, "justification must not enter the fingerprint");
-        assert_eq!(justified, reworded, "rewording justification must not re-key");
+        assert_eq!(
+            plain, justified,
+            "justification must not enter the fingerprint"
+        );
+        assert_eq!(
+            justified, reworded,
+            "rewording justification must not re-key"
+        );
     }
 
     #[test]
@@ -344,7 +355,10 @@ mod tests {
             "external_policy_write",
             &json!({"target": "acl", "justification": "grant write"}),
         );
-        assert_ne!(a, b, "an external tool's justification stays in the identity");
+        assert_ne!(
+            a, b,
+            "an external tool's justification stays in the identity"
+        );
     }
 
     #[test]
@@ -352,7 +366,10 @@ mod tests {
         // The invariant the whole action-aware refactor exists for: two
         // different calls of the SAME tool must not share a fingerprint, or a
         // grant on one authorizes the other.
-        let a = grant_fingerprint("file_ops", &json!({"operation": "delete", "path": "/tmp/junk"}));
+        let a = grant_fingerprint(
+            "file_ops",
+            &json!({"operation": "delete", "path": "/tmp/junk"}),
+        );
         let b = grant_fingerprint(
             "file_ops",
             &json!({"operation": "delete", "path": "/home/u/Documents"}),

@@ -456,7 +456,8 @@ impl MoaManageTool {
             advisors,
             aggregator,
             fanout: fanout.unwrap_or_default(),
-            advisor_timeout_secs: advisor_timeout_seconds.unwrap_or_else(default_advisor_timeout_secs),
+            advisor_timeout_secs: advisor_timeout_seconds
+                .unwrap_or_else(default_advisor_timeout_secs),
             advisor_max_tokens,
             advisor_temperature,
             aggregator_temperature,

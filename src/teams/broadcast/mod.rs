@@ -673,8 +673,8 @@ impl GroupChatBroadcaster {
         // closing statement (self-report/warning/artifact pointer), and the review
         // verdict ends up BEFORE the triggering submission in the transcript
         // (causality reversal, permanently stored).
-        let reply = extract_final_response(&collector.events().await)
-            .filter(|r| !r.trim().is_empty());
+        let reply =
+            extract_final_response(&collector.events().await).filter(|r| !r.trim().is_empty());
         if let Some(reply) = &reply {
             // Long TTL: group transcript is a durable record, not subject to inbox's
             // short TTL. A persistence failure must be visible — silent loss creates
@@ -830,8 +830,14 @@ mod tests {
             }
             admitted += 1;
         }
-        assert_eq!(admitted, MAX_TOTAL_ACTIVATIONS, "exactly MAX member activations admitted");
-        assert_eq!(note_posts, 1, "overflow notice fired exactly once (natural dedup, no spam)");
+        assert_eq!(
+            admitted, MAX_TOTAL_ACTIVATIONS,
+            "exactly MAX member activations admitted"
+        );
+        assert_eq!(
+            note_posts, 1,
+            "overflow notice fired exactly once (natural dedup, no spam)"
+        );
     }
 
     #[test]

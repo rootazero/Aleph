@@ -154,7 +154,8 @@ impl CommandPolicy {
         let set = RegexSetBuilder::new(&patterns)
             .case_insensitive(true)
             // rust-doctor-disable-next-line unwrap-in-production
-            .build().expect("hardline rules must compile");
+            .build()
+            .expect("hardline rules must compile");
         let names = defs.iter().map(|r| r.name.to_string()).collect();
         let descriptions = defs.iter().map(|r| r.description.to_string()).collect();
         (set, names, descriptions)

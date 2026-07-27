@@ -27,8 +27,9 @@ fn file_ref_regex() -> ExtensionResult<&'static Regex> {
     FILE_REF_REGEX.get_or_try_init(|| {
         // Pattern: @./path or @/path, stopping at whitespace or delimiters.
         // The regex is a compile-time constant; a parse failure is a programmer error.
-        Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#)
-            .map_err(|e| ExtensionError::template_error(format!("Invalid file reference regex: {e}")))
+        Regex::new(r#"@(\.?/[^\s\]\)>`"']+)"#).map_err(|e| {
+            ExtensionError::template_error(format!("Invalid file reference regex: {e}"))
+        })
     })
 }
 

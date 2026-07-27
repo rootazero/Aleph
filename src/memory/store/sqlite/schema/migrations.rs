@@ -193,7 +193,8 @@ pub fn migrate_dream_reports_add_activity_counters(conn: &Connection) -> Result<
     };
     for col in new_cols {
         if !existing.contains(col) {
-            let sql = format!("ALTER TABLE dream_reports ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0");
+            let sql =
+                format!("ALTER TABLE dream_reports ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0");
             conn.execute(&sql, [])
                 .map_err(|e| AlephError::other(format!("add col {col}: {e}")))?;
         }
@@ -218,8 +219,11 @@ pub fn migrate_dream_reports_add_evolution(conn: &Connection) -> Result<(), Alep
         rows.filter_map(|r| r.ok()).collect()
     };
     if !existing.contains("evolution_json") {
-        conn.execute("ALTER TABLE dream_reports ADD COLUMN evolution_json TEXT", [])
-            .map_err(|e| AlephError::other(format!("add col evolution_json: {e}")))?;
+        conn.execute(
+            "ALTER TABLE dream_reports ADD COLUMN evolution_json TEXT",
+            [],
+        )
+        .map_err(|e| AlephError::other(format!("add col evolution_json: {e}")))?;
     }
     Ok(())
 }
