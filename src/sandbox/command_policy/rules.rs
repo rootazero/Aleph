@@ -34,16 +34,48 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Canonical raw-block-device class shared by the `dd` / redirect / wipe rules:
-/// SCSI/SATA (`sd`), NVMe, macOS (`disk`), legacy IDE (`hd`), virtio (`vd`),
-/// Xen/AWS-EC2 root volumes (`xvd` — previously uncovered, so
-/// `dd of=/dev/xvda` wiped an EC2 root disk undetected), SD/eMMC (`mmcblk`),
-/// loop, optical (`sr`), persistent memory (`pmem`), device-mapper/LVM (`dm-`)
-/// and software-RAID (`md`). The alternation is always anchored right after
-/// `/dev/`, so member order does not affect matching.
+/// Canonical raw-block-device class shared by the `dd` / redirect / device-wipe
+/// rules. Written **once** here so a newly-covered device class can never drift
+/// out of sync across the three device rules — the alternation was previously
+/// pasted in three to four separate copies, and adding a class to one rule but
+/// not another was a silent bypass (exactly the failure that let
+/// `dd of=/dev/mapper/vg-root` escape the catastrophic floor). Covers:
+/// SCSI/SATA (`sd`), NVMe, macOS (`disk`, which also matches Linux
+/// `/dev/disk/by-*` symlinks), legacy IDE (`hd`), Xen/AWS-EC2 root volumes
+/// (`xvd`), virtio (`vd`), SD/eMMC (`mmcblk`), loop, optical (`sr`), persistent
+/// memory (`pmem`), device-mapper / LVM (`dm-`, `mapper`), software-RAID (`md`),
+/// and the kernel-memory nodes (`mem`/`kmem`/`port`) a raw write to which
+/// compromises or crashes the host. The alternation is anchored right after
+/// `/dev/`, and every rule only tests match *presence*, so alternation order
+/// does not affect matching.
 macro_rules! unix_block_device {
     () => {
-        r"(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"
+        r"(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|mapper|md|mem|kmem|port)"
+    };
+}
+
+/// Shared `rm` + recursive-flag prefix for the two recursive-remove rules
+/// (hardline [`rm_rf_root`](hardline_rules) and tunable
+/// [`rm_rf_system_path`](default_rules)), single-sourced so the notion of "a
+/// recursive rm" cannot drift between the floor and the warn. Matches `rm`
+/// then, in any flag order, a recursive flag — a combined cluster
+/// (`-rf`/`-fr`/`-R`), a bare short `-r`, or long `--recursive` — with any
+/// other flags allowed before/after. The trailing `\s+` leaves the scan
+/// positioned at the target argument, which each rule then constrains.
+macro_rules! rm_recursive_prefix {
+    () => {
+        r"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+"
+    };
+}
+
+/// Bare-root target for the hardline [`rm_rf_root`] rule: one-or-more `/` (so
+/// `//`, `///` — all POSIX root — are covered, closing the `rm -rf //`
+/// bypass), an optional trailing `.` (`/.`), then a terminator or the root
+/// glob `*`. A redundant-slash *subdir* (`//tmp`) does not match: the char
+/// after the slash run is a path segment, not a terminator.
+macro_rules! rm_root_target {
+    () => {
+        r#"["']?/+\.?(?:\s|\*|$|["';&|])"#
     };
 }
 
@@ -183,22 +215,27 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
         },
         PolicyRule {
             name: "rm_rf_root",
-            description: "recursive rm of the bare filesystem root (/ or /*) — irreversible whole-disk wipe",
+            description: "recursive rm of the bare filesystem root (/, //, /. or /*) — irreversible whole-disk wipe",
             action: Block,
             // The catastrophic sibling of the tunable `rm_rf_system_path`: a
-            // recursive remove whose target is the *bare* root `/` (or the root
-            // glob `/*`), which `rm_no_preserve_root` misses entirely on the
-            // platforms where it bites hardest — busybox/Alpine `rm -rf /` has
-            // no `--preserve-root` guard, and GNU `rm -rf /*` expands the glob so
-            // the `--preserve-root` refusal never triggers. Force is optional: in
-            // the agent's non-interactive shell `rm -r /` deletes without a
-            // prompt. A recursive flag (combined `-rf`/`-fr`, short `-r`/`-R`, or
-            // long `--recursive`) plus a bare-root target is the precise,
-            // never-legitimate shape — a subdir target (`/etc`, `/tmp/x`) does
-            // not match because the char after `/` must be a terminator, leaving
-            // those to the tunable `rm_rf_system_path` warn.
-            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?/(?:\s|\*|$|["';&|])"#,
+            // recursive remove whose target is the *bare* root `/` (or `//`,
+            // `/.`, the root glob `/*`), which `rm_no_preserve_root` misses
+            // entirely on the platforms where it bites hardest — busybox/Alpine
+            // `rm -rf /` has no `--preserve-root` guard, and GNU `rm -rf /*`
+            // expands the glob so the `--preserve-root` refusal never triggers.
+            // Force is optional: in the agent's non-interactive shell `rm -r /`
+            // deletes without a prompt. Recursive flag + bare-root target is the
+            // precise, never-legitimate shape — a subdir target (`/etc`,
+            // `/tmp/x`, `//tmp`) does not match because the char after the slash
+            // run must be a terminator, leaving those to the tunable
+            // `rm_rf_system_path` warn. Prefix + root fragment single-sourced in
+            // `rm_recursive_prefix!` / `rm_root_target!`.
+            pattern: concat!(rm_recursive_prefix!(), rm_root_target!()),
         },
+        // Raw-block-device rules. The device class itself is single-sourced in
+        // `unix_block_device!()` and composed into each pattern via
+        // `concat!`, so a device class added there is covered by all three at
+        // once — no more manual "keep in sync" across four pasted copies.
         PolicyRule {
             name: "dd_to_block_device",
             description: "dd writing directly to a raw block device (disk-wipe / overwrite)",
@@ -396,17 +433,19 @@ pub fn default_rules() -> Vec<PolicyRule> {
             description: "recursive remove targeting an absolute root / system / home path",
             action: Warn,
             // Requires rm + a recursive flag + an absolute root / system / home
-            // target on the same line. The recursive flag is matched as a
+            // target on the same line. The recursive flag (shared with the hardline
+            // `rm_rf_root` via `rm_recursive_prefix!`) is matched as a
             // combined cluster (`-rf`/`-fr`/`-R`), a bare short `-r`, OR the long
             // `--recursive`, with any other flags before/after it — so the split
             // form `rm -r -f /etc` and the recursive-only `rm -r /etc` (which
             // deletes without a prompt in the agent's non-interactive shell) are
-            // both caught. The previous pattern required the recursive *and*
-            // force letters in a single token, so `rm -r -f /etc` and
-            // `rm -r /etc` evaded it. Force is no longer required: `-r` alone is
-            // destructive here. Relative targets (`build/`, `./target`) are
-            // excluded by the absolute-path requirement.
-            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#,
+            // both caught. Force is not required: `-r` alone is destructive here.
+            // Relative targets (`build/`, `./target`) are excluded by the
+            // absolute-path requirement.
+            pattern: concat!(
+                rm_recursive_prefix!(),
+                r#"["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#
+            ),
         },
         PolicyRule {
             name: "pipe_to_shell",
@@ -460,6 +499,19 @@ pub fn default_rules() -> Vec<PolicyRule> {
             // / `poweroff` are command-position anchored. Windows `Stop-Computer`
             // / `Restart-Computer` and `shutdown /s|/r` are covered too.
             pattern: r"\bshutdown\b[^\n]*(?:\s/[sr]\b|\s-{1,2}(?:h|r|p|halt|reboot|poweroff)\b|\bnow\b|\s\+\d)|(?:^|[\s;&|(])(?:reboot|poweroff)\b|\bsystemctl\b[^\n]*\b(?:poweroff|reboot|halt)\b|\b(?:init|telinit)\s+[06]\b|\b(?:stop-computer|restart-computer)\b",
+        },
+        PolicyRule {
+            name: "proc_sysrq_trigger",
+            description:
+                "writing the magic SysRq trigger (/proc/sysrq-trigger) — instant host crash/reboot (`echo c` panics the kernel, `echo b` reboots) bypassing a clean sync/shutdown",
+            action: Warn,
+            // Same reversible "host availability" tier as `system_shutdown` (the
+            // machine comes back), so it audits rather than joins the
+            // irreversible hardline floor — but it is a sneakier takedown than a
+            // plain `reboot`, so it earns its own paper trail. Matches only a
+            // *write* into the trigger (redirect `>`/`>>` or `tee`); reading
+            // ordinary procfs stays clean.
+            pattern: r"(?:>>?|\btee\b[^\n]*)\s*/proc/sysrq-trigger\b",
         },
         PolicyRule {
             name: "sudo_privilege_stdin",

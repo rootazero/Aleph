@@ -1037,6 +1037,35 @@ audits a slightly larger suspicious set; it never reasons about model intent.
 - **Non-breaking:** defaults block only patterns with essentially no
   legitimate workspace use; relative-path `rm -rf build/` and ordinary
   commands are unaffected. The OS sandbox remains the real enforcer.
+- **Linux hardening (2026-07-27, codex-sandbox-informed):**
+  - **`rm_rf_root` multi-slash / dot bypass closed.** The bare-root floor
+    matched exactly one `/` + terminator, so `rm -rf //`, `///`, `//*`, and
+    `/.` — all resolving to the POSIX root — slipped past the *hardline* into a
+    mere tunable warn. The root target is now `/+\.?` (one-or-more slashes,
+    optional dot), so every pure-root spelling blocks under **every** enforcement
+    mode. A redundant-slash *subdir* (`//tmp`) is not over-blocked — it stays a
+    `rm_rf_system_path` warn.
+  - **Raw-device class widened** to cover LVM device-mapper nodes
+    (`/dev/mapper/vg-root`) and the kernel-memory devices (`/dev/mem`,
+    `/dev/kmem`, `/dev/port`), so `dd of=/dev/mapper/…` (wipe an LVM volume) and
+    `dd of=/dev/mem` / `> /dev/mem` (clobber kernel memory) no longer escape the
+    dd / redirect / device-wipe floor.
+  - **New `Warn` rule `proc_sysrq_trigger`** — writing the magic SysRq trigger
+    (`echo c > /proc/sysrq-trigger` panics the kernel, `echo b` reboots without a
+    clean sync), a Linux-native host takedown that bypasses the audited
+    `shutdown` path. Same reversible "host availability" tier as `system_shutdown`
+    → audit, not block. Only a *write* (`>`/`>>`/`tee`) matches; reading procfs
+    is clean.
+  - **De-duplication (entropy reduction).** The raw-block-device alternation was
+    hand-pasted in four rules and the `rm` recursive-flag prefix in two — the
+    exact drift hazard behind the device-class gap. Both are now single-sourced
+    (`RAW_BLOCK_DEVICE_CLASS` / `RM_RECURSIVE_PREFIX` consts composed into the
+    patterns via `LazyLock`), so a newly-covered device or a change to "what
+    counts as a recursive rm" lands in one place and every affected rule sees it.
+  - Still a pure deterministic hard-filter (R7): no LLM/intent reasoning was
+    added; codex's landlock+seccomp is mirrored by `sandbox_init.rs`, and its
+    positive safe-command allowlist deliberately stays in the exec-tier /
+    approval layer, not here.
 
 ## References
 

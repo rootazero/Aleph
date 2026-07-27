@@ -640,6 +640,104 @@ mod tests {
     }
 
     #[test]
+    fn blocks_rm_rf_multislash_and_dot_root() {
+        // Bypass regression: `//`, `///` and `/.` all resolve to the filesystem
+        // root on POSIX, but the old floor required exactly one `/` followed by a
+        // terminator, so `rm -rf //` slipped past the hardline into a mere warn.
+        // Every pure-root spelling must join the undisableable floor.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "rm -rf //",
+            "rm -rf ///",
+            "rm -rf //*",
+            "rm -rf /.",
+            "rm -r //",
+            "rm --recursive //",
+        ] {
+            assert!(
+                p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "multi-slash / dot root recursive rm must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn rm_rf_multislash_subdir_is_not_hardline_root() {
+        // `//tmp` normalises to `/tmp` (a subdir), NOT root — the tightened
+        // root regex must not over-block a redundant-slash subdir path.
+        let p = policy(EnforcementMode::Block);
+        for cmd in ["rm -rf //tmp", "rm -rf //home/user", "rm -rf /./build"] {
+            assert!(
+                !p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "redundant-slash subdir must not trip the bare-root floor: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_dd_to_lvm_mapper_and_kernel_memory() {
+        // Gap: the raw-device class omitted LVM device-mapper nodes
+        // (`/dev/mapper/vg-root`) and kernel-memory devices
+        // (`/dev/mem`/`/dev/kmem`/`/dev/port`), so `dd of=/dev/mapper/vg-root`
+        // (wipe an LVM volume) and `dd of=/dev/mem` (clobber kernel memory)
+        // escaped the catastrophic floor. Both must now block on dd, redirect,
+        // and wipe surfaces.
+        let p = policy(EnforcementMode::Block);
+        for dev in ["/dev/mapper/vg-root", "/dev/mem", "/dev/kmem", "/dev/port"] {
+            assert!(
+                p.evaluate(&format!("dd if=/dev/zero of={dev} bs=1M"))
+                    .blocked
+                    .contains(&"dd_to_block_device".to_string()),
+                "dd to {dev} must block"
+            );
+            assert!(
+                p.evaluate(&format!("echo x > {dev}"))
+                    .blocked
+                    .contains(&"redirect_to_block_device".to_string()),
+                "redirect to {dev} must block"
+            );
+        }
+        assert!(
+            p.evaluate("wipefs -a /dev/mapper/vg-root")
+                .blocked
+                .contains(&"device_wipe_tools".to_string()),
+            "wipefs of an LVM mapper node must block"
+        );
+    }
+
+    #[test]
+    fn warns_on_proc_sysrq_trigger_write() {
+        // Linux instant-host-takedown vector: `echo c > /proc/sysrq-trigger`
+        // panics the kernel and `echo b` reboots without a clean unmount /
+        // sync, both bypassing the audited `shutdown` path. Same reversible
+        // "host availability" tier as `system_shutdown` → warn, not block.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "echo c > /proc/sysrq-trigger",
+            "echo b >> /proc/sysrq-trigger",
+            "cat trigger | tee /proc/sysrq-trigger",
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(
+                e.blocked.is_empty(),
+                "sysrq trigger must warn, not block: {cmd}"
+            );
+            assert!(
+                e.warned.contains(&"proc_sysrq_trigger".to_string()),
+                "sysrq-trigger write must warn: {cmd} -> {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_proc_is_clean() {
+        // Only *writing* the sysrq trigger is the takedown shape — reading
+        // ordinary procfs must stay clean.
+        let e = policy(EnforcementMode::Block).evaluate("cat /proc/cpuinfo");
+        assert!(e.is_clean(), "reading procfs must be clean: {e:?}");
+    }
+
+    #[test]
     fn warns_on_rm_rf_split_and_recursive_only_flags() {
         // Regression: the previous `rm_rf_system_path` required the recursive
         // and force letters in a *single* token, so the split form `rm -r -f`
