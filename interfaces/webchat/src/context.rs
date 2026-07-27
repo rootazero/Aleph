@@ -121,7 +121,12 @@ fn parse_query_param(search: &str, prefix: &str) -> Option<String> {
 
 /// Drop listed query params from a `?…` string, returning the remaining query
 /// (no leading `?`). Empty when all params were stripped.
-#[cfg(any(target_arch = "wasm32", test))]
+///
+/// Deliberately **not** cfg-gated. It used to be `cfg(any(wasm32, test))`, but
+/// `views::memory` imports it unconditionally — so the host (non-wasm, non-test)
+/// build of this crate did not compile, which in turn meant `cargo test -p
+/// aleph-panel` could not build the lib and **every host unit test in this crate
+/// silently stopped running**. Pure string logic has no reason to be gated.
 pub(crate) fn strip_params(search: &str, prefixes: &[&str]) -> String {
     let q = search.strip_prefix('?').unwrap_or(search);
     q.split('&')
@@ -130,11 +135,53 @@ pub(crate) fn strip_params(search: &str, prefixes: &[&str]) -> String {
         .join("&")
 }
 
-/// Legacy helper kept for existing host tests.
-#[cfg(any(target_arch = "wasm32", test))]
-#[allow(dead_code)]
-pub(crate) fn strip_token_param(search: &str) -> String {
-    strip_params(search, &["token="])
+/// What kind of credential the operator just pasted into the login wall.
+///
+/// The three prefixes are the wire contract with the server (`aleph-bt-*` is
+/// minted by `gateway.ticket.create` / `aleph-server pair`, `aleph-dt-*` by the
+/// bootstrap exchange, bare `aleph-*` is the shared token), so classification is
+/// a pure prefix match — kept in one place because getting it wrong sends the
+/// value in the wrong `connect` field and the server rejects a perfectly good
+/// credential.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum SubmittedCredential {
+    /// One-time pairing ticket. Not persisted: it is consumed by the very next
+    /// `connect`, which hands back a device token to persist instead.
+    BootstrapTicket,
+    /// Long-lived per-device token from a previous pairing.
+    DeviceToken,
+    /// Legacy shared Gateway token.
+    SharedToken,
+}
+
+pub(crate) fn classify_credential(token: &str) -> SubmittedCredential {
+    if token.starts_with("aleph-bt-") {
+        SubmittedCredential::BootstrapTicket
+    } else if token.starts_with("aleph-dt-") {
+        SubmittedCredential::DeviceToken
+    } else {
+        SubmittedCredential::SharedToken
+    }
+}
+
+/// Rewrite the query string to carry a bootstrap ticket, preserving any other
+/// params. Returns the query without a leading `?`.
+///
+/// A pasted ticket takes the same route as a scanned QR (`?bt=`) instead of
+/// getting its own storage + handshake path: one credential, one code path.
+/// Stale `token=` / `bt=` values are dropped first, since
+/// `read_connect_credentials` prefers the URL over localStorage and an expired
+/// leftover would shadow what the operator just typed.
+// Only `submit_token`'s wasm arm calls it (the host build has no `location`),
+// but the logic is pure so it stays compiled and unit-tested on the host.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn query_with_bootstrap_ticket(search: &str, ticket: &str) -> String {
+    let remaining = strip_params(search, &["token=", "bt="]);
+    if remaining.is_empty() {
+        format!("bt={ticket}")
+    } else {
+        format!("{remaining}&bt={ticket}")
+    }
 }
 
 /// Persist a validated device token so refreshes / reconnects stay authorized.
@@ -178,6 +225,32 @@ fn scrub_credentials_from_url() {
     let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&new_url));
 }
 
+/// Navigate to `?bt=<ticket>`, which reloads the page so the fresh `connect`
+/// presents the pairing ticket — the same route a scanned QR takes.
+#[cfg(target_arch = "wasm32")]
+fn redirect_with_bootstrap_ticket(ticket: &str) {
+    if let Some(w) = web_sys::window() {
+        let search = w.location().search().unwrap_or_default();
+        let _ = w
+            .location()
+            .set_search(&query_with_bootstrap_ticket(&search, ticket));
+    }
+}
+
+/// Reload after persisting a credential.
+///
+/// Stale `?token=` / `?bt=` are dropped from the URL **first**:
+/// `read_connect_credentials` prefers the URL over localStorage, so an expired
+/// link would otherwise shadow what the operator just entered and re-trip the
+/// login wall on every reload.
+#[cfg(target_arch = "wasm32")]
+fn scrub_credentials_and_reload() {
+    scrub_credentials_from_url();
+    if let Some(w) = web_sys::window() {
+        let _ = w.location().reload();
+    }
+}
+
 /// Drop all persisted credentials. Called when authentication is rejected so
 /// the login box starts empty on the next load.
 #[cfg(target_arch = "wasm32")]
@@ -216,56 +289,11 @@ fn clear_credentials() {}
 #[cfg(not(target_arch = "wasm32"))]
 fn scrub_credentials_from_url() {}
 
-/// Legacy helpers kept for old call sites during the transition.
-#[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
-fn read_gateway_token() -> Option<String> {
-    let creds = read_connect_credentials();
-    creds
-        .bootstrap_ticket
-        .or(creds.device_token)
-        .or(creds.legacy_token)
-}
-
-#[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
-fn persist_gateway_token(token: &str) {
-    if token.starts_with("aleph-dt-") {
-        persist_device_token(token);
-    } else {
-        persist_legacy_token(token);
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
-fn clear_gateway_token() {
-    clear_credentials();
-}
-
-#[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
-fn scrub_token_from_url() {
-    scrub_credentials_from_url();
-}
+#[cfg(not(target_arch = "wasm32"))]
+fn redirect_with_bootstrap_ticket(_ticket: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn read_gateway_token() -> Option<String> {
-    None
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn persist_gateway_token(_token: &str) {}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn clear_gateway_token() {}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
-fn scrub_token_from_url() {}
+fn scrub_credentials_and_reload() {}
 
 enum Handshake {
     Authorized,
@@ -436,6 +464,20 @@ fn panel_device_identity() -> (String, String) {
     (String::new(), "Panel".to_string())
 }
 
+/// This Panel's `device_id`, or `None` before it has ever paired.
+///
+/// Exposed so the paired-device roster can mark which row is *this* browser.
+/// Comparison happens client-side on purpose: the server would have to thread
+/// connection identity into a pure-I/O handler to answer the same question, and
+/// the client already knows. Now that revoking closes the device's live sessions
+/// immediately, "am I about to log myself out?" is a question the operator must
+/// be able to answer before clicking.
+#[must_use]
+pub(crate) fn local_device_id() -> Option<String> {
+    let (id, _) = panel_device_identity();
+    Some(id).filter(|s| !s.is_empty())
+}
+
 /// Best-effort "Browser on OS" label from a user-agent string.
 #[cfg(target_arch = "wasm32")]
 fn friendly_device_name(ua: &str) -> String {
@@ -537,31 +579,34 @@ impl DashboardState {
         self.connection_error.set(Some(legacy));
     }
 
-    /// Submit a Gateway token from the login wall: persist it, then reload the
-    /// page so the fresh `connect` handshake presents it. Reload (vs. in-place
-    /// reconnect) keeps the boot/subscription wiring on its single happy path.
+    /// Submit a credential from the login wall: route it by kind, then reload
+    /// the page so the fresh `connect` handshake presents it. Reload (vs.
+    /// in-place reconnect) keeps the boot/subscription wiring on its single
+    /// happy path.
     ///
-    /// Accepts either a long-lived device token (`aleph-dt-…`) or the legacy
-    /// shared token (`aleph-…`).
+    /// Accepts all three credentials the server understands — a one-time pairing
+    /// ticket (`aleph-bt-…`, what `aleph-server pair` and the QR hand out), a
+    /// device token (`aleph-dt-…`), or the legacy shared token (`aleph-…`).
+    /// Tickets used to be silently misfiled as shared tokens and rejected by the
+    /// server, which made "read the code off the QR and type it in" — the only
+    /// option when a phone cannot scan — impossible.
     pub fn submit_token(&self, token: String) {
         let token = token.trim().to_string();
         if token.is_empty() {
             return;
         }
-        if token.starts_with("aleph-dt-") {
-            persist_device_token(&token);
-        } else {
-            persist_legacy_token(&token);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Drop any stale `?token=` / `?bt=` from the URL *before* reloading:
-            // `read_connect_credentials` prefers the URL query over localStorage,
-            // so an expired link would otherwise shadow the one just entered and
-            // re-trip the login wall on every reload.
-            scrub_credentials_from_url();
-            if let Some(w) = web_sys::window() {
-                let _ = w.location().reload();
+        match classify_credential(&token) {
+            // Hand a ticket to the `?bt=` path rather than persisting it: it is
+            // single-use, and the exchange returns the device token that actually
+            // deserves storage. Navigating is the reload.
+            SubmittedCredential::BootstrapTicket => redirect_with_bootstrap_ticket(&token),
+            SubmittedCredential::DeviceToken => {
+                persist_device_token(&token);
+                scrub_credentials_and_reload();
+            }
+            SubmittedCredential::SharedToken => {
+                persist_legacy_token(&token);
+                scrub_credentials_and_reload();
             }
         }
     }
@@ -1378,26 +1423,78 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{role_is_operator, strip_token_param, ws_url_for};
+    use super::{
+        classify_credential, query_with_bootstrap_ticket, role_is_operator, strip_params,
+        ws_url_for, SubmittedCredential,
+    };
+
+    /// What `scrub_credentials_from_url` actually strips — both credential
+    /// params, not just the legacy one.
+    const CREDENTIAL_PARAMS: &[&str] = &["token=", "bt="];
 
     #[test]
-    fn strip_token_only_param_collapses_to_empty() {
-        assert_eq!(strip_token_param("?token=aleph-abc"), "");
-        assert_eq!(strip_token_param("token=aleph-abc"), "");
+    fn stripping_the_only_param_collapses_to_empty() {
+        assert_eq!(strip_params("?token=aleph-abc", CREDENTIAL_PARAMS), "");
+        assert_eq!(strip_params("token=aleph-abc", CREDENTIAL_PARAMS), "");
+        assert_eq!(strip_params("?bt=aleph-bt-abc", CREDENTIAL_PARAMS), "");
     }
 
     #[test]
-    fn strip_token_keeps_other_params() {
-        assert_eq!(strip_token_param("?token=aleph-abc&view=chat"), "view=chat");
-        assert_eq!(strip_token_param("?view=chat&token=aleph-abc"), "view=chat");
-        assert_eq!(strip_token_param("?a=1&token=aleph-abc&b=2"), "a=1&b=2");
+    fn stripping_keeps_other_params() {
+        assert_eq!(
+            strip_params("?token=aleph-abc&view=chat", CREDENTIAL_PARAMS),
+            "view=chat"
+        );
+        assert_eq!(
+            strip_params("?view=chat&token=aleph-abc", CREDENTIAL_PARAMS),
+            "view=chat"
+        );
+        assert_eq!(
+            strip_params("?a=1&bt=aleph-bt-abc&b=2", CREDENTIAL_PARAMS),
+            "a=1&b=2"
+        );
     }
 
     #[test]
-    fn strip_token_noop_without_token() {
-        assert_eq!(strip_token_param("?view=chat"), "view=chat");
-        assert_eq!(strip_token_param(""), "");
-        assert_eq!(strip_token_param("?"), "");
+    fn stripping_is_a_noop_without_credentials() {
+        assert_eq!(strip_params("?view=chat", CREDENTIAL_PARAMS), "view=chat");
+        assert_eq!(strip_params("", CREDENTIAL_PARAMS), "");
+        assert_eq!(strip_params("?", CREDENTIAL_PARAMS), "");
+    }
+
+    #[test]
+    fn credentials_are_classified_by_their_wire_prefix() {
+        assert_eq!(
+            classify_credential("aleph-bt-1234"),
+            SubmittedCredential::BootstrapTicket
+        );
+        assert_eq!(
+            classify_credential("aleph-dt-1234"),
+            SubmittedCredential::DeviceToken
+        );
+        assert_eq!(
+            classify_credential("aleph-1234"),
+            SubmittedCredential::SharedToken
+        );
+    }
+
+    #[test]
+    fn a_pasted_ticket_becomes_a_bt_query_and_drops_stale_credentials() {
+        // Typing the code off a QR must reach the same `?bt=` path as scanning it.
+        assert_eq!(
+            query_with_bootstrap_ticket("", "aleph-bt-1"),
+            "bt=aleph-bt-1"
+        );
+        assert_eq!(
+            query_with_bootstrap_ticket("?view=chat", "aleph-bt-1"),
+            "view=chat&bt=aleph-bt-1"
+        );
+        // A stale/expired credential in the URL would otherwise shadow the one
+        // just typed, because the URL wins over localStorage.
+        assert_eq!(
+            query_with_bootstrap_ticket("?bt=aleph-bt-expired&token=aleph-old", "aleph-bt-1"),
+            "bt=aleph-bt-1"
+        );
     }
 
     #[test]
