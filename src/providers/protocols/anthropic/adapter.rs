@@ -224,7 +224,7 @@ fn classify_anthropic_error_response(
             }
         }
         // Overloaded is transient. Keep the literal "overloaded" token in the
-        // message so `retry::is_overloaded_message` classifies it retryable —
+        // message so `llm_retry::classify` sees it as a transient overload —
         // 529 is deliberately absent from the default retryable status list.
         _ if overloaded => {
             AlephError::provider(format!("Anthropic API overloaded ({status}): {detail}"))
@@ -233,8 +233,10 @@ fn classify_anthropic_error_response(
         400 | 422 => {
             AlephError::provider(format!("Anthropic invalid request ({status}): {detail}"))
         }
-        // Everything else (incl. 500/502/503/504) keeps the numeric status in
-        // the message so the retry policy's status-code match decides.
+        // Everything else (incl. 500/502/503/504) stays a `ProviderError`,
+        // which is `ErrorClass::Transient` — so `failover::decision::decide`
+        // retries it in place and then advances the chain. The numeric status
+        // is kept in the message for diagnosis, not for classification.
         _ => AlephError::provider(format!("Anthropic API error ({status}): {detail}")),
     }
 }
@@ -248,7 +250,9 @@ impl ProtocolAdapter for AnthropicProtocol {
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
         self.stream_idle_timeout_secs.store(
-            config.stream_idle_timeout_secs.unwrap_or(crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS),
+            config
+                .stream_idle_timeout_secs
+                .unwrap_or(crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS),
             std::sync::atomic::Ordering::Relaxed,
         );
         // Cycle 4: resolve capability policy once at the top of build_request.
@@ -684,11 +688,8 @@ impl ProtocolAdapter for AnthropicProtocol {
     ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
         let status = response.status();
         if !status.is_success() {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+            let retry_after =
+                crate::providers::protocols::http_client::retry_after_secs(response.headers());
             let error_text =
                 crate::providers::protocols::http_client::read_error_body(response).await;
             return Err(classify_anthropic_error_response(
@@ -1063,10 +1064,19 @@ mod truncation_guard_tests {
 mod error_classification_tests {
     use super::{classify_anthropic_error_response, parse_anthropic_error_envelope};
     use crate::error::AlephError;
-    use crate::providers::retry::retryable_reason;
+    use crate::providers::failover::{decide, Decision};
 
+    /// Whether the failover walk retries this error **in place** before moving
+    /// on — asked of `decide`, the function the walk actually calls, so the
+    /// assertion cannot drift from the behaviour it claims to pin.
+    ///
+    /// This used to ask `providers::retry`'s own predicate, which matched
+    /// `RetryPolicy::retryable_status_codes` — a table production never
+    /// consulted. Every assertion below could therefore hold while the live path
+    /// did something else; the adapter comment about "the retry policy's
+    /// status-code match" pointed at the same dead path.
     fn is_retryable(e: &AlephError) -> bool {
-        retryable_reason(e).is_some()
+        matches!(decide(e, 0, 2), Decision::RetrySame(_))
     }
 
     #[test]

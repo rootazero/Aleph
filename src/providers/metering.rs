@@ -157,6 +157,10 @@ impl AiProvider for MeteringProvider {
     fn as_http_provider(&self) -> Option<&crate::providers::http_provider::HttpProvider> {
         self.inner.as_http_provider()
     }
+
+    fn supports_streaming(&self) -> bool {
+        self.inner.supports_streaming()
+    }
 }
 
 #[cfg(test)]

@@ -162,7 +162,16 @@ impl CodexTokenRefresher {
                 self.registry.register(PROVIDER_NAME.to_string(), provider);
                 // Clear any circuit-breaker / failure state recorded against
                 // the stale token so the renewed provider is tried immediately.
+                // Both maps: the registry's (which feeds the resolution badge)
+                // and the failover breaker's (which decides whether the request
+                // is dialed at all — an expired token trips it as a *permanent*
+                // failure, i.e. the full 10-minute cooldown, so skipping this
+                // reset would strand the freshly-renewed token behind the
+                // failure it just fixed).
                 self.registry.reset_health(PROVIDER_NAME);
+                if let Some(obs) = crate::providers::route_observe::global_route_observability() {
+                    obs.health.reset(PROVIDER_NAME).await;
+                }
                 info!("codex refresh: hot-swapped chatgpt provider with renewed token");
             }
             Err(e) => warn!(error = %e, "codex refresh: failed to rebuild chatgpt provider"),

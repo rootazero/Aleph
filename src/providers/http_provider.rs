@@ -512,8 +512,7 @@ impl HttpProvider {
         let diag_request = request.try_clone();
         // TTFB watchdog — mirrors the `execute` path so a stalled upstream
         // produces a typed Timeout instead of hanging the turn.
-        let ttfb_secs =
-            crate::providers::protocols::stream_idle::effective_idle_secs(&self.config);
+        let ttfb_secs = crate::providers::protocols::stream_idle::effective_idle_secs(&self.config);
         let send_fut = request.send();
         let send_result = if ttfb_secs == 0 {
             send_fut.await
@@ -653,6 +652,12 @@ impl AiProvider for HttpProvider {
         sink: &'a dyn crate::providers::DeltaSink,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move { self.execute_streaming(payload, sink).await })
+    }
+
+    /// The one leaf that genuinely streams — every decorator's answer is a
+    /// delegation that bottoms out here.
+    fn supports_streaming(&self) -> bool {
+        true
     }
 
     fn supports_native_tools(&self) -> bool {

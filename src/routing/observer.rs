@@ -36,8 +36,6 @@ pub fn outcome_from_session_completed(
         token_breakdown: token_breakdown.clone().unwrap_or_default(),
         estimated_cost: None,
         duration_ms: duration_ms.unwrap_or(0),
-        context_tokens: 0,
-        context_window: 0,
         tool_error_count: tool_timeline.iter().filter(|t| !t.success).count() as u32,
         tool_call_total: tool_timeline.len() as u32,
     }
@@ -265,8 +263,6 @@ mod tests {
             token_breakdown: TokenBreakdown::default(),
             estimated_cost: None,
             duration_ms: 0,
-            context_tokens: 0,
-            context_window: 0,
             tool_error_count: 0,
             tool_call_total: 0,
         };

@@ -14,12 +14,6 @@ use crate::providers::{
 };
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
-/// Sentinel name for the fallback node that wraps the whole global chain
-/// inside a per-`provider_hint` override. Cannot collide with a real provider
-/// (names come from `[providers]` toml keys), so `FailoverProvider`'s
-/// primary-vs-fallback dedup never drops it.
-const GLOBAL_CHAIN_NODE: &str = "__global_chain__";
-
 /// Endpoint tier for one configured provider, used by the route policy.
 ///
 /// Special-cases `protocol == "ollama"` with no `base_url` → [`Local`]
@@ -94,6 +88,21 @@ pub fn build_failover_chain(
         .iter()
         // rust-doctor-disable-next-line excessive-clone
         .map(|(name, pc)| (name.clone(), pc.all_models().to_vec()))
+        .collect();
+
+    // Endpoint tier of every configured provider, keyed by the same toml name.
+    // The *static* chain stamps this onto each node via `node_for`; the
+    // *live-derived* chain (the default when no `[fallback_provider].chain` is
+    // configured) has no node to copy from, so it resolves the tier through this
+    // catalog. Without it every live-derived candidate would be `Unknown`, which
+    // classifies to `Allow` under every route mode — silently voiding
+    // `always_local` — and reads as unknown-cost, inverting `cost_aware` for
+    // on-machine endpoints.
+    let tier_catalog: HashMap<String, EndpointTier> = config
+        .providers
+        .iter()
+        // rust-doctor-disable-next-line excessive-clone
+        .map(|(name, pc)| (name.clone(), provider_tier(pc)))
         .collect();
 
     // Shared circuit-breaker health: the global chain and every per-hint
@@ -181,6 +190,7 @@ pub fn build_failover_chain(
                 tier: n.tier,
             })
             .collect(),
+        auto_derived,
         // rust-doctor-disable-next-line excessive-clone
         health: health.clone(),
         // rust-doctor-disable-next-line excessive-clone
@@ -205,6 +215,8 @@ pub fn build_failover_chain(
     )
     // rust-doctor-disable-next-line excessive-clone
     .with_route(route_mode, allow_escalation, escalation_approval.clone())
+    // rust-doctor-disable-next-line excessive-clone
+    .with_tier_catalog(tier_catalog.clone())
     // rust-doctor-disable-next-line excessive-clone
     .with_load_stats(load.clone())
     // rust-doctor-disable-next-line excessive-clone
@@ -247,7 +259,7 @@ pub fn build_failover_chain(
             let pinned = FailoverProvider::new(
                 Arc::new(StaticDefault::new(provider)),
                 vec![FailoverNode {
-                    name: GLOBAL_CHAIN_NODE.to_string(),
+                    name: crate::providers::failover::NESTED_CHAIN_NODE.to_string(),
                     models: Vec::new(),
                     // rust-doctor-disable-next-line excessive-clone
                     provider: global.clone(),
@@ -266,6 +278,8 @@ pub fn build_failover_chain(
             // rust-doctor-disable-next-line excessive-clone
             .with_route(route_mode, allow_escalation, escalation_approval.clone())
             .with_primary_tier(pin_tier)
+            // rust-doctor-disable-next-line excessive-clone
+            .with_tier_catalog(tier_catalog.clone())
             // rust-doctor-disable-next-line excessive-clone
             .with_load_stats(load.clone())
             // rust-doctor-disable-next-line excessive-clone

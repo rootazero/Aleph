@@ -77,6 +77,25 @@ pub struct ProviderHealthView {
 }
 
 impl FailoverHealth {
+    /// Close `name`'s circuit and clear its failure count / cooldown, returning
+    /// whether an entry existed.
+    ///
+    /// The operator's escape hatch from a `Permanent` trip. A revoked key opens
+    /// the breaker on the *first* strike with the full [`MAX_COOLDOWN`] window
+    /// (`super::MAX_COOLDOWN`, 10 minutes), which is right while the key is
+    /// still revoked and wrong the moment it is rotated: without this, "Test
+    /// connection" probes the provider successfully, reports green, and the next
+    /// ten minutes of real requests keep skipping it with only a `debug!` line.
+    /// The probe itself deliberately never mutates state, so the reset is the
+    /// caller's explicit act.
+    ///
+    /// Deliberately does **not** touch the rate-limit cooldowns
+    /// ([`ModelCooldown`] / [`ProviderCooldown`]): a successful probe proves the
+    /// endpoint answers, not that a throttling window has elapsed.
+    pub async fn reset(&self, name: &str) -> bool {
+        self.0.write().await.remove(name).is_some()
+    }
+
     /// Snapshot every tracked provider's breaker state, name-sorted.
     /// Diagnostic only — the hot path keeps using `circuit_allows`.
     pub async fn snapshot(&self) -> Vec<ProviderHealthView> {

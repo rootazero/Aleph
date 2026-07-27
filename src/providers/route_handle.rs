@@ -96,32 +96,6 @@ impl RouteHandle {
     pub fn snapshot(&self) -> Arc<RouteState> {
         self.state.load_full()
     }
-
-    /// Read the current `(mode, allow_cloud_escalation)` — the two hard signals
-    /// the route policy needs. Prefer [`snapshot`](Self::snapshot) when reading
-    /// more than one field so the reads share one generation.
-    pub fn load(&self) -> (RouteMode, bool) {
-        let s = self.state.load();
-        (s.mode, s.allow_escalation)
-    }
-
-    /// Read the current load-balancing strategy.
-    pub fn load_balance(&self) -> LoadBalanceStrategy {
-        self.state.load().load_balance
-    }
-
-    /// Read the current provider pins. The returned `Arc` is a stable snapshot.
-    pub fn targets(&self) -> Arc<RouteTargets> {
-        // rust-doctor-disable-next-line excessive-clone
-        self.state.load().targets.clone()
-    }
-
-    /// Read the current per-provider rate ceilings. The returned `Arc` is a
-    /// stable snapshot.
-    pub fn limits(&self) -> Arc<RateLimits> {
-        // rust-doctor-disable-next-line excessive-clone
-        self.state.load().limits.clone()
-    }
 }
 
 /// Process-global live handle. The daemon is an OS-level singleton (flock), so
@@ -163,28 +137,52 @@ mod tests {
                 ..Default::default()
             };
             let h = RouteHandle::from_config(&cfg);
-            assert_eq!(h.load(), (mode, esc));
+            assert_eq!(
+                {
+                    let s = h.snapshot();
+                    (s.mode, s.allow_escalation)
+                },
+                (mode, esc)
+            );
         }
     }
 
     #[test]
     fn store_hot_applies() {
         let h = RouteHandle::from_config(&ModelRouteConfig::default());
-        assert_eq!(h.load(), (RouteMode::Auto, false));
+        assert_eq!(
+            {
+                let s = h.snapshot();
+                (s.mode, s.allow_escalation)
+            },
+            (RouteMode::Auto, false)
+        );
 
         h.store(&ModelRouteConfig {
             mode: RouteMode::AlwaysLocal,
             allow_cloud_escalation: true,
             ..Default::default()
         });
-        assert_eq!(h.load(), (RouteMode::AlwaysLocal, true));
+        assert_eq!(
+            {
+                let s = h.snapshot();
+                (s.mode, s.allow_escalation)
+            },
+            (RouteMode::AlwaysLocal, true)
+        );
 
         h.store(&ModelRouteConfig {
             mode: RouteMode::AlwaysCloud,
             allow_cloud_escalation: false,
             ..Default::default()
         });
-        assert_eq!(h.load(), (RouteMode::AlwaysCloud, false));
+        assert_eq!(
+            {
+                let s = h.snapshot();
+                (s.mode, s.allow_escalation)
+            },
+            (RouteMode::AlwaysCloud, false)
+        );
     }
 
     #[test]
@@ -218,7 +216,7 @@ mod tests {
     #[test]
     fn targets_default_empty_and_hot_apply() {
         let h = RouteHandle::from_config(&ModelRouteConfig::default());
-        assert_eq!(*h.targets(), RouteTargets::default());
+        assert_eq!(*h.snapshot().targets, RouteTargets::default());
 
         h.store(&ModelRouteConfig {
             mode: RouteMode::AlwaysLocal,
@@ -226,7 +224,8 @@ mod tests {
             cloud_provider: Some("anthropic".to_string()),
             ..Default::default()
         });
-        let t = h.targets();
+        let snap = h.snapshot();
+        let t = &snap.targets;
         assert_eq!(t.local_provider.as_deref(), Some("ollama"));
         assert_eq!(t.cloud_provider.as_deref(), Some("anthropic"));
         assert!(t.is_pinned("ollama"));
@@ -235,7 +234,7 @@ mod tests {
 
         // Clearing pins hot-applies back to empty.
         h.store(&ModelRouteConfig::default());
-        assert_eq!(*h.targets(), RouteTargets::default());
+        assert_eq!(*h.snapshot().targets, RouteTargets::default());
     }
 
     #[test]
@@ -243,7 +242,7 @@ mod tests {
         use crate::config::types::ProviderRateLimit;
 
         let h = RouteHandle::from_config(&ModelRouteConfig::default());
-        assert!(h.limits().is_empty());
+        assert!(h.snapshot().limits.is_empty());
 
         h.store(&ModelRouteConfig {
             rate_limits: [(
@@ -257,20 +256,21 @@ mod tests {
             .collect(),
             ..Default::default()
         });
-        let lim = h.limits();
+        let snap = h.snapshot();
+        let lim = &snap.limits;
         assert!(!lim.is_empty());
         // 30/60 rpm = 500‰, 0 tpm → binding = 500‰, not over.
         assert_eq!(lim.assess("anthropic", 30, 0), (500, false));
 
         // Clearing hot-applies back to empty.
         h.store(&ModelRouteConfig::default());
-        assert!(h.limits().is_empty());
+        assert!(h.snapshot().limits.is_empty());
     }
 
     #[test]
     fn load_balance_defaults_and_hot_applies() {
         let h = RouteHandle::from_config(&ModelRouteConfig::default());
-        assert_eq!(h.load_balance(), LoadBalanceStrategy::Ordered);
+        assert_eq!(h.snapshot().load_balance, LoadBalanceStrategy::Ordered);
 
         for s in [
             LoadBalanceStrategy::RoundRobin,
@@ -283,7 +283,7 @@ mod tests {
                 load_balance: s,
                 ..Default::default()
             });
-            assert_eq!(h.load_balance(), s);
+            assert_eq!(h.snapshot().load_balance, s);
         }
     }
 

@@ -59,6 +59,28 @@ pub struct LoadMetric {
     /// split from each candidate's [`EndpointTier`]. The sort key for
     /// `CostAware`; ignored by every other strategy.
     pub price_per_mtok: u64,
+    /// Whether this provider is currently sidelined by *health*: its circuit
+    /// breaker is open, or it is parked inside a rate-limit pacing window.
+    ///
+    /// Deprioritised exactly like [`over_limit`](Self::over_limit) — to the back
+    /// of its tier, never dropped, so the chain can still reach it as a last
+    /// resort. Without this the breaker only acted *during* the walk, which
+    /// meant a dead provider still led the chain and cost a probe round-trip on
+    /// every request; worse, under `LeastBusy` / `LatencyAware` a dead provider
+    /// looks *ideal* (nothing in flight, no latency samples) and sorts first.
+    /// Filled by the failover layer from the shared breaker/cooldown registries;
+    /// `false` in every unit test that supplies its own metric, so the ordering
+    /// stays byte-identical there.
+    pub cooling: bool,
+}
+
+impl LoadMetric {
+    /// Whether this candidate should be pushed behind its healthy same-tier
+    /// siblings — rate-saturated, unhealthy, or both.
+    #[must_use]
+    pub const fn is_sidelined(&self) -> bool {
+        self.over_limit || self.cooling
+    }
 }
 
 /// Operator's explicit per-tier provider preference — "use *this* local /
@@ -300,9 +322,9 @@ where
 /// 2. operator pins ([`RouteTargets`]) are promoted to the front and are
 ///    **never** reordered by the balancer (an explicit pin is a hard signal —
 ///    it leads even when rate-saturated);
-/// 3. rate-saturated (`over_limit`) non-pinned candidates are split off and
-///    deprioritised to the back of the tier (never dropped — the chain must not
-///    starve);
+/// 3. sidelined non-pinned candidates — rate-saturated (`over_limit`) or
+///    unhealthy (`cooling`) — are split off and deprioritised to the back of the
+///    tier (never dropped — the chain must not starve);
 /// 4. the remaining fresh same-tier `Allow` candidates are reordered by
 ///    `strategy` using the prompt-blind [`LoadMetric`] from `metric_of` (and
 ///    `rr_base` for [`RoundRobin`](LoadBalanceStrategy::RoundRobin) rotation);
@@ -352,21 +374,22 @@ where
                 .partition(|(c, _)| targets.is_pinned(name_of(c)))
         };
 
-    // Over-limit gate (strategy-agnostic): deprioritise rate-saturated providers
-    // to the back of the tier — appended after the balanced fresh group, never
-    // dropped, so the chain can still fall back to a throttled endpoint rather
-    // than starve. A no-op without `rate_limits` (every `over_limit` is `false`
-    // → `saturated` is empty → byte-identical to pre-usage ordering). Stable:
-    // `partition` preserves configured order within the saturated group.
-    let (fresh, saturated): (Vec<(T, CandidateAction)>, Vec<(T, CandidateAction)>) = unpinned
+    // Sideline gate (strategy-agnostic): deprioritise rate-saturated *and*
+    // unhealthy providers to the back of the tier — appended after the balanced
+    // fresh group, never dropped, so the chain can still fall back to a
+    // throttled or cooling endpoint rather than starve. A no-op when neither
+    // signal is present (every `is_sidelined` is `false` → `sidelined` is empty
+    // → byte-identical to pre-gate ordering). Stable: `partition` preserves
+    // configured order within the sidelined group.
+    let (fresh, sidelined): (Vec<(T, CandidateAction)>, Vec<(T, CandidateAction)>) = unpinned
         .into_iter()
-        .partition(|(c, _)| !metric_of(name_of(c)).over_limit);
+        .partition(|(c, _)| !metric_of(name_of(c)).is_sidelined());
 
     let mut out: Vec<(T, CandidateAction)> = pinned;
     out.extend(balance_group(
         fresh, strategy, rr_base, &metric_of, &name_of,
     ));
-    out.extend(saturated);
+    out.extend(sidelined);
     out.extend(crossings);
     out
 }
@@ -832,6 +855,36 @@ mod tests {
             &[("a", 0, false), ("b", 1200, true), ("c", 0, false)],
         );
         assert_eq!(names, vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn unhealthy_candidates_are_deprioritised_like_saturated_ones() {
+        // The breaker used to act only *during* the walk, so a dead provider
+        // still led the chain and cost a probe round-trip every request — and
+        // under LeastBusy/LatencyAware it looked ideal (nothing in flight, no
+        // latency samples) and sorted first.
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Local),
+        ];
+        let out = order_candidates_balanced(
+            cands,
+            RouteMode::Auto,
+            false,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+            LoadBalanceStrategy::Ordered,
+            0,
+            |name| LoadMetric {
+                cooling: name == "a",
+                ..Default::default()
+            },
+        );
+        let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
+        // Never dropped — the chain must still be able to reach it last.
+        assert_eq!(names, vec!["b", "c", "a"]);
     }
 
     #[test]

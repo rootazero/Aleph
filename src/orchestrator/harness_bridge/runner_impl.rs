@@ -132,6 +132,26 @@ impl HarnessRunner for AgentHarnessRunner {
                         .get(&spec.agent)
                         .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)))
                 });
+        // An unresolvable provider pin falls back to the default chain — but the
+        // *attribution* must fall back with it. `select_model` now refuses an
+        // unknown key outright, so this is reachable only via an agent's
+        // `provider_hint` naming a provider that has since been deleted; leaving
+        // the original name in `routing_directive` would price the run against a
+        // provider that never served a token and write that pair into the
+        // routing-experience store the model later reads back as verified.
+        let model_directive = model_directive.map(|(provider_opt, model)| {
+            let resolved = provider_opt.filter(|p| {
+                let known = self.named_providers.contains_key(p);
+                if !known {
+                    tracing::warn!(
+                        provider = %p,
+                        "model directive names an unconfigured provider; using the default chain",
+                    );
+                }
+                known
+            });
+            (resolved, model)
+        });
         // rust-doctor-disable-next-line excessive-clone
         let routing_directive = model_directive.clone();
         let llm = match model_directive {
@@ -338,12 +358,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // also backfills routing_attribution.task_emb for the observer (symmetry).
         let routing_text: Option<String> = if let Some(recall) = self.routing_recall.as_ref() {
             recall
-                .build_routing_experience_message(
-                    &user_query,
-                    &spec.agent,
-                    None,
-                    &routing_attribution,
-                )
+                .build_routing_experience_message(&user_query, &spec.agent, &routing_attribution)
                 .await
                 .ok()
                 .flatten()

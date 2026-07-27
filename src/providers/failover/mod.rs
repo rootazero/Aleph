@@ -45,10 +45,30 @@ mod provider;
 #[cfg(test)]
 mod tests;
 
+/// The walk's per-failure verdict, exported so protocol adapters can assert
+/// what the chain will actually *do* with an error they construct — rather
+/// than re-deriving the rule and drifting from it. Test-only: production has
+/// exactly one caller and it lives inside this module.
+#[cfg(test)]
+pub(crate) use decision::{decide, Decision};
 pub use health::{
     CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown, ProviderHealthView,
 };
+pub(crate) use provider::effective_fallback_names;
 pub use provider::FailoverProvider;
+
+/// Name of the sentinel node that wraps a whole *nested* chain rather than a
+/// real endpoint.
+///
+/// A per-`provider_hint` override chain is `[pinned provider, <the entire global
+/// chain>]`; the second slot needs a name, and it must not collide with a real
+/// provider (names come from `[providers]` toml keys, which cannot start with
+/// `__`). It is not an endpoint, so it takes part in nothing that describes one:
+/// no load accounting (its in-flight count and latency EWMA would be the *sum*
+/// of the nested dials it delegates to, and its name would surface in
+/// `route_status` as a provider the operator never configured), and no health
+/// sidelining (the nested chain runs its own breaker per real provider).
+pub const NESTED_CHAIN_NODE: &str = "__global_chain__";
 
 /// Consecutive failures at which a provider's circuit breaker opens.
 const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
@@ -56,9 +76,8 @@ const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
 const MAX_COOLDOWN: Duration = Duration::from_secs(600);
 /// Backoff used for a bare transient error whose message carried no delay hint.
 const DEFAULT_TRANSIENT_DELAY: Duration = Duration::from_millis(300);
-/// Ceiling on a single in-place retry wait. Matches `llm_retry`'s backoff cap
-/// (`MAX_DELAY`) so the failover loop and the standalone `retry_async` helper
-/// grow their backoff identically.
+/// Ceiling on a single in-place retry wait, applied on top of
+/// `llm_retry::backoff_delay`'s exponential growth.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// Ceiling on a single in-place wait while *riding out a transient server
 /// overload* (429 "please wait a moment", 529). Higher than [`MAX_RETRY_DELAY`]
