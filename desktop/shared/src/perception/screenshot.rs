@@ -20,27 +20,170 @@ use crate::{DisplayInfo, ScreenRegion, Screenshot};
 /// here as a native Rust loop over the `image` crate.
 pub const DEFAULT_SCREENSHOT_MAX_BYTES: usize = 1_500_000;
 
-/// Capture a screenshot of the primary monitor, optionally cropped to a region.
+/// A display's placement in the global screen space, in that space's own units.
 ///
-/// Uses `xcap::Monitor` to enumerate displays and capture the primary one.
-/// The image is encoded as PNG and returned as a base64-encoded [`Screenshot`].
+/// Extracted from `xcap::Monitor` so the display-selection geometry is a pure
+/// function testable without a screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DisplayGeometry {
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub is_primary: bool,
+}
+
+/// Area of the overlap between a display and a global-space rectangle.
+fn overlap_area(display: &DisplayGeometry, region: &ScreenRegion) -> u64 {
+    let (dx0, dy0) = (i64::from(display.origin_x), i64::from(display.origin_y));
+    let (dx1, dy1) = (
+        dx0 + i64::from(display.width),
+        dy0 + i64::from(display.height),
+    );
+    let (rx0, ry0) = (i64::from(region.x), i64::from(region.y));
+    let (rx1, ry1) = (
+        rx0 + i64::from(region.width),
+        ry0 + i64::from(region.height),
+    );
+
+    let w = (dx1.min(rx1) - dx0.max(rx0)).max(0);
+    let h = (dy1.min(ry1) - dy0.max(ry0)).max(0);
+    (w as u64) * (h as u64)
+}
+
+/// Which display a **global-space** rectangle should be captured from, and that
+/// rectangle re-expressed in the display's own pixel space (which is what
+/// `xcap::Monitor::capture_region` takes — its coordinates are monitor-relative,
+/// not global).
+///
+/// Without this step a region is captured from the primary monitor at the
+/// *global* offset, so on any multi-monitor desktop it either crops the wrong
+/// place or is rejected outright for exceeding the primary monitor's size.
+///
+/// Selection is by largest overlap, primary breaking ties, because a region the
+/// model derived from a stitched or mis-remembered geometry should still land on
+/// the display it mostly covers rather than fail. The returned rectangle is
+/// clamped to the chosen display: a rectangle straddling two monitors cannot be
+/// captured in one call, and returning the part that exists — with the served
+/// image reporting its real dimensions — beats refusing.
+///
+/// `None` means no display overlaps the rectangle at all; the caller falls back
+/// to the primary monitor, which is the pre-existing behavior.
+pub(crate) fn resolve_region_target(
+    displays: &[DisplayGeometry],
+    region: &ScreenRegion,
+) -> Option<(usize, ScreenRegion)> {
+    let (index, display) = displays
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (i, d, overlap_area(d, region)))
+        .filter(|(_, _, area)| *area > 0)
+        .max_by_key(|(_, d, area)| (*area, d.is_primary))
+        .map(|(i, d, _)| (i, d))?;
+
+    // Global → monitor-relative, then clamp to the monitor's extent.
+    let local_x = i64::from(region.x) - i64::from(display.origin_x);
+    let local_y = i64::from(region.y) - i64::from(display.origin_y);
+    let x = local_x.clamp(0, i64::from(display.width)) as u32;
+    let y = local_y.clamp(0, i64::from(display.height)) as u32;
+    let width = (i64::from(region.width) + local_x.min(0))
+        .clamp(0, i64::from(display.width) - i64::from(x)) as u32;
+    let height = (i64::from(region.height) + local_y.min(0))
+        .clamp(0, i64::from(display.height) - i64::from(y)) as u32;
+
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some((
+        index,
+        ScreenRegion {
+            x,
+            y,
+            width,
+            height,
+        },
+    ))
+}
+
+/// Physical pixels per unit of the coordinate space this process's input,
+/// window and accessibility APIs speak, on a display whose DPI ratio is
+/// `monitor_scale`.
+///
+/// On macOS and Linux that ratio *is* the answer (a Retina point is two pixels).
+/// On Windows it depends on the process: a per-monitor-DPI-aware process already
+/// reads physical pixels everywhere, so reporting the display's DPI ratio there
+/// makes every consumer that multiplies by it — the normalized-coordinate
+/// viewport, the Set-of-Marks overlay, the window-space mapping — overshoot by
+/// exactly that ratio. See [`crate::win_dpi`].
+pub(crate) fn coordinate_scale(monitor_scale: f64) -> f64 {
+    #[cfg(windows)]
+    {
+        crate::win_dpi::effective_scale(crate::win_dpi::process_dpi_awareness(), monitor_scale)
+    }
+    #[cfg(not(windows))]
+    {
+        if monitor_scale.is_finite() && monitor_scale > 0.0 {
+            monitor_scale
+        } else {
+            1.0
+        }
+    }
+}
+
+/// Read a monitor's placement without letting one unreadable field drop it.
+fn geometry_of(m: &xcap::Monitor) -> DisplayGeometry {
+    DisplayGeometry {
+        origin_x: m.x().unwrap_or(0),
+        origin_y: m.y().unwrap_or(0),
+        width: m.width().unwrap_or(0),
+        height: m.height().unwrap_or(0),
+        is_primary: m.is_primary().unwrap_or(false),
+    }
+}
+
+/// The monitor a paramless capture targets: the primary one, or the first
+/// available when no monitor claims to be primary.
+fn primary_index(monitors: &[xcap::Monitor]) -> Result<usize> {
+    monitors
+        .iter()
+        .position(|m| m.is_primary().unwrap_or(false))
+        .or(if monitors.is_empty() { None } else { Some(0) })
+        .ok_or_else(|| DesktopError::ScreenCapture("No monitors found".into()))
+}
+
+/// Capture a screenshot, optionally cropped to a **global-space** region.
+///
+/// A paramless capture takes the primary monitor. A region is captured from the
+/// display it actually overlaps (see [`resolve_region_target`]) — its
+/// coordinates are in the global screen space, the same space clicks are issued
+/// in, not offsets into the primary monitor.
+///
+/// The image is encoded as PNG and returned as a base64-encoded [`Screenshot`]
+/// carrying the display's [`coordinate_scale`], so a consumer never has to
+/// re-derive (and mis-derive) the points-to-pixels ratio.
 ///
 /// # Errors
 ///
-/// - [`DesktopError::ScreenCapture`] if no monitors are found, no primary
-///   monitor exists, or the capture/encoding fails.
+/// - [`DesktopError::ScreenCapture`] if no monitors are found or the
+///   capture/encoding fails.
 pub fn take_screenshot(region: Option<&ScreenRegion>) -> Result<Screenshot> {
     debug!("Taking screenshot, region: {:?}", region);
 
     let monitors = xcap::Monitor::all()
         .map_err(|e| DesktopError::ScreenCapture(format!("Failed to enumerate monitors: {e}")))?;
 
-    let monitor = monitors
-        .into_iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .ok_or_else(|| DesktopError::ScreenCapture("No primary monitor found".into()))?;
+    let geometries: Vec<DisplayGeometry> = monitors.iter().map(geometry_of).collect();
+    let (index, local_region) = match region.and_then(|r| resolve_region_target(&geometries, r)) {
+        Some((i, r)) => (i, Some(r)),
+        // No display overlaps the rectangle (or none was asked for): fall back
+        // to the primary monitor, unchanged from the legacy behavior.
+        None => (primary_index(&monitors)?, region.copied()),
+    };
+    let monitor = &monitors[index];
 
-    let image = region
+    let image = local_region
+        .as_ref()
         .map_or_else(
             || monitor.capture_image(),
             |r| monitor.capture_region(r.x, r.y, r.width, r.height),
@@ -63,7 +206,9 @@ pub fn take_screenshot(region: Option<&ScreenRegion>) -> Result<Screenshot> {
         width,
         height,
         format: "png".to_string(),
-        scale_factor: None,
+        scale_factor: Some(coordinate_scale(f64::from(
+            monitor.scale_factor().unwrap_or(1.0),
+        ))),
     })
 }
 
@@ -81,10 +226,7 @@ pub fn capture_screen_png() -> Result<Vec<u8>> {
     let monitors = xcap::Monitor::all()
         .map_err(|e| DesktopError::ScreenCapture(format!("Failed to enumerate monitors: {e}")))?;
 
-    let monitor = monitors
-        .into_iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .ok_or_else(|| DesktopError::ScreenCapture("No primary monitor found".into()))?;
+    let monitor = &monitors[primary_index(&monitors)?];
 
     let image = monitor
         .capture_image()
@@ -104,6 +246,13 @@ pub fn capture_screen_png() -> Result<Vec<u8>> {
 /// available on a given platform are filled with sensible defaults (e.g.
 /// empty string for `name`, `1.0` for `scale_factor`).
 ///
+/// `scale_factor` is the display's [`coordinate_scale`] — pixels per unit of the
+/// space this process's geometry is reported in — not the raw DPI ratio. Two
+/// consumers multiply `width` by it (the normalized-coordinate viewport in
+/// `coord_resolve::resolve_viewport`) and use it to place overlay marks
+/// (`set_of_marks`), and both are only correct when the two numbers describe the
+/// *same* coordinate space.
+///
 /// # Errors
 ///
 /// - [`DesktopError::ScreenCapture`] if monitor enumeration fails.
@@ -120,7 +269,7 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>> {
             name: m.name().unwrap_or_default(),
             width: m.width().unwrap_or(0),
             height: m.height().unwrap_or(0),
-            scale_factor: f64::from(m.scale_factor().unwrap_or(1.0)),
+            scale_factor: coordinate_scale(f64::from(m.scale_factor().unwrap_or(1.0))),
             is_primary: m.is_primary().unwrap_or(false),
             origin_x: m.x().unwrap_or(0),
             origin_y: m.y().unwrap_or(0),
@@ -181,7 +330,9 @@ pub fn take_screenshot_display(
         width,
         height,
         format: "png".to_string(),
-        scale_factor: None,
+        scale_factor: Some(coordinate_scale(f64::from(
+            monitor.scale_factor().unwrap_or(1.0),
+        ))),
     })
 }
 
@@ -428,6 +579,126 @@ fn jpeg_screenshot(bytes: Vec<u8>, width: u32, height: u32) -> Screenshot {
 }
 
 // ── Tests ────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod region_target_tests {
+    use super::*;
+
+    /// A left-to-right desktop: 1920-wide primary at the origin, 2560-wide
+    /// secondary immediately to its right.
+    fn two_monitors() -> Vec<DisplayGeometry> {
+        vec![
+            DisplayGeometry {
+                origin_x: 0,
+                origin_y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: true,
+            },
+            DisplayGeometry {
+                origin_x: 1920,
+                origin_y: 0,
+                width: 2560,
+                height: 1440,
+                is_primary: false,
+            },
+        ]
+    }
+
+    fn region(x: u32, y: u32, width: u32, height: u32) -> ScreenRegion {
+        ScreenRegion {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_region_on_the_primary_stays_where_it_is() {
+        let (index, local) =
+            resolve_region_target(&two_monitors(), &region(100, 50, 400, 300)).expect("resolved");
+        assert_eq!(index, 0);
+        assert_eq!(local, region(100, 50, 400, 300));
+    }
+
+    #[test]
+    fn a_region_on_the_second_monitor_picks_it_and_is_made_monitor_relative() {
+        // This is the case that silently cropped the wrong pixels: the global
+        // x=2000 was handed to the primary monitor as an offset into *it*.
+        let (index, local) =
+            resolve_region_target(&two_monitors(), &region(2000, 100, 640, 480)).expect("resolved");
+        assert_eq!(index, 1, "must select the display the region lives on");
+        assert_eq!(local.x, 80, "global 2000 is 80px into a monitor at x=1920");
+        assert_eq!(local.y, 100);
+        assert_eq!((local.width, local.height), (640, 480));
+    }
+
+    #[test]
+    fn a_straddling_region_lands_on_the_display_it_mostly_covers_and_is_clamped() {
+        // 1800..2200: 120px on the primary, 280px on the secondary.
+        let (index, local) =
+            resolve_region_target(&two_monitors(), &region(1800, 0, 400, 200)).expect("resolved");
+        assert_eq!(index, 1, "largest overlap wins");
+        assert_eq!(
+            local.x, 0,
+            "the part left of the monitor is cut, not wrapped"
+        );
+        assert_eq!(
+            local.width, 280,
+            "width shrinks by the amount that fell off the left edge"
+        );
+    }
+
+    #[test]
+    fn a_region_wider_than_its_display_is_clamped_to_the_display() {
+        // xcap rejects a region that overruns the monitor; clamping keeps the
+        // capture alive and the served image reports its real dimensions.
+        let (index, local) =
+            resolve_region_target(&two_monitors(), &region(1000, 0, 4000, 900)).expect("resolved");
+        assert_eq!(index, 1);
+        assert!(
+            local.x + local.width <= 2560,
+            "clamped region must fit its display, got {local:?}"
+        );
+    }
+
+    #[test]
+    fn a_region_off_every_display_falls_back_to_the_caller() {
+        // `None` is the signal to use the primary monitor unchanged — the
+        // legacy behavior, kept rather than turned into a hard error.
+        assert!(resolve_region_target(&two_monitors(), &region(9000, 9000, 10, 10)).is_none());
+    }
+
+    #[test]
+    fn a_zero_area_region_is_not_resolvable() {
+        assert!(resolve_region_target(&two_monitors(), &region(10, 10, 0, 100)).is_none());
+    }
+
+    #[test]
+    fn vertical_stacking_is_handled_on_the_y_axis_too() {
+        let displays = vec![
+            DisplayGeometry {
+                origin_x: 0,
+                origin_y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: true,
+            },
+            DisplayGeometry {
+                origin_x: 0,
+                origin_y: 1080,
+                width: 1920,
+                height: 1080,
+                is_primary: false,
+            },
+        ];
+        let (index, local) =
+            resolve_region_target(&displays, &region(10, 1200, 100, 100)).expect("resolved");
+        assert_eq!(index, 1);
+        assert_eq!(local.y, 120);
+    }
+}
 
 #[cfg(test)]
 mod budget_tests {

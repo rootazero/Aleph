@@ -727,7 +727,7 @@ fn build_gdigrab_args(
 pub fn screen_record(
     config: &crate::screen_types::ScreenRecordConfig,
 ) -> Result<crate::screen_types::ScreenRecordResult> {
-    use std::process::Command;
+    use crate::script_exec::hidden_std_command;
 
     let config = config.clone().clamped();
 
@@ -751,9 +751,14 @@ pub fn screen_record(
     let output_str = output_path.to_string_lossy().into_owned();
     let args = build_gdigrab_args(&config, audio_device.as_deref(), &output_str);
 
-    let output = Command::new("ffmpeg").args(&args).output().map_err(|e| {
-        DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-    })?;
+    // `hidden_std_command`: a console child spawned from the windowless daemon
+    // would flash a black console over whatever the recording is capturing.
+    let output = hidden_std_command("ffmpeg")
+        .args(&args)
+        .output()
+        .map_err(|e| {
+            DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

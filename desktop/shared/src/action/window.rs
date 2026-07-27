@@ -161,96 +161,89 @@ pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
 
 // ── Windows window management helpers ─────────────────────────────
 
+/// Windows window list, projected from the shared enumeration in
+/// [`crate::win_window`].
+///
+/// The enumeration rules — visibility, DWM cloaking, tool windows, and the
+/// visible-frame bounds — live there because the running-app list and the UI
+/// Automation root resolver need exactly the same answers, and three private
+/// copies of `EnumWindows` is how they came to disagree.
+///
+/// `owner` is filled from the owning process's executable, which is a handle a
+/// caller can pass back as `app:`. A window title is not one: File Explorer
+/// titles itself after the open folder, so `app: "explorer"` never matched.
 #[cfg(target_os = "windows")]
 fn windows_window_list() -> Result<Vec<WindowInfo>> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-        IsWindowVisible,
-    };
+    use std::collections::HashMap;
 
-    use crate::BoundingBox;
+    // One version-resource read per *process*, not per window.
+    let mut owners: HashMap<u32, String> = HashMap::new();
 
-    struct EnumState {
-        windows: Vec<WindowInfo>,
-    }
-
-    extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        // SAFETY: `EnumWindows` guarantees `hwnd` is valid for this callback,
-        // and `lparam` carries the `&mut EnumState` pointer passed below, which
-        // outlives the synchronous enumeration.
-        unsafe {
-            if IsWindowVisible(hwnd).as_bool() {
-                let mut buf = [0u16; 512];
-                let len = GetWindowTextW(hwnd, &mut buf);
-                if len > 0 {
-                    let title = String::from_utf16_lossy(&buf[..len as usize]);
-                    let mut pid: u32 = 0;
-                    GetWindowThreadProcessId(hwnd, Some(&mut pid));
-
-                    // A minimized window keeps WS_VISIBLE, so `IsWindowVisible`
-                    // alone would report it as on screen; `IsIconic` is the only
-                    // thing that says otherwise. Windows also parks a minimized
-                    // window's rect at (-32000, -32000) — a sentinel, not a
-                    // position — so its geometry is reported as unknown rather
-                    // than as somewhere nothing can be clicked.
-                    let iconic = IsIconic(hwnd).as_bool();
-                    let mut rect = RECT::default();
-                    let bounds = if iconic {
-                        None
-                    } else {
-                        // Screen coordinates, top-left origin — the same space
-                        // clicks are issued in.
-                        GetWindowRect(hwnd, &mut rect).ok().map(|()| BoundingBox {
-                            x: f64::from(rect.left),
-                            y: f64::from(rect.top),
-                            w: f64::from(rect.right - rect.left),
-                            h: f64::from(rect.bottom - rect.top),
-                        })
-                    };
-
-                    let state = &mut *(lparam.0 as *mut EnumState);
-                    state.windows.push(WindowInfo {
-                        id: hwnd.0 as usize as u64,
-                        title,
-                        owner: String::new(),
-                        pid: u64::from(pid),
-                        bounds,
-                        on_screen: Some(!iconic),
-                        // Windows has no window-level concept comparable to
-                        // macOS' `kCGWindowLayer`: not told, not zero.
-                        ..Default::default()
-                    });
-                }
+    let windows: Vec<WindowInfo> = crate::win_window::enumerate_top_level()
+        .into_iter()
+        // An untitled window cannot be named or chosen from a list; the
+        // enumeration keeps them because the pid→window resolver needs them.
+        .filter(|w| !w.title.is_empty())
+        .map(|w| {
+            let owner = owners
+                .entry(w.pid)
+                .or_insert_with(|| {
+                    crate::win_window::process_image_path(w.pid)
+                        .map(|exe| crate::win_window::friendly_app_name(&exe))
+                        .unwrap_or_default()
+                })
+                .clone();
+            WindowInfo {
+                id: w.id,
+                title: w.title,
+                owner,
+                pid: u64::from(w.pid),
+                bounds: w.bounds,
+                on_screen: Some(!w.minimized),
+                // Windows has no window-level concept comparable to macOS'
+                // `kCGWindowLayer`: not told, not zero.
+                ..Default::default()
             }
-        }
-        BOOL(1) // continue enumeration
-    }
+        })
+        .collect();
 
-    let mut state = EnumState {
-        windows: Vec::new(),
-    };
-    // SAFETY: `enum_proc` matches the `WNDENUMPROC` signature; `state` lives
-    // until `EnumWindows` returns.
-    unsafe {
-        let _ = EnumWindows(
-            Some(enum_proc),
-            LPARAM(std::ptr::addr_of_mut!(state) as isize),
-        );
-    }
-
-    info!(
-        count = state.windows.len(),
-        "Window list retrieved (Windows)"
-    );
-    Ok(state.windows)
+    info!(count = windows.len(), "Window list retrieved (Windows)");
+    Ok(windows)
 }
 
+/// How long to wait for the window server to actually make a window foreground.
+///
+/// `SetForegroundWindow` is asynchronous *and* refusable: Windows' foreground
+/// lock denies the change outright when the calling process did not receive the
+/// last input, and the API still returns without saying so usefully. Polling
+/// `GetForegroundWindow` for the real outcome is the only way to know; orca's
+/// Windows runtime lands on the same 500 ms ceiling (`Wait-OrcaWindowFocused`).
+#[cfg(target_os = "windows")]
+const FOREGROUND_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(target_os = "windows")]
+const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Raise a window and report whether it actually reached the foreground.
+///
+/// This used to fire `SetForegroundWindow` and discard the result — the comment
+/// said a refusal "is not a hard failure", so the tool answered `focused: true`
+/// for a window Windows had merely flashed in the taskbar. The model then aimed
+/// its next keystroke at an app that was never in front.
+///
+/// **The refusal is not worked around on purpose.** The documented escalation
+/// (`AttachThreadInput` onto the foreground thread, then set, then detach) does
+/// force the change, and it is exactly the "steal the focus the user is holding"
+/// move R5 rules out — the foreground lock is Windows protecting the person
+/// typing. Every background use-case that used to need focus now has a path that
+/// does not: `set_value` / `ax_action` address an element inside any process via
+/// UI Automation, and `screenshot_window` captures an occluded window through
+/// `PrintWindow`. So the honest failure costs the model nothing but a redirect.
 #[cfg(target_os = "windows")]
 fn windows_focus_window(window_id: u64) -> Result<()> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        SW_SHOW,
     };
 
     let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
@@ -263,16 +256,39 @@ fn windows_focus_window(window_id: u64) -> Result<()> {
                 "No window found with id {window_id}"
             )));
         }
+        // Restoring is what makes a minimized window focusable at all; a
+        // non-minimized one still needs `SW_SHOW` if it was hidden.
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
         }
-        // `SetForegroundWindow` may return false under Windows' foreground-lock
-        // rules even when the window is raised; that is not a hard failure.
         let _ = SetForegroundWindow(hwnd);
+
+        // Poll for the outcome rather than assume it. Reporting success for a
+        // focus change the foreground lock refused is how a model ends up
+        // typing into the app the user was working in — the exact failure the
+        // type_text focus gate exists to catch, arriving one call earlier.
+        let deadline = std::time::Instant::now() + FOREGROUND_WAIT;
+        loop {
+            if GetForegroundWindow() == hwnd {
+                info!(window_id, "Window focused (Windows)");
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(FOREGROUND_POLL);
+        }
     }
 
-    info!(window_id, "Window focused (Windows)");
-    Ok(())
+    Err(DesktopError::WindowFailed(format!(
+        "window {window_id} was restored but Windows did not make it foreground within {} ms. \
+         The foreground lock blocks a background process from stealing focus while the user is \
+         typing elsewhere. Retry after the user interacts with the desktop, or address the app \
+         directly with set_value / ax_action, which need no focus.",
+        FOREGROUND_WAIT.as_millis()
+    )))
 }
 
 /// Reposition and/or resize a window via Win32 `SetWindowPos`.

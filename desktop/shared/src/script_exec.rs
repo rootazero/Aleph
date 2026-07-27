@@ -44,6 +44,50 @@ pub fn is_spawn_failure(e: &DesktopError) -> bool {
     matches!(e, DesktopError::InputFailed(m) if m.starts_with(SPAWN_FAILURE_PREFIX))
 }
 
+/// Build a [`Command`] that never flashes a console window.
+///
+/// Every desktop capability that shells out — PowerShell for toasts, shortcuts
+/// and registry reads, `cmd /C start` for Settings deep links, `ffmpeg` for
+/// capture — is a console program. When `aleph-server` runs as a detached daemon
+/// it owns no console, so each such child **allocates its own**: a black window
+/// that pops up and vanishes on the user's screen, for a call the user did not
+/// make. `check_all` alone did that six times in a row.
+///
+/// This is the desktop crates' counterpart to `src/utils/no_window.rs`, which
+/// the core uses for the same reason and which these crates cannot reach.
+///
+/// Note the Win32 semantics the caller must not break: a later
+/// `creation_flags(..)` call **replaces** this value rather than OR-ing into it.
+/// Build the command here and add arguments, not flags.
+#[must_use]
+pub fn hidden_command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// [`hidden_command`] for the blocking `std` API, used by the capture paths that
+/// already run inside `spawn_blocking`.
+#[must_use]
+pub fn hidden_std_command(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// `CREATE_NO_WINDOW` — create the process without allocating a console.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Run `cmd` to completion, but never longer than `timeout`. On elapse the
 /// child is killed (`kill_on_drop`) so we never leak a hung process, and the
 /// caller gets a clear error that points at the background path.
