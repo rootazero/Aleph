@@ -120,13 +120,10 @@ Examples:
             (None, Some(url), None) => {
                 // SSRF protection: block requests to internal/private hosts
                 let ssrf_policy = SsrfPolicy::default();
-                match validate_url_async(url, &ssrf_policy).await {
-                    Err(e) => {
-                        return Ok(MediaUnderstandOutput::err(format!(
-                            "SSRF blocked for URL '{url}': {e}"
-                        )));
-                    }
-                    Ok(_) => {}
+                if let Err(e) = validate_url_async(url, &ssrf_policy).await {
+                    return Ok(MediaUnderstandOutput::err(format!(
+                        "SSRF blocked for URL '{url}': {e}"
+                    )));
                 }
 
                 // Try format_hint first, then extract extension from URL.

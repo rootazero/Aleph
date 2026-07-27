@@ -418,9 +418,11 @@ impl AgentRuntime {
         // logged inside `persist_transcript`.
         let transcript_for_persist = transcript.clone();
         let chain_id_for_persist = self.child_chain.chain_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        // Detach rather than await: dropping the `JoinHandle` leaves the spawned
+        // task running (drop is not cancellation), which is what best-effort wants.
+        drop(tokio::task::spawn_blocking(move || {
             persist_transcript(&transcript_for_persist, &chain_id_for_persist);
-        });
+        }));
 
         // SubagentStop lifecycle hook (observer-only). Carries the completion
         // outcome so hooks can react to delegation results without re-reading
