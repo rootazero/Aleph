@@ -176,6 +176,12 @@ pub(in crate::commands::start) fn register_artifact_handlers(
     );
     register_handler!(
         server,
+        "artifacts.read_text",
+        artifact_handlers::handle_read_text,
+        store
+    );
+    register_handler!(
+        server,
         "session.export_html",
         artifact_handlers::handle_export_html,
         store,
@@ -185,6 +191,7 @@ pub(in crate::commands::start) fn register_artifact_handlers(
     if !daemon {
         println!("Artifact methods:");
         println!("  - artifacts.list      : List a session's stored artifacts");
+        println!("  - artifacts.read_text : Read a text artifact for in-pane preview");
         println!("  - session.export_html : Export a session as a self-contained HTML document");
         println!();
     }

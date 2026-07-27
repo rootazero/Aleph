@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use super::lightbox::LightboxTarget;
+use super::preview::PreviewTarget;
 use super::{origin_badge_class, ArtifactFilter};
 use crate::api::artifacts::ArtifactItem;
 
@@ -32,19 +32,23 @@ where
 
 /// One artifact row: thumbnail for images, name + size + origin badge for all.
 ///
-/// The two kinds deliberately behave differently on click:
+/// The two behaviours on click are decided by
+/// [`PreviewTarget::for_item`] — one predicate, so the row cannot offer a
+/// viewer the overlay does not implement:
 ///
-/// * **Images** open the in-pane [`super::lightbox::Lightbox`] — a glance
-///   should not cost you the app.
+/// * **Anything Aleph can render itself** — an image, or readable text —
+///   opens the in-pane [`super::preview::Preview`]. A glance should not cost
+///   you the app.
 /// * **Everything else** is a plain top-level link to the capability URL. In
 ///   the desktop shell that path is classified external (`external_link.rs`),
 ///   so the OS browser opens it instead of replacing the single webview.
 #[component]
 pub(super) fn ArtifactRow(
     item: ArtifactItem,
-    lightbox: RwSignal<Option<LightboxTarget>>,
+    preview: RwSignal<Option<PreviewTarget>>,
 ) -> impl IntoView {
     let is_image = item.is_image();
+    let target = PreviewTarget::for_item(&item);
     let url = item.url.clone();
     let filename = item.filename.clone();
     let size = item.human_size();
@@ -75,27 +79,22 @@ pub(super) fn ArtifactRow(
 
     let row_class = "w-full flex items-center gap-2 py-1.5 border-b border-border/40 group";
 
-    if is_image {
-        let target = LightboxTarget {
-            url: url.clone(),
-            filename: filename.clone(),
-        };
-        view! {
+    match target {
+        Some(target) => view! {
             <button
                 type="button"
                 class=row_class
-                on:click=move |_| lightbox.set(Some(target.clone()))
+                on:click=move |_| preview.set(Some(target.clone()))
             >
                 {body}
             </button>
         }
-        .into_any()
-    } else {
-        view! {
+        .into_any(),
+        None => view! {
             <a href=url target="_blank" rel="noreferrer" class=row_class>
                 {body}
             </a>
         }
-        .into_any()
+        .into_any(),
     }
 }

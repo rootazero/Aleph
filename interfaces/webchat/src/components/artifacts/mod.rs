@@ -28,12 +28,29 @@
 //! out ([`ping_is_for_session`]) so a background run cannot make the visible
 //! pane flicker.
 //!
-//! Pure logic (filtering, badge derivation) is separated from the view so it is
-//! host-testable via `cargo test -p aleph-panel --lib`.
+//! # The closed pane
+//!
+//! The pane's default layout is `ChatOnly` — collapsed, translated off-screen,
+//! `pointer-events: none`. Two consequences drive the wiring below, and both
+//! were live defects before this round:
+//!
+//! * A new artifact has to be **announced**, or the pane is a room nobody knows
+//!   filled up. The toggle's badge does that. It used to count *tool activity*
+//!   — a leftover from the inspector this pane replaced — which meant it fired
+//!   for things the pane does not show and stayed silent for the one thing it
+//!   does.
+//! * The blocked-auto-open banner **lives inside the pane**, so offering it
+//!   while collapsed degrades to silence. Refusing the open therefore also
+//!   opens the pane: the model already decided this document was worth
+//!   interrupting for, and the browser refusing a pop-up must not overturn
+//!   that decision on its behalf.
+//!
+//! Pure logic (filtering, arrival detection, badge derivation) is separated
+//! from the view so it is host-testable via `cargo test -p aleph-panel --lib`.
 
 pub mod deliverable;
 mod files;
-mod lightbox;
+mod preview;
 mod row;
 
 use leptos::prelude::*;
@@ -43,12 +60,11 @@ use std::collections::HashSet;
 use crate::api::artifacts::{ping_is_for_session, ArtifactItem, ArtifactsApi, ARTIFACT_TOPIC};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::views::chat::state::ChatState;
-use deliverable::{
-    deliverable_ids, first_unseen_deliverable, partition_deliverables, DeliverableCard,
-};
+use deliverable::{first_unseen_deliverable, partition_deliverables, DeliverableCard};
 use files::WorkspaceFiles;
-use lightbox::{Lightbox, LightboxTarget};
+use preview::{Preview, PreviewTarget};
 use row::{ArtifactRow, FilterChip};
 
 /// Which rows the pane is showing.
@@ -81,6 +97,30 @@ pub fn filtered(items: &[ArtifactItem], filter: ArtifactFilter) -> Vec<ArtifactI
         .collect()
 }
 
+/// How many rows in this listing the pane has not accounted for yet.
+///
+/// Drives the toggle badge, which is the only signal a collapsed pane has. Note
+/// what it counts: *artifacts*, the pane's actual contents. The badge used to be
+/// bumped by tool-start / reasoning / MoA trace events left over from the
+/// inspector this pane replaced — so it announced things the pane never showed
+/// and stayed silent for the ones it did.
+#[must_use]
+pub fn newly_arrived(items: &[ArtifactItem], known: &HashSet<String>) -> usize {
+    items.iter().filter(|i| !known.contains(&i.id)).count()
+}
+
+/// Every id in a listing, for seeding the known-set.
+///
+/// One set covers both jobs it is asked to do — "has the badge counted this
+/// row?" and "has the user been offered this deliverable?" — because a
+/// deliverable id present in the set means the listing was seen, which is
+/// exactly what both questions ask. Two sets would be two chances to seed one
+/// and forget the other.
+#[must_use]
+pub fn artifact_ids(items: &[ArtifactItem]) -> Vec<String> {
+    items.iter().map(|i| i.id.clone()).collect()
+}
+
 /// Tailwind classes for an origin badge. Inbound (what the user gave the agent)
 /// and outbound (what the agent produced) read differently at a glance.
 ///
@@ -105,41 +145,59 @@ pub fn origin_badge_class(origin: &str) -> &'static str {
 pub fn ArtifactsSurface() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let dash = expect_context::<DashboardState>();
+    let workspace = expect_context::<WorkspaceState>();
     let i18n = use_i18n();
 
     let items = RwSignal::new(Vec::<ArtifactItem>::new());
     let filter = RwSignal::new(ArtifactFilter::All);
     let exporting = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
-    let lightbox = RwSignal::new(Option::<LightboxTarget>::None);
-    // Deliverables this pane has already offered the user. Seeded from the
-    // first listing of a conversation so that *opening* an old conversation
-    // never re-opens its report — only a document that arrives while you are
-    // watching is new.
-    let seen = RwSignal::new(HashSet::<String>::new());
+    let preview = RwSignal::new(Option::<PreviewTarget>::None);
+    // Every artifact id this pane has already listed. Seeded from the first
+    // listing of a conversation so that *opening* an old conversation never
+    // re-opens its report nor lights the badge — only what arrives while you
+    // are watching is new. See [`artifact_ids`] for why one set serves both.
+    let known = RwSignal::new(HashSet::<String>::new());
     let seeded = RwSignal::new(false);
     // Set when an auto-open was refused (a pop-up blocker, or no window at
     // all). The banner it drives turns the retry into a real user gesture,
     // which browsers always allow — so a blocked open degrades to one click
     // rather than to silence.
-    let blocked = RwSignal::new(Option::<ArtifactItem>::None);
+    let blocked = RwSignal::new(Option::<PendingOpen>::None);
+
+    // Offer a document that could not open itself. The pane is the fallback
+    // surface, so it has to be on screen for the fallback to exist at all.
+    let offer = move |pending: PendingOpen| {
+        blocked.set(Some(pending));
+        workspace.set_layout(LayoutMode::Split);
+    };
 
     // Single settle path for a fresh listing: decide what is new BEFORE the
-    // seen-set absorbs it, then publish.
+    // known-set absorbs it, then publish.
     let settle = move |rows: Vec<ArtifactItem>| {
-        let arrival = seen.with_untracked(|s| first_unseen_deliverable(&rows, s));
         let first_listing = !seeded.get_untracked();
-        seen.update(|s| s.extend(deliverable_ids(&rows)));
+        let (arrival, fresh) =
+            known.with_untracked(|k| (first_unseen_deliverable(&rows, k), newly_arrived(&rows, k)));
+        known.update(|k| k.extend(artifact_ids(&rows)));
         seeded.set(true);
         items.set(rows);
         error.set(None);
 
-        // Nothing auto-opens on the first listing: everything there predates
-        // the user's attention, and popping a tab for a week-old report the
-        // moment a conversation is opened would be the opposite of helpful.
-        if let (false, Some(doc)) = (first_listing, arrival) {
+        // Nothing announces itself on the first listing: everything there
+        // predates the user's attention, and popping a tab — or a badge — for a
+        // week-old report the moment a conversation is opened would be the
+        // opposite of helpful.
+        if first_listing {
+            return;
+        }
+
+        // Bump before any layout change: entering Split is treated as "seen"
+        // and clears the badge, which is correct only if it happens after.
+        workspace.note_artifacts(fresh);
+
+        if let Some(doc) = arrival {
             if !open_in_new_tab(&doc.url) {
-                blocked.set(Some(doc));
+                offer(PendingOpen::deliverable(&doc));
             }
         }
     };
@@ -166,9 +224,9 @@ pub fn ArtifactsSurface() -> impl IntoView {
     // stale lightbox and the seen-set: both point at the previous session.
     Effect::new(move |_| {
         let _ = chat.session_key.get();
-        lightbox.set(None);
+        preview.set(None);
         blocked.set(None);
-        seen.update(HashSet::clear);
+        known.update(HashSet::clear);
         seeded.set(false);
         refetch();
     });
@@ -215,9 +273,13 @@ pub fn ArtifactsSurface() -> impl IntoView {
                     // event stream is explicitly best-effort).
                     refetch();
                     // The await above already cost us the user gesture, so a
-                    // strict pop-up blocker can refuse this too; the export row
-                    // is in the list either way.
-                    let _ = open_in_new_tab(&res.url);
+                    // strict pop-up blocker can refuse this too. It used to be
+                    // discarded — the user pressed a button and nothing
+                    // happened, with the row appearing silently below. It now
+                    // degrades to the same one-click banner a deliverable does.
+                    if !open_in_new_tab(&res.url) {
+                        offer(PendingOpen::export(&res.url));
+                    }
                 }
                 Err(e) => error.set(Some(e)),
             }
@@ -276,8 +338,13 @@ pub fn ArtifactsSurface() -> impl IntoView {
             })}
 
             // Auto-open was refused; this click is the gesture that is not.
-            {move || blocked.get().map(|doc| {
-                let url = doc.url.clone();
+            {move || blocked.get().map(|pending| {
+                let url = pending.url.clone();
+                let label = if pending.is_deliverable {
+                    t_string!(i18n, common.artifacts_ready).to_string()
+                } else {
+                    t_string!(i18n, common.artifacts_export_ready).to_string()
+                };
                 view! {
                     <a
                         href=url
@@ -287,9 +354,7 @@ pub fn ArtifactsSurface() -> impl IntoView {
                                text-[11px] text-primary flex items-center gap-2"
                         on:click=move |_| blocked.set(None)
                     >
-                        <span class="flex-1 min-w-0 truncate">
-                            {t!(i18n, common.artifacts_ready)}
-                        </span>
+                        <span class="flex-1 min-w-0 truncate">{label}</span>
                         <span class="shrink-0 underline">{t!(i18n, common.artifacts_open)}</span>
                     </a>
                 }
@@ -336,7 +401,7 @@ pub fn ArtifactsSurface() -> impl IntoView {
                         }
                     } else {
                         rows.into_iter()
-                            .map(|item| view! { <ArtifactRow item=item lightbox=lightbox /> })
+                            .map(|item| view! { <ArtifactRow item=item preview=preview /> })
                             .collect::<Vec<_>>()
                             .into_any()
                     }
@@ -344,8 +409,36 @@ pub fn ArtifactsSurface() -> impl IntoView {
             </div>
 
             <WorkspaceFiles />
-            <Lightbox target=lightbox />
+            <Preview target=preview />
         </div>
+    }
+}
+
+/// A document that should have opened itself and did not.
+///
+/// Carries the one bit that changes the wording: a *deliverable* is the work
+/// product the agent published, a transcript *export* is the conversation the
+/// user asked to keep. Announcing one as the other is the confusion this whole
+/// section of the product exists to end, so the banner does not get to guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingOpen {
+    url: String,
+    is_deliverable: bool,
+}
+
+impl PendingOpen {
+    fn deliverable(item: &ArtifactItem) -> Self {
+        Self {
+            url: item.url.clone(),
+            is_deliverable: true,
+        }
+    }
+
+    fn export(url: &str) -> Self {
+        Self {
+            url: url.to_string(),
+            is_deliverable: false,
+        }
     }
 }
 
@@ -356,12 +449,8 @@ pub fn ArtifactsSurface() -> impl IntoView {
 /// document is on screen" and "the user needs to click", and does.
 #[cfg(target_arch = "wasm32")]
 fn open_in_new_tab(url: &str) -> bool {
-    web_sys::window().is_some_and(|w| {
-        matches!(
-            w.open_with_url_and_target(url, "_blank"),
-            Ok(Some(_))
-        )
-    })
+    web_sys::window()
+        .is_some_and(|w| matches!(w.open_with_url_and_target(url, "_blank"), Ok(Some(_))))
 }
 
 /// Host unit tests have no window, which is the same answer a blocked pop-up
@@ -412,6 +501,55 @@ mod tests {
         let out = filtered(&rows, ArtifactFilter::Images);
         assert_eq!(out[0].id, "newest");
         assert_eq!(out[1].id, "older");
+    }
+
+    #[test]
+    fn only_unlisted_rows_count_as_arrivals() {
+        let mut a = item("image/png", "outbound");
+        a.id = "old".into();
+        let mut b = item("text/plain", "outbound");
+        b.id = "new".into();
+
+        let known: HashSet<String> = ["old".to_string()].into_iter().collect();
+        assert_eq!(newly_arrived(&[a.clone(), b.clone()], &known), 1);
+        // A re-read with nothing new — the common case, since every ping
+        // re-reads the whole list — must not keep bumping the badge.
+        let all: HashSet<String> = artifact_ids(&[a.clone(), b.clone()]).into_iter().collect();
+        assert_eq!(newly_arrived(&[a, b], &all), 0);
+    }
+
+    /// One set, two questions. Seeding it from every row (not only the
+    /// deliverables) must not change what the deliverable question answers.
+    #[test]
+    fn the_shared_known_set_still_answers_the_deliverable_question() {
+        use deliverable::first_unseen_deliverable;
+
+        let mut doc = item("text/html", "deliverable");
+        doc.id = "doc".into();
+        let mut shot = item("image/png", "outbound");
+        shot.id = "shot".into();
+        let rows = vec![doc, shot];
+
+        let empty = HashSet::new();
+        assert_eq!(
+            first_unseen_deliverable(&rows, &empty).map(|i| i.id),
+            Some("doc".to_string())
+        );
+
+        let seeded: HashSet<String> = artifact_ids(&rows).into_iter().collect();
+        assert!(
+            first_unseen_deliverable(&rows, &seeded).is_none(),
+            "seeding with every id must still mark the deliverable as offered"
+        );
+    }
+
+    #[test]
+    fn a_blocked_open_names_which_document_it_is() {
+        let doc = item("text/html", "deliverable");
+        let d = PendingOpen::deliverable(&doc);
+        assert!(d.is_deliverable);
+        assert_eq!(d.url, doc.url);
+        assert!(!PendingOpen::export("/artifact/c/e/t.html").is_deliverable);
     }
 
     #[test]

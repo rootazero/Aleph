@@ -90,10 +90,15 @@ pub struct WorkspaceState {
     /// tool stay in sync and the choice survives the keyed-`<For>` remount that
     /// fires on every streamed token.
     pub expanded_events: RwSignal<HashSet<String>>,
-    /// Count of tool activities that started while the pane was not in
-    /// Split — drives the toggle button's unseen-activity dot (R5: we
-    /// surface activity without force-opening the pane).
-    pub unseen_activity: RwSignal<usize>,
+    /// Artifacts that arrived while the pane was not in Split — drives the
+    /// toggle button's badge (R5: surface it without force-opening the pane).
+    ///
+    /// This counts **what the pane contains**. It used to count tool starts,
+    /// reasoning notes and MoA fan-outs, which was correct when the right
+    /// column was a tool inspector and became a lie the day that inspector was
+    /// deleted: the badge fired for things the pane does not show, and stayed
+    /// dark when the report the user was waiting for landed in it.
+    pub unseen_artifacts: RwSignal<usize>,
 }
 
 impl Default for WorkspaceState {
@@ -111,7 +116,7 @@ impl WorkspaceState {
             mode: RwSignal::new(hydrated),
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
-            unseen_activity: RwSignal::new(0),
+            unseen_artifacts: RwSignal::new(0),
         }
     }
 
@@ -128,7 +133,7 @@ impl WorkspaceState {
         self.mode.set(mode);
         persist_layout_mode(mode);
         if mode == LayoutMode::Split {
-            self.unseen_activity.set(0);
+            self.unseen_artifacts.set(0);
         }
     }
 
@@ -151,11 +156,16 @@ impl WorkspaceState {
         self.expanded_events.with(|set| set.contains(tool_id))
     }
 
-    /// Record that a tool started. Bumps the unseen badge only when the
-    /// pane is not already open (R5 — never force-open).
-    pub fn note_activity(&self) {
-        if self.mode.get_untracked() != LayoutMode::Split {
-            self.unseen_activity.update(|n| *n += 1);
+    /// Record that `count` artifacts arrived. Bumps the unseen badge only when
+    /// the pane is not already open (R5 — never force-open), and is a no-op for
+    /// zero so a re-read that found nothing new costs no signal write.
+    ///
+    /// The caller passes a count rather than calling this in a loop because the
+    /// producer is a *listing* diff, not an event stream: one re-read can carry
+    /// several arrivals and each one would otherwise be its own reactive write.
+    pub fn note_artifacts(&self, count: usize) {
+        if count > 0 && self.mode.get_untracked() != LayoutMode::Split {
+            self.unseen_artifacts.update(|n| *n += count);
         }
     }
 
@@ -166,7 +176,7 @@ impl WorkspaceState {
         self.tool_payloads.update(std::collections::HashMap::clear);
         self.expanded_events
             .update(std::collections::HashSet::clear);
-        self.unseen_activity.set(0);
+        self.unseen_artifacts.set(0);
     }
 
     /// Record the input/args of a tool call. Idempotent.
@@ -229,7 +239,7 @@ mod tests {
             mode: RwSignal::new(mode),
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
-            unseen_activity: RwSignal::new(0),
+            unseen_artifacts: RwSignal::new(0),
         }
     }
 
@@ -322,18 +332,31 @@ mod tests {
     }
 
     #[test]
-    fn note_activity_bumps_badge_only_when_not_split() {
+    fn note_artifacts_bumps_badge_only_when_not_split() {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::ChatOnly);
-        ws.note_activity();
-        ws.note_activity();
-        assert_eq!(ws.unseen_activity.get_untracked(), 2);
+        ws.note_artifacts(1);
+        ws.note_artifacts(1);
+        assert_eq!(ws.unseen_artifacts.get_untracked(), 2);
+        // One re-read carrying several arrivals counts them all.
+        ws.note_artifacts(3);
+        assert_eq!(ws.unseen_artifacts.get_untracked(), 5);
         // Entering Split clears the badge (now host-safe: persist no-ops off-wasm).
         ws.set_layout(LayoutMode::Split);
-        assert_eq!(ws.unseen_activity.get_untracked(), 0);
-        // In Split, further activity does not accrue.
-        ws.note_activity();
-        assert_eq!(ws.unseen_activity.get_untracked(), 0);
+        assert_eq!(ws.unseen_artifacts.get_untracked(), 0);
+        // In Split, further arrivals do not accrue — the user is looking at them.
+        ws.note_artifacts(2);
+        assert_eq!(ws.unseen_artifacts.get_untracked(), 0);
+    }
+
+    /// Every ping re-reads the whole list, and most re-reads find nothing new.
+    #[test]
+    fn a_refresh_with_no_arrivals_writes_nothing() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::ChatOnly);
+        ws.note_artifacts(0);
+        assert_eq!(ws.unseen_artifacts.get_untracked(), 0);
     }
 }

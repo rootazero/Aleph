@@ -49,18 +49,18 @@ pub fn LayoutToggle() -> impl IntoView {
             </svg>
             <Show when=move || {
                 workspace.mode.get() == LayoutMode::ChatOnly
-                    && workspace.unseen_activity.get() > 0
+                    && workspace.unseen_artifacts.get() > 0
             }>
                 // Surface the actual unseen-activity count (capped "9+") rather
                 // than a bare presence dot — the count is already tracked in
-                // `WorkspaceState::unseen_activity`; previously only its >0-ness
+                // `WorkspaceState::unseen_artifacts`; previously only its >0-ness
                 // was consumed.
                 <span class="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px]
                              rounded-full bg-primary text-white
                              text-[9px] font-semibold leading-[14px] text-center
                              animate-pulse">
                     {move || {
-                        let n = workspace.unseen_activity.get();
+                        let n = workspace.unseen_artifacts.get();
                         if n > 9 { "9+".to_string() } else { n.to_string() }
                     }}
                 </span>

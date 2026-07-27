@@ -51,6 +51,24 @@ impl ArtifactItem {
         self.mime_type.starts_with("image/")
     }
 
+    /// True when the row's bytes can be read into the in-pane text preview.
+    ///
+    /// Reads the *shared* predicate rather than a local list: the core's
+    /// `artifacts.read_text` refuses anything this says no to, so a second
+    /// opinion here would either offer a click that always errors or hide a
+    /// file the core would happily have served.
+    #[must_use]
+    pub fn is_text(&self) -> bool {
+        aleph_protocol::artifact::is_previewable_text(&self.mime_type)
+    }
+
+    /// True when a text preview of this row should be *rendered* as Markdown
+    /// rather than printed as source.
+    #[must_use]
+    pub fn is_markdown(&self) -> bool {
+        aleph_protocol::artifact::is_markdown(&self.mime_type)
+    }
+
     /// True when the agent published this row as the finished work product.
     ///
     /// Deliverables are what the user asked for; everything else in the pane is
@@ -93,6 +111,19 @@ pub struct ExportResult {
     pub size: u64,
 }
 
+/// Result of `artifacts.read_text` — a bounded UTF-8 slice of one artifact.
+///
+/// `truncated` is not decoration: a preview that silently stops is a preview
+/// that lies about the file's contents, so the pane says so and keeps the link
+/// to the whole thing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TextPreview {
+    pub filename: String,
+    pub mime_type: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
 pub struct ArtifactsApi;
 
 impl ArtifactsApi {
@@ -106,6 +137,27 @@ impl ArtifactsApi {
             .await?;
         let items = result.get("items").cloned().unwrap_or(Value::Array(vec![]));
         serde_json::from_value(items).map_err(|e| e.to_string())
+    }
+
+    /// Read a text artifact for the in-pane preview.
+    ///
+    /// The Panel has no HTTP client — it speaks JSON-RPC over the authenticated
+    /// WebSocket and nothing else — so bytes destined for the screen come back
+    /// this way rather than through the capability URL. That URL still exists
+    /// and is still what "open in a browser" uses; this is for reading in
+    /// place.
+    pub async fn read_text(
+        state: &DashboardState,
+        session_key: &str,
+        id: &str,
+    ) -> Result<TextPreview, String> {
+        let result = state
+            .rpc_call(
+                "artifacts.read_text",
+                json!({ "session_key": session_key, "id": id }),
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
     /// Render the session transcript to a self-contained HTML document and
@@ -206,6 +258,61 @@ mod tests {
             );
             let it: ArtifactItem = serde_json::from_str(&j).unwrap();
             assert_eq!(it.is_deliverable(), expected, "origin {origin}");
+        }
+    }
+
+    #[test]
+    fn deserializes_a_text_preview() {
+        // `r##"…"##`: the body holds a Markdown heading, and `"#` would close a
+        // single-hash raw string right in the middle of it.
+        let j = r##"{"id":"a","filename":"notes.md","mime_type":"text/markdown",
+                    "size":12,"content":"# hi","truncated":true}"##;
+        let p: TextPreview = serde_json::from_str(j).unwrap();
+        assert_eq!(p.content, "# hi");
+        assert!(p.truncated);
+    }
+
+    /// The three row kinds the pane routes a click on, and the rule that they
+    /// are mutually exclusive: an image never offers a text preview (its bytes
+    /// are the picture) and a PDF offers neither (it leaves for a real viewer).
+    #[test]
+    fn a_row_is_at_most_one_kind_of_previewable() {
+        let cases = [
+            ("image/png", true, false),
+            ("image/svg+xml", true, false),
+            ("text/markdown", false, true),
+            ("application/json", false, true),
+            ("application/pdf", false, false),
+            ("application/zip", false, false),
+        ];
+        for (mime, image, text) in cases {
+            let mut it = item_with(mime);
+            it.mime_type = mime.to_string();
+            assert_eq!(it.is_image(), image, "{mime} image");
+            assert_eq!(it.is_text(), text, "{mime} text");
+            assert!(!(it.is_image() && it.is_text()), "{mime} claimed both");
+        }
+    }
+
+    #[test]
+    fn only_markdown_rows_ask_for_the_renderer() {
+        assert!(item_with("text/markdown").is_markdown());
+        assert!(!item_with("text/plain").is_markdown());
+        // Every Markdown row is also a text row — the renderer is a refinement
+        // of the preview, not a separate path.
+        assert!(item_with("text/markdown").is_text());
+    }
+
+    fn item_with(mime: &str) -> ArtifactItem {
+        ArtifactItem {
+            id: "a".into(),
+            filename: "f".into(),
+            mime_type: mime.into(),
+            size: 1,
+            origin: "inbound".into(),
+            run_id: None,
+            created_at: 0,
+            url: "/artifact/c/a/f".into(),
         }
     }
 

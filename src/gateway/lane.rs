@@ -103,6 +103,14 @@ impl Lane {
             // so classify it explicitly — keeps this hot read off the Mutate
             // lane and out of idempotency guarding.
             "moa.listPresets" => Some(Self::Query),
+            // Both feed the artifacts pane's reading surface and neither writes
+            // anything: `fs.read_file` backs the workspace-file preview,
+            // `artifacts.read_text` backs the attachment preview beside it. The
+            // `read_*` suffixes match no Query token, so without these two lines
+            // a pure read lands in Mutate and an operator running with
+            // `require_idempotency_key = true` gets `IDEMPOTENCY_KEY_REQUIRED`
+            // for opening a text file.
+            "fs.read_file" | "artifacts.read_text" => Some(Self::Query),
             // skills.remove is package management, not a data delete →
             // System lane. memory.delete / sessions.delete / session.truncate
             // are data ops that fall through to default Mutate.
@@ -582,6 +590,18 @@ mod tests {
         assert_eq!(Lane::for_method("version"), Lane::Query);
         assert_eq!(Lane::for_method("system.info"), Lane::Query);
         assert_eq!(Lane::for_method("request.state"), Lane::Query);
+    }
+
+    /// The two reading RPCs behind the artifacts pane. Neither `read_file` nor
+    /// `read_text` matches a Query suffix, so without their overrides a pure
+    /// read is idempotency-guarded and fails outright under
+    /// `require_idempotency_key`.
+    #[test]
+    fn the_panes_read_rpcs_are_query_lane() {
+        assert_eq!(Lane::for_method("fs.read_file"), Lane::Query);
+        assert_eq!(Lane::for_method("artifacts.read_text"), Lane::Query);
+        assert_eq!(Lane::for_method("artifacts.list"), Lane::Query);
+        assert!(!Lane::for_method("artifacts.read_text").needs_idempotency());
     }
 
     #[test]

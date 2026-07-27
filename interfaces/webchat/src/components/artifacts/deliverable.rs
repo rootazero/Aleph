@@ -33,25 +33,19 @@ pub fn partition_deliverables(items: &[ArtifactItem]) -> (Vec<ArtifactItem>, Vec
 /// already accounted for — which is the normal case on a plain refresh, and the
 /// reason a re-read triggered by an unrelated artifact does not re-open
 /// anything.
+///
+/// `known` holds every id the pane has listed, not only the deliverables: an id
+/// being present means that listing was seen, which is exactly what this asks.
+/// See [`super::artifact_ids`] for why one set serves both callers.
 #[must_use]
 pub fn first_unseen_deliverable(
     items: &[ArtifactItem],
-    seen: &HashSet<String>,
+    known: &HashSet<String>,
 ) -> Option<ArtifactItem> {
     items
         .iter()
-        .find(|i| i.is_deliverable() && !seen.contains(&i.id))
+        .find(|i| i.is_deliverable() && !known.contains(&i.id))
         .cloned()
-}
-
-/// Every deliverable id in a listing, for seeding the seen-set.
-#[must_use]
-pub fn deliverable_ids(items: &[ArtifactItem]) -> Vec<String> {
-    items
-        .iter()
-        .filter(|i| i.is_deliverable())
-        .map(|i| i.id.clone())
-        .collect()
 }
 
 /// One deliverable, rendered as a card rather than a list row.
@@ -170,15 +164,5 @@ mod tests {
         let seen: HashSet<String> = ["d".to_string()].into_iter().collect();
         let rows = vec![item("d", "deliverable"), item("shot", "outbound")];
         assert!(first_unseen_deliverable(&rows, &seen).is_none());
-    }
-
-    #[test]
-    fn only_deliverable_ids_seed_the_seen_set() {
-        let rows = vec![
-            item("d", "deliverable"),
-            item("e", "export"),
-            item("o", "outbound"),
-        ];
-        assert_eq!(deliverable_ids(&rows), vec!["d".to_string()]);
     }
 }

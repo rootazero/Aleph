@@ -46,10 +46,14 @@ pub(crate) fn apply_trace_event(
                 .and_then(|t| t.as_str())
                 .unwrap_or("tool");
             chat.update_tool(run_id, tool_id, tool_name, "running", None);
-            // Surface activity on the toggle when the pane is
-            // closed (R5 — never force-open the Split).
-            workspace.note_activity();
-            // Capture args/input for the workspace pane. Schema
+            // No badge bump here. A tool starting is not something the right
+            // pane shows — it shows what the session *produced* — and the
+            // badge that used to fire from this line was inspector-era
+            // residue: it advertised a pane whose contents had not changed,
+            // and was silent when they had. `ArtifactsSurface` owns it now,
+            // driven by the artifact listing.
+            //
+            // Capture args/input for the chat column's tool card. Schema
             // varies by tool kind — try the two known keys.
             if !tool_id.is_empty() {
                 let args = call
@@ -168,7 +172,6 @@ pub(crate) fn apply_trace_event(
                 td_string!(locale, narration.compaction_failed).to_string()
             };
             append_reasoning(chat, &note);
-            workspace.note_activity();
         }
         // Watchdog: the model tried to finish but its scratchpad checklist
         // still has unchecked items, so the loop was forced to continue.
@@ -185,7 +188,6 @@ pub(crate) fn apply_trace_event(
                     td_string!(locale, narration.verifier_veto)
                 ),
             );
-            workspace.note_activity();
         }
         // MoA (Mixture-of-Agents) advisor fan-out — one event per advisor per
         // consultation. Rendered as a reasoning block so it appears inline
@@ -231,7 +233,6 @@ pub(crate) fn apply_trace_event(
                     &format!("◇ {advisor} {index}/{count} — {label}\n{text}"),
                 );
             }
-            workspace.note_activity();
         }
         // Fan-out complete; the aggregator (acting model) is being called.
         "moa_aggregating" => {

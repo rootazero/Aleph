@@ -1,8 +1,9 @@
 //! Artifact metadata RPCs.
 //!
 //! Methods:
-//! - `artifacts.list       { session_key }` → `{ session_key, items, count }`
-//! - `session.export_html  { session_key }` → `{ url, filename, size }`
+//! - `artifacts.list       { session_key }`      → `{ session_key, items, count }`
+//! - `artifacts.read_text  { session_key, id }`  → `{ id, …, content, truncated }`
+//! - `session.export_html  { session_key }`      → `{ url, filename, size }`
 //!
 //! These are pure I/O (R4): they parse params, ask core, and serialize. Where
 //! the bytes live is [`crate::artifacts::ArtifactStore`]'s business; how the
@@ -24,9 +25,19 @@ use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
+};
 use super::super::router::SessionKey;
 use super::parse_params;
+
+/// Largest slice of a text artifact returned as a preview.
+///
+/// Matches `fs.read_file`'s ceiling: both feed the same reading pane, and a
+/// user who can preview half a megabyte of a project file would rightly ask why
+/// the attachment beside it stops sooner. The pane is for *reading*, not for
+/// shipping bytes — the capability URL is still there for the whole file.
+const TEXT_PREVIEW_CAP: usize = 512 * 1024;
 
 /// Percent-encode set for the filename path segment of an artifact URL.
 ///
@@ -121,6 +132,105 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<ArtifactStore>) -> 
             "count": count,
         }),
     )
+}
+
+// ─── artifacts.read_text ─────────────────────────────────────────────────────
+
+/// Params for [`handle_read_text`].
+#[derive(Debug, Deserialize)]
+pub struct ReadTextParams {
+    pub session_key: String,
+    pub id: String,
+}
+
+/// `artifacts.read_text { session_key, id }` → a bounded UTF-8 preview.
+///
+/// # Why this exists rather than a `fetch` from the Panel
+///
+/// The Panel speaks one protocol — JSON-RPC over the authenticated WebSocket —
+/// and has no HTTP client at all. Reading the capability URL from WASM would
+/// mean introducing one, plus a second authorization story for bytes that
+/// already have one. This mirrors `fs.read_file`, which serves the file preview
+/// a few pixels lower in the very same pane.
+///
+/// # Why it refuses non-text
+///
+/// Handing back `String::from_utf8_lossy` of a PNG is not a preview, it is
+/// mojibake with a scroll bar. The predicate is
+/// [`aleph_protocol::artifact::is_previewable_text`] — shared with the Panel so
+/// the side that *offers* the preview and the side that *serves* it cannot
+/// disagree about which rows are readable.
+pub async fn handle_read_text(
+    request: JsonRpcRequest,
+    store: Arc<ArtifactStore>,
+) -> JsonRpcResponse {
+    let params: ReadTextParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let session_key = match resolve_session(&request, &params.session_key) {
+        Ok(k) => k.to_key_string(),
+        Err(e) => return e,
+    };
+
+    let (record, bytes) = match store.read(&session_key, &params.id).await {
+        Ok(pair) => pair,
+        Err(
+            e @ (crate::artifacts::ArtifactError::NotFound(_)
+            | crate::artifacts::ArtifactError::InvalidId(_)),
+        ) => {
+            return JsonRpcResponse::error(request.id, RESOURCE_NOT_FOUND, e.to_string());
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to read artifact: {e}"),
+            );
+        }
+    };
+
+    if !aleph_protocol::artifact::is_previewable_text(&record.mime_type) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "artifact {} is {}, which has no text preview",
+                record.id, record.mime_type
+            ),
+        );
+    }
+
+    let (content, truncated) = truncate_utf8(&bytes, TEXT_PREVIEW_CAP);
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "id": record.id,
+            "filename": record.filename,
+            "mime_type": record.mime_type,
+            "size": record.size,
+            "content": content,
+            "truncated": truncated,
+        }),
+    )
+}
+
+/// Take at most `cap` bytes, cutting on a UTF-8 character boundary.
+///
+/// Slicing at a fixed offset would split a multi-byte character and hand the
+/// reader a U+FFFD at the seam — for CJK text that is every truncation, not an
+/// edge case.
+fn truncate_utf8(bytes: &[u8], cap: usize) -> (String, bool) {
+    if bytes.len() <= cap {
+        return (String::from_utf8_lossy(bytes).into_owned(), false);
+    }
+    // A UTF-8 continuation byte matches 0b10xxxxxx; walk back to a leading byte.
+    let mut end = cap;
+    while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    (String::from_utf8_lossy(&bytes[..end]).into_owned(), true)
 }
 
 // ─── session.export_html ─────────────────────────────────────────────────────
@@ -366,6 +476,124 @@ mod tests {
         };
         let resp = handle_list(request, store).await;
         assert_eq!(resp.error.expect("expected error").code, INVALID_PARAMS);
+    }
+
+    async fn store_with_text(
+        session_key: &str,
+        name: &str,
+        mime: &str,
+        body: &[u8],
+    ) -> (TempDir, Arc<ArtifactStore>, String) {
+        let tmp = TempDir::new().expect("tempdir");
+        let store = Arc::new(ArtifactStore::new(tmp.path().to_path_buf()));
+        let record = store
+            .put(session_key, None, ArtifactOrigin::Inbound, name, mime, body)
+            .await
+            .expect("put");
+        (tmp, store, record.id)
+    }
+
+    #[tokio::test]
+    async fn read_text_returns_the_body() {
+        let session_key = "agent:main:main";
+        let (_tmp, store, id) =
+            store_with_text(session_key, "notes.md", "text/markdown", b"# Title\n\nbody").await;
+
+        let resp = handle_read_text(
+            req(
+                "artifacts.read_text",
+                json!({ "session_key": session_key, "id": id }),
+            ),
+            store,
+        )
+        .await;
+
+        let result = resp.result.expect("expected success");
+        assert_eq!(result["content"], "# Title\n\nbody");
+        assert_eq!(result["truncated"], false);
+        assert_eq!(result["filename"], "notes.md");
+    }
+
+    #[tokio::test]
+    async fn read_text_refuses_a_binary_artifact() {
+        // Handing back `from_utf8_lossy` of a PNG is not a preview. The Panel
+        // asks the same shared predicate before offering the click, so reaching
+        // this arm means the two sides disagreed — it must be an error, not a
+        // page of replacement characters.
+        let session_key = "agent:main:main";
+        let (_tmp, store, id) =
+            store_with_text(session_key, "shot.png", "image/png", b"\x89PNG\r\n").await;
+
+        let resp = handle_read_text(
+            req(
+                "artifacts.read_text",
+                json!({ "session_key": session_key, "id": id }),
+            ),
+            store,
+        )
+        .await;
+
+        assert_eq!(resp.error.expect("expected error").code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn read_text_of_an_unknown_id_is_not_found() {
+        let session_key = "agent:main:main";
+        let (_tmp, store, _) = store_with_text(session_key, "a.txt", "text/plain", b"x").await;
+
+        for id in [
+            uuid::Uuid::new_v4().to_string(),
+            "../../etc/passwd".to_string(),
+        ] {
+            let resp = handle_read_text(
+                req(
+                    "artifacts.read_text",
+                    json!({ "session_key": session_key, "id": id }),
+                ),
+                Arc::clone(&store),
+            )
+            .await;
+            assert_eq!(
+                resp.error.expect("expected error").code,
+                RESOURCE_NOT_FOUND,
+                "id {id}"
+            );
+        }
+    }
+
+    /// A reader scoped to one session must not be able to name another's bytes,
+    /// even holding a valid id — the store looks only under the key it is given.
+    #[tokio::test]
+    async fn read_text_cannot_reach_another_sessions_artifact() {
+        let (_tmp, store, id) =
+            store_with_text("agent:main:main", "secret.txt", "text/plain", b"s").await;
+
+        let resp = handle_read_text(
+            req(
+                "artifacts.read_text",
+                json!({ "session_key": "agent:other:main", "id": id }),
+            ),
+            store,
+        )
+        .await;
+
+        assert_eq!(resp.error.expect("expected error").code, RESOURCE_NOT_FOUND);
+    }
+
+    #[test]
+    fn truncation_lands_on_a_character_boundary() {
+        // Three-byte characters against a cap that falls mid-character: the
+        // result must still be valid text, not a U+FFFD at the seam.
+        let text = "中文内容".repeat(4);
+        let (out, truncated) = truncate_utf8(text.as_bytes(), 10);
+        assert!(truncated);
+        assert!(!out.contains('\u{FFFD}'), "split a character: {out:?}");
+        assert!(text.starts_with(&out), "{out:?}");
+        assert!(out.len() <= 10);
+
+        let (whole, truncated) = truncate_utf8(text.as_bytes(), text.len());
+        assert!(!truncated);
+        assert_eq!(whole, text);
     }
 
     /// Byte-budget behaviour is `export::collect_artifacts`' own business and

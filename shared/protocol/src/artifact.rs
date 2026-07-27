@@ -49,3 +49,134 @@ pub const ORIGIN_EXPORT: &str = "export";
 /// This is the origin the artifacts pane pins to the top and opens in a
 /// browser; everything else is supporting material.
 pub const ORIGIN_DELIVERABLE: &str = "deliverable";
+
+/// Can this MIME type be shown as text in the artifacts pane?
+///
+/// Lives here for the same reason the tokens above do: the Panel decides
+/// whether to *offer* a text preview and the core decides whether to *serve*
+/// one, and if those two predicates drift the failure is silent in the worst
+/// direction — the row invites a click that always errors, or a perfectly
+/// readable file is only offered as a download.
+///
+/// An **allowlist**, deliberately. The question being answered is "will
+/// `String::from_utf8_lossy` produce something a human wants to read", and the
+/// only honest way to answer it is by naming the families that do. A denylist
+/// would let every future `application/x-*` binary through as mojibake.
+///
+/// `image/svg+xml` is excluded despite matching `+xml`: it is an image, the
+/// pane already renders it as one, and its source is not what a click on a
+/// thumbnail asks for.
+#[must_use]
+pub fn is_previewable_text(mime: &str) -> bool {
+    // MIME types are case-insensitive and may carry parameters
+    // (`text/plain; charset=utf-8`); every comparison below is on the bare,
+    // lowercased type/subtype.
+    let base = mime
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    if base == "image/svg+xml" {
+        return false;
+    }
+    if base.starts_with("text/") {
+        return true;
+    }
+    // Structured-syntax suffixes: `application/vnd.api+json`, `…+xml`, `…+yaml`
+    // are all text by definition of the suffix.
+    if base.ends_with("+json") || base.ends_with("+xml") || base.ends_with("+yaml") {
+        return true;
+    }
+    matches!(
+        base.as_str(),
+        "application/json"
+            | "application/xml"
+            | "application/javascript"
+            | "application/ecmascript"
+            | "application/x-javascript"
+            | "application/yaml"
+            | "application/x-yaml"
+            | "application/toml"
+            | "application/x-toml"
+            | "application/sql"
+            | "application/x-sh"
+            | "application/x-shellscript"
+            | "application/x-ndjson"
+    )
+}
+
+/// Does this MIME type name Markdown, so a preview should render it rather than
+/// print its source?
+///
+/// Separate from [`is_previewable_text`] because it answers a different
+/// question — every Markdown type is previewable text, but only these deserve
+/// the renderer. Kept beside it so the two cannot be answered from two
+/// different lists.
+#[must_use]
+pub fn is_markdown(mime: &str) -> bool {
+    let base = mime
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(base.as_str(), "text/markdown" | "text/x-markdown")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_families_are_previewable() {
+        for mime in [
+            "text/plain",
+            "text/markdown",
+            "text/csv",
+            "TEXT/PLAIN; charset=utf-8",
+            "application/json",
+            "application/vnd.api+json",
+            "application/x-yaml",
+            "text/x-rust",
+        ] {
+            assert!(is_previewable_text(mime), "{mime} should be previewable");
+        }
+    }
+
+    #[test]
+    fn binaries_are_not_previewable() {
+        for mime in [
+            "image/png",
+            "application/pdf",
+            "application/zip",
+            "application/octet-stream",
+            "video/mp4",
+            "font/woff2",
+            "",
+        ] {
+            assert!(!is_previewable_text(mime), "{mime} should not be");
+        }
+    }
+
+    /// SVG matches `+xml` but is served as an image everywhere else in the
+    /// product; offering its source instead of the picture would be a worse
+    /// answer to the same click.
+    #[test]
+    fn svg_is_an_image_not_a_text_file() {
+        assert!(!is_previewable_text("image/svg+xml"));
+        assert!(!is_previewable_text("IMAGE/SVG+XML; charset=utf-8"));
+    }
+
+    #[test]
+    fn only_markdown_types_ask_for_the_renderer() {
+        assert!(is_markdown("text/markdown"));
+        assert!(is_markdown("text/markdown; charset=utf-8"));
+        assert!(is_markdown("text/x-markdown"));
+        assert!(!is_markdown("text/plain"));
+        assert!(!is_markdown("text/html"));
+        // Anything the renderer is offered must first have been readable text.
+        assert!(is_previewable_text("text/markdown"));
+    }
+}

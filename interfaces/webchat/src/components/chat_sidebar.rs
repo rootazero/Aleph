@@ -245,7 +245,7 @@ pub(crate) async fn hydrate_session_history(
             // clear the live-only badge + active-iteration marker that
             // replay set.
             if let Some(ws) = workspace {
-                ws.unseen_activity.set(0);
+                ws.unseen_artifacts.set(0);
             }
 
             // Re-project the gauge from the persisted occupancy. This is the

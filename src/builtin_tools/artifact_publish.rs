@@ -174,17 +174,7 @@ impl AlephTool for ArtifactPublishTool {
         publish_artifact_ping(&session_key);
 
         Ok(ArtifactPublishOutput {
-            // Says only what this side can know. Whether the browser actually
-            // opened the tab is the Panel's business and it can fail there —
-            // a popup blocker returns null and the pane falls back to a
-            // one-click banner. Claiming "it is open" would have the model
-            // report that to the user as fact.
-            published: format!(
-                "Published \"{title}\" ({}). It is pinned at the top of the user's artifacts pane \
-                 and opens in a browser tab — refer to it in your reply, do not repeat its \
-                 contents.",
-                human_size(record.size)
-            ),
+            published: published_line(title, record.size, &turn.channel_id),
             artifact_id: record.id,
             filename: record.filename,
             size: record.size,
@@ -230,6 +220,42 @@ async fn resolve_figures(
 /// One line of provenance under the title.
 fn provenance_line() -> String {
     format!("Aleph · {}", chrono::Local::now().format("%Y-%m-%d %H:%M"))
+}
+
+/// What to tell the model just happened — which depends on where the user is.
+///
+/// # Why this branches
+///
+/// The pinned-and-opens-in-a-browser behaviour belongs to the **Panel**. On a
+/// channel turn (Telegram, Slack, email, a bot) there is no pane and no tab:
+/// the user is reading a chat message on a phone. A flat claim that the
+/// document "is pinned at the top of the user's artifacts pane and opens in a
+/// browser tab" is then simply false, and the model — reasonably trusting its
+/// own tool's result — relays it as fact. That is the same failure already
+/// fixed once for the blocked-pop-up case: this line may only assert what this
+/// side actually knows.
+///
+/// It also changes what the model should *do*. With the document on screen,
+/// repeating its contents in the reply is noise. With the user on a channel
+/// that cannot show it, a reply that says only "published!" delivers nothing —
+/// so there the instruction inverts, and the model is told to carry the
+/// substance in the message itself.
+fn published_line(title: &str, size: u64, channel_id: &str) -> String {
+    let size = human_size(size);
+    if channel_id.is_empty() {
+        format!(
+            "Published \"{title}\" ({size}). It is pinned at the top of the user's artifacts pane, \
+             and the Panel opens a newly published document in a browser tab — refer to it in your \
+             reply, do not repeat its contents."
+        )
+    } else {
+        format!(
+            "Published \"{title}\" ({size}) and stored it with this session. This turn came from \
+             the \"{channel_id}\" channel, which has no artifacts pane and no browser tab, so the \
+             user has NOT seen it — do not tell them it opened. Summarise the substance in your \
+             reply so the message stands on its own."
+        )
+    }
 }
 
 /// Derive a filename from the title.
@@ -374,6 +400,41 @@ mod tests {
         assert_eq!(figures.len(), MAX_FIGURES);
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].contains("limit"), "{:?}", skipped);
+    }
+
+    /// The Panel is the only surface that pins and auto-opens. Saying so on a
+    /// channel turn hands the model a falsehood it will pass straight on.
+    #[test]
+    fn the_published_line_does_not_promise_a_pane_the_user_has_not_got() {
+        let panel = published_line("Q3", 2048, "");
+        assert!(panel.contains("pinned at the top"), "{panel}");
+        assert!(panel.contains("do not repeat its contents"), "{panel}");
+
+        // The assertions name the *claim*, not the words: the channel line
+        // mentions the pane and the tab precisely to say the user has neither,
+        // so a substring check would fail on the sentence that fixes the bug.
+        let channel = published_line("Q3", 2048, "telegram");
+        assert!(
+            !channel.contains("pinned at the top"),
+            "promised a pane on a channel turn: {channel}"
+        );
+        assert!(
+            channel.contains("has NOT seen it"),
+            "did not say the user cannot see it: {channel}"
+        );
+        assert!(channel.contains("telegram"), "{channel}");
+        // And the instruction inverts: with nothing on screen, a reply that
+        // only announces the publish delivers nothing.
+        assert!(channel.contains("Summarise the substance"), "{channel}");
+    }
+
+    #[test]
+    fn the_published_line_always_names_the_document_and_its_size() {
+        for channel in ["", "slack"] {
+            let line = published_line("Q3 review", 2048, channel);
+            assert!(line.contains("Q3 review"), "{line}");
+            assert!(line.contains("2.0 KB"), "{line}");
+        }
     }
 
     #[tokio::test]
