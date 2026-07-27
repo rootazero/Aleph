@@ -148,8 +148,7 @@ mod tests {
                 _max_iterations_override: Option<u32>,
                 _transient_context: Option<String>,
                 _think_level: Option<crate::agents::thinking::ThinkLevel>,
-                _exec_tier: Option<crate::config::types::policies::ExecTier>,
-                _session_mode: Option<crate::config::types::policies::SessionMode>,
+                _envelope: crate::thinker::TurnEnvelope,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

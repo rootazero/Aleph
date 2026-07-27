@@ -343,26 +343,10 @@ impl SecurityContext {
             notes.push("Network Access: Disabled".to_string());
         }
 
-        // Elevated policy note
-        match &self.elevated_policy {
-            ElevatedPolicy::Off => {
-                notes.push("Elevated Operations: Disabled (exec, bash not available)".to_string());
-            }
-            ElevatedPolicy::Ask => {
-                notes.push(
-                    "Elevated Operations: Require user approval before execution".to_string(),
-                );
-            }
-            ElevatedPolicy::AllowList(list) => {
-                notes.push(format!(
-                    "Elevated Operations: Limited to allowlist ({} entries)",
-                    list.len()
-                ));
-            }
-            ElevatedPolicy::Full => {
-                // No note needed for full access
-            }
-        }
+        // NOTE: the elevated-policy note is deliberately NOT here — see
+        // `elevated_policy_note`. It describes the same thing as the resolved
+        // `ExecTier` (does a mutating call pause for the human?) and only one of
+        // the two may speak per prompt.
 
         // Denied tools note (sorted for deterministic output)
         if !self.denied_tools.is_empty() {
@@ -372,6 +356,39 @@ impl SecurityContext {
         }
 
         notes
+    }
+
+    /// The paradigm-derived approval posture, as a prompt bullet — or `None` when
+    /// the policy imposes nothing worth saying (`Full`).
+    ///
+    /// Split out of [`Self::security_notes`] because it is a **second voice on the
+    /// same question** as the resolved [`ExecTier`](crate::config::types::policies::ExecTier)
+    /// that `SecurityLayer` renders as `Approval mode:`. They disagreed in the
+    /// default install: a Messaging paradigm derives `ElevatedPolicy::Ask`, so a
+    /// Telegram turn at `exec_tier = auto` was told both "Approval mode: auto —
+    /// routine tool calls run without interruption" *and* "Elevated Operations:
+    /// Require user approval before execution", in one bullet list, three lines
+    /// apart. Only the tier is enforced (`src/tools/scoped/`), and the unenforced
+    /// line came second — winning on recency.
+    ///
+    /// `SecurityLayer` therefore renders this only when no tier was resolved, so
+    /// the prompt always carries exactly one approval regime, and it is the
+    /// enforced one.
+    #[must_use]
+    pub fn elevated_policy_note(&self) -> Option<String> {
+        match &self.elevated_policy {
+            ElevatedPolicy::Off => {
+                Some("Elevated Operations: Disabled (exec, bash not available)".to_string())
+            }
+            ElevatedPolicy::Ask => {
+                Some("Elevated Operations: Require user approval before execution".to_string())
+            }
+            ElevatedPolicy::AllowList(list) => Some(format!(
+                "Elevated Operations: Limited to allowlist ({} entries)",
+                list.len()
+            )),
+            ElevatedPolicy::Full => None,
+        }
     }
 }
 
@@ -561,10 +578,13 @@ mod tests {
         // Should mention network disabled
         assert!(notes.iter().any(|n| n.contains("Network Access: Disabled")));
 
-        // Should mention elevated operations disabled
-        assert!(notes
-            .iter()
-            .any(|n| n.contains("Elevated Operations: Disabled")));
+        // The elevated-policy posture is NOT in `security_notes`: it answers the
+        // same question as the enforced `ExecTier`, so it lives in its own
+        // accessor and `SecurityLayer` renders it only when no tier was resolved.
+        assert!(!notes.iter().any(|n| n.contains("Elevated Operations")));
+        assert!(ctx
+            .elevated_policy_note()
+            .is_some_and(|n| n.contains("Elevated Operations: Disabled")));
 
         // Should mention denied tools
         assert!(notes.iter().any(|n| n.contains("Denied Tools")));
@@ -678,10 +698,15 @@ mod tests {
         let ctx = SecurityContext::for_paradigm(InteractionParadigm::Messaging);
         let notes = ctx.security_notes();
         assert!(
-            notes
-                .iter()
-                .any(|n| n.contains("Elevated Operations: Require user approval")),
-            "messaging paradigm must surface approval-required posture, got: {notes:?}"
+            ctx.elevated_policy_note()
+                .is_some_and(|n| n.contains("Elevated Operations: Require user approval")),
+            "messaging paradigm must surface approval-required posture"
+        );
+        // …but not inside `security_notes`, where it would render unconditionally
+        // and contradict the enforced `Approval mode:` line.
+        assert!(
+            !notes.iter().any(|n| n.contains("Elevated Operations")),
+            "elevated posture must not ride security_notes, got: {notes:?}"
         );
         assert!(
             notes.iter().any(|n| n.contains("Standard")),

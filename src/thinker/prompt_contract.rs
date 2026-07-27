@@ -51,10 +51,6 @@ const CONDITIONALLY_SILENT: &[(&str, &str)] = &[
         "runtime_capabilities",
         "detected Python / Node / FFmpeg runtimes",
     ),
-    (
-        "runtime_context",
-        "RuntimeContext::collect on the resolved context",
-    ),
     ("tool_runtime_state", "a tool-health probe result"),
     ("agent_catalog", "at least one switchable agent registered"),
     ("provider_guidance", "a model_behaviors/{family}.md delta"),
@@ -95,11 +91,66 @@ const PARADIGMS: &[InteractionParadigm] = &[
 ];
 
 fn resolve(paradigm: InteractionParadigm) -> ResolvedContext {
-    ContextAggregator::resolve(
+    let mut ctx = ContextAggregator::resolve(
         &InteractionManifest::new(paradigm),
         &SecurityContext::for_paradigm(paradigm),
         &[],
-    )
+    );
+    // The four fields below are present on EVERY gateway turn, so a guard that
+    // leaves them unset is not measuring the always-on prompt. `runtime_context`
+    // was even excused in `CONDITIONALLY_SILENT` — and that excuse is exactly how
+    // the `EnvironmentLayer` / `RuntimeContextLayer` OS+cwd duplication survived
+    // unmeasured, alongside `Approval mode:` (206 B), `Usage mode:` (353 B) and
+    // the sandbox bullets: an arbitrarily long sentence could be added to any of
+    // them with both the byte ratchet and the duplicate-sentence guard green.
+    //
+    // The rule this encodes: **present on every production turn ⇒ must be
+    // measured; genuinely conditional ⇒ may go in `CONDITIONALLY_SILENT`.**
+    //
+    // All four use FIXED stand-ins rather than live collection, so the ceiling is
+    // machine-independent — a developer's long `cwd`, hostname, or workspace path
+    // must not move the measured number.
+    ctx.runtime_context = Some(fixed_runtime_context());
+    ctx.approval_tier = Some(crate::config::types::policies::ExecTier::default());
+    ctx.session_mode = Some(crate::config::types::policies::SessionMode::default());
+    ctx.sandbox_summary = Some(fixed_sandbox_summary());
+    ctx
+}
+
+/// Sandbox posture frozen at representative widths, for the same
+/// machine-independence reason as [`fixed_runtime_context`].
+fn fixed_sandbox_summary() -> crate::sandbox::SandboxSummary {
+    crate::sandbox::SandboxSummary {
+        // Deliberately names a DIFFERENT os than `fixed_runtime_context().os`:
+        // `no_environment_fact_is_stated_twice` matches on the fact's value, and a
+        // `linux/bwrap` backend would collide with `os = "linux"` as a substring —
+        // a false positive about a genuinely different fact.
+        backend: "macos/seatbelt",
+        policy_tier: crate::sandbox::PolicyTier::WorkspaceWrite.as_str(),
+        // Same width as `fixed_runtime_context().working_dir`, deliberately a
+        // DIFFERENT value. In production the two usually coincide, but they are
+        // different facts — "where you may write" vs "where you are" — and the
+        // guard matches on value, so equal strings would read as a duplicate.
+        writable_roots: vec![std::path::PathBuf::from("/home/u/projects/demo-wsp")],
+        network: crate::sandbox::NetworkState::AllowAll,
+        max_memory_mb: Some(512),
+    }
+}
+
+/// Machine facts frozen at representative widths, so `scaffold_bytes_ratchet`
+/// measures the layer set rather than the machine it runs on.
+fn fixed_runtime_context() -> crate::thinker::runtime_context::RuntimeContext {
+    crate::thinker::runtime_context::RuntimeContext {
+        os: "linux".to_string(),
+        arch: "x86_64".to_string(),
+        shell: "bash".to_string(),
+        working_dir: std::path::PathBuf::from("/home/u/.aleph/workspaces/main"),
+        repo_root: None,
+        current_model: "anthropic".to_string(),
+        hostname: "aleph-host".to_string(),
+        current_time: "2026-07-26 12:00".to_string(),
+        timezone: "UTC".to_string(),
+    }
 }
 
 /// The input the main loop builds, minus per-session content — the same shape
@@ -181,7 +232,25 @@ fn reachable_layers() {
 ///   3. Would a stronger model still need it next quarter? If not it is a cage,
 ///      and cages get worse as models improve.
 ///
-/// History: 5,140 B measured 2026-07-26 — the **worst paradigm**, WebRich
+/// History: **5,913 B measured 2026-07-26 (§2.3 envelope round, via this very test with the ceiling temporarily set to 1)** — worst
+/// paradigm still WebRich. The jump from 5,140 is **not new prompt content**: it
+/// is the same bytes production always sent, now finally inside the ratchet's
+/// field of view. `production_shaped` left `runtime_context`, `approval_tier`,
+/// `session_mode` and `sandbox_summary` unset — all four are set on every gateway
+/// turn — so `RuntimeContextLayer` in full, `Approval mode:` (206 B),
+/// `Usage mode:` (353 B) and the sandbox bullets were unmeasured, and an
+/// arbitrarily long sentence could be added to any of them with this test green.
+/// The three answers for the raise:
+///   1. **Runtime fact, not teaching.** Every added byte is something the model
+///      cannot know: which directory it is in, which shell it will get, whether a
+///      mutating call pauses for a human, which tool families are deferred.
+///   2. **No single tool owns them.** They are cross-tool operating constraints —
+///      exactly what a system prompt is for; a per-tool `DESCRIPTION` cannot state
+///      "this whole session is in Ask mode".
+///   3. **A stronger model still needs them.** They are environment state, not
+///      scaffolding for weak reasoning; a better model uses them better.
+/// The ceiling is now honest, so the next real growth is catchable. Prior entry:
+/// 5,140 B measured 2026-07-26 — the **worst paradigm**, WebRich
 /// (`aleph-server prompt-size --path cached --paradigm webrich`); Background,
 /// the daemon default, is 4,904 B. The ceiling is the max rather than one
 /// chosen paradigm because no paradigm dominates: Background alone gets
@@ -193,7 +262,7 @@ fn reachable_layers() {
 /// `special_actions` 1,234 → 313 and `memory_protocol` 2,938 → 1,187, both by
 /// moving per-tool how-to into the tool `DESCRIPTION`s that already stated it,
 /// less 75 B for the parallel-dispatch fact rescued into `role`.
-const SCAFFOLD_CEILING_BYTES: usize = 5_140;
+const SCAFFOLD_CEILING_BYTES: usize = 5_913;
 
 /// No paradigm's fixed scaffold may grow past the ceiling.
 #[test]
@@ -263,4 +332,52 @@ fn no_sentence_is_stated_twice() {
         "the same sentence is emitted by two layers — pick one home:\n{}",
         dupes.join("\n")
     );
+}
+
+/// No environment *fact* may be stated by two layers.
+///
+/// [`no_sentence_is_stated_twice`] cannot catch this class: it compares whole
+/// normalized sentences, so the same fact rendered in two different shapes —
+/// `- **OS**: linux` in `environment` and `os=linux` in `runtime_context` — slips
+/// through as two distinct "sentences". That is precisely how the environment
+/// envelope came to state OS, the working directory, and the date twice per
+/// request, with the per-run-varying `cwd` copy sitting in the *cacheable* prefix.
+///
+/// This guard asserts on the fact's **value**, which is shape-independent, and it
+/// is the regression test for the §2.3 two-zone split: `environment` @300 (Stable)
+/// owns the process-invariant half, `runtime_context` @1720 (Dynamic) owns the
+/// per-run half, and neither repeats the other.
+#[test]
+fn no_environment_fact_is_stated_twice() {
+    let pipeline = PromptPipeline::default_layers();
+    let config = PromptConfig::default();
+    let rt = fixed_runtime_context();
+    let context = resolve(InteractionParadigm::WebRich);
+    let input = production_shaped(&config, &context);
+
+    // Distinctive values only: a fact whose value is a common substring (e.g. a
+    // one-word arch on some hosts) would produce coincidental hits.
+    let facts: [(&str, &str); 6] = [
+        ("os", rt.os.as_str()),
+        ("arch", rt.arch.as_str()),
+        ("shell", rt.shell.as_str()),
+        ("hostname", rt.hostname.as_str()),
+        ("working_dir", "/home/u/.aleph/workspaces/main"),
+        ("time", rt.current_time.as_str()),
+    ];
+
+    for (fact, value) in facts {
+        let stating: Vec<&'static str> = pipeline
+            .layer_sections(AssemblyPath::Cached, &input, PromptMode::Full)
+            .into_iter()
+            .filter(|(_, section)| section.contains(value))
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            stating.len() <= 1,
+            "environment fact {fact} ({value:?}) is stated by {stating:?} — exactly one \
+             layer must own it. Stable facts belong in `environment`, per-run facts in \
+             `runtime_context`; see RuntimeContext's module docs for the split."
+        );
+    }
 }

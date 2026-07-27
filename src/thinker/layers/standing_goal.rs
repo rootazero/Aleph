@@ -45,7 +45,10 @@ impl PromptLayer for StandingGoalLayer {
             return;
         }
         output.push_str("<standing_goal>\n");
-        output.push_str(goal);
+        // Escaped at the seam: the objective is the user's own `/goal` text, so an
+        // unescaped closing tag in it would break out of this element and forge
+        // top-level prompt sections. Single source: `xml_util`.
+        output.push_str(&crate::thinker::xml_util::escape_xml(goal));
         output.push_str("\n</standing_goal>\n\n");
     }
 }

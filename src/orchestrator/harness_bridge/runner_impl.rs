@@ -79,8 +79,7 @@ impl HarnessRunner for AgentHarnessRunner {
         max_iterations_override: Option<u32>,
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
-        exec_tier: Option<crate::config::types::policies::ExecTier>,
-        session_mode: Option<crate::config::types::policies::SessionMode>,
+        envelope: crate::thinker::TurnEnvelope,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -368,8 +367,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 workspace_override.as_deref(),
                 routing_text,
                 has_session_summaries,
-                exec_tier,
-                session_mode,
+                &envelope,
             )
             .await
         {
@@ -1015,11 +1013,10 @@ impl HarnessRunner for AgentHarnessRunner {
                     // Static overhead estimate: no real history, so no session
                     // summaries — keeps the cached estimate stable.
                     false,
-                    // No resolved tier on the estimate path — an approval line
-                    // here would pollute the cached per-(agent, model) overhead.
-                    None,
-                    // Same for the usage-mode line.
-                    None,
+                    // Empty envelope on the estimate path: an approval / usage-mode
+                    // line or a run-specific cwd here would pollute the cached
+                    // per-(agent, model) overhead with another run's facts.
+                    &crate::thinker::TurnEnvelope::none(),
                 )
                 .await
                 .map(|(s, _parts, _recall)| s)

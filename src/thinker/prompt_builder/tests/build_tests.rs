@@ -139,11 +139,20 @@ fn phase4_with_runtime_context_populated_emits_runtime_environment_on_basic_path
         prompt.contains("## Runtime Environment"),
         "RuntimeContextLayer must emit on Basic path when runtime_context is populated"
     );
-    assert!(prompt.contains("arch=aarch64"));
-    assert!(prompt.contains("shell=fish"));
+    // Per-run / per-hour facts ride the Dynamic runtime line…
+    assert!(prompt.contains("cwd=/srv/aleph"));
     assert!(prompt.contains("model=test-provider"));
-    assert!(prompt.contains("host=ci-runner"));
     assert!(prompt.contains("(UTC)"));
+    // …while the process-invariant ones are stated ONCE, by the Stable
+    // `## Environment` section, in its Markdown-bullet shape.
+    assert!(prompt.contains("- **OS**: linux (aarch64)"), "{prompt}");
+    assert!(prompt.contains("- **Shell**: fish"), "{prompt}");
+    assert!(prompt.contains("- **Host**: ci-runner"), "{prompt}");
+    // Neither half may restate the other's facts (R9).
+    assert!(!prompt.contains("os=linux"), "{prompt}");
+    assert!(!prompt.contains("arch=aarch64"), "{prompt}");
+    assert!(!prompt.contains("shell=fish"), "{prompt}");
+    assert!(!prompt.contains("host=ci-runner"), "{prompt}");
 }
 
 #[test]
@@ -302,10 +311,13 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
 
     let prompt = builder.with_resolved_context(ctx).build_system_prompt(&[]);
 
-    // Runtime context should be present
+    // Runtime context should be present. `os=` moved to the Stable
+    // `## Environment` bullet (`- **OS**: linux (x86_64)`); the Dynamic line owns
+    // the per-run facts.
     assert!(prompt.contains("## Runtime Environment"));
-    assert!(prompt.contains("os=linux"));
+    assert!(prompt.contains("cwd=/home/user"));
     assert!(prompt.contains("model=gpt-4"));
+    assert!(prompt.contains("- **OS**: linux (x86_64)"));
 
     // Runtime context is a dynamic layer (priority 1710) so it appears
     // after stable layers like environment (priority 300).
@@ -382,7 +394,13 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         prompt.contains("## Runtime Environment"),
         "Missing RuntimeContext section"
     );
-    assert!(prompt.contains("os=macOS 15.3"), "Missing OS info");
+    // OS is stated once, by the Stable `## Environment` bullet — not by the
+    // Dynamic runtime line, which owns only per-run / per-hour facts.
+    assert!(
+        prompt.contains("- **OS**: macOS 15.3"),
+        "Missing OS info: {prompt}"
+    );
+    assert!(!prompt.contains("os=macOS 15.3"), "OS stated twice");
     assert!(
         prompt.contains("model=claude-opus-4-6"),
         "Missing model info"
@@ -531,9 +549,10 @@ fn test_interactive_prompt_minimal_token_overhead() {
         "RuntimeContext should be present in WebRich mode"
     );
     assert!(
-        prompt.contains("os=linux"),
-        "Missing OS info in WebRich mode"
+        prompt.contains("- **OS**: linux"),
+        "Missing OS info in WebRich mode: {prompt}"
     );
+    assert!(!prompt.contains("os=linux"), "OS stated twice");
     assert!(
         prompt.contains("model=gpt-4"),
         "Missing model info in WebRich mode"

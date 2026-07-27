@@ -50,7 +50,10 @@ impl PromptLayer for GraphTopologyLayer {
             return;
         }
         output.push_str("<loop_graph_context>\n");
-        output.push_str(topology);
+        // Escaped at the seam: node labels / anchors are user-authored, so an
+        // unescaped closing tag in one would break out of this element and forge
+        // top-level prompt sections. Single source: `xml_util`.
+        output.push_str(&crate::thinker::xml_util::escape_xml(topology));
         output.push_str("</loop_graph_context>\n\n");
     }
 }

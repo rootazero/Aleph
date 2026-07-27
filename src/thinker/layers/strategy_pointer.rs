@@ -55,7 +55,10 @@ impl PromptLayer for StrategyPointerLayer {
             return;
         }
         output.push_str("<strategy_reminder>\n");
-        output.push_str(guardrails);
+        // Escaped at the seam: guardrails are authored from user input, so an
+        // unescaped closing tag would break out of this element and forge
+        // top-level prompt sections. Single source: `xml_util`.
+        output.push_str(&crate::thinker::xml_util::escape_xml(guardrails));
         output.push_str("\n</strategy_reminder>\n\n");
     }
 }

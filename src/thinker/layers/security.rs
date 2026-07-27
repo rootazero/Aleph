@@ -32,15 +32,35 @@ impl PromptLayer for SecurityLayer {
         let disabled_tools = &ctx.disabled_tools;
         let security_notes = &ctx.environment_contract.security_notes;
         let sandbox_summary = ctx.sandbox_summary.as_ref();
-        let approval_tier = ctx.approval_tier;
-        let session_mode = ctx.session_mode;
 
-        // Only add section if there's something to report
+        // The paradigm-derived approval posture yields to the resolved `ExecTier`
+        // whenever one exists: both answer "does a mutating call pause for the
+        // human?", only the tier is enforced, and for a Messaging turn at
+        // `exec_tier = auto` they flatly contradicted each other three bullets
+        // apart. `OperatingEnvelopeLayer` @1758 states the tier.
+        let elevated_note = ctx
+            .approval_tier
+            .is_none()
+            .then_some(ctx.environment_contract.elevated_policy_note.as_deref())
+            .flatten();
+
+        // Only add the section if something below can actually render. The gate
+        // used to admit ANY non-empty `disabled_tools`, including the
+        // `UnsupportedByChannel` / `Unhealthy` reasons that have no render arm —
+        // which would emit a bare header with no body.
+        let blocked_by_policy: Vec<_> = disabled_tools
+            .iter()
+            .filter(|d| matches!(d.reason, DisableReason::BlockedByPolicy { .. }))
+            .collect();
+        let requires_approval: Vec<_> = disabled_tools
+            .iter()
+            .filter(|d| matches!(d.reason, DisableReason::RequiresApproval { .. }))
+            .collect();
         if security_notes.is_empty()
-            && disabled_tools.is_empty()
+            && blocked_by_policy.is_empty()
+            && requires_approval.is_empty()
             && sandbox_summary.is_none()
-            && approval_tier.is_none()
-            && session_mode.is_none()
+            && elevated_note.is_none()
         {
             return;
         }
@@ -58,39 +78,19 @@ impl PromptLayer for SecurityLayer {
             output.push('\n');
         }
 
-        // Approval regime (codex `<approval_policy>` parity): the complement of
-        // the sandbox posture above — sandbox says what the agent may touch,
-        // this says whether a mutating touch pauses for the human. The copy is a
-        // constant owned by `ExecTier` (single source with the rule it
-        // describes), so it needs no prompt sanitization.
-        if let Some(tier) = approval_tier {
-            output.push_str(&format!("- {}\n\n", tier.approval_prompt_line()));
-        }
-
-        // Usage-mode register (chat / work / code): the presentation half of
-        // the envelope — names the partition the tool surface was built with,
-        // so the model knows which families are deferred behind `tool_search`
-        // instead of discovering absences by failed calls. Copy is a constant
-        // owned by `SessionMode` (single source with the partition tables), so
-        // it needs no prompt sanitization.
-        if let Some(mode) = session_mode {
-            output.push_str(&format!("- {}\n\n", mode.prompt_line()));
-        }
-
         // Security notes
         for note in security_notes {
             let note = sanitize_for_prompt(note, SanitizeLevel::Light);
             output.push_str(&format!("- {note}\n"));
         }
-        if !security_notes.is_empty() {
+        // Fallback approval posture, only when no `ExecTier` was resolved.
+        if let Some(note) = elevated_note {
+            let note = sanitize_for_prompt(note, SanitizeLevel::Light);
+            output.push_str(&format!("- {note}\n"));
+        }
+        if !security_notes.is_empty() || elevated_note.is_some() {
             output.push('\n');
         }
-
-        // Collect policy-blocked tools
-        let blocked_by_policy: Vec<_> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::BlockedByPolicy { .. }))
-            .collect();
 
         if !blocked_by_policy.is_empty() {
             output.push_str("**Disabled by Policy**:\n");
@@ -101,12 +101,6 @@ impl PromptLayer for SecurityLayer {
             }
             output.push('\n');
         }
-
-        // Collect approval-required tools
-        let requires_approval: Vec<_> = disabled_tools
-            .iter()
-            .filter(|d| matches!(d.reason, DisableReason::RequiresApproval { .. }))
-            .collect();
 
         if !requires_approval.is_empty() {
             output.push_str("**Requires User Approval**:\n");
@@ -202,9 +196,12 @@ mod tests {
         assert!(out.contains("512 MiB"));
     }
 
+    /// The volatile envelope knobs belong to `OperatingEnvelopeLayer` @1758
+    /// (Dynamic). This Stable layer must never restate them — that placement is
+    /// what invalidated a whole conversation's prompt cache on a pill flip.
     #[test]
-    fn renders_approval_tier_when_attached() {
-        use crate::config::types::policies::ExecTier;
+    fn never_renders_the_volatile_envelope_knobs() {
+        use crate::config::types::policies::{ExecTier, SessionMode};
         use crate::thinker::context::ContextAggregator;
         use crate::thinker::security_context::SecurityContext;
         use crate::thinker::InteractionManifest;
@@ -216,63 +213,6 @@ mod tests {
             &[],
         );
         ctx.approval_tier = Some(ExecTier::Ask);
-
-        let layer = SecurityLayer;
-        let config = PromptConfig::default();
-        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("## Security & Constraints"));
-        assert!(out.contains("Approval mode: ask"));
-    }
-
-    #[test]
-    fn approval_tier_alone_triggers_the_section() {
-        use crate::config::types::policies::ExecTier;
-        use crate::thinker::context::ContextAggregator;
-        use crate::thinker::security_context::SecurityContext;
-        use crate::thinker::InteractionManifest;
-        use crate::thinker::InteractionParadigm;
-
-        let mut ctx = ContextAggregator::resolve(
-            &InteractionManifest::new(InteractionParadigm::Background),
-            &SecurityContext::permissive(),
-            &[],
-        );
-        // Strip the permissive note and leave no sandbox / disabled tools, so
-        // the tier is the SOLE reason the section renders — the new guard arm.
-        ctx.environment_contract.security_notes.clear();
-        ctx.approval_tier = Some(ExecTier::Full);
-        assert!(ctx.sandbox_summary.is_none());
-        assert!(ctx.disabled_tools.is_empty());
-
-        let layer = SecurityLayer;
-        let config = PromptConfig::default();
-        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(out.contains("## Security & Constraints"));
-        assert!(out.contains("Approval mode: full"));
-    }
-
-    #[test]
-    fn renders_session_mode_line_when_attached() {
-        use crate::config::types::policies::SessionMode;
-        use crate::thinker::context::ContextAggregator;
-        use crate::thinker::security_context::SecurityContext;
-        use crate::thinker::InteractionManifest;
-        use crate::thinker::InteractionParadigm;
-
-        let mut ctx = ContextAggregator::resolve(
-            &InteractionManifest::new(InteractionParadigm::Background),
-            &SecurityContext::permissive(),
-            &[],
-        );
-        // Strip everything else so the mode is the sole trigger — pins the
-        // new guard arm alongside the approval-tier one.
-        ctx.environment_contract.security_notes.clear();
         ctx.session_mode = Some(SessionMode::Code);
 
         let layer = SecurityLayer;
@@ -281,40 +221,87 @@ mod tests {
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        assert!(out.contains("## Security & Constraints"));
-        assert!(out.contains("Usage mode: code"));
-
-        // An unset mode (internal / subagent dispatch) leaves the line absent.
-        ctx.session_mode = None;
-        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
-        assert!(!out.contains("Usage mode:"));
+        assert!(!out.contains("Approval mode"), "{out}");
+        assert!(!out.contains("Usage mode"), "{out}");
     }
 
+    /// One approval voice, and it is the enforced one: the paradigm-derived
+    /// `ElevatedPolicy` note yields whenever a real `ExecTier` was resolved.
+    /// Regression for the Messaging + `exec_tier = auto` contradiction, where the
+    /// prompt carried both "Approval mode: auto — routine tool calls run without
+    /// interruption" and "Elevated Operations: Require user approval".
     #[test]
-    fn no_approval_tier_leaves_the_line_absent() {
-        // A context that never set `approval_tier` (internal / subagent
-        // dispatch) must not emit an approval line — byte-identical to before.
+    fn elevated_policy_note_yields_to_a_resolved_tier() {
+        use crate::config::types::policies::ExecTier;
         use crate::thinker::context::ContextAggregator;
         use crate::thinker::security_context::SecurityContext;
         use crate::thinker::InteractionManifest;
         use crate::thinker::InteractionParadigm;
 
-        let ctx = ContextAggregator::resolve(
+        let layer = SecurityLayer;
+        let config = PromptConfig::default();
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Messaging),
+            &SecurityContext::for_paradigm(InteractionParadigm::Messaging),
+            &[],
+        );
+
+        // No tier resolved (internal / sub-agent dispatch) → the paradigm note is
+        // the only approval signal available, so it renders.
+        assert!(ctx.approval_tier.is_none());
+        let mut out = String::new();
+        layer.inject(
+            &mut out,
+            &LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx)),
+        );
+        assert!(
+            out.contains("Elevated Operations: Require user approval"),
+            "{out}"
+        );
+
+        // Tier resolved → the unenforced note must vanish.
+        ctx.approval_tier = Some(ExecTier::Auto);
+        let mut out = String::new();
+        layer.inject(
+            &mut out,
+            &LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx)),
+        );
+        assert!(!out.contains("Elevated Operations"), "{out}");
+        assert!(
+            out.contains("Security Level"),
+            "other notes must survive: {out}"
+        );
+    }
+
+    /// The section gate must agree with the body: a `disabled_tools` list holding
+    /// only reasons the body cannot render must not emit a bare header.
+    #[test]
+    fn unrenderable_disable_reasons_do_not_emit_a_bare_header() {
+        use crate::thinker::context::{ContextAggregator, DisableReason, DisabledTool};
+        use crate::thinker::security_context::SecurityContext;
+        use crate::thinker::InteractionManifest;
+        use crate::thinker::InteractionParadigm;
+
+        let mut ctx = ContextAggregator::resolve(
             &InteractionManifest::new(InteractionParadigm::Background),
             &SecurityContext::permissive(),
             &[],
         );
-        assert!(ctx.approval_tier.is_none());
+        ctx.environment_contract.security_notes.clear();
+        ctx.environment_contract.elevated_policy_note = None;
+        ctx.disabled_tools = vec![DisabledTool {
+            name: "canvas".to_string(),
+            reason: DisableReason::UnsupportedByChannel,
+        }];
 
         let layer = SecurityLayer;
         let config = PromptConfig::default();
-        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx));
         let mut out = String::new();
-        layer.inject(&mut out, &input);
-
-        assert!(!out.contains("Approval mode"));
+        layer.inject(
+            &mut out,
+            &LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(&ctx)),
+        );
+        assert!(out.is_empty(), "header with no renderable body: {out}");
     }
 
     #[test]

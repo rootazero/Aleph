@@ -133,6 +133,13 @@ pub struct EnvironmentContract {
     pub constraints: InteractionConstraints,
     /// Security notes to include in system prompt
     pub security_notes: Vec<String>,
+    /// The paradigm-derived approval posture, kept OUT of
+    /// [`Self::security_notes`] because it answers the same question as the
+    /// resolved [`ExecTier`](crate::config::types::policies::ExecTier). Rendered
+    /// by `SecurityLayer` only when [`ResolvedContext::approval_tier`] is absent,
+    /// so exactly one approval regime — the enforced one — reaches the model.
+    /// See [`SecurityContext::elevated_policy_note`].
+    pub elevated_policy_note: Option<String>,
 }
 
 /// What kind of voice context this turn is in.
@@ -174,6 +181,58 @@ impl VoiceContext {
     }
 }
 
+/// The per-turn operating envelope the gateway resolves and the prompt renders.
+///
+/// §2.3 "Context mode" had no named type: the three facts below were three loose
+/// `Option<…>` positional parameters threaded through `FlowRequest` →
+/// `HarnessRunner::run` → `build_system_prompt` → `resolve_prompt_context`. Two of
+/// them (`cwd` and the adjacent `workspace_override`) are the *same* Rust type, so
+/// the positional form let a caller swap them with no compiler complaint. Grouping
+/// them makes the concept locatable, removes two positional parameters from an
+/// already 15-argument trait method, and gives future envelope facts a home that
+/// does not grow the signature.
+///
+/// Every field is `Option`al with the same contract: `None` means "this dispatch
+/// path resolved no such fact", and the corresponding prompt line stays **absent**
+/// so internal / sub-agent / token-estimate prompts remain byte-identical (and
+/// therefore prompt-cache-stable) rather than rendering a guessed default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnEnvelope {
+    /// Active execution-permission tier (Ask / Auto / Full) — the approval half
+    /// of the envelope, rendered by `SecurityLayer` as `Approval mode:` and the
+    /// Aleph equivalent of codex's `<approval_policy>`. Carries the tier
+    /// *already resolved* by the gateway (request pill > session > global, after
+    /// the channel clamp) — the exact tier the tool gate will enforce — so the
+    /// prompt can never promise a regime the gate does not apply.
+    pub exec_tier: Option<crate::config::types::policies::ExecTier>,
+    /// Active session usage mode (chat / work / code) — the presentation half,
+    /// rendered by `SecurityLayer` as `Usage mode:`. Names the partition the
+    /// tool surface was built with so the model knows which families are
+    /// deferred behind `tool_search` instead of learning it from failed calls.
+    pub session_mode: Option<crate::config::types::policies::SessionMode>,
+    /// The run's **effective** working directory: the project override when the
+    /// user picked one, else the agent's `~/.aleph/workspaces/{id}`.
+    ///
+    /// This is the same value the gateway feeds the tool adapters as
+    /// `default_working_dir`, i.e. the directory a shell tool call actually
+    /// executes in. It anchors `RuntimeContext`'s `cwd=` / `repo=` / `git=`
+    /// segments. Before it was threaded, those three were derived from
+    /// `std::env::current_dir()` — the *daemon's* directory — so the prompt
+    /// advertised a path where no tool ran and, in project mode, reported the
+    /// daemon's git branch as the project's.
+    pub cwd: Option<std::path::PathBuf>,
+}
+
+impl TurnEnvelope {
+    /// Envelope for dispatch paths that resolve no per-turn facts (internal
+    /// tooling, sub-flows, token estimation). Named so a call site states the
+    /// intent instead of spelling three `None`s.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+}
+
 /// Resolved context after two-phase filtering
 ///
 /// This is the final output of the `ContextAggregator`, containing:
@@ -193,7 +252,7 @@ pub struct ResolvedContext {
     pub runtime_context: Option<super::runtime_context::RuntimeContext>,
     /// Aggregated per-tool runtime state fragments. Populated by the
     /// orchestrator before prompt assembly; rendered by
-    /// `ToolRuntimeStateLayer` (priority 502) as `<tool_runtime_state>`
+    /// `ToolRuntimeStateLayer` (priority 1703, Dynamic) as `<tool_runtime_state>`
     /// XML. Empty when no opt-in tools have anything to say.
     #[serde(skip, default)]
     pub runtime_state_blocks: Vec<crate::tools::runtime_state::RuntimeStateFragment>,
@@ -252,7 +311,8 @@ pub struct ResolvedContext {
     #[serde(skip, default)]
     pub voice: VoiceContext,
     /// Active execution-permission tier (Ask / Auto / Full), rendered by
-    /// `SecurityLayer` (priority 600) as the `Approval mode:` line. This is the
+    /// `OperatingEnvelopeLayer` (priority 1758, **Dynamic**) as the
+    /// `Approval mode:` line. This is the
     /// approval half of the operating envelope — the complement of
     /// [`Self::sandbox_summary`]'s filesystem/network half — and the Aleph
     /// equivalent of codex's `<approval_policy>`. Populated in the harness
@@ -260,11 +320,16 @@ pub struct ResolvedContext {
     /// (request pill > session > global, after the channel clamp — the exact
     /// tier the tool gate will enforce). `None` on internal / subagent dispatch
     /// that carries no resolved tier, keeping their prompt byte-identical.
+    ///
+    /// It lives in a **Dynamic** layer, not in `SecurityLayer` @600 (Stable),
+    /// because the user can flip the composer pill mid-conversation: a Stable-zone
+    /// byte change invalidates the whole conversation's prompt cache.
     #[serde(skip, default)]
     pub approval_tier: Option<crate::config::types::policies::ExecTier>,
 
     /// Active session usage mode (chat / work / code), rendered by
-    /// `SecurityLayer` beside the approval line as the `Usage mode:` line —
+    /// `OperatingEnvelopeLayer` (priority 1758, **Dynamic**) beside the approval
+    /// line as the `Usage mode:` line —
     /// the presentation half of the operating envelope: which register the
     /// session runs in and how its tool surface was partitioned
     /// (schema-resident vs deferred). Populated in the harness bridge from
@@ -373,6 +438,7 @@ impl ContextAggregator {
             active_capabilities,
             constraints: interaction.constraints.clone(),
             security_notes: security.security_notes(),
+            elevated_policy_note: security.elevated_policy_note(),
         }
     }
 }

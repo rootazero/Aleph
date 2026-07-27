@@ -334,6 +334,8 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 同轮还确认了一件事：**"这一层写得对不对"和"这一层根本会不会说话"是两个问题，而单层的单元测试只能回答前一个**——层的测试会精确构造出让它开口的输入，所以生产里没人喂的层照样全绿。故把两把尺**建进架构**（§8 主旨的自指应用）：`thinker::prompt_contract` 的 `reachable_layers`（每层必须在某个 paradigm 下开口，否则必须带理由进 `CONDITIONALLY_SILENT` 白名单）、`scaffold_bytes_ratchet`（实测棘轮，只减不增）、`no_sentence_is_stated_twice`（跨层重复句守卫）。本轮实测：Background **4,904 B / ~1,428 token**（此前 7,501 B），棘轮取五个 paradigm 的最大值 **5,140 B**（WebRich），层数 **40→35**。
 
+**第三课：尺子量的是它被喂到的东西（2026-07-26 §2.3 轮）**。上面这三把尺共用一个输入构造器 `production_shaped`，而它**没填**四个在生产里**每轮都在**的字段：`runtime_context` / `approval_tier` / `session_mode` / `sandbox_summary`。于是 `RuntimeContextLayer` 整层、`Approval mode:`（206 B）、`Usage mode:`（353 B）、sandbox 三行全在射程之外——**"实测棘轮"实测的是一个不存在的 prompt**，往 `ExecTier::approval_prompt_line` 里加任意长的句子都能一路绿灯。更糟的是 `runtime_context` 被写进了 `CONDITIONALLY_SILENT` 当**借口**（"需要 `RuntimeContext::collect`"），而生产路径 `resolve_prompt_context` 是**无条件**填的。因此立一条规则：**生产恒在的字段必须填进 `production_shaped`（用固定合成值，保持机器无关）；只有真正条件性缺席的才准进白名单。** 修正后 ceiling 由 5,140 抬到 **5,913 B**——这不是新增内容，是同一批一直在发的字节第一次进入视野（三问作答见 `SCAFFOLD_CEILING_BYTES` 的 doc）。同轮还发现第三把尺有一个**结构性盲区**：它比对整句，而同一事实的两种写法（`- **OS**: linux` 与 `os=linux`）永远不是同一"句"，所以 `EnvironmentLayer` / `RuntimeContextLayer` 之间的 OS+cwd 重复它抓不到——补 `no_environment_fact_is_stated_twice`，按**事实的值**判重。层数 **35→36**（`OperatingEnvelopeLayer` @1758，把每轮可变的审批档位/会话模式挪出可缓存前缀；总字节不变，只换缓存分区）。详见 [FEATURE_LOCATOR §2.3](FEATURE_LOCATOR.md#23-context-模式-context-mode--codex-风格)。
+
 ---
 
 ## 9. 参考文献

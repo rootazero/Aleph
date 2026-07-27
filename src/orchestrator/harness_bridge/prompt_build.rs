@@ -221,8 +221,7 @@ impl AgentHarnessRunner {
         workspace: Option<&std::path::Path>,
         routing_text: Option<String>,
         has_session_summaries: bool,
-        exec_tier: Option<crate::config::types::policies::ExecTier>,
-        session_mode: Option<crate::config::types::policies::SessionMode>,
+        envelope: &crate::thinker::TurnEnvelope,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -617,8 +616,7 @@ impl AgentHarnessRunner {
             provider,
             sandbox,
             self.tool_catalog.as_ref(),
-            exec_tier,
-            session_mode,
+            envelope,
         )
         .await;
         builder = builder.with_resolved_context(resolved_context);
@@ -712,8 +710,7 @@ async fn resolve_prompt_context(
     provider: &dyn AiProvider,
     sandbox: &dyn Sandbox,
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
-    exec_tier: Option<crate::config::types::policies::ExecTier>,
-    session_mode: Option<crate::config::types::policies::SessionMode>,
+    envelope: &crate::thinker::TurnEnvelope,
 ) -> crate::thinker::context::ResolvedContext {
     let default_manifest;
     let manifest_ref = match channel_manifest {
@@ -729,23 +726,30 @@ async fn resolve_prompt_context(
         crate::thinker::security_context::SecurityContext::for_paradigm(manifest_ref.paradigm);
     let mut resolved_context =
         crate::thinker::context::ContextAggregator::resolve(manifest_ref, &security_ctx, &[]);
-    // Phase 4 (F1): populate `runtime_context` so `RuntimeContextLayer`
-    // surfaces shell / arch / hostname / timezone / model. EnvironmentLayer
-    // emits OS/cwd in a Markdown list (Stable, priority 300);
-    // `RuntimeContext::to_prompt_section()` emits a pipe-separated
-    // single-line summary (Dynamic, priority 1720) — formats deliberately
-    // differ. We accept the minor OS/cwd overlap; the unique fields
-    // (arch, shell, repo_root, model, hostname, timezone, current_time)
-    // carry the value. Phase 5 (F3) populates `repo_root` via a
-    // `OnceLock`-cached `.git` walk-up — process-lifetime amortized,
-    // no `git` subprocess.
-    resolved_context.runtime_context = Some(
-        crate::thinker::runtime_context::RuntimeContext::collect(provider.name()),
-    );
+    // Populate `runtime_context` — the single source of the environment
+    // envelope's facts, split across the two prompt zones that own them:
+    // `EnvironmentLayer` (Stable @300) renders the process-invariant half
+    // (OS/arch, shell, host) and `RuntimeContextLayer` (Dynamic @1720) the
+    // per-run half (cwd, repo, git branch, model, local time). The two used to
+    // overlap on OS *and* cwd; the cwd copy in the Stable prefix was also wrong,
+    // reading the daemon's `current_dir()`.
+    //
+    // `envelope.cwd` is the run's EFFECTIVE workspace — the same path the gateway
+    // gives the tool adapters as `default_working_dir`, so the advertised `cwd=`
+    // is the directory a shell call actually lands in, and `repo=` / `git=`
+    // describe the project the model is working on rather than the daemon's own
+    // checkout. `repo_root` resolution is cached per directory (no `git`
+    // subprocess); the branch is re-read from `.git/HEAD` on every render so a
+    // mid-session `checkout` shows up next turn.
+    resolved_context.runtime_context =
+        Some(crate::thinker::runtime_context::RuntimeContext::collect_in(
+            provider.name(),
+            envelope.cwd.as_deref(),
+        ));
     // Populate runtime-state fragments from the tool catalog's
     // `ToolHealthCache`. Each currently-cached `Unhealthy` entry becomes
     // a `RuntimeStateFragment::unavailable(name, reason)` that
-    // `ToolRuntimeStateLayer` @502 renders into `<tool_runtime_state>`.
+    // `ToolRuntimeStateLayer` @1703 (Dynamic) renders into `<tool_runtime_state>`.
     // `None` tool_catalog (test / early boot) → empty vec → the
     // layer emits nothing.
     resolved_context.runtime_state_blocks = compute_runtime_state_blocks(tool_catalog);
@@ -814,12 +818,12 @@ async fn resolve_prompt_context(
     // precedence and the channel clamp applied. Threaded through here rather
     // than re-derived so the prompt shows the exact tier the tool gate enforces.
     // `None` on internal / subagent dispatch leaves the approval line absent.
-    resolved_context.approval_tier = exec_tier;
+    resolved_context.approval_tier = envelope.exec_tier;
     // Usage-mode register (chat / work / code): the turn's resolved session
     // mode, threaded through the same way as the tier so the prompt names the
     // exact partition the tool surface was built with. `None` on internal /
     // subagent dispatch leaves the mode line absent.
-    resolved_context.session_mode = session_mode;
+    resolved_context.session_mode = envelope.session_mode;
     resolved_context
 }
 

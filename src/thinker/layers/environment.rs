@@ -38,15 +38,29 @@ impl PromptLayer for EnvironmentLayer {
     fn inject(&self, output: &mut String, input: &LayerInput) {
         output.push_str("## Environment\n\n");
 
-        // Always-available baseline. Date-granular timestamp keeps the
-        // prompt prefix byte-stable within a UTC day for prefix-cache reuse.
-        output.push_str(&format!(
-            "- **Date (UTC)**: {}\n",
-            Utc::now().format("%Y-%m-%d")
-        ));
-        output.push_str(&format!("- **OS**: {}\n", std::env::consts::OS));
-        if let Ok(cwd) = std::env::current_dir() {
-            output.push_str(&format!("- **Working directory**: {}\n", cwd.display()));
+        // Machine facts come from the ONE place that owns them —
+        // `RuntimeContext` — so this Stable section and the Dynamic
+        // `## Runtime Environment` line can never state the same fact twice.
+        // This layer takes the process-invariant half (OS/arch, shell, host);
+        // cwd / repo / branch / model / time are per-run or per-hour and are
+        // rendered by `RuntimeContextLayer` on the far side of the prompt-cache
+        // breakpoint. The `working_dir` bullet that used to live here was doubly
+        // wrong: it re-stated a fact the runtime line already carried, and it read
+        // the *daemon's* `current_dir()` rather than the run's effective
+        // workspace — the directory shell tools actually execute in.
+        match input.context.and_then(|c| c.runtime_context.as_ref()) {
+            Some(rt) => output.push_str(&rt.to_stable_lines()),
+            None => {
+                // No `ResolvedContext` (bare `prompt-size`, unit tests): keep a
+                // minimal, allocation-free baseline so the model is never left
+                // without a date or platform. Date-granular keeps the prefix
+                // byte-stable within a UTC day for prefix-cache reuse.
+                output.push_str(&format!(
+                    "- **Date (UTC)**: {}\n",
+                    Utc::now().format("%Y-%m-%d")
+                ));
+                output.push_str(&format!("- **OS**: {}\n", std::env::consts::OS));
+            }
         }
         output.push('\n');
 

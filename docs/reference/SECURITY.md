@@ -280,6 +280,20 @@ two real layers documented above:
   (`config/types/policies/exec_tier.rs`) enforced at `src/tools/scoped/`, which
   raises the action-aware approval card via `src/sandbox/exec_approval/`.
 
+> **The prompt gets exactly one approval voice, and it is the enforced one.**
+> The tier the gate will apply is surfaced to the model as `Approval mode: …`
+> (`ExecTier::approval_prompt_line`, rendered by `OperatingEnvelopeLayer` @1758 —
+> **Dynamic**, because the tier is a per-turn pill; see
+> [FEATURE_LOCATOR §2.3](FEATURE_LOCATOR.md#23-context-模式-context-mode--codex-风格)).
+> `SecurityContext`'s paradigm-derived `ElevatedPolicy` note answers the **same
+> question** and is **not** enforced anywhere, so it was split out into
+> `SecurityContext::elevated_policy_note()` and now renders only when no tier was
+> resolved. Before that split, a Telegram turn at the default `exec_tier = auto`
+> was told both "Approval mode: auto — routine tool calls run without
+> interruption" and "Elevated Operations: Require user approval before
+> execution", three bullets apart, with the unenforced one last (recency wins).
+> If you add another approval-shaped sentence, delete one of these two first.
+
 `src/exec/` holds the supporting primitives these layers use — none of them
 enforce on their own:
 

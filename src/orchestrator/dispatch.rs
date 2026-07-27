@@ -454,22 +454,15 @@ pub struct FlowRequest {
     /// `None` = send no thinking directive, leaving each provider on its own
     /// default (the behaviour of every release before this field existed).
     pub think_level: Option<crate::agents::thinking::ThinkLevel>,
-    /// This turn's resolved execution-permission tier (Ask / Auto / Full),
-    /// already resolved by the gateway with request/session/global precedence
-    /// and the channel clamp applied. Forwarded into `HarnessRunner::run`, which
-    /// threads it into the `ResolvedContext` so `SecurityLayer` surfaces the
-    /// approval regime to the model (codex `<approval_policy>` parity). `None`
-    /// for internal / subagent dispatch that carries no resolved tier — their
-    /// prompt stays byte-identical.
-    pub exec_tier: Option<crate::config::types::policies::ExecTier>,
-    /// This turn's resolved session usage mode (chat / work / code), already
-    /// resolved by the gateway with request/session/global precedence. Third
-    /// twin of `think_level` / `exec_tier` above. Forwarded into
-    /// `HarnessRunner::run`, which threads it into the `ResolvedContext` so
-    /// `SecurityLayer` surfaces the mode's register to the model, beside the
-    /// approval line. `None` for internal / subagent dispatch — their prompt
-    /// stays byte-identical.
-    pub session_mode: Option<crate::config::types::policies::SessionMode>,
+    /// This turn's resolved operating envelope — approval tier, usage mode, and
+    /// the effective working directory — all already resolved by the gateway with
+    /// request/session/global precedence (and, for the tier, the channel clamp).
+    /// Forwarded into `HarnessRunner::run`, which threads it into the
+    /// `ResolvedContext` that `SecurityLayer` and `RuntimeContextLayer` render.
+    /// [`TurnEnvelope::none()`] for internal / subagent dispatch that resolves
+    /// none of the three — their prompt stays byte-identical. See
+    /// [`TurnEnvelope`] for the per-field contract.
+    pub envelope: crate::thinker::TurnEnvelope,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -571,14 +564,11 @@ pub trait HarnessRunner: Send + Sync {
         // Declared reasoning depth for this run. `None` = omit the thinking
         // directive entirely and leave the provider on its own default.
         think_level: Option<crate::agents::thinking::ThinkLevel>,
-        // This turn's resolved exec tier (Ask / Auto / Full). Surfaced to the
-        // model as the `Approval mode:` line. `None` = no tier resolved
-        // (internal / subagent dispatch), approval line stays absent.
-        exec_tier: Option<crate::config::types::policies::ExecTier>,
-        // This turn's resolved usage mode (chat / work / code). Surfaced to
-        // the model as the `Usage mode:` line beside the approval line.
-        // `None` = no mode resolved, line stays absent.
-        session_mode: Option<crate::config::types::policies::SessionMode>,
+        // This turn's resolved operating envelope: approval tier (`Approval
+        // mode:` line), usage mode (`Usage mode:` line), and the effective
+        // working directory that anchors the runtime `cwd=` / `repo=` / `git=`
+        // segments. `TurnEnvelope::none()` leaves all three lines absent.
+        envelope: crate::thinker::TurnEnvelope,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -831,8 +821,8 @@ impl Orchestrator {
         // rust-doctor-disable-next-line excessive-clone
         let transient_context = req.transient_context.clone();
         let think_level = req.think_level;
-        let exec_tier = req.exec_tier;
-        let session_mode = req.session_mode;
+        // rust-doctor-disable-next-line excessive-clone
+        let envelope = req.envelope.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -873,8 +863,7 @@ impl Orchestrator {
                         max_iterations_override,
                         transient_context,
                         think_level,
-                        exec_tier,
-                        session_mode,
+                        envelope,
                     ),
                 ),
             )

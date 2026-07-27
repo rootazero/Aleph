@@ -7,11 +7,12 @@ use super::layers::{
     AgentCatalogLayer, AgentRoleLayer, ChainContextLayer, CitationStandardsLayer,
     CuratedMemoryLayer, DoctorRepairHintLayer, EnvironmentLayer, ExecutionPlanLayer,
     ExtraFilesLayer, GraphTopologyLayer, GuidelinesLayer, IdentityFilesLayer, LanguageLayer,
-    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperationalGuidelinesLayer,
-    ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer, RoleLayer, RuntimeCapabilitiesLayer,
-    RuntimeContextLayer, SecurityLayer, SessionBudgetLayer, SessionContextGuideLayer,
-    SkillInstructionsLayer, SoulLayer, SpecialActionsLayer, StandingGoalLayer, StrategyLayer,
-    StrategyPointerLayer, TimerLoopLayer, ToolRuntimeStateLayer, VoiceModeLayer,
+    McpInstructionsLayer, MemoryProtocolLayer, MultiStepConductLayer, OperatingEnvelopeLayer,
+    OperationalGuidelinesLayer, ProfileLayer, ProtocolTokensLayer, ProviderGuidanceLayer,
+    RoleLayer, RuntimeCapabilitiesLayer, RuntimeContextLayer, SecurityLayer, SessionBudgetLayer,
+    SessionContextGuideLayer, SkillInstructionsLayer, SoulLayer, SpecialActionsLayer,
+    StandingGoalLayer, StrategyLayer, StrategyPointerLayer, TimerLoopLayer, ToolRuntimeStateLayer,
+    VoiceModeLayer,
 };
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
@@ -314,6 +315,7 @@ impl PromptPipeline {
             Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(StrategyPointerLayer),
+            Box::new(OperatingEnvelopeLayer),
             // SessionResumeLayer (@1760, Dynamic) was removed 2026-07-17: its
             // only input (`LayerInput::session_snapshot`) was never set outside
             // the layer's own unit test — the prior-session snapshot actually
@@ -493,7 +495,12 @@ mod tests {
         // → 35: ToolsLayer too — both writers force `native_tools_enabled =
         // true`, and the text-envelope parser that would have consumed its
         // prompt-injected tool listings was deleted 2026-05-10.
-        assert_eq!(pipeline.layer_count(), 35);
+        // → 36 (OperatingEnvelopeLayer @1758 Dynamic, 2026-07-26): the approval
+        // tier and usage mode moved OUT of `SecurityLayer` @600, which is Stable
+        // by default — so flipping a composer pill mid-conversation rewrote a byte
+        // in the cacheable prefix and invalidated the whole conversation's prompt
+        // cache. Net prompt bytes unchanged; only the cache zone differs.
+        assert_eq!(pipeline.layer_count(), 36);
     }
 
     #[test]
@@ -731,11 +738,15 @@ mod stability_tests {
         // topology; deterministic bytes (graph rows only, no clocks), so the
         // Dynamic classification is about content ownership, not volatility.
         assert!(dynamic_names.contains(&"graph_topology"));
+        // → 17: OperatingEnvelopeLayer (@1758) — the approval tier and usage mode
+        // are per-turn pills, so they must NOT sit in the Stable cacheable prefix
+        // where `SecurityLayer` @600 used to render them.
+        assert!(dynamic_names.contains(&"operating_envelope"));
         // Every name above is asserted individually; the count pins the set.
         assert_eq!(
             dynamic_names.len(),
-            16,
-            "Exactly 16 dynamic layers expected"
+            17,
+            "Exactly 17 dynamic layers expected"
         );
     }
 

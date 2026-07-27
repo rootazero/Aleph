@@ -1,21 +1,38 @@
-//! Runtime Context - Micro-environmental awareness for prompt injection
+//! Runtime Context — the single source of the environment envelope's *facts*.
 //!
-//! Collects lightweight runtime environment metadata (OS, arch, shell, working directory,
-//! current model, hostname) and formats it as a compact prompt section. This gives the
-//! LLM grounding in the physical execution environment without heavy dependencies.
+//! Collects lightweight runtime environment metadata (OS, arch, shell, working
+//! directory, repo/branch, current model, hostname, local time) and renders it
+//! in **two halves**, because the two halves have different cache lifetimes and
+//! must therefore live in different prompt zones:
+//!
+//! | half | contents | zone | why |
+//! |------|----------|------|-----|
+//! | [`to_stable_lines`](RuntimeContext::to_stable_lines) | OS + arch, shell, host | `EnvironmentLayer` @300, **Stable** (cacheable prefix) | process-invariant — a byte here is written once and read back at 0.1× for the rest of the conversation |
+//! | [`to_dynamic_line`](RuntimeContext::to_dynamic_line) | cwd, repo, git branch, model, local time | `RuntimeContextLayer` @1720, **Dynamic** | cwd varies per *run* (project mode), branch varies mid-session, time varies hourly — any of these in the Stable prefix re-keys the whole conversation's provider cache |
+//!
+//! Every fact is stated by exactly one of the two halves. They used to overlap:
+//! `EnvironmentLayer` printed its own `OS` / `Working directory` bullets from
+//! `std::env` while this struct's single-line summary printed `os=` / `cwd=`
+//! again — the same fact twice per request, with the per-run-varying one sitting
+//! in the *cacheable* zone (R9 / prompt-cache discipline). The overlap was
+//! invisible to `prompt_contract::no_sentence_is_stated_twice` because the two
+//! renderings never produced an identical sentence.
 //!
 //! # Usage
 //!
 //! ```rust,no_run
 //! use alephcore::thinker::runtime_context::RuntimeContext;
 //!
-//! let ctx = RuntimeContext::collect("claude-opus-4-6");
-//! let section = ctx.to_prompt_section();
-//! // => "## Runtime Environment\nos=macos | arch=aarch64 | shell=zsh | cwd=/workspace | model=claude-opus-4-6 | host=MacBook-Pro"
+//! // `cwd` is the run's EFFECTIVE working directory (project override, else the
+//! // agent workspace) — the directory the shell tool will actually execute in.
+//! let ctx = RuntimeContext::collect_in("claude-opus-4-6", Some("/work/proj".as_ref()));
+//! let stable = ctx.to_stable_lines(); // "- **OS**: macos (aarch64)\n- **Shell**: bash\n…"
+//! let live = ctx.to_dynamic_line();   // "## Runtime Environment\ncwd=/work/proj | …"
 //! ```
 
 use crate::sync_primitives::Mutex;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -29,9 +46,22 @@ pub struct RuntimeContext {
     pub os: String,
     /// CPU architecture, e.g. "aarch64", "x86_64"
     pub arch: String,
-    /// User's default shell, e.g. "zsh", "bash"
+    /// Interpreter a shell tool call actually runs under, e.g. "bash".
+    ///
+    /// This is the *agent's* shell, read from the exec tool that owns the fact
+    /// ([`shell_interpreter`](crate::builtin_tools::code_exec::shell_interpreter)) —
+    /// **not** the human operator's `$SHELL`. `$SHELL` describes a login shell the
+    /// agent never uses, and is unset on Windows, where it rendered the useless
+    /// `shell=unknown` while every `bash` / `code_exec` call still spawned bash.
     pub shell: String,
-    /// Current working directory
+    /// The run's **effective** working directory — the directory a shell tool
+    /// call executes in when the model supplies no `cwd`.
+    ///
+    /// Supplied by the caller via [`RuntimeContext::collect_in`], because only the
+    /// caller knows it: the gateway resolves it as `workspace_override` (project
+    /// mode) else the agent's `~/.aleph/workspaces/{id}`, and feeds that same
+    /// value to the tool adapters' `default_working_dir`. Falls back to the
+    /// daemon's process cwd only when no caller-supplied path is available.
     pub working_dir: PathBuf,
     /// Git repository root, if inside a repo (caller provides from cached git info)
     pub repo_root: Option<PathBuf>,
@@ -48,24 +78,43 @@ pub struct RuntimeContext {
 }
 
 impl RuntimeContext {
-    /// Collect runtime context from the current environment.
-    ///
-    /// `current_model` is passed in because the caller (prompt builder) knows which
-    /// model was selected by the router.
-    ///
-    /// `repo_root` is populated lazily via a process-lifetime `OnceLock` cache
-    /// (see [`cached_repo_root`]). The detector walks up from the working
-    /// directory looking for `.git`; no `git` subprocess is spawned. aleph-server
-    /// is a long-running daemon whose working directory is stable, so caching at
-    /// process scope is sufficient.
+    /// Collect runtime context for a run with no caller-known working directory
+    /// (tests, `prompt-size`, internal tooling). Delegates to
+    /// [`Self::collect_in`] with `None`, which falls back to the daemon's process
+    /// cwd. **Production prompt assembly must use `collect_in`** with the run's
+    /// effective workspace — see [`Self::working_dir`].
     #[must_use]
     pub fn collect(current_model: &str) -> Self {
+        Self::collect_in(current_model, None)
+    }
+
+    /// Collect runtime context, anchored on the run's effective working directory.
+    ///
+    /// `current_model` and `cwd` are both passed in because only the caller knows
+    /// them: the router picks the model, and the gateway resolves the effective
+    /// workspace (project override, else the agent workspace) — the very path it
+    /// hands the tool adapters as `default_working_dir`. Passing it here is what
+    /// makes the prompt's `cwd=` agree with where `bash` actually runs.
+    ///
+    /// A `cwd` that is not a directory (unmounted volume, deleted between
+    /// dispatch and prompt assembly) is rejected with a warn and degraded to the
+    /// process cwd rather than advertising a path the model cannot use — pi's
+    /// `assertSessionCwdExists` lesson, softened to P7 graceful degradation
+    /// because the gateway already hard-fails a vanished project override.
+    ///
+    /// `repo_root` is populated lazily via a process-lifetime cache keyed by the
+    /// resolved directory (see [`cached_repo_root`]). The detector walks up
+    /// looking for `.git`; no `git` subprocess is spawned.
+    #[must_use]
+    pub fn collect_in(current_model: &str, cwd: Option<&Path>) -> Self {
         let os = std::env::consts::OS.to_string();
         let arch = std::env::consts::ARCH.to_string();
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+        // The interpreter the agent's own shell tool spawns — single source with
+        // the exec path, so this line cannot drift from what actually runs.
+        let shell = crate::builtin_tools::code_exec::shell_interpreter().to_string();
 
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let working_dir = resolve_working_dir(cwd);
 
         let hostname = std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
@@ -113,12 +162,37 @@ impl RuntimeContext {
         }
     }
 
-    /// Format as a compact prompt section for system prompt injection.
+    /// The **process-invariant** half of the envelope, as Markdown bullets for
+    /// `EnvironmentLayer`'s `## Environment` section (Stable / cacheable zone).
     ///
-    /// Output example (with repo):
+    /// ```text
+    /// - **OS**: macos (aarch64)
+    /// - **Shell**: bash
+    /// - **Host**: MacBook-Pro
+    /// ```
+    ///
+    /// Nothing here can change while the daemon runs, so these bytes are written
+    /// to the provider prompt cache once and read back cheaply for the rest of
+    /// the conversation. Deliberately excludes `working_dir` / `repo_root` /
+    /// `current_model` / `current_time`: each of those varies per run or per hour
+    /// and belongs in [`Self::to_dynamic_line`].
+    #[must_use]
+    pub fn to_stable_lines(&self) -> String {
+        let mut out = String::with_capacity(96);
+        let _ = writeln!(out, "- **OS**: {} ({})", self.os, self.arch);
+        let _ = writeln!(out, "- **Shell**: {}", self.shell);
+        let _ = writeln!(out, "- **Host**: {}", self.hostname);
+        out
+    }
+
+    /// The **per-run / per-hour** half of the envelope, as the compact
+    /// pipe-separated section `RuntimeContextLayer` injects (Dynamic zone, on the
+    /// far side of the prompt-cache breakpoint where changing bytes cost only
+    /// themselves).
+    ///
     /// ```text
     /// ## Runtime Environment
-    /// os=macos | arch=aarch64 | shell=zsh | cwd=/workspace | repo=/workspace | git=main | model=claude-opus-4-6 | host=MacBook-Pro
+    /// cwd=/workspace | repo=/workspace | git=main | model=claude-opus-4-6 | time=2026-03-30 14:00 (Asia/Shanghai)
     /// ```
     ///
     /// The `repo=` / `git=` segments are omitted when `repo_root` is `None` or
@@ -128,13 +202,8 @@ impl RuntimeContext {
     /// matching what codex's `<environment_context>` and hermes-agent's
     /// workspace block surface.
     #[must_use]
-    pub fn to_prompt_section(&self) -> String {
-        let mut parts = vec![
-            format!("os={}", self.os),
-            format!("arch={}", self.arch),
-            format!("shell={}", self.shell),
-            format!("cwd={}", self.working_dir.display()),
-        ];
+    pub fn to_dynamic_line(&self) -> String {
+        let mut parts = vec![format!("cwd={}", self.working_dir.display())];
 
         if let Some(ref repo) = self.repo_root {
             parts.push(format!("repo={}", repo.display()));
@@ -144,7 +213,6 @@ impl RuntimeContext {
         }
 
         parts.push(format!("model={}", self.current_model));
-        parts.push(format!("host={}", self.hostname));
         // Hour-precision time only — no `time_ms=`. A millisecond epoch here
         // changed every build, and any byte change in this section invalidates
         // the provider prompt cache for the entire conversation that follows
@@ -154,6 +222,30 @@ impl RuntimeContext {
 
         format!("## Runtime Environment\n{}", parts.join(" | "))
     }
+}
+
+/// Resolve the directory the envelope will advertise as the run's cwd.
+///
+/// `Some(dir)` wins; a `Some` that is not a directory is refused with a warn so
+/// the model is never told to write into a path that vanished between dispatch
+/// and prompt assembly. `None` (tests, `prompt-size`, internal tooling) falls
+/// back to the daemon's process cwd.
+fn resolve_working_dir(cwd: Option<&Path>) -> PathBuf {
+    match cwd {
+        Some(p) if p.is_dir() => p.to_path_buf(),
+        Some(p) => {
+            tracing::warn!(
+                cwd = %p.display(),
+                "run workspace is not a directory; falling back to the process cwd for the prompt envelope"
+            );
+            process_cwd()
+        }
+        None => process_cwd(),
+    }
+}
+
+fn process_cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
 }
 
 /// Process-lifetime cache for the detected repository root, keyed by working
@@ -305,19 +397,72 @@ mod tests {
     }
 
     #[test]
-    fn test_to_prompt_section_format() {
+    fn stable_half_carries_only_process_invariant_facts() {
+        let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
+        let stable = ctx.to_stable_lines();
+
+        assert!(stable.contains("- **OS**: macos (aarch64)"), "{stable}");
+        assert!(stable.contains("- **Shell**: zsh"), "{stable}");
+        assert!(stable.contains("- **Host**: MacBook-Pro"), "{stable}");
+        // Anything that can change while the daemon runs must NOT be here: these
+        // bytes sit in the cacheable prompt prefix, so a per-run or per-hour value
+        // would re-key the whole conversation's provider cache on every change.
+        for volatile in [
+            "/workspace",
+            "claude-opus-4-6",
+            "2026-03-30",
+            "Asia/Shanghai",
+        ] {
+            assert!(
+                !stable.contains(volatile),
+                "volatile value {volatile:?} leaked into the Stable half:\n{stable}"
+            );
+        }
+    }
+
+    /// The invariant the two-zone split exists to protect: no fact is stated by
+    /// both halves. Regression for the OS/cwd overlap that `EnvironmentLayer` and
+    /// `RuntimeContextLayer` both used to print, which
+    /// `prompt_contract::no_sentence_is_stated_twice` could not see because the two
+    /// renderings never produced a byte-identical sentence.
+    #[test]
+    fn the_two_halves_never_state_the_same_fact() {
+        let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
+        let stable = ctx.to_stable_lines();
+        let dynamic = ctx.to_dynamic_line();
+
+        let facts = [
+            ("os", ctx.os.as_str()),
+            ("arch", ctx.arch.as_str()),
+            ("shell", ctx.shell.as_str()),
+            ("host", ctx.hostname.as_str()),
+            ("model", ctx.current_model.as_str()),
+            ("time", ctx.current_time.as_str()),
+            ("timezone", ctx.timezone.as_str()),
+        ];
+        for (name, value) in facts {
+            assert!(
+                !(stable.contains(value) && dynamic.contains(value)),
+                "{name} ({value:?}) is stated by BOTH halves — pick one zone\n\
+                 stable:\n{stable}\ndynamic:\n{dynamic}"
+            );
+        }
+        // cwd is the one checked by path rather than by value: it must appear only
+        // in the Dynamic half, because it varies per run in project mode.
+        assert!(dynamic.contains("cwd=/workspace"), "{dynamic}");
+        assert!(!stable.contains("/workspace"), "{stable}");
+    }
+
+    #[test]
+    fn dynamic_half_format() {
         let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
 
-        let section = ctx.to_prompt_section();
+        let section = ctx.to_dynamic_line();
 
         assert!(section.starts_with("## Runtime Environment\n"));
-        assert!(section.contains("os=macos"));
-        assert!(section.contains("arch=aarch64"));
-        assert!(section.contains("shell=zsh"));
         assert!(section.contains("cwd=/workspace"));
         assert!(section.contains("repo=/workspace"));
         assert!(section.contains("model=claude-opus-4-6"));
-        assert!(section.contains("host=MacBook-Pro"));
         assert!(section.contains("time=2026-03-30 14:00 (Asia/Shanghai)"));
         // No sub-hour precision and no epoch ms — the section must stay
         // byte-stable within the hour so it never re-keys the provider
@@ -401,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_prompt_section_no_repo() {
+    fn dynamic_half_omits_repo_segments_without_a_repo() {
         let ctx = RuntimeContext {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
@@ -414,24 +559,55 @@ mod tests {
             timezone: "UTC".to_string(),
         };
 
-        let section = ctx.to_prompt_section();
+        let section = ctx.to_dynamic_line();
 
         assert!(section.starts_with("## Runtime Environment\n"));
-        assert!(section.contains("os=linux"));
-        assert!(section.contains("arch=x86_64"));
-        assert!(section.contains("shell=bash"));
         assert!(section.contains("cwd=/home/user"));
         assert!(
             !section.contains("repo="),
             "should NOT contain repo= when repo_root is None"
         );
         assert!(section.contains("model=gpt-4"));
-        assert!(section.contains("host=server-01"));
         assert!(section.contains("time="));
         assert!(!section.contains("time_ms="));
         assert!(
             !section.contains("git="),
             "should NOT contain git= when repo_root is None"
+        );
+    }
+
+    /// `collect_in` must honour the caller's effective workspace, and must refuse
+    /// a path that is not a directory rather than advertising it to the model.
+    #[test]
+    fn collect_in_anchors_on_the_callers_workspace_and_rejects_non_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ws = dir.path().join("proj");
+        std::fs::create_dir(&ws).expect("mkdir proj");
+
+        let ctx = RuntimeContext::collect_in("m", Some(&ws));
+        assert_eq!(ctx.working_dir, ws, "caller-supplied workspace must win");
+
+        // A vanished / non-directory path degrades to the process cwd (P7), never
+        // to the bogus path itself.
+        let ghost = dir.path().join("gone");
+        let ctx = RuntimeContext::collect_in("m", Some(&ghost));
+        assert_ne!(ctx.working_dir, ghost);
+        assert_eq!(ctx.working_dir, process_cwd());
+
+        // `None` (tests / prompt-size / internal tooling) = process cwd.
+        assert_eq!(RuntimeContext::collect("m").working_dir, process_cwd());
+    }
+
+    /// The advertised shell must be the interpreter the exec tool actually spawns,
+    /// not the operator's `$SHELL` (unset on Windows, where it rendered
+    /// `shell=unknown` while every shell call still ran bash).
+    #[test]
+    fn shell_fact_comes_from_the_exec_tool_not_the_env() {
+        let ctx = RuntimeContext::collect("m");
+        assert_eq!(
+            ctx.shell,
+            crate::builtin_tools::code_exec::shell_interpreter(),
+            "shell must be single-sourced from the exec path"
         );
     }
 

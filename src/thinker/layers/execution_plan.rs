@@ -70,7 +70,11 @@ impl PromptLayer for ExecutionPlanLayer {
             return;
         }
         output.push_str("<execution_plan>\n");
-        output.push_str(plan);
+        // Escaped at the seam: plan items are free text written through the
+        // `scratchpad` tool (which a tool result or an untrusted file can steer),
+        // so an unescaped closing tag would break out of this element and forge
+        // top-level prompt sections. Single source: `xml_util`.
+        output.push_str(&crate::thinker::xml_util::escape_xml(plan));
         output.push_str(
             "\n\nThis is your standing plan for the current objective. Keep working \
              the list one step at a time; update it with the `scratchpad` tool \

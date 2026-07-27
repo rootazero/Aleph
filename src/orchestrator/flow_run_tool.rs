@@ -94,9 +94,9 @@ impl FlowRunTool {
             // No per-run thinking directive on this path — the provider keeps its
             // own default, which is what every release before this field sent.
             think_level: None,
-            // Subagent sub-flows carry no resolved exec tier — no approval line.
-            exec_tier: None,
-            session_mode: None,
+            // Subagent sub-flows resolve no tier / mode / workspace of their own;
+            // they inherit the parent's via the surrounding RunRequest path.
+            envelope: crate::thinker::TurnEnvelope::none(),
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

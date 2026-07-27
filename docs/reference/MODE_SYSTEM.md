@@ -80,9 +80,17 @@ ToolSearchTool 注册处把 `tool_search` 推进 `mode_core_tools`（披露启�
 （`SpawnRequest.session_mode` → `PromptBuilder::with_session_mode` 后置焊接；Work=恒等分区跳过，
 子 prompt 字节等价）。
 
-**prompt line**：`FlowRequest.session_mode` → `HarnessRunner::run` 参数 →
-`resolve_prompt_context` → `ResolvedContext.session_mode` → `SecurityLayer`
-（`Usage mode:` 行，紧邻 `Approval mode:` 行；会话稳定，仅用户翻转时 re-key）。
+**prompt line**：`FlowRequest.envelope`（[`TurnEnvelope`](FEATURE_LOCATOR.md#23-context-模式-context-mode--codex-风格)，
+与 `exec_tier` / `cwd` 同一结构体）→ `HarnessRunner::run` 参数 → `resolve_prompt_context` →
+`ResolvedContext.session_mode` → **`OperatingEnvelopeLayer` @1758（Dynamic）**
+（`Usage mode:` 行，紧邻 `Approval mode:` 行）。
+
+> ⚠️ 2026-07-26 起这两行**不在** `SecurityLayer` @600。那层不覆写 `stability()`＝默认 **Stable**，
+> 即**可缓存前缀**；而模式/档位是**每轮可翻的旋钮**（composer pill / `session_set_mode` /
+> `self_config`）。第 40 轮翻一次 pill 就改写 Stable 区一个字节 → 整段会话的 provider 前缀缓存
+> 作废（历史从 0.1× 读变 1.25× 写）。不能直接把 @600 翻 Dynamic（`stable_layers_come_before_dynamic`
+> 禁止两区交错），故两行搬进 `## Operating Envelope`（`src/thinker/layers/operating_envelope.rs`）。
+> prompt 总字节不变，只换缓存分区。加新的"每轮可变"提示行时**默认放这里**，别放 `SecurityLayer`。
 
 **R8 工具**：`src/builtin_tools/sessions/set_mode_tool.rs`（`session_set_mode`，
 镜像 `session_rename` 的 8 个注册点：definitions/groups/struct_def/constructor/

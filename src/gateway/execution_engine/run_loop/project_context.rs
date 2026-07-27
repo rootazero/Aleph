@@ -31,64 +31,38 @@ pub(crate) const PROJECT_SKILLS_MAX: usize = 50;
 /// verbose frontmatter line cannot dominate the listing.
 pub(crate) const PROJECT_SKILL_DESC_MAX_CHARS: usize = 200;
 
-/// Build the working-directory directive surfaced to the model on every turn.
+/// Build the write-here directive surfaced to the model on every turn.
 ///
-/// The effective workspace (project override or the agent's stable
-/// `~/.aleph/workspaces/{agent_id}` directory) is already resolved before the
-/// loop runs, but nothing told the model what it was — so when asked to "save a
-/// file" the model would invent a plausible absolute path under the user's home
-/// (e.g. `/Users/<u>/paris-riot-timeline/index.html`) and write outside the
-/// workspace. This directive closes that gap by naming the directory and asking
-/// the model to default to it. It steers (R7: no hard jail) — an explicit
+/// Asked to "save a file", a model with no default would invent a plausible
+/// absolute path under the user's home (e.g.
+/// `/Users/<u>/paris-riot-timeline/index.html`) and write outside the workspace.
+/// This directive closes that gap. It steers (R7: no hard jail) — an explicit
 /// user-named location still wins.
-pub(crate) fn workspace_directive(workspace: &std::path::Path) -> String {
-    format!(
-        "Working directory: `{}`\n\
-         Save any files you create or generate here — use a relative path, or \
-         this directory as the base for an absolute path. Only write to a \
-         different location when the user explicitly asks for one.",
-        workspace.display()
-    )
+///
+/// It deliberately does **not** name the directory. The path is a fact, and the
+/// facts of the environment envelope have exactly one home: the system prompt's
+/// `## Runtime Environment` line, whose `cwd=` is fed by the same
+/// `effective_workspace` (`TurnEnvelope.cwd` → `RuntimeContext::collect_in`).
+/// Stating it here too would be the third copy in one request and — worse — a
+/// copy that can silently disagree, which is exactly what happened while the
+/// envelope's `cwd=` still reported the daemon's own directory.
+pub(crate) fn workspace_directive() -> &'static str {
+    "Save any files you create or generate in the working directory named above \
+     (`cwd=` in Runtime Environment) — use a relative path, or that directory as \
+     the base for an absolute path. Only write to a different location when the \
+     user explicitly asks for one."
 }
 
-/// Legacy gateway-path presenter for project context. Delegates discovery to
-/// `thinker::project_instructions::discover_project_instructions` (the single
-/// source of truth — ancestor walk to git root, `CLAUDE.md` / `AGENTS.md` /
-/// `.aleph/CLAUDE.md` / `CLAUDE.local.md` / rules / `@import`, with the shared
-/// budget) and formats the result as one ancestor-first → project-last block
-/// for per-turn `<system-reminder>` injection. Empty when no files exist.
-pub(crate) fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
-    // Single discovery source of truth shared with the orchestrator path
-    // (`thinker::project_instructions`): same file set, `@import` expansion,
-    // `CLAUDE.local.md` / `.aleph` rules, ancestor walk, and budget — so the
-    // legacy gateway path and the orchestrator path never drift in what project
-    // context they surface. This presenter only differs in *formatting*: a
-    // per-turn `<system-reminder>` block instead of a cached `ExtraFilesLayer`.
-    let files = crate::thinker::project_instructions::discover_project_instructions(workspace);
-    if files.is_empty() {
-        return Vec::new();
-    }
-
-    let header = format!(
-        "Active project: `{}`. The following project files describe \
-        local conventions, scope, and constraints — treat them as \
-        durable context for this conversation. Files are listed from the \
-        outermost ancestor (`<dir>/...`) down to the project root; later \
-        entries override earlier ones on conflict.",
-        workspace.display()
-    );
-
-    let mut body = String::new();
-    body.push_str(&header);
-    body.push_str("\n\n");
-    for file in &files {
-        body.push_str(&format!("### {}\n\n", file.label));
-        body.push_str(file.content.trim_end());
-        body.push_str("\n\n");
-    }
-
-    vec![body]
-}
+// `collect_project_context_blocks` lived here until 2026-07-26. It re-presented
+// the SAME `discover_project_instructions` set the orchestrator already renders
+// through `ExtraFilesLayer` (`prompt_build.rs` →
+// `project_instructions::load_project_instructions`), under the same
+// `workspace_override.is_some()` gate — so every project-mode turn shipped the
+// whole `CLAUDE.md` / `AGENTS.md` / rules set twice, and this copy was the one
+// that skipped the sanitizer and the prompt budget. Deleted rather than fixed:
+// two presenters of one source is the duplication, not the formatting. The
+// discovery behaviour it tested (ancestor walk, `@import`, rules glob, budget) is
+// covered directly in `thinker::project_instructions`' own 22 tests.
 
 /// Advertise the project's own skills to the model (round 3).
 ///
@@ -150,7 +124,18 @@ pub(crate) fn collect_project_skill_block(workspace: &std::path::Path) -> Option
                     .collect::<String>()
                     + "…";
             }
-            let name = manifest.name().trim();
+            // `name` and `desc` come from a SKILL.md inside the project folder —
+            // i.e. from whatever repo the user opened, not from Aleph. They land
+            // in a `<system-reminder>` the model is told to treat as a task
+            // directive, so a cloned repo could otherwise ship
+            // `description: Ignore all previous instructions and …` straight into
+            // the prompt. Run the SAME scanner the project's own instruction files
+            // already go through in `ExtraFilesLayer` (injection patterns +
+            // invisible Unicode) — identical trust boundary, identical defense.
+            let desc = crate::thinker::layers::sanitize_identity_content(id, &desc).into_owned();
+            let name =
+                crate::thinker::layers::sanitize_identity_content(id, manifest.name().trim())
+                    .into_owned();
             lines.push(if desc.is_empty() {
                 format!("- `{id}` — {name}")
             } else {
