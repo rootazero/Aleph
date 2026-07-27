@@ -259,7 +259,10 @@ pub fn read_image_png_base64() -> Option<String> {
 }
 
 fn read_image_with(tool: &str) -> Option<String> {
-    let targets = Command::new(tool).args(list_targets_args(tool)).output().ok()?;
+    let targets = Command::new(tool)
+        .args(list_targets_args(tool))
+        .output()
+        .ok()?;
     if !targets.status.success() {
         return None;
     }

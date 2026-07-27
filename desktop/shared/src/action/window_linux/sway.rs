@@ -133,13 +133,14 @@ fn node_to_window(node: &Value) -> Option<WindowInfo> {
         // sway reports no stacking level; not told is not zero.
         layer: None,
         on_screen: node.get("visible").and_then(Value::as_bool),
-        })
+    })
 }
 
 /// The focused window's `con_id`, if any node in the tree claims focus.
 #[must_use]
 pub fn parse_focused(json: &Value) -> Option<u64> {
-    if node_to_window(json).is_some() && json.get("focused").and_then(Value::as_bool) == Some(true) {
+    if node_to_window(json).is_some() && json.get("focused").and_then(Value::as_bool) == Some(true)
+    {
         return json.get("id").and_then(Value::as_u64);
     }
     for key in ["nodes", "floating_nodes"] {

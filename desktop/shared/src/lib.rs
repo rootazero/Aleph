@@ -22,6 +22,7 @@
 
 pub mod action;
 pub mod automation_types;
+pub mod ax_rank;
 pub mod bridge;
 pub mod coord;
 pub mod error;
@@ -46,6 +47,7 @@ pub mod win_registry;
 #[cfg(windows)]
 pub mod win_window;
 
+pub use ax_rank::{rank_candidates, RankCandidate};
 pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;

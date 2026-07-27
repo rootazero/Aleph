@@ -279,9 +279,8 @@ pub fn launch(app_name: &str) -> Result<()> {
 
     // 3. A plain executable on PATH.
     if which(app_name).is_some() {
-        spawn_detached(app_name, &[]).map_err(|e| {
-            DesktopError::InputFailed(format!("Failed to start '{app_name}': {e}"))
-        })?;
+        spawn_detached(app_name, &[])
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to start '{app_name}': {e}")))?;
         info!(app_name, "App launched from PATH");
         return Ok(());
     }
@@ -521,14 +520,20 @@ Exec=/usr/lib/firefox/firefox --private-window %u
 
     #[test]
     fn empty_query_matches_nothing() {
-        assert_eq!(rank_entry("firefox", &entry("Firefox", "firefox"), ""), None);
+        assert_eq!(
+            rank_entry("firefox", &entry("Firefox", "firefox"), ""),
+            None
+        );
     }
 
     #[test]
     fn best_match_picks_the_strongest_rank_deterministically() {
         let mut entries = BTreeMap::new();
         entries.insert("zzz-alias".to_string(), entry("Firefox", "firefox"));
-        entries.insert("firefox".to_string(), entry("Firefox Web Browser", "firefox"));
+        entries.insert(
+            "firefox".to_string(),
+            entry("Firefox Web Browser", "firefox"),
+        );
         // The exact-id entry must win over an exact-Name one.
         assert_eq!(best_match(&entries, "firefox").as_deref(), Some("firefox"));
 

@@ -315,13 +315,7 @@ pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
     conn.send_root_message(
         window,
         conn.atoms.net_moveresize_window,
-        [
-            moveresize_flags(true, false),
-            x as u32,
-            y as u32,
-            0,
-            0,
-        ],
+        [moveresize_flags(true, false), x as u32, y as u32, 0, 0],
     )
 }
 

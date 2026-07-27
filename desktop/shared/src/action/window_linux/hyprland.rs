@@ -352,7 +352,11 @@ mod tests {
         );
         assert_eq!(
             resize_args(0x2a, 800, 600),
-            vec!["dispatch", "resizewindowpixel", "exact 800 600,address:0x2a"]
+            vec![
+                "dispatch",
+                "resizewindowpixel",
+                "exact 800 600,address:0x2a"
+            ]
         );
         assert_eq!(
             focus_args(0x2a),

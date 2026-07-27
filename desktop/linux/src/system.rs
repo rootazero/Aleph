@@ -65,8 +65,7 @@ impl SystemCapability for LinuxSystem {
                 .flatten()
                 .and_then(|id| windows.iter().find(|w| w.id == id))
                 .map(|w| w.pid);
-            let windowed: std::collections::HashSet<u64> =
-                windows.iter().map(|w| w.pid).collect();
+            let windowed: std::collections::HashSet<u64> = windows.iter().map(|w| w.pid).collect();
 
             let mut apps = Vec::new();
             let mut seen = std::collections::HashSet::new();

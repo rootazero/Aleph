@@ -192,61 +192,11 @@ pub fn actions_for(has_press_pattern: bool, has_expand_collapse: bool) -> Vec<St
     out
 }
 
-/// A flattened UIA element summary used purely for locator ranking. Holds only
-/// the Send-safe scalar fields `rank_candidates` needs, so the ranking decision
-/// is a pure function testable without COM.
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
-#[derive(Clone, Debug)]
-pub struct RankCandidate {
-    /// Mapped `"AX*"` role string (via `control_type_to_ax_role`).
-    pub role: String,
-    /// Element name/title, if any.
-    pub title: Option<String>,
-    /// Bounding-rect center in physical screen pixels.
-    pub center: (f64, f64),
-}
-
-/// Pick the best candidate for an [`AxLocator`], mirroring the macOS Swift
-/// locator: role is a hard filter; title ranks exact (0) < contains (1) <
-/// no-match (2), case-insensitive; `center` euclidean distance breaks ties.
-/// Returns `None` when the role filter leaves no candidate.
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
-pub fn rank_candidates(cands: &[RankCandidate], loc: &AxLocator) -> Option<usize> {
-    let mut best: Option<(usize, (u8, f64))> = None;
-    for (i, c) in cands.iter().enumerate() {
-        if let Some(role) = &loc.role {
-            if &c.role != role {
-                continue;
-            }
-        }
-        let title_rank = match (&loc.title, &c.title) {
-            (Some(want), Some(have)) => {
-                let (want, have) = (want.to_lowercase(), have.to_lowercase());
-                if have == want {
-                    0
-                } else if have.contains(&want) {
-                    1
-                } else {
-                    2
-                }
-            }
-            (Some(_), None) => 2,
-            (None, _) => 0,
-        };
-        let dist = match loc.center {
-            Some([x, y]) => {
-                let (dx, dy) = (c.center.0 - x, c.center.1 - y);
-                dx.hypot(dy)
-            }
-            None => 0.0,
-        };
-        let key = (title_rank, dist);
-        if best.as_ref().is_none_or(|(_, bk)| key < *bk) {
-            best = Some((i, key));
-        }
-    }
-    best.map(|(i, _)| i)
-}
+// The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract the
+// macOS Swift helper and the Linux AT-SPI limb also implement, and three
+// hand-copied versions of one ranking rule is how platforms start disagreeing
+// about which element a locator meant.
+pub use aleph_desktop::{rank_candidates, RankCandidate};
 
 /// UIA control patterns the AX write path can invoke, in fallback order.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
@@ -1067,13 +1017,6 @@ mod tests {
         assert_eq!(control_type_to_ax_role(50004), "AXTextField");
     }
 
-    fn cand(role: &str, title: Option<&str>, cx: f64, cy: f64) -> RankCandidate {
-        RankCandidate {
-            role: role.into(),
-            title: title.map(Into::into),
-            center: (cx, cy),
-        }
-    }
     fn loc(role: Option<&str>, title: Option<&str>, center: Option<[f64; 2]>) -> AxLocator {
         AxLocator {
             pid: None,
@@ -1081,67 +1024,6 @@ mod tests {
             title: title.map(Into::into),
             center,
         }
-    }
-
-    #[test]
-    fn role_filter_excludes_non_matching() {
-        let cands = [
-            cand("AXButton", Some("OK"), 0.0, 0.0),
-            cand("AXTextField", Some("OK"), 0.0, 0.0),
-        ];
-        // Only the AXTextField candidate is eligible.
-        assert_eq!(
-            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn no_match_returns_none() {
-        let cands = [cand("AXButton", None, 0.0, 0.0)];
-        assert_eq!(
-            rank_candidates(&cands, &loc(Some("AXTextField"), None, None)),
-            None
-        );
-    }
-
-    #[test]
-    fn exact_title_beats_contains_case_insensitive() {
-        let cands = [
-            cand("AXTextField", Some("Email address"), 0.0, 0.0),
-            cand("AXTextField", Some("email"), 0.0, 0.0),
-        ];
-        // "email" is an exact (case-insensitive) match; "Email address" only contains it.
-        assert_eq!(
-            rank_candidates(&cands, &loc(Some("AXTextField"), Some("Email"), None)),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn center_breaks_ties_when_titles_equal_rank() {
-        let cands = [
-            cand("AXButton", None, 100.0, 100.0),
-            cand("AXButton", None, 10.0, 10.0),
-        ];
-        // No title given → both rank 0; nearest center to (0,0) wins.
-        assert_eq!(
-            rank_candidates(&cands, &loc(Some("AXButton"), None, Some([0.0, 0.0]))),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn no_role_filter_considers_all() {
-        let cands = [
-            cand("AXButton", Some("Save"), 0.0, 0.0),
-            cand("AXMenuItem", Some("Save"), 0.0, 0.0),
-        ];
-        // role=None → first exact-title match wins.
-        assert_eq!(
-            rank_candidates(&cands, &loc(None, Some("Save"), None)),
-            Some(0)
-        );
     }
 
     #[test]
