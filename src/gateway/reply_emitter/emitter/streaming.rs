@@ -338,15 +338,16 @@ impl EventEmitter for ReplyEmitter {
                                 {
                                     Ok(_result) => {
                                         self.has_sent.store(true, Ordering::SeqCst);
-                                        // Stop typing, react success, send media — then return.
-                                        // `drain_and_send_media` fetches, it does not clean up
-                                        // (the temp files go with `MediaCache::cleanup_session`
-                                        // below): discarding its return value silently dropped
-                                        // every attachment on this branch.
+                                        // Stop typing, react success, close the media
+                                        // leg — then return. This branch used to
+                                        // `let _ =` the drain, silently dropping every
+                                        // attachment; and because it returns early it
+                                        // never reaches the cleanup at the end of
+                                        // `RunComplete`, so it has to close the leg
+                                        // itself. `deliver_run_media` is both halves.
                                         self.typing_cancel.cancel();
                                         self.react_on_inbound("\u{1f44d}").await;
-                                        let media = self.drain_and_send_media().await;
-                                        self.send_media_standalone(media).await;
+                                        self.deliver_run_media().await;
                                         return Ok(());
                                     }
                                     Err(e) => {
@@ -489,19 +490,12 @@ impl EventEmitter for ReplyEmitter {
                 // React with 👍 on successful completion
                 self.react_on_inbound("👍").await;
 
-                // Last chance to deliver media. Every drain above hangs off a
-                // non-empty reply, so a run that produced ONLY media — the model
-                // calls `media_send` and stops — left the queue full and the user
-                // with nothing. Idempotent: the buffer is `mem::take`n, so a run
-                // that already drained finds it empty and this is a no-op. Must
-                // precede the cleanup below, which deletes the fetched temp files.
-                let leftover = self.drain_and_send_media().await;
-                self.send_media_standalone(leftover).await;
-
-                // Clean up media temp files for this run
-                if let Err(e) = crate::media::cache::MediaCache::cleanup_session(&self.run_id) {
-                    tracing::warn!(error = %e, "Failed to cleanup media session");
-                }
+                // Last chance to deliver media, then drop the temp files. Every
+                // drain above hangs off a non-empty reply, so a run that produced
+                // ONLY media — the model calls `media_send` and stops — left the
+                // queue full and the user with nothing. Idempotent: the buffer is
+                // `mem::take`n, so a run that already drained finds it empty.
+                self.deliver_run_media().await;
             }
 
             StreamEvent::RunError { error, .. } => {

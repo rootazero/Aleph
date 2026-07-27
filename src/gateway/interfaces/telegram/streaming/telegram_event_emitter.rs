@@ -88,20 +88,6 @@ impl TelegramEventEmitter {
             media,
         }
     }
-
-    /// Deliver whatever the run left in its media buffer, then drop the temp
-    /// files it fetched.
-    ///
-    /// Mirrors the closing drain of `ReplyEmitter`'s own `RunComplete` branch,
-    /// including its idempotence (the buffer is `mem::take`n, so a run that
-    /// produced no media sends nothing).
-    async fn deliver_media(&self) {
-        let attachments = self.media.drain_and_send_media().await;
-        self.media.send_media_standalone(attachments).await;
-        if let Err(e) = crate::media::cache::MediaCache::cleanup_session(self.media.run_id()) {
-            tracing::warn!(error = %e, "Failed to cleanup media session");
-        }
-    }
 }
 
 #[async_trait]
@@ -119,7 +105,7 @@ impl EventEmitter for TelegramEventEmitter {
         // regardless of `forwarded`: a dead orchestrator loses the text, it
         // must not also swallow the attachments.
         if run_ended {
-            self.deliver_media().await;
+            self.media.deliver_run_media().await;
         }
         forwarded
     }

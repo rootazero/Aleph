@@ -272,6 +272,14 @@ impl EventEmitter for FeishuEventEmitter {
                     }
                     drop(card_guard);
                     self.stop_typing().await;
+                    // The card owns the *text*, so this branch deliberately does
+                    // not forward to `inner` (its `RunComplete` would re-send the
+                    // whole answer off `summary.final_response` as a second
+                    // message). But the media leg lives on `inner` too, and
+                    // skipping it dropped every attachment — and leaked the temp
+                    // files — for any run that got a card. Close that leg
+                    // explicitly; it touches only the media buffer, never text.
+                    self.inner.deliver_run_media().await;
                     Ok(())
                 } else {
                     drop(card_guard);
@@ -304,5 +312,94 @@ impl EventEmitter for FeishuEventEmitter {
 
     fn next_seq(&self) -> u64 {
         self.seq_counter.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::channel::{ChannelId, ConversationId};
+    use crate::gateway::channel_registry::ChannelRegistry;
+    use crate::gateway::event_emitter::RunSummary;
+    use crate::gateway::interfaces::feishu::auth::TokenManager;
+    use crate::gateway::media::{MediaItem, PendingMedia};
+
+    /// Emitter in the state that used to lose media: a card already streamed
+    /// (and closed, so finishing it needs no API call) and a run's worth of
+    /// `_media` sitting in the buffer.
+    ///
+    /// The `FeishuApi` here is never called — `base_url` points nowhere and the
+    /// card is pre-closed — so the test does no I/O.
+    async fn emitter_with_closed_card(pending: PendingMedia) -> FeishuEventEmitter {
+        let http = reqwest::Client::new();
+        let auth = Arc::new(TokenManager::new(
+            "app",
+            "secret",
+            "http://127.0.0.1:1",
+            http.clone(),
+        ));
+        let api = Arc::new(FeishuApi::new(auth, "http://127.0.0.1:1", http));
+        let inner = ReplyEmitter::new(
+            Arc::new(ChannelRegistry::new()),
+            ReplyRoute::new(ChannelId::new("feishu"), ConversationId::new("oc_1")),
+            "feishu-run".to_string(),
+            pending,
+        );
+        let emitter = FeishuEventEmitter::new(
+            inner,
+            api,
+            ReplyRoute::new(ChannelId::new("feishu"), ConversationId::new("oc_1")),
+            "oc_1".to_string(),
+            None,
+            true,
+            false,
+        );
+        let card = FeishuStreamingCard::new("card-1".to_string());
+        card.closed.store(true, Ordering::SeqCst);
+        *emitter.card.lock().await = Some(card);
+        emitter
+    }
+
+    fn run_complete() -> StreamEvent {
+        StreamEvent::RunComplete {
+            run_id: "feishu-run".to_string(),
+            seq: 1,
+            summary: RunSummary::default(),
+            total_duration_ms: 1,
+        }
+    }
+
+    /// THE wire: the card branch deliberately does not forward `RunComplete` to
+    /// `inner` (that would re-post the whole answer as a second message), and
+    /// that skip took the media leg down with it — every attachment was lost
+    /// for any run that got a streaming card.
+    #[tokio::test]
+    async fn run_complete_with_a_card_still_drains_the_media_buffer() {
+        let pending: PendingMedia = Arc::new(tokio::sync::Mutex::new(vec![MediaItem {
+            // Inline data URL — resolved without touching the network.
+            url: "data:image/png;base64,SGVsbG8=".to_string(),
+            media_type: "image".to_string(),
+            mime_type: None,
+            filename: None,
+        }]));
+        let emitter = emitter_with_closed_card(pending.clone()).await;
+
+        emitter.emit(run_complete()).await.unwrap();
+
+        assert!(
+            pending.lock().await.is_empty(),
+            "a streamed card must not swallow the run's attachments"
+        );
+    }
+
+    /// The same branch with nothing to deliver stays a no-op.
+    #[tokio::test]
+    async fn run_complete_with_a_card_and_no_media_is_a_no_op() {
+        let pending = PendingMedia::default();
+        let emitter = emitter_with_closed_card(pending.clone()).await;
+
+        emitter.emit(run_complete()).await.unwrap();
+
+        assert!(pending.lock().await.is_empty());
     }
 }

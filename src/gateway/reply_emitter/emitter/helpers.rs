@@ -213,6 +213,28 @@ impl ReplyEmitter {
         attachments
     }
 
+    /// A run's closing media act: deliver whatever is left in the buffer, then
+    /// drop the temp files the fetch created.
+    ///
+    /// Every emitter that owns text delivery itself still has to close this
+    /// leg, and there are now three of them — this `ReplyEmitter`'s own
+    /// `RunComplete`, Telegram's orchestrated emitter, and Feishu's streaming
+    /// card. Each was reconstructing the same three steps, and each got a
+    /// different subset right (the native-stream branch drained without
+    /// cleaning up; the two channel emitters did neither). One method so the
+    /// order is fixed in one place: the drain **must** precede the cleanup,
+    /// which deletes the very files the attachments point at.
+    ///
+    /// Idempotent — the buffer is `mem::take`n, so a second call (or a run that
+    /// produced no media at all) sends nothing.
+    pub(crate) async fn deliver_run_media(&self) {
+        let attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(attachments).await;
+        if let Err(e) = crate::media::cache::MediaCache::cleanup_session(&self.run_id) {
+            warn!(error = %e, "Failed to cleanup media session");
+        }
+    }
+
     /// Send media as a separate standalone message.
     pub(crate) async fn send_media_standalone(
         &self,

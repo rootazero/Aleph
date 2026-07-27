@@ -8,6 +8,124 @@ use crate::sync_primitives::Arc;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::channel::{
+        Channel, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, MessageId,
+        OutboundMessage, SendResult,
+    };
+    use crate::gateway::media::{MediaItem, PendingMedia};
+
+    /// Captures every `OutboundMessage` the registry hands it, so a test can
+    /// assert what actually left for the chat rather than only what the emitter
+    /// took off its own buffer.
+    struct RecordingChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+        sent: Arc<tokio::sync::Mutex<Vec<OutboundMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for RecordingChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+            self.sent.lock().await.push(message);
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: chrono::Utc::now(),
+            })
+        }
+    }
+
+    /// Emitter wired to a recording channel; returns the emitter plus the log.
+    async fn emitter_over_recorder(
+        run_id: &str,
+        pending: PendingMedia,
+    ) -> (ReplyEmitter, Arc<tokio::sync::Mutex<Vec<OutboundMessage>>>) {
+        let sent = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = ChannelRegistry::new();
+        registry
+            .register(Box::new(RecordingChannel {
+                info: ChannelInfo {
+                    id: ChannelId::new("rec"),
+                    name: "rec".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: Default::default(),
+                },
+                state: ChannelState::new(8),
+                sent: sent.clone(),
+            }))
+            .await;
+        let emitter = ReplyEmitter::new(
+            Arc::new(registry),
+            ReplyRoute::new(ChannelId::new("rec"), ConversationId::new("conv-1")),
+            run_id.to_string(),
+            pending,
+        );
+        (emitter, sent)
+    }
+
+    fn one_inline_image() -> PendingMedia {
+        Arc::new(tokio::sync::Mutex::new(vec![MediaItem {
+            // Inline data URL — resolved without touching the network.
+            url: "data:image/png;base64,SGVsbG8=".to_string(),
+            media_type: "image".to_string(),
+            mime_type: None,
+            filename: None,
+        }]))
+    }
+
+    /// The single source every run-end path now shares: what is in the buffer
+    /// leaves as an attachment message, and the buffer is left empty.
+    #[tokio::test]
+    async fn deliver_run_media_sends_the_buffer_as_attachments() {
+        let pending = one_inline_image();
+        let (emitter, sent) = emitter_over_recorder("run-media", pending.clone()).await;
+
+        emitter.deliver_run_media().await;
+
+        let sent = sent.lock().await;
+        assert_eq!(sent.len(), 1, "one standalone attachment message");
+        assert_eq!(sent[0].attachments.len(), 1);
+        assert_eq!(sent[0].attachments[0].mime_type, "image/png");
+        assert!(
+            sent[0].text.is_empty(),
+            "media rides its own message, it must not re-post text"
+        );
+        assert!(pending.lock().await.is_empty(), "buffer drained");
+    }
+
+    /// Idempotent by construction (`mem::take`) — the run-end paths call this
+    /// after earlier mid-run drains, and a second call must not re-post.
+    #[tokio::test]
+    async fn deliver_run_media_is_idempotent() {
+        let (emitter, sent) = emitter_over_recorder("run-twice", one_inline_image()).await;
+
+        emitter.deliver_run_media().await;
+        emitter.deliver_run_media().await;
+
+        assert_eq!(sent.lock().await.len(), 1);
+    }
+
+    /// A run that produced no media must stay silent — no empty message.
+    #[tokio::test]
+    async fn deliver_run_media_without_media_sends_nothing() {
+        let (emitter, sent) = emitter_over_recorder("run-quiet", PendingMedia::default()).await;
+
+        emitter.deliver_run_media().await;
+
+        assert!(sent.lock().await.is_empty());
+    }
 
     #[test]
     fn test_config_defaults() {
