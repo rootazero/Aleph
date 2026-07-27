@@ -214,7 +214,6 @@ portable-pty = "0.8"
 strip-ansi-escapes = "0.2"
 printpdf = "0.9"
 pulldown-cmark = "0.12"
-rhai = { version = "1.17", features = ["sync", "no_float", "only_i64"] }
 httpdate = "1.0"
 dashmap = "5.5"
 reqwest-eventsource = "0.6"
@@ -293,7 +292,6 @@ path = "src/bin/aleph-server/main.rs"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
-cucumber = { version = "0.21", features = ["macros"] }
 tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
