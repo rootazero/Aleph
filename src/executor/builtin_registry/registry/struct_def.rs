@@ -64,6 +64,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) recall_events_tool: crate::builtin_tools::RecallEventsTool,
     /// Self-management tool instance (LLM-triggered entry point)
     pub(crate) self_manage_tool: crate::builtin_tools::SelfManageTool,
+    /// Hooks-manage tool instance (runtime hook inventory + global hooks.json CRUD)
+    pub(crate) hooks_manage_tool: crate::builtin_tools::HooksManageTool,
     /// Self-config tool instance (identity files + config.toml access)
     pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
     /// Moa-manage tool instance (session MoA activation + preset CRUD)

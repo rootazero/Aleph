@@ -279,6 +279,7 @@ impl HandlerRegistry {
         // No context needed — the handlers reach the extension manager
         // via the process-global accessor.
         registry.register("hooks.list", hooks_admin::handle_hooks_list);
+        registry.register("hooks.registry", hooks_admin::handle_hooks_registry);
         registry.register("hooks.add", hooks_admin::handle_hooks_add);
         registry.register("hooks.remove", hooks_admin::handle_hooks_remove);
         registry.register("hooks.reload", hooks_admin::handle_hooks_reload);

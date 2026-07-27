@@ -132,6 +132,17 @@ impl BuiltinToolRegistry {
             SelfManageTool::DESCRIPTION,
             schema::<crate::builtin_tools::self_manage::SelfManageArgs>("self_manage"),
         );
+        // Always-on: the hook registry it reads is the process-global
+        // extension manager, so there is no service dependency to wait for.
+        // It must stay reachable even when no hooks are registered — "nothing
+        // is wired up" is itself the answer someone debugging a dead hook
+        // needs, and an absent tool cannot give it.
+        reg(
+            tools,
+            "hooks_manage",
+            crate::builtin_tools::HooksManageTool::DESCRIPTION,
+            schema::<crate::builtin_tools::hooks_manage::HooksManageArgs>("hooks_manage"),
+        );
         // Always-on: the ledger it reads is a process global installed at boot,
         // so this tool has no service dependency to wait for. It must be
         // reachable even when the ledger is NOT installed — it then says so

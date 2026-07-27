@@ -78,6 +78,10 @@ const CHAT_DEFER_FAMILIES: &[&str] = &[
     "speech_generate",
     "pdf_generate",
     "cron_manage",
+    // Same register as `cron_manage` / `skill_manage`: an admin surface you
+    // reach for deliberately ("why isn't my hook firing?"), not something a
+    // casual chat turn needs resident. `tool_search` promotes it on demand.
+    "hooks",
     "automation",
     "heartbeat",
     "goal",

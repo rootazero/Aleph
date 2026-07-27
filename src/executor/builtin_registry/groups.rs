@@ -91,6 +91,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "desktop_gui_locate",
             "desktop_som",
             "self_manage",
+            "hooks_manage",
             "self_config",
             "read_config_guide",
             "config_audit",

@@ -2,7 +2,7 @@
 
 use super::{
     substitute_variables, ActionResult, HookContext, ShellHookConsent,
-    DEFAULT_COMMAND_TIMEOUT_SECS,
+    DEFAULT_COMMAND_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS,
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
@@ -152,6 +152,28 @@ fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
 #[must_use]
 pub fn event_payload_json(event: HookEvent, context: &HookContext) -> String {
     build_event_payload(event, context)
+}
+
+/// Short, human-readable label for one hook action, used by the runtime
+/// inventory. Long commands / URLs are elided — the inventory is a "what is
+/// wired up" listing, not a config dump; `hooks.list` still returns the
+/// verbatim file for editing.
+fn describe_action(action: &HookAction) -> String {
+    /// Keep labels to one terminal line.
+    const LABEL_CAP: usize = 80;
+    let (kind, detail) = match action {
+        HookAction::Command { command } => ("command", command.as_str()),
+        HookAction::Prompt { prompt } => ("prompt", prompt.as_str()),
+        HookAction::Agent { agent } => ("agent", agent.as_str()),
+        HookAction::Http { url, .. } => ("http", url.as_str()),
+        HookAction::Plugin { plugin_id, handler } => {
+            return format!("plugin: {plugin_id}::{handler}")
+        }
+    };
+    format!(
+        "{kind}: {}",
+        crate::utils::text_format::truncate_text(detail, LABEL_CAP)
+    )
 }
 
 /// Compare two directory paths for identity, canonicalising best-effort so
@@ -456,8 +478,27 @@ impl HookExecutor {
 
     /// Effective timeout for a single hook execution (per-hook override or
     /// the executor default).
+    ///
+    /// The override is clamped to [`MAX_HOOK_TIMEOUT_SECS`]. This is the ONLY
+    /// place a `timeout_secs` declaration becomes a real deadline, so clamping
+    /// here covers every source (`~/.aleph/hooks.json`, project hooks, plugin
+    /// `hooks.json`, `aleph.plugin.toml`) without a per-loader guard. A zero
+    /// override is treated as "unset" — `Duration::ZERO` would make every hook
+    /// time out instantly.
     fn effective_timeout(&self, override_secs: Option<u64>) -> Duration {
-        override_secs.map_or(self.command_timeout, Duration::from_secs)
+        match override_secs.filter(|s| *s > 0) {
+            Some(secs) => {
+                if secs > MAX_HOOK_TIMEOUT_SECS {
+                    warn!(
+                        requested = secs,
+                        clamped_to = MAX_HOOK_TIMEOUT_SECS,
+                        "hook timeout_secs exceeds the ceiling; clamping"
+                    );
+                }
+                Duration::from_secs(secs.min(MAX_HOOK_TIMEOUT_SECS))
+            }
+            None => self.command_timeout,
+        }
     }
 
     /// Execute a shell command
@@ -934,6 +975,101 @@ impl HookExecutor {
         Ok((current_context, accumulated))
     }
 
+    /// Every registered hook, as the running server sees it.
+    ///
+    /// Answers "what is actually wired up, and will it fire?" — the question
+    /// the `hooks.list` file view structurally cannot, because it only ever
+    /// reads `~/.aleph/hooks.json` and therefore misses project and
+    /// plugin-shipped hooks, the resolved `kind`, and both reachability
+    /// foot-guns. Sorted by (event, priority) so the output reads in roughly
+    /// the order hooks would run.
+    #[must_use]
+    pub fn inventory(&self) -> Vec<super::HookInventoryEntry> {
+        let mut out: Vec<_> = self.hooks.iter().map(|h| self.describe(h)).collect();
+        out.sort_by(|a, b| a.event.cmp(&b.event).then(a.priority.cmp(&b.priority)));
+        out
+    }
+
+    /// Build the inventory row for one hook.
+    fn describe(&self, hook: &HookConfig) -> super::HookInventoryEntry {
+        let kind = match hook.kind {
+            HookKind::Interceptor => "interceptor",
+            HookKind::Observer => "observer",
+        };
+
+        // Reachability mirrors the two load-time foot-gun warnings, reading
+        // the SAME predicates on `HookEvent` so the two can never disagree.
+        let (reachable, issue) = if hook.matcher.is_some() && !hook.event.supports_matcher() {
+            (
+                false,
+                Some(
+                    "`matcher` is set on an event that carries no tool name; matchers test \
+                     tool_name only, so this hook never fires. Drop the matcher."
+                        .to_string(),
+                ),
+            )
+        } else if hook.kind == HookKind::Interceptor && !hook.event.supports_interceptor() {
+            (
+                false,
+                Some(
+                    "kind is `interceptor` but this event's fire-site dispatches observers \
+                     only, so this hook never executes. Use `\"kind\": \"observer\"`."
+                        .to_string(),
+                ),
+            )
+        } else {
+            (true, None)
+        };
+
+        super::HookInventoryEntry {
+            source: hook.plugin_name.clone(),
+            event: serde_json::to_value(hook.event)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| format!("{:?}", hook.event)),
+            kind: kind.to_string(),
+            priority: format!("{:?}", hook.priority).to_lowercase(),
+            matcher: hook.matcher.clone(),
+            actions: hook.actions.iter().map(describe_action).collect(),
+            timeout_secs: hook.timeout_secs,
+            project_root: hook
+                .plugin_name
+                .starts_with("user:project")
+                .then(|| hook.plugin_root.parent().map(|p| p.display().to_string()))
+                .flatten(),
+            reachable,
+            issue,
+            consent: self.consent_state(hook),
+        }
+    }
+
+    /// Consent state for a hook's gated actions (`command` / `http`).
+    ///
+    /// `pending` wins over `approved`: a hook is only fully live when EVERY
+    /// gated action it owns is approved, and reporting the weakest link is
+    /// what makes "my hook doesn't run" diagnosable. `None` means nothing to
+    /// approve (or no gate attached — the unit-test default).
+    fn consent_state(&self, hook: &HookConfig) -> Option<String> {
+        let consent = self.consent.as_ref()?;
+        let mut saw_gated = false;
+        let mut all_approved = true;
+        for action in &hook.actions {
+            let key = match action {
+                HookAction::Command { command } => command.clone(),
+                HookAction::Http { url, .. } => format!("http:{url}"),
+                _ => continue,
+            };
+            saw_gated = true;
+            if !consent.is_approved(&hook.plugin_name, &key) {
+                all_approved = false;
+            }
+        }
+        if !saw_gated {
+            return None;
+        }
+        Some(if all_approved { "approved" } else { "pending" }.to_string())
+    }
+
     /// Execute observer hooks for an event
     ///
     /// Different observers run in parallel, but actions within each observer
@@ -987,7 +1123,6 @@ impl HookExecutor {
 
         futures::future::join_all(futures).await;
     }
-
 }
 
 #[cfg(test)]
@@ -1010,6 +1145,140 @@ mod tests {
             handler: None,
             timeout_secs: None,
         }
+    }
+
+    #[test]
+    fn inventory_flags_a_matcher_on_a_tool_less_event() {
+        // Foot-gun #1: matchers test `tool_name`, which SessionStart has none
+        // of — the hook loads, never fires, and used to say so only in a boot
+        // log line nobody reads hours later.
+        let mut hook = dummy_hook("user:global");
+        hook.event = HookEvent::SessionStart;
+        hook.kind = HookKind::Observer;
+        hook.matcher = Some("Write".into());
+
+        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        assert!(!entry.reachable);
+        assert!(
+            entry
+                .issue
+                .as_deref()
+                .unwrap_or_default()
+                .contains("matcher"),
+            "issue must name the cause: {:?}",
+            entry.issue
+        );
+    }
+
+    #[test]
+    fn inventory_flags_an_interceptor_on_an_observer_only_event() {
+        // Foot-gun #2: the global fire-and-forget seams dispatch observers
+        // only, so an interceptor registered there never executes.
+        let mut hook = dummy_hook("plugin:audit");
+        hook.event = HookEvent::MessageSent;
+        hook.kind = HookKind::Interceptor;
+
+        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        assert!(!entry.reachable);
+        assert!(entry
+            .issue
+            .as_deref()
+            .unwrap_or_default()
+            .contains("observers"));
+    }
+
+    #[test]
+    fn inventory_reports_a_well_formed_hook_as_reachable() {
+        let mut hook = dummy_hook("user:global");
+        hook.event = HookEvent::BeforeToolCall;
+        hook.kind = HookKind::Interceptor;
+        hook.matcher = Some("Write|Edit".into());
+        hook.timeout_secs = Some(30);
+
+        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        assert!(entry.reachable);
+        assert!(entry.issue.is_none());
+        assert_eq!(entry.kind, "interceptor");
+        assert_eq!(entry.event, "before_tool_call", "canonical serde name");
+        assert_eq!(entry.matcher.as_deref(), Some("Write|Edit"));
+        assert_eq!(entry.timeout_secs, Some(30));
+        assert_eq!(entry.actions, vec!["command: true"]);
+        assert_eq!(entry.source, "user:global");
+        // No consent gate attached → nothing to report.
+        assert!(entry.consent.is_none());
+    }
+
+    #[test]
+    fn inventory_reports_pending_consent_for_unapproved_commands() {
+        // The third silent-death cause, and the one with no load-time warning
+        // at all: the hook is perfectly well-formed and simply never runs
+        // because nobody approved it.
+        use crate::sync_primitives::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let consent = Arc::new(crate::extension::hooks::ShellHookConsent::with_path(
+            dir.path().join("allowlist.json"),
+        ));
+        let mut hook = dummy_hook("plugin:linter");
+        hook.event = HookEvent::BeforeToolCall;
+        hook.kind = HookKind::Interceptor;
+
+        let exec = HookExecutor::new(vec![hook]).with_consent(consent.clone());
+        assert_eq!(exec.inventory()[0].consent.as_deref(), Some("pending"));
+
+        // Approving flips it — and the hook stays reachable throughout, since
+        // consent is a separate axis from configuration validity.
+        consent.record_pending("plugin:linter", "true", "BeforeToolCall");
+        let fp = consent.entries()[0].fingerprint.clone();
+        consent.approve(&fp).expect("approve");
+        let entry = &exec.inventory()[0];
+        assert_eq!(entry.consent.as_deref(), Some("approved"));
+        assert!(entry.reachable);
+    }
+
+    #[test]
+    fn inventory_binds_project_hooks_to_their_project_root() {
+        // A project hook only fires inside its own workspace; the inventory
+        // must say which, otherwise "registered but silent" looks like a bug.
+        let root = tempfile::tempdir().unwrap();
+        let hook = project_hook("user:project", root.path());
+        let entry = &HookExecutor::new(vec![hook]).inventory()[0];
+        assert_eq!(
+            entry.project_root.as_deref(),
+            Some(root.path().display().to_string()).as_deref()
+        );
+
+        // Global and plugin hooks are not workspace-bound.
+        let plain = &HookExecutor::new(vec![dummy_hook("plugin:foo")]).inventory()[0];
+        assert!(plain.project_root.is_none());
+    }
+
+    #[test]
+    fn hook_timeout_override_is_clamped_to_the_ceiling() {
+        // An interceptor seam AWAITS its hooks: an unclamped
+        // `timeout_secs: 86400` would wedge the tool gate for a day. The
+        // clamp lives at this single chokepoint so every config source
+        // (user / project / plugin hooks.json / aleph.plugin.toml) is covered.
+        let exec = HookExecutor::empty();
+        assert_eq!(
+            exec.effective_timeout(Some(86_400)),
+            Duration::from_secs(MAX_HOOK_TIMEOUT_SECS)
+        );
+        // Under the ceiling passes through untouched.
+        assert_eq!(exec.effective_timeout(Some(30)), Duration::from_secs(30));
+        // Exactly at the ceiling is allowed.
+        assert_eq!(
+            exec.effective_timeout(Some(MAX_HOOK_TIMEOUT_SECS)),
+            Duration::from_secs(MAX_HOOK_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn zero_and_absent_timeout_fall_back_to_the_executor_default() {
+        // `Duration::ZERO` would time every hook out instantly, so a zero
+        // override is read as "unset" rather than honoured literally.
+        let exec = HookExecutor::empty().with_timeout(Duration::from_secs(11));
+        assert_eq!(exec.effective_timeout(None), Duration::from_secs(11));
+        assert_eq!(exec.effective_timeout(Some(0)), Duration::from_secs(11));
     }
 
     #[test]
@@ -1171,8 +1440,7 @@ mod tests {
         // just in the `$ARGUMENTS` env var. Before the fix only `arguments`
         // was threaded forward, so stdin carried the original input.
         use crate::extension::hooks::HookContext;
-        let rewriter =
-            interceptor_command_hook(r#"echo 'update_input: {"path":"/rewritten"}'"#);
+        let rewriter = interceptor_command_hook(r#"echo 'update_input: {"path":"/rewritten"}'"#);
         let checker = interceptor_command_hook(
             r#"input=$(cat); echo "$input" | grep -q '/rewritten' && echo 'context: saw-rewrite' || echo 'context: saw-original'"#,
         );

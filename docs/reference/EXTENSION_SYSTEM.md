@@ -479,19 +479,49 @@ Hooks allow plugins to intercept and respond to system events.
 |------|-----------|----------|
 | **Interceptor** | Sequential | Can modify context or block execution. Each hook receives the result of the previous one. |
 | **Observer** | Parallel | Fire-and-forget. Errors are logged but don't affect execution. Used for telemetry/logging. |
-| **Resolver** | Sequential | First-win competition. Execution stops when a hook returns a non-null result. |
+
+> A third `Resolver` kind (first-win competition) existed on paper but never
+> gained a production fire-site and was removed under YAGNI. Configs that still
+> say `"kind": "resolver"` parse to the `Observer` default rather than failing.
+
+**Only some events accept each kind.** The single source is
+`HookEvent::supports_matcher()` / `supports_interceptor()`
+(`src/extension/types/hooks.rs`); both are surfaced per hook by
+`hooks_manage(action="list")` and as a catalogue by
+`hooks_manage(action="events")`. Two silent-death shapes to avoid:
+
+- a `matcher` on an event whose context carries no tool name (matchers test
+  `tool_name` **only**, so the hook loads and never fires);
+- `"kind": "interceptor"` on an event whose fire-site dispatches observers
+  only (message / provider / gateway / subagent seams).
+
+Both are warned at load time **and** reported per hook as
+`reachable: false` with an `issue` string by the runtime inventory.
 
 #### Available Hook Events
+
+The exhaustive list is `HookEvent::ALL`. Frequently used:
 
 | Event | Description |
 |-------|-------------|
 | `before_tool_call` | Before any tool is invoked |
 | `after_tool_call` | After tool execution completes |
+| `session_start` / `session_end` | Session lifecycle |
+| `user_prompt_submit` | Before the first provider call of a run; may inject context or halt |
+| `stop` | Gate on the loop's stop (veto = keep going, with feedback) |
 | `subagent_start` | When a sub-agent is spawned (observer-only; env: `SUBAGENT_ID`, `SUBAGENT_TYPE`, `TASK`, `PARENT_AGENT_ID`, `CHAIN_DEPTH`) |
 | `subagent_stop` | When a sub-agent completes (observer-only; env: `SUBAGENT_ID`, `SUBAGENT_TYPE`, `OUTCOME`, `ITERATIONS`, `DURATION_MS`, `TOKENS_USED`, `KEY_FINDINGS`) |
-| `on_message` | When a user message is received |
-| `on_response` | Before response is sent to user |
-| `on_error` | When an error occurs |
+| `message_received` / `message_sending` / `message_sent` | Channel I/O (observer-only) |
+| `before_compaction` / `after_compaction` | Around history compaction |
+| `pre_api_request` / `post_api_request` | Around a provider call (observer-only) |
+
+#### Limits enforced on every hook
+
+| Limit | Value | Why |
+|-------|-------|-----|
+| `timeout_secs` ceiling | 300s | Interceptor seams **await** hooks; an unclamped override would wedge the tool gate. Clamped at `HookExecutor::effective_timeout`, covering every config source. |
+| stdout / stderr / HTTP body read | 64KB | Truncation is a **hard error** (fail-closed): a `deny:` printed past the cap must never be silently dropped. |
+| Injected context per block | ~2500 tokens | Over-budget `context:` text is spilled to `~/.aleph/data/hook_outputs/<session>/` and replaced by a head/tail preview naming the file, so the model can still read it in full on demand. |
 
 #### Hook Example
 
@@ -510,19 +540,11 @@ async function onBeforeTool(context: HookContext): Promise<HookContext> {
 async function onAfterTool(context: HookContext): Promise<void> {
   console.log(`Tool ${context.toolName} executed in ${context.duration}ms`);
 }
-
-// Resolver: First-win
-async function resolveConfig(context: HookContext): Promise<Config | null> {
-  if (context.key in myConfigs) {
-    return myConfigs[context.key];  // Wins, stops chain
-  }
-  return null;  // Continue to next resolver
-}
 ```
 
 ### Hook Priorities
 
-Priorities determine execution order for interceptors and resolvers.
+Priorities determine execution order for interceptors.
 
 | Priority | Value | Use Case |
 |----------|-------|----------|

@@ -49,11 +49,13 @@
 mod consent;
 mod executor;
 mod json_output;
+mod output_budget;
 mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
-pub use executor::{event_payload_json, HookExecutor};
 pub(crate) use executor::read_capped;
+pub use executor::{event_payload_json, HookExecutor};
+pub use output_budget::{budget_hook_contexts, join_messages};
 pub(crate) use user_settings::default_kind_for_event;
 pub use user_settings::load_user_hooks;
 
@@ -62,6 +64,19 @@ use std::path::{Path, PathBuf};
 
 /// Default timeout for command execution (300 seconds)
 const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 300;
+
+/// Hard ceiling on any per-hook `timeout_secs` override.
+///
+/// `timeout_secs` arrives from three untrusted-ish sources (`hooks.json`,
+/// a plugin's `hooks.json`, `aleph.plugin.toml`) and used to be honoured
+/// verbatim. An interceptor seam AWAITS its hooks, so a hook declaring
+/// `timeout_secs: 86400` wedges the tool-dispatch (or stop) gate for a day —
+/// well past the 180s per-tool budget the rest of the system assumes. The
+/// clamp is applied at the single chokepoint that turns the override into a
+/// `Duration` ([`HookExecutor::effective_timeout`]), so every source is
+/// covered without touching any loader. hermes clamps identically
+/// (`MAX_TIMEOUT_SECONDS = 300`).
+pub(crate) const MAX_HOOK_TIMEOUT_SECS: u64 = 300;
 
 /// Hook execution context
 #[derive(Debug, Clone, Default)]
@@ -143,6 +158,52 @@ impl HookContext {
         self.tool_error = Some(is_error);
         self
     }
+}
+
+/// One registered hook as the running server actually sees it.
+///
+/// This is the **runtime** view, deliberately distinct from the `hooks.list`
+/// RPC's **file** view of `~/.aleph/hooks.json`. The file view cannot answer
+/// the questions that actually go wrong in practice:
+///
+/// - project-scoped and plugin-shipped hooks never appear in it at all;
+/// - `kind` is usually omitted in config and resolved per-event at load time,
+///   so the file does not say what a hook will actually do;
+/// - the two silent-death foot-guns (a `matcher` on an event with no tool
+///   name; `kind: interceptor` on an observer-only seam) were previously
+///   reported ONLY as a `warn!` line at boot — invisible to anyone debugging
+///   "why doesn't my hook fire?" hours later.
+///
+/// [`reachable`](Self::reachable) answers exactly that question, and
+/// [`issue`](Self::issue) says why not.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HookInventoryEntry {
+    /// Registration source: `user:global`, `user:project`, `user:project-local`,
+    /// or a plugin name.
+    pub source: String,
+    /// Canonical (snake_case) event name.
+    pub event: String,
+    /// Resolved kind — `interceptor` or `observer` — after per-event defaults.
+    pub kind: String,
+    /// Priority bucket; interceptors run in ascending order.
+    pub priority: String,
+    /// Tool-name regex, when set.
+    pub matcher: Option<String>,
+    /// One label per action, e.g. `command: ./lint.sh` / `http: https://…`.
+    pub actions: Vec<String>,
+    /// Effective per-hook timeout override, if declared.
+    pub timeout_secs: Option<u64>,
+    /// For project-scoped hooks, the project this hook is bound to. Such a
+    /// hook only fires while the agent works inside that folder.
+    pub project_root: Option<String>,
+    /// Whether this hook can fire at all with its current configuration.
+    pub reachable: bool,
+    /// Why it cannot fire (or a caveat worth surfacing), when applicable.
+    pub issue: Option<String>,
+    /// Consent state for hooks whose actions need operator approval
+    /// (`command` / `http`): `approved`, `pending`, or `None` when the hook
+    /// has no gated action or no consent gate is attached.
+    pub consent: Option<String>,
 }
 
 /// Result of a single hook action
