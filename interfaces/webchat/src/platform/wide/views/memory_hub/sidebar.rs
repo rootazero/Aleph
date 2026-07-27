@@ -156,6 +156,11 @@ pub fn MemorySidebar() -> impl IntoView {
                         on:input=move |ev| mem.search_query.set(event_target_value(&ev))
                         on:keydown=move |ev| { if ev.key() == "Enter" { mem.search_nonce.update(|n| *n += 1); } }
                     />
+                    <Show when=move || !mem.search_query.get().trim().is_empty()>
+                        <p class="mt-1 text-[10px] leading-snug text-text-tertiary">
+                            {move || t_string!(i18n, memory.search_hint_local).to_string()}
+                        </p>
+                    </Show>
                 </div>
             </div>
 

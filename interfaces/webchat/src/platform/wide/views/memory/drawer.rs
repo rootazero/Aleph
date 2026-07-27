@@ -1,18 +1,19 @@
 //! Right-side detail drawer for the memory console. Note rows fetch full
 //! markdown + backlinks via `graph.node_detail` and can be edited inline via
 //! `graph.update_note` (mirrors the canvas node detail panel). Raw rows show
-//! their stored Q/A and, when from a search, the similarity score. Pure I/O —
-//! all persistence is JSON-RPC (R4).
+//! their stored Q/A. Pure I/O — all persistence is JSON-RPC (R4).
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use super::provenance::ProvenanceSection;
+use super::toast::{push_toast, ToastKind, ToastSlot};
 use crate::api::graph::GraphApi;
-use crate::api::{CompressedFact, RawMemory};
+use crate::api::{CompressedFact, RawMemory, TraceKind};
 use crate::canvas_engine::category_color::category_color;
 use crate::canvas_engine::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::memory::MemoryState;
 
 /// What the drawer is currently showing.
@@ -23,13 +24,17 @@ pub enum DrawerTarget {
 }
 
 #[component]
-pub fn DetailDrawer(target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
+pub fn DetailDrawer(
+    target: RwSignal<Option<DrawerTarget>>,
+    toast_slot: ToastSlot,
+    #[prop(into)] on_mutated: Callback<()>,
+) -> impl IntoView {
     view! {
         {move || match target.get() {
             None => view! { <div></div> }.into_any(),
             Some(DrawerTarget::Note(fact)) => view! {
                 <DrawerShell target=target>
-                    <NoteDetail fact=fact target=target />
+                    <NoteDetail fact=fact target=target toast_slot=toast_slot on_mutated=on_mutated />
                 </DrawerShell>
             }
             .into_any(),
@@ -69,7 +74,12 @@ fn DrawerShell(target: RwSignal<Option<DrawerTarget>>, children: Children) -> im
 }
 
 #[component]
-fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> impl IntoView {
+fn NoteDetail(
+    fact: CompressedFact,
+    target: RwSignal<Option<DrawerTarget>>,
+    toast_slot: ToastSlot,
+    #[prop(into)] on_mutated: Callback<()>,
+) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let mem = expect_context::<MemoryState>();
@@ -127,6 +137,14 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                         body.set(Some(content));
                         is_saving.set(false);
                         is_editing.set(false);
+                        push_toast(
+                            toast_slot,
+                            t_string!(i18n, memory.toast_saved).to_string(),
+                            ToastKind::Success,
+                        );
+                        // The card list's `updated_at` would otherwise sit stale
+                        // until an unrelated refresh; a save changes it for real.
+                        on_mutated.run(());
                     }
                     Err(e) => {
                         is_saving.set(false);
@@ -160,6 +178,17 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                         ))));
                         is_saving.set(false);
                         is_renaming.set(false);
+                        push_toast(
+                            toast_slot,
+                            t_string!(i18n, memory.toast_renamed).to_string(),
+                            ToastKind::Success,
+                        );
+                        // Without this, the card list still keys off the old
+                        // path: it stays clickable (opening a drawer whose
+                        // `graph.node_detail` fails against the renamed path)
+                        // and selectable (its delete would target a path that
+                        // no longer exists) until an unrelated refresh happens.
+                        on_mutated.run(());
                     }
                     Err(e) => {
                         is_saving.set(false);
@@ -188,6 +217,13 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                     Ok(()) => {
                         target.set(None);
                         is_saving.set(false);
+                        mem.highlight_note_id.set(None);
+                        push_toast(
+                            toast_slot,
+                            t_string!(i18n, memory.toast_deleted).to_string(),
+                            ToastKind::Success,
+                        );
+                        on_mutated.run(());
                     }
                     Err(e) => {
                         is_saving.set(false);
@@ -365,6 +401,12 @@ fn NoteDetail(fact: CompressedFact, target: RwSignal<Option<DrawerTarget>>) -> i
                 })
             }}
 
+            <ProvenanceSection
+                agent=Signal::derive(move || mem.agent_id.get())
+                target=path.clone()
+                kind=TraceKind::Note
+            />
+
             <div class="mt-4 pt-3 border-t border-border-subtle text-[11px] italic text-text-tertiary">
                 {t!(i18n, memory.note_lifecycle_managed)}
             </div>
@@ -406,21 +448,21 @@ fn navigate_drawer(
 #[component]
 fn RawDetail(raw: RawMemory) -> impl IntoView {
     let i18n = use_i18n();
-    let sim = raw.similarity;
+    let mem = expect_context::<MemoryState>();
+    let raw_id = raw.id.clone();
     view! {
         <div>
             <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-2">
                 {t!(i18n, memory.facet_raw)}
             </div>
-            {sim.map(|s| view! {
-                <div class="mb-3 text-xs">
-                    <span class="text-text-tertiary">{t!(i18n, memory.similarity)}": "</span>
-                    <span class="font-mono text-primary">{format!("{s:.3}")}</span>
-                </div>
-            })}
             <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary font-sans">
-                {raw.content}
+                {raw.display_text()}
             </pre>
+            <ProvenanceSection
+                agent=Signal::derive(move || mem.agent_id.get())
+                target=raw_id.clone()
+                kind=TraceKind::Raw
+            />
         </div>
     }
 }

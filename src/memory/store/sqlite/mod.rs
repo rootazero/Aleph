@@ -51,6 +51,50 @@ pub struct SqliteMemoryBackend {
     tuning: RetrievalTuning,
 }
 
+/// Build the `WHERE` clause and its positional bind values for the
+/// user-facing `raw_memories` projection.
+///
+/// `count_raw_memories` and `get_raw_memories_dashboard` both go through
+/// here, so a filtered count can never disagree with the filtered list. That
+/// disagreement was the phantom-page bug: the console paired a *global* count
+/// with an *agent-scoped* list, so "next page" stayed enabled forever and
+/// eventually landed on an empty page.
+///
+/// `tool_invocation` rows are per-call telemetry consumed by the Dream cycle
+/// by source, never user-facing memories, so they are excluded unconditionally.
+fn raw_where(agent_id: Option<&str>, query: Option<&str>) -> (String, Vec<rusqlite::types::Value>) {
+    use rusqlite::types::Value;
+
+    let mut sql = String::from(" WHERE source != 'tool_invocation'");
+    let mut binds: Vec<Value> = Vec::new();
+
+    if let Some(agent) = agent_id {
+        sql.push_str(" AND agent_id = ?");
+        binds.push(Value::Text(agent.to_string()));
+    }
+    // A blank search box browses; it does not match every row containing a space.
+    if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+        sql.push_str(r" AND content LIKE ? ESCAPE '\'");
+        binds.push(Value::Text(format!("%{}%", escape_like(q))));
+    }
+
+    (sql, binds)
+}
+
+/// Escape SQL `LIKE` metacharacters so a query containing `%`, `_` or `\`
+/// matches them literally. Without this, searching for "100%" matches every
+/// row. Pairs with the `ESCAPE '\'` clause emitted by [`raw_where`].
+fn escape_like(q: &str) -> String {
+    let mut out = String::with_capacity(q.len());
+    for ch in q.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 impl SqliteMemoryBackend {
     /// Create a new `SqliteMemoryBackend` backed by the given database file.
     ///
@@ -149,39 +193,46 @@ impl SqliteMemoryBackend {
 
     /// Get raw memory entries (session summaries / conversation records).
     ///
+    /// `query` is an optional substring filter over `content` (`LIKE '%q%'`).
+    /// SQLite's default `LIKE` is case-insensitive for ASCII only — it does
+    /// not case-fold non-ASCII text, so a search over this store's Chinese
+    /// content is effectively case-sensitive there. `raw_memories` has no
+    /// fts5 shadow table — this is a browse-UI filter, and building real FTS
+    /// here would need a DDL migration plus sync triggers (deliberately out
+    /// of scope).
+    ///
     /// `offset` skips the first N rows of the `created_at DESC` ordering,
     /// enabling stable server-side pagination for the dashboard.
     ///
-    /// `tool_invocation` rows are per-call telemetry (consumed by the Dream
-    /// cycle / insights aggregator *by source*, see [`RawMemorySource::ToolInvocation`])
-    /// — they are not user-facing memories, so the dashboard excludes them.
+    /// The `WHERE` clause comes from [`raw_where`], shared with
+    /// [`Self::count_raw_memories`] so list and count cannot drift.
     pub fn get_raw_memories_dashboard(
         &self,
         agent_id: Option<&str>,
+        query: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, AlephError> {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
+        use rusqlite::types::Value;
 
         let conn = self
             .conn
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        let sql = if agent_id.is_some() {
-            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
-             is_processed, created_at \
-             FROM raw_memories WHERE agent_id = ?1 AND source != 'tool_invocation' \
-             ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
-        } else {
-            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
-             is_processed, created_at \
-             FROM raw_memories WHERE source != 'tool_invocation' \
-             ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
-        };
+        let (where_sql, mut binds) = raw_where(agent_id, query);
+        let sql = format!(
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, \
+             attachment_text, is_processed, created_at \
+             FROM raw_memories{where_sql} \
+             ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        );
+        binds.push(Value::Integer(limit as i64));
+        binds.push(Value::Integer(offset as i64));
 
         let mut stmt = conn
-            .prepare(sql)
+            .prepare(&sql)
             .map_err(|e| AlephError::config(format!("get_raw_memories_dashboard prepare: {e}")))?;
 
         let row_mapper = |row: &rusqlite::Row| -> rusqlite::Result<RawMemory> {
@@ -202,15 +253,9 @@ impl SqliteMemoryBackend {
             })
         };
 
-        let rows = if let Some(ws) = agent_id {
-            stmt.query_map(
-                rusqlite::params![ws, limit as i64, offset as i64],
-                row_mapper,
-            )
-        } else {
-            stmt.query_map(rusqlite::params![limit as i64, offset as i64], row_mapper)
-        }
-        .map_err(|e| AlephError::config(format!("get_raw_memories_dashboard failed: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(binds), row_mapper)
+            .map_err(|e| AlephError::config(format!("get_raw_memories_dashboard failed: {e}")))?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -221,22 +266,27 @@ impl SqliteMemoryBackend {
         Ok(results)
     }
 
-    /// Count user-facing raw memory entries.
+    /// Count user-facing raw memory entries under the same filter the
+    /// dashboard list uses.
     ///
-    /// Excludes `tool_invocation` telemetry rows so the count matches the
-    /// dashboard list (see [`Self::get_raw_memories_dashboard`]).
-    pub fn count_raw_memories(&self) -> Result<i64, AlephError> {
+    /// Shares [`raw_where`] with [`Self::get_raw_memories_dashboard`]: pass the
+    /// same `(agent_id, query)` and the count is guaranteed to describe exactly
+    /// that list. Excludes `tool_invocation` telemetry.
+    pub fn count_raw_memories(
+        &self,
+        agent_id: Option<&str>,
+        query: Option<&str>,
+    ) -> Result<i64, AlephError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        conn.query_row(
-            "SELECT COUNT(*) FROM raw_memories WHERE source != 'tool_invocation'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
+        let (where_sql, binds) = raw_where(agent_id, query);
+        let sql = format!("SELECT COUNT(*) FROM raw_memories{where_sql}");
+
+        conn.query_row(&sql, rusqlite::params_from_iter(binds), |row| row.get(0))
+            .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
     }
 
     /// Delete a single raw memory entry by id.
@@ -257,5 +307,68 @@ impl SqliteMemoryBackend {
             )
             .map_err(|e| AlephError::config(format!("delete_raw_memory failed: {e}")))?;
         Ok(affected > 0)
+    }
+}
+
+#[cfg(test)]
+mod raw_where_tests {
+    use super::{escape_like, raw_where};
+    use rusqlite::types::Value;
+
+    #[test]
+    fn baseline_always_excludes_telemetry() {
+        let (sql, binds) = raw_where(None, None);
+        assert_eq!(sql, " WHERE source != 'tool_invocation'");
+        assert!(binds.is_empty());
+    }
+
+    #[test]
+    fn agent_scope_adds_one_bind() {
+        let (sql, binds) = raw_where(Some("main"), None);
+        assert_eq!(sql, " WHERE source != 'tool_invocation' AND agent_id = ?");
+        assert_eq!(binds, vec![Value::Text("main".to_string())]);
+    }
+
+    #[test]
+    fn query_adds_escaped_like_bind() {
+        let (sql, binds) = raw_where(None, Some("deploy"));
+        assert_eq!(
+            sql,
+            " WHERE source != 'tool_invocation' AND content LIKE ? ESCAPE '\\'"
+        );
+        assert_eq!(binds, vec![Value::Text("%deploy%".to_string())]);
+    }
+
+    #[test]
+    fn agent_and_query_bind_in_positional_order() {
+        let (sql, binds) = raw_where(Some("main"), Some("smoke"));
+        assert_eq!(
+            sql,
+            " WHERE source != 'tool_invocation' AND agent_id = ? AND content LIKE ? ESCAPE '\\'"
+        );
+        assert_eq!(
+            binds,
+            vec![
+                Value::Text("main".to_string()),
+                Value::Text("%smoke%".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn blank_query_is_not_a_filter() {
+        // A whitespace-only search box must browse, not match every row that
+        // happens to contain a space.
+        assert_eq!(raw_where(None, Some("   ")).1.len(), 0);
+        assert_eq!(raw_where(None, Some("")).1.len(), 0);
+    }
+
+    #[test]
+    fn like_metacharacters_match_literally() {
+        // Without escaping, a user searching for "100%" would match everything.
+        assert_eq!(escape_like("100%"), r"100\%");
+        assert_eq!(escape_like("a_b"), r"a\_b");
+        assert_eq!(escape_like(r"c\d"), r"c\\d");
+        assert_eq!(escape_like("plain"), "plain");
     }
 }

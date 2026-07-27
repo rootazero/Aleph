@@ -89,8 +89,8 @@ pub fn PhoneMemory() -> impl IntoView {
             spawn_local(async move {
                 st.loaded.set(false);
                 st.error.set(None);
-                match MemoryApi::list_facts(&dashboard, &agent, Some(NOTE_WINDOW), 0).await {
-                    Ok(facts) => st.window.set(facts),
+                match MemoryApi::list_facts(&dashboard, &agent, NOTE_WINDOW, 0).await {
+                    Ok((facts, _total)) => st.window.set(facts),
                     Err(e) => st.error.set(Some(e)),
                 }
                 st.loaded.set(true);

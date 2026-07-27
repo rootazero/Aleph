@@ -12,24 +12,6 @@ const fn default_limit() -> usize {
     100
 }
 
-// === graph.neighbors ===
-#[derive(Debug, Deserialize)]
-pub struct GraphNeighborsParams {
-    pub node_id: String,
-    #[serde(default = "default_depth")]
-    pub depth: u8,
-    #[serde(default = "default_neighbor_limit")]
-    pub limit: usize,
-    #[serde(default)]
-    pub agent_id: Option<String>,
-}
-const fn default_depth() -> u8 {
-    2
-}
-const fn default_neighbor_limit() -> usize {
-    200
-}
-
 // === graph.node_detail ===
 #[derive(Debug, Deserialize)]
 pub struct GraphNodeDetailParams {
@@ -150,7 +132,7 @@ pub struct GraphQueryResponse {
 /// render dangling/tombstone links distinctly.
 #[derive(Debug, Serialize)]
 pub struct OutgoingLinkDto {
-    pub to: String,          // resolved path (active/tombstone) or raw (dangling)
+    pub to: String, // resolved path (active/tombstone) or raw (dangling)
     pub raw: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relation: Option<String>,
@@ -159,7 +141,7 @@ pub struct OutgoingLinkDto {
     pub confidence: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_by: Option<String>,
-    pub status: String,      // active | dangling | tombstone
+    pub status: String, // active | dangling | tombstone
 }
 
 #[derive(Debug, Serialize)]
@@ -170,28 +152,26 @@ pub struct NoteDetailResponse {
     pub outgoing: Vec<OutgoingLinkDto>,
 }
 
+/// One full-text search hit.
+///
+/// Carries the whole index row, not just an id: the panel renders hits as note
+/// cards, and a hit that only knows its own name would force a second round
+/// trip per row. Every field below is already on `NoteIndexEntry`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResultDto {
     pub id: String,
     pub name: String,
     pub category: String,
+    /// `"title"` when the query matched the filename, `"content"` otherwise.
     pub match_field: String,
+    pub agent_id: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub tags: Vec<String>,
+    pub link_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GraphSearchResponse {
     pub results: Vec<SearchResultDto>,
-}
-
-// === graph.neighbors response (radial navigation) ===
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GraphNeighborsResponse {
-    /// The node that was queried — pinned at world origin in the radial layout.
-    pub center: NoteNodeDto,
-    /// Neighbor nodes (excludes the center node itself).
-    pub nodes: Vec<NoteNodeDto>,
-    /// Edges between all returned nodes (including center).
-    pub edges: Vec<NoteLinkDto>,
-    /// Hop distance from center for each neighbor node: 1 = direct, 2 = two hops.
-    pub hop_depth: std::collections::HashMap<String, u8>,
 }

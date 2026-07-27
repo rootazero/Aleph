@@ -41,7 +41,7 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
     let results: Vec<SearchResultDto> = entries
         .into_iter()
         .map(|entry| {
-            // Determine match field heuristic: check if filename contains the query.
+            // Match-field heuristic: did the query hit the filename?
             let match_field = if entry
                 .filename
                 .to_lowercase()
@@ -56,6 +56,11 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
                 name: entry.filename,
                 category: entry.category,
                 match_field,
+                agent_id: entry.agent_id,
+                created_at: entry.created_at,
+                updated_at: entry.updated_at,
+                tags: entry.tags,
+                link_count: entry.link_count,
             }
         })
         .collect();
@@ -154,5 +159,28 @@ mod tests {
             !names.iter().any(|n| n.contains("AlphaNote")),
             "non-default agent's hit must NOT appear: {names:?}"
         );
+    }
+
+    /// The SearchHits layer renders these as note cards, so a hit must carry
+    /// everything a card shows. All of it is already on NoteIndexEntry.
+    #[tokio::test]
+    async fn search_hits_carry_full_note_row() {
+        let db = make_db();
+        let mut note = make_note_with_fact("TaggedSearchNote", "distinctivefactword");
+        note.tags = vec!["rust".to_string(), "ci".to_string()];
+        db.index_note(&note, "main", "concept").await.unwrap();
+
+        let req = search_request("distinctivefactword", 20, Some("main"));
+        let resp = handle_search_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+
+        let v = resp.result.expect("result");
+        let hit = &v["results"][0];
+        assert_eq!(hit["agent_id"], "main");
+        assert!(hit["created_at"].is_i64(), "created_at must be present");
+        assert!(hit["updated_at"].is_i64(), "updated_at must be present");
+        assert!(hit["link_count"].is_u64(), "link_count must be present");
+        let tags: Vec<String> = serde_json::from_value(hit["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["rust".to_string(), "ci".to_string()]);
     }
 }
