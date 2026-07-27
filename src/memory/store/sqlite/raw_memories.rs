@@ -677,17 +677,20 @@ mod tests {
             .with_agent("main");
         old.created_at = 1000;
 
-        let mut fresh_main = RawMemory::new("fresh".to_string(), RawMemorySource::SessionCompressed)
-            .with_path("aleph://correction/c2")
-            .with_agent("main");
+        let mut fresh_main =
+            RawMemory::new("fresh".to_string(), RawMemorySource::SessionCompressed)
+                .with_path("aleph://correction/c2")
+                .with_agent("main");
         fresh_main.created_at = 3000;
 
         // A second agent's correction — the audit-wide count must include it
         // (the count reader is deliberately NOT agent-scoped, unlike the fetch).
-        let mut fresh_other =
-            RawMemory::new("fresh-other".to_string(), RawMemorySource::SessionCompressed)
-                .with_path("aleph://correction/c3")
-                .with_agent("other-agent");
+        let mut fresh_other = RawMemory::new(
+            "fresh-other".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_path("aleph://correction/c3")
+        .with_agent("other-agent");
         fresh_other.created_at = 3000;
 
         // A non-correction path after the watermark must be excluded by prefix.
@@ -781,7 +784,7 @@ mod tests {
 
         // Page 1 (offset 0, limit 2): newest two.
         let p1 = backend
-            .get_raw_memories_dashboard(Some("pager"), 2, 0)
+            .get_raw_memories_dashboard(Some("pager"), None, 2, 0)
             .unwrap();
         assert_eq!(p1.len(), 2);
         assert_eq!(p1[0].content, "entry-4");
@@ -789,7 +792,7 @@ mod tests {
 
         // Page 2 (offset 2): next two, no overlap with page 1.
         let p2 = backend
-            .get_raw_memories_dashboard(Some("pager"), 2, 2)
+            .get_raw_memories_dashboard(Some("pager"), None, 2, 2)
             .unwrap();
         assert_eq!(p2.len(), 2);
         assert_eq!(p2[0].content, "entry-2");
@@ -797,7 +800,7 @@ mod tests {
 
         // Page 3 (offset 4): final partial page.
         let p3 = backend
-            .get_raw_memories_dashboard(Some("pager"), 2, 4)
+            .get_raw_memories_dashboard(Some("pager"), None, 2, 4)
             .unwrap();
         assert_eq!(p3.len(), 1);
         assert_eq!(p3[0].content, "entry-0");
@@ -817,7 +820,7 @@ mod tests {
         // Deleting an existing id reports success and removes exactly one row.
         assert!(backend.delete_raw_memory(&drop_id).unwrap());
         let remaining = backend
-            .get_raw_memories_dashboard(Some("del"), 10, 0)
+            .get_raw_memories_dashboard(Some("del"), None, 10, 0)
             .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, keep.id);
@@ -849,16 +852,38 @@ mod tests {
 
         // Dashboard (both agent-scoped and global) hides telemetry.
         let scoped = backend
-            .get_raw_memories_dashboard(Some("noise"), 100, 0)
+            .get_raw_memories_dashboard(Some("noise"), None, 100, 0)
             .unwrap();
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].content, "real conversation");
 
-        let global = backend.get_raw_memories_dashboard(None, 100, 0).unwrap();
+        let global = backend
+            .get_raw_memories_dashboard(None, None, 100, 0)
+            .unwrap();
         assert_eq!(global.len(), 1);
 
         // The user-facing count matches the dashboard (1, not 4).
-        assert_eq!(backend.count_raw_memories().unwrap(), 1);
+        assert_eq!(backend.count_raw_memories(None, None).unwrap(), 1);
+
+        // Count and list must agree under EVERY filter combination — a global
+        // count paired with a scoped list is what produced phantom pages.
+        for (agent, query) in [
+            (None, None),
+            (Some("noise"), None),
+            (None, Some("real")),
+            (Some("noise"), Some("real")),
+            (Some("noise"), Some("nonexistent-needle")),
+        ] {
+            let listed = backend
+                .get_raw_memories_dashboard(agent, query, 1000, 0)
+                .unwrap()
+                .len() as i64;
+            let counted = backend.count_raw_memories(agent, query).unwrap();
+            assert_eq!(
+                listed, counted,
+                "count/list disagree for agent={agent:?} query={query:?}"
+            );
+        }
 
         // Telemetry is still retrievable by source for the Dream metrics path.
         let tele_rows = backend

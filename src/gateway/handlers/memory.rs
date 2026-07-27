@@ -10,7 +10,11 @@ use super::parse_params;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
-/// Memory entry for JSON serialization
+/// Memory entry for JSON serialization.
+///
+/// One raw conversation record. `user_input` / `ai_output` stay separate so the
+/// panel can style the two halves independently — joining them into one string
+/// server-side threw that away.
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub id: String,
@@ -18,9 +22,11 @@ pub struct MemoryEntry {
     pub window_title: String,
     pub user_input: String,
     pub ai_output: String,
-    pub timestamp: i64,
+    /// Session the row was recorded in, when known. Already selected by the
+    /// dashboard query — previously dropped on the floor here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub similarity_score: Option<f32>,
+    pub session_id: Option<String>,
+    pub timestamp: i64,
 }
 
 /// Window memory info
@@ -94,94 +100,88 @@ impl Default for SearchParams {
     }
 }
 
-/// Search memory.
+/// Search raw memory (Layer 1 conversation records).
 ///
-/// With a non-empty `query`, runs a full-text (FTS5) search over the compiled
-/// knowledge notes and returns the matches. With an empty query, returns the
-/// most recent raw memories (dashboard view).
+/// `query` filters `content` by substring; empty `query` browses. This handler
+/// is the **only** raw-memory entry point, and it returns **only** raw rows.
 ///
-/// # Example Request
+/// It used to run a note full-text search when `query` was non-empty —
+/// duplicating `graph.search`, which calls the same `search_notes_fts`. The
+/// panel wired that branch into its raw-memory table, so searching showed note
+/// filenames dressed as conversation records and the row delete button targeted
+/// `delete_raw_memory` with a note path (always `Ok(false)` → error → swallowed).
+/// Note search belongs to `graph.search`; keep it there.
 ///
-/// ```json
-/// {"jsonrpc":"2.0","method":"memory.search","params":{"query":"rust","limit":10},"id":1}
-/// ```
+/// The response carries `total`, the row count under the *same* `(agent_id,
+/// query)` filter as `memories` (via [`MemoryBackend::count_raw_memories`]),
+/// not the whole-store total. The panel's pager sizes itself from this field;
+/// a store-wide total would leave "next" enabled past the last match once a
+/// query narrows the list — the B4 phantom-page bug, resurrected for the
+/// filtered case.
 pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    use crate::memory::notes::store::NoteStore;
-
     let params: SearchParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    // A non-empty query runs a real full-text search over knowledge notes.
-    // Previously the `query` parameter was silently ignored.
-    let query = params.query.as_deref().map_or("", str::trim);
-    if !query.is_empty() {
-        let agent_id = params
-            .agent_id
-            .as_deref()
-            .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
-        return match db
-            .search_notes_fts(query, agent_id, params.limit as usize)
-            .await
-        {
-            Ok(notes) => {
-                let entries: Vec<MemoryEntry> = notes
-                    .into_iter()
-                    .map(|n| MemoryEntry {
-                        id: n.path.clone(),
-                        agent_id: n.agent_id,
-                        window_title: n.category,
-                        user_input: n.filename,
-                        ai_output: String::new(),
-                        timestamp: n.updated_at,
-                        similarity_score: None,
-                    })
-                    .collect();
-                JsonRpcResponse::success(request.id, json!({ "memories": entries }))
-            }
-            Err(e) => JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Note search failed: {e}"),
-            ),
-        };
-    }
-
-    // Scope to an agent namespace even when agent_id is omitted — matching the
-    // FTS branch above. Passing None drops the SQL `WHERE agent_id` clause and
-    // returns every agent's raw memories, violating workspace isolation.
+    // Scope to an agent namespace even when agent_id is omitted: passing None
+    // drops the SQL `WHERE agent_id` clause and returns every agent's raw
+    // memories, violating workspace isolation.
     let agent_id = params
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
-    match db.get_raw_memories_dashboard(
+    let query = params
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
+
+    let memories = match db.get_raw_memories_dashboard(
         Some(agent_id),
+        query,
         params.limit as usize,
         params.offset as usize,
     ) {
-        Ok(memories) => {
-            let entries: Vec<MemoryEntry> = memories
-                .into_iter()
-                .map(|m| MemoryEntry {
-                    id: m.id,
-                    agent_id: m.agent_id,
-                    window_title: String::new(),
-                    user_input: m.content,
-                    ai_output: String::new(),
-                    timestamp: m.created_at,
-                    similarity_score: None,
-                })
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "memories": entries }))
+        Ok(memories) => memories,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Search raw memories failed: {e}"),
+            )
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Search raw memories failed: {e}"),
-        ),
-    }
+    };
+
+    // Same (agent_id, query) as the list above, so `total` describes exactly
+    // that filtered set — not the whole store. A pager sized to the store
+    // total would keep "next" enabled past the last match (B4 phantom-page,
+    // resurrected for the filtered case).
+    let total = match db.count_raw_memories(Some(agent_id), query) {
+        Ok(total) => total,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Count raw memories failed: {e}"),
+            )
+        }
+    };
+
+    let entries: Vec<MemoryEntry> = memories
+        .into_iter()
+        .map(|m| MemoryEntry {
+            id: m.id,
+            agent_id: m.agent_id,
+            window_title: String::new(),
+            user_input: m.content,
+            ai_output: String::new(),
+            session_id: m.session_id,
+            timestamp: m.created_at,
+        })
+        .collect();
+    JsonRpcResponse::success(request.id, json!({ "memories": entries, "total": total }))
 }
 
 // ============================================================================
@@ -279,7 +279,11 @@ const fn default_facts_limit() -> usize {
     50
 }
 
-/// Fact entry for JSON serialization
+/// Fact entry for JSON serialization.
+///
+/// `tags` / `link_count` / `updated_at` are already carried by every
+/// `NoteIndexEntry` the underlying query returns — this handler used to drop
+/// them, leaving the panel with nothing per row but a filename.
 #[derive(Debug, Clone, Serialize)]
 pub struct FactEntry {
     pub id: String,
@@ -288,8 +292,11 @@ pub struct FactEntry {
     #[serde(rename = "fact_type")]
     pub note_type: String,
     pub created_at: i64,
+    pub updated_at: i64,
     pub category: String,
     pub path: String,
+    pub tags: Vec<String>,
+    pub link_count: usize,
 }
 
 /// List note memories (compiled knowledge notes from `notes_index`).
@@ -309,6 +316,9 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
 
     match db.list_notes(agent_id).await {
         Ok(notes) => {
+            // `total` describes the whole agent store, so the pager can size
+            // itself instead of guessing from a full page.
+            let total = notes.len() as i64;
             let entries: Vec<FactEntry> = notes
                 .into_iter()
                 .skip(params.offset)
@@ -319,12 +329,15 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
                     content: n.filename.clone(),
                     note_type: n.category.clone(),
                     created_at: n.created_at,
+                    updated_at: n.updated_at,
                     category: n.category,
                     path: n.path,
+                    tags: n.tags,
+                    link_count: n.link_count,
                 })
                 .collect();
 
-            JsonRpcResponse::success(request.id, json!({ "facts": entries }))
+            JsonRpcResponse::success(request.id, json!({ "facts": entries, "total": total }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -358,20 +371,54 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 // Stats
 // ============================================================================
 
-/// Get memory statistics
+/// Parameters for `memory.stats`.
+#[derive(Debug, Default, Deserialize)]
+pub struct StatsParams {
+    /// Scope every count to one agent. Omitted = whole store.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+/// Get memory statistics.
+///
+/// **Every count in one response shares one scope.** Mixing a cross-agent note
+/// count with an agent-scoped list is what made the console's stat cards
+/// contradict the rows beneath them, and what fed the raw pager a total that
+/// did not describe the list it was paging.
+///
+/// The note graph is inherently per-agent, so an unscoped request returns
+/// `null` for the graph counts rather than passing the default agent's graph
+/// off as everyone's. A failed graph fetch for a *scoped* request also
+/// returns `null`, not `0` — a failure to count is not "counted zero", and
+/// padding it with a plausible-looking `0` would tell the panel something
+/// false with total confidence.
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
-    let raw_count = db.count_raw_memories().unwrap_or(0);
+    let params: StatsParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
 
-    // Note memory: count across all agents
-    let note_count = db.count_all_notes().await.unwrap_or(0);
+    let agent = params.agent_id.as_deref();
+    let scope = if agent.is_some() { "agent" } else { "global" };
 
-    // Graph stats for default agent
-    let agent_id = crate::routing::DEFAULT_AGENT_ID;
-    let (graph_nodes, graph_edges) = match db.get_graph_data(agent_id, 10000).await {
-        Ok((entries, links)) => (entries.len() as i64, links.len() as i64),
-        Err(_) => (0, 0),
+    let raw_count = db.count_raw_memories(agent, None).unwrap_or(0);
+    let note_count = match agent {
+        Some(a) => db.count_notes(a).await.unwrap_or(0),
+        None => db.count_all_notes().await.unwrap_or(0),
+    };
+
+    let (graph_nodes, graph_edges) = match agent {
+        Some(a) => match db.get_graph_data(a, 10000).await {
+            Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
+            // A failed fetch is "we could not count", not "this agent has
+            // zero nodes" — report the same `null` an unscoped request gets,
+            // not a confident-looking zero.
+            Err(_) => (None, None),
+        },
+        None => (None, None),
     };
 
     JsonRpcResponse::success(
@@ -379,9 +426,12 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         json!({
             "totalMemories": raw_count,
             "totalFacts": note_count,
+            // Notes have no invalidated state (unlike the retired fact model),
+            // so this mirrors totalFacts. Kept for response compatibility.
             "validFacts": note_count,
             "totalGraphNodes": graph_nodes,
             "totalGraphEdges": graph_edges,
+            "scope": scope,
         }),
     )
 }
@@ -903,29 +953,29 @@ mod tests {
             window_title: "Test Window".to_string(),
             user_input: "Hello".to_string(),
             ai_output: "Hi there".to_string(),
+            session_id: Some("s-1".to_string()),
             timestamp: 1234567890,
-            similarity_score: Some(0.5), // Use 0.5 which can be represented exactly in f32
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["id"], "test-id");
-        assert_eq!(json["similarity_score"], 0.5);
+        assert_eq!(json["session_id"], "s-1");
     }
 
     #[test]
-    fn test_memory_entry_no_score() {
+    fn test_memory_entry_no_session() {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
             window_title: "".to_string(),
             user_input: "".to_string(),
             ai_output: "".to_string(),
+            session_id: None,
             timestamp: 0,
-            similarity_score: None,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
-        assert!(json.get("similarity_score").is_none());
+        assert!(json.get("session_id").is_none());
     }
 }
 
@@ -982,5 +1032,424 @@ mod trace_tests {
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
             "evidence references seeded raw raw-ev1"
         );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_search_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.search".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    async fn seed(db: &MemoryBackend) {
+        // One raw conversation row…
+        let raw = RawMemory {
+            id: "raw-1".to_string(),
+            content: "we should run smoke tests before deploy".to_string(),
+            source: RawMemorySource::Transcript,
+            agent_id: "main".to_string(),
+            session_id: Some("s-77".to_string()),
+            path: None,
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        };
+        db.insert_raw_memory(&raw).await.unwrap();
+
+        // …and one note whose body ALSO contains the word "smoke", so an
+        // accidental note-FTS branch would be visible in the assertion.
+        let note = KnowledgeNote {
+            title: "deploy-notes".to_string(),
+            category: "facts".to_string(),
+            facts: vec!["smoke".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_500,
+            content_hash: "h1".to_string(),
+            ..Default::default()
+        };
+        db.index_note(&note, "main", "facts").await.unwrap();
+    }
+
+    /// The core regression: a query must NEVER return note rows. The old
+    /// handler ran a note FTS search here and returned note paths as if they
+    /// were conversation records, so the console's "Raw" tab showed note
+    /// filenames and its delete button targeted a table that does not hold them.
+    #[tokio::test]
+    async fn query_returns_raw_rows_never_notes() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "smoke",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        let memories = resp.result.expect("success")["memories"]
+            .as_array()
+            .expect("memories array")
+            .clone();
+        assert_eq!(memories.len(), 1, "only the raw row matches, not the note");
+        assert_eq!(memories[0]["id"], "raw-1");
+        assert_eq!(memories[0]["session_id"], "s-77");
+        assert!(
+            memories[0]["user_input"]
+                .as_str()
+                .unwrap()
+                .contains("smoke tests"),
+            "raw content must be returned verbatim, not a note filename"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_query_browses_all_raw_rows() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        assert_eq!(
+            resp.result.expect("success")["memories"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn query_with_no_match_returns_empty_not_error() {
+        let db = db();
+        seed(&db).await;
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "zzz-nothing-matches",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+
+        assert!(resp.error.is_none());
+        assert!(resp.result.expect("success")["memories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    /// B4 phantom-page regression, filtered case: `total` must be the
+    /// FILTERED row count (`count_raw_memories(agent, query)`), not the
+    /// whole-store count and not the page size. Seed count (5) and match
+    /// count (2) are deliberately different numbers so a store-total
+    /// implementation cannot pass by coincidence, and the page is capped
+    /// below the match count so `memories.len()` can't be mistaken for it
+    /// either.
+    #[tokio::test]
+    async fn total_reflects_filtered_count_not_store_count() {
+        let db = db();
+
+        for (i, content) in [
+            "apple pie recipe",
+            "banana bread recipe",
+            "apple crumble recipe",
+            "cherry tart recipe",
+            "date squares recipe",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let raw = RawMemory {
+                id: format!("raw-{i}"),
+                content: content.to_string(),
+                source: RawMemorySource::Transcript,
+                agent_id: "main".to_string(),
+                session_id: None,
+                path: None,
+                layer: None,
+                attachment_text: None,
+                is_processed: false,
+                created_at: 1_700_000_000 + i as i64,
+            };
+            db.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "apple",
+                "limit": 1
+            })),
+            db.clone(),
+        )
+        .await;
+
+        let result = resp.result.expect("success");
+        assert_eq!(
+            result["memories"].as_array().unwrap().len(),
+            1,
+            "page is capped by limit"
+        );
+        assert_eq!(
+            result["total"], 2,
+            "total must be the filtered count (2 rows contain 'apple'), not \
+             the store total (5 seeded) and not the page size (1)"
+        );
+
+        // Empty query: total covers all (non-telemetry) rows.
+        let resp = handle_search(
+            req(serde_json::json!({
+                "agent_id": "main",
+                "query": "",
+                "limit": 20
+            })),
+            db,
+        )
+        .await;
+        assert_eq!(resp.result.expect("success")["total"], 5);
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_stats_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: Option<serde_json::Value>) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.stats".to_string(),
+            params,
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    fn note(title: &str) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.to_string(),
+            category: "facts".to_string(),
+            facts: vec!["f".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            content_hash: format!("h-{title}"),
+            ..Default::default()
+        }
+    }
+
+    fn raw(id: &str, agent: &str) -> RawMemory {
+        RawMemory {
+            id: id.to_string(),
+            content: "c".to_string(),
+            source: RawMemorySource::Transcript,
+            agent_id: agent.to_string(),
+            session_id: None,
+            path: None,
+            layer: None,
+            attachment_text: None,
+            is_processed: false,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    /// Two agents, asymmetric data. Scoped stats must describe ONE of them.
+    async fn seed(db: &MemoryBackend) {
+        db.index_note(&note("a1"), "alpha", "facts").await.unwrap();
+        db.index_note(&note("a2"), "alpha", "facts").await.unwrap();
+        db.index_note(&note("b1"), "beta", "facts").await.unwrap();
+        db.insert_raw_memory(&raw("r1", "alpha")).await.unwrap();
+        db.insert_raw_memory(&raw("r2", "alpha")).await.unwrap();
+        db.insert_raw_memory(&raw("r3", "beta")).await.unwrap();
+    }
+
+    /// The regression: the stat cards used to show a cross-agent note count and
+    /// a global raw count while the rows underneath were agent-scoped, so
+    /// switching agents left the numbers describing a different population.
+    #[tokio::test]
+    async fn scoped_stats_describe_only_that_agent() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "agent");
+        assert_eq!(v["totalFacts"], 2, "alpha has 2 notes, not 3");
+        assert_eq!(v["totalMemories"], 2, "alpha has 2 raw rows, not 3");
+    }
+
+    #[tokio::test]
+    async fn unscoped_stats_are_global_and_disclaim_graph_counts() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(None), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "global");
+        assert_eq!(v["totalFacts"], 3, "all agents");
+        assert_eq!(v["totalMemories"], 3, "all agents");
+        // The note graph is inherently per-agent. Rather than silently report
+        // the default agent's graph as if it were everyone's, an unscoped
+        // request declines to answer.
+        assert!(v["totalGraphNodes"].is_null());
+        assert!(v["totalGraphEdges"].is_null());
+    }
+
+    #[tokio::test]
+    async fn scoped_stats_answer_graph_counts() {
+        let db = db();
+        seed(&db).await;
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let v = r.result.expect("success");
+        assert_eq!(v["totalGraphNodes"], 2, "alpha's two notes are two nodes");
+        assert!(v["totalGraphEdges"].is_i64());
+    }
+
+    /// `null` means "could not count", not "counted zero". An agent that
+    /// genuinely has no notes must still get back a real `0`, not `null` —
+    /// otherwise the fix that makes a *failed* graph fetch report `null`
+    /// (see `handle_stats`) would also blur an empty-but-successful fetch
+    /// into "unanswerable".
+    #[tokio::test]
+    async fn scoped_stats_zero_notes_reports_real_zero_not_null() {
+        let db = db();
+        seed(&db).await; // "gamma" is never seeded — zero notes, not an error
+
+        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "gamma" }))), db).await;
+        let v = r.result.expect("success");
+
+        assert_eq!(v["scope"], "agent");
+        assert_eq!(
+            v["totalGraphNodes"], 0,
+            "gamma has zero notes, but zero is a real, known count"
+        );
+        assert_eq!(v["totalGraphEdges"], 0);
+        assert!(!v["totalGraphNodes"].is_null());
+        assert!(!v["totalGraphEdges"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod list_facts_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("mem_lf_test_{}", uuid::Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn req(params: serde_json::Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "memory.listFacts".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn total_counts_the_whole_store_not_the_page() {
+        let db = db();
+        for i in 0..7 {
+            let note = KnowledgeNote {
+                title: format!("n{i}"),
+                category: "facts".to_string(),
+                facts: vec!["f".to_string()],
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+                content_hash: format!("h{i}"),
+                ..Default::default()
+            };
+            db.index_note(&note, "main", "facts").await.unwrap();
+        }
+
+        let v = handle_list_facts(
+            req(serde_json::json!({ "agent_id": "main", "limit": 3, "offset": 0 })),
+            db,
+        )
+        .await
+        .result
+        .expect("success");
+
+        assert_eq!(v["facts"].as_array().unwrap().len(), 3, "page is capped");
+        assert_eq!(v["total"], 7, "total describes the store, not the page");
+    }
+
+    /// tags / link_count / updated_at are already on every NoteIndexEntry the
+    /// query returns. They used to be dropped here, which is why the panel had
+    /// nothing to show per row beyond a filename.
+    #[tokio::test]
+    async fn passes_through_tags_link_count_and_updated_at() {
+        let db = db();
+        let mut note = KnowledgeNote {
+            title: "tagged".to_string(),
+            category: "facts".to_string(),
+            facts: vec!["f".to_string()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_009_999,
+            content_hash: "h".to_string(),
+            ..Default::default()
+        };
+        note.tags = vec!["rust".to_string(), "ci".to_string()];
+        db.index_note(&note, "main", "facts").await.unwrap();
+
+        let v = handle_list_facts(
+            req(serde_json::json!({ "agent_id": "main", "limit": 50, "offset": 0 })),
+            db,
+        )
+        .await
+        .result
+        .expect("success");
+
+        let row = &v["facts"][0];
+        assert_eq!(row["updated_at"], 1_700_009_999_i64);
+        let tags: Vec<String> = serde_json::from_value(row["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["rust".to_string(), "ci".to_string()]);
+        assert!(row["link_count"].is_u64());
     }
 }

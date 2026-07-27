@@ -77,12 +77,23 @@ pub struct NoteDetailResponse {
     pub outgoing: Vec<OutgoingLinkDto>,
 }
 
+/// One `graph.search` hit — a full note index row, mirroring the server DTO.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResultDto {
     pub id: String,
     pub name: String,
     pub category: String,
     pub match_field: String,
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub link_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +121,26 @@ mod tests {
         assert_eq!(link.relation, None);
         assert_eq!(link.label, None);
         assert_eq!(link.resolved_by, None);
+    }
+
+    /// A narrow response from an un-upgraded core (Panel connected to an older
+    /// gateway over LAN, per the "Panel ↔ Daemon" deployment split) must still
+    /// parse — the new fields default rather than fail the whole response.
+    #[test]
+    fn search_result_dto_deserializes_without_the_new_fields() {
+        let json = r#"{
+            "id": "wiki/rust",
+            "name": "rust",
+            "category": "wiki",
+            "match_field": "content"
+        }"#;
+        let hit: SearchResultDto = serde_json::from_str(json).expect("Failed to deserialize");
+        assert_eq!(hit.id, "wiki/rust");
+        assert_eq!(hit.agent_id, "");
+        assert_eq!(hit.created_at, 0);
+        assert_eq!(hit.updated_at, 0);
+        assert!(hit.tags.is_empty());
+        assert_eq!(hit.link_count, 0);
     }
 
     #[test]

@@ -110,9 +110,11 @@ impl Drop for Spinner {
             return;
         }
         self.stop_signal.notify_one();
-        if let Some(handle) = self.join.take() {
-            handle.abort();
-        }
+        // Don't abort: the spawned task owns its own terminal cleanup
+        // (clear-line on stderr) and will exit naturally when the signal
+        // fires. Aborting here kills the task before it can clean up,
+        // leaving the spinner glyph and message on stderr.
+        let _ = self.join.take();
     }
 }
 

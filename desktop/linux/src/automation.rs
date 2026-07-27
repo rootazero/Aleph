@@ -105,9 +105,18 @@ impl AutomationCapability for LinuxAutomation {
                 c
             }
             ScriptLanguage::PowerShell => {
-                let mut c = tokio::process::Command::new("pwsh");
-                c.args(["-NoProfile", "-Command", source]);
-                c
+                // Try pwsh first, fall back to powershell (older Ubuntu LTS).
+                for bin in ["pwsh", "powershell"] {
+                    let mut c = tokio::process::Command::new(bin);
+                    c.args(["-NoProfile", "-Command", source]);
+                    match spawn_background(c, log_path).await {
+                        Ok(pid) => return Ok(pid),
+                        Err(_) => continue,
+                    }
+                }
+                return Err(DesktopError::InputFailed(
+                    "PowerShell not found (install pwsh or powershell)".into(),
+                ));
             }
             ScriptLanguage::AppleScript | ScriptLanguage::Jxa => {
                 return Err(DesktopError::NotImplemented(format!(

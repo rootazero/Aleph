@@ -40,7 +40,9 @@ impl RpcClient {
         }
     }
 
-    // WASM is single-threaded; holding RefCell borrow across await is safe.
+    // RefCell borrow across await is safe because RpcClient (via Rc + RefCell)
+    // only compiles on WASM single-threaded targets. Non-WASM builds would
+    // fail on `Send` bounds of the futures runtime before reaching this point.
     #[allow(clippy::await_holding_refcell_ref)]
     pub async fn call<P, R>(&self, method: &str, params: P) -> Result<R, RpcError>
     where

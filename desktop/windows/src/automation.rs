@@ -8,6 +8,17 @@ use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIM
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
 
+/// Escape a value for safe interpolation into a PowerShell single-quoted
+/// string. Doubles embedded single quotes per PowerShell escaping rules,
+/// and escapes wildcard characters used by `-Filter`.
+fn ps_escape_sq(s: &str) -> String {
+    s.replace('\'', "''")
+        .replace('[', "`[")
+        .replace(']', "`]")
+        .replace('*', "`*")
+        .replace('?', "`?")
+}
+
 /// Build the `powershell.exe`/`cmd.exe` command for a script, without running
 /// it. Shared by the synchronous and background execution paths.
 fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {
@@ -125,9 +136,10 @@ impl AutomationCapability for WindowsAutomation {
             let name = name.to_string();
             let input = input.map(str::to_string);
 
+            let escaped_name = ps_escape_sq(&name);
             let script = format!(
                 r#"$lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter '{0}.lnk' | Select-Object -First 1; if ($lnk) {{ $shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut($lnk.FullName); & $shortcut.TargetPath $shortcut.Arguments }} else {{ exit 1 }}"#,
-                name.replace('\'', "''")
+                escaped_name
             );
 
             let mut cmd = Command::new("powershell.exe");

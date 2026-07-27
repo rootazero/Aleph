@@ -70,9 +70,13 @@ fn pid_belongs_to_server(pid: u32) -> bool {
 /// Send a signal to a process (Unix only)
 #[cfg(unix)]
 fn send_signal(pid: u32, signal: i32) -> bool {
-    // SAFETY: `pid` is a positive `u32` cast to `i32`. The caller is Unix-gated and
-    // `signal` is a valid Unix signal constant.
-    unsafe { libc::kill(pid as i32, signal) == 0 }
+    // SAFETY: `pid` is a positive `u32` that fits in `i32`. The caller is
+    // Unix-gated and `signal` is a valid Unix signal constant.
+    let pid_i32: i32 = match pid.try_into() {
+        Ok(pid) => pid,
+        Err(_) => return false,
+    };
+    unsafe { libc::kill(pid_i32, signal) == 0 }
 }
 
 /// Locate the `aleph-server` binary.
@@ -436,7 +440,14 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
         .iter()
         .filter(|line| {
             if let Some(lvl) = level {
-                line.to_uppercase().contains(&lvl.to_uppercase())
+                let upper = line.to_uppercase();
+                let target = lvl.to_uppercase();
+                // Match the level as a whole word to avoid false positives
+                // (e.g. "warn" matching "warning" or "forewarned").
+                upper.contains(&format!(" {target} ")) || upper.contains(&format!("\t{target}\t"))
+                    || upper.starts_with(&format!("{target} ")) || upper.starts_with(&format!("{target}\t"))
+                    || upper.ends_with(&format!(" {target}")) || upper.ends_with(&format!("\t{target}"))
+                    || upper == target
             } else {
                 true
             }

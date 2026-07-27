@@ -160,8 +160,14 @@ impl AlephClient {
                 if let Some(req) = maybe_req {
                     let result = if let Some(error) = response.error {
                         Err(error)
+                    } else if response.result.is_some() {
+                        Ok(response.result.unwrap())
                     } else {
-                        Ok(response.result.unwrap_or(Value::Null))
+                        Err(JsonRpcError {
+                            code: -32600,
+                            message: "Invalid Request: missing both result and error".into(),
+                            data: None,
+                        })
                     };
                     let _ = req.tx.send(result);
                 }
@@ -230,7 +236,7 @@ impl AlephClient {
     fn next_id(&self) -> String {
         let id = self
             .id_counter
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         id.to_string()
     }
 

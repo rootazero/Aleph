@@ -47,17 +47,33 @@ impl AlephConnector for WasmConnector {
         let msg_tx = tx.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Some(txt) = e.data().as_string() {
-                if let Ok(val) = serde_json::from_str::<Value>(&txt) {
-                    let _ = msg_tx.unbounded_send(Ok(val));
+                match serde_json::from_str::<Value>(&txt) {
+                    Ok(val) => {
+                        let _ = msg_tx.unbounded_send(Ok(val));
+                    }
+                    Err(e) => {
+                        let _ = msg_tx.unbounded_send(Err(
+                            ConnectionError::ReceiveFailed(format!(
+                                "malformed frame: {e}"
+                            )),
+                        ));
+                    }
                 }
             }
         }) as Box<dyn FnMut(MessageEvent)>);
         ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
         onmessage_callback.forget();
 
-        // OnError
+        // OnError — surface the error to the receive stream so the message
+        // loop can observe it. onerror and onclose are independent events per
+        // the WebSocket spec, so an error without a close (e.g. policy
+        // violation) would otherwise never reach the receiver.
+        let error_tx = tx.clone();
         let onerror_callback = Closure::wrap(Box::new(move |e: ErrorEvent| {
             web_sys::console::error_1(&e);
+            let _ = error_tx.unbounded_send(Err(ConnectionError::ConnectionLost(
+                "WebSocket error".into(),
+            )));
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
