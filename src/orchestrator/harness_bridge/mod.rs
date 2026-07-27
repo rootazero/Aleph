@@ -205,10 +205,12 @@ pub struct AgentHarnessRunner {
     /// configured. Invoked once per run, pre-loop.
     pub routing_recall: Option<Arc<crate::routing::RoutingRecall>>,
 
-    /// Per-(agent_id, model) static-overhead cache for the context-occupancy
-    /// estimate. Populated on demand by `estimate_context`; never evicted
-    /// (spec D5). Shared `Arc` so the gauge estimate is cheap on repeated
-    /// history switches.
+    /// Per-(session_key, model) prompt-overhead cache for the context-occupancy
+    /// estimate. Populated on demand by `estimate_context`; bounded LRU, no TTL
+    /// (spec D5). Shared `Arc` so re-hydrating the same conversation (session
+    /// switch, `run.session_updated` live refresh) does not re-assemble the
+    /// prompt. Session-keyed because the measured prompt is session-shaped —
+    /// see [`context_estimate::OverheadCache`].
     pub estimate_overhead_cache:
         std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
 
