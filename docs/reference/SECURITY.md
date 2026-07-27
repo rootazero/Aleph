@@ -336,7 +336,13 @@ call sees the real command, not just the word `bash`) — it is a rendering aid,
 not an enforcement gate. The catastrophic floor that actually refuses commands
 is `sandbox::command_policy`, whose real hardline rules
 (`command_policy/rules.rs::hardline_rules`) cover the never-legitimate shapes:
-fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device.
+fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device,
+and on Windows a drive/hive-root recursive delete, `format`, and the
+destruction chain (shadow copies, backup catalog, boot recovery, raw disk).
+A `powershell -EncodedCommand` payload is decoded before matching, so encoding
+a script does not remove it from the floor's view — see
+[SANDBOX.md](SANDBOX.md) § "command-policy hard-filter" for the normalisation
+contract.
 
 ---
 
@@ -1188,6 +1194,8 @@ from the pre-revert build:
 | Verifier | none | none | `agent_identity(action="verify")` + `aleph-server identity verify` (offline, daemon-independent) | **ahead** — shipped with the chain, not after it |
 | Floor beneath the top tier | under `Never`, dangerous commands are Forbidden — **but only when the sandbox profile is Managed**; with it off, the top tier is unbounded | hermes: `HARDLINE_PATTERNS` + a user-editable `approvals.deny` floor that survives yolo | `[sandbox.command_policy]` holds under every tier including `Full` (unit-pinned); a `deny` override also beats the tier | **aligned** — better placed than codex's |
 | What the human SEES | full argv + cwd + the model's own justification | hermes: the whole command, redacted, with all findings merged into one prompt. pi: typed per-tool event | the redacted **action summary** (the command / `operation=delete path=…`), on every surface | **gap → closed** — this was the sharpest defect of round 1 |
+| Windows command parsing | `shell-command/src/command_safety/`: a **resident PowerShell AST subprocess** (`powershell_parser.ps1`, id-tagged request protocol) + shlex/operator splitting for cmd — feeding *approval escalation*, not a hard block | hermes / pi: no Windows-specific command surface at all | `RegexSet` hard-filter over a normalised copy; codex's AST **deliberately not ported** (see below), its three *semantics* were: same-segment gaps (`seg!()`), order-free verb/flag/target, full `Remove-Item` alias set | **aligned on semantics** — deliberately different on mechanism |
+| Encoded-payload visibility | AST parser sees the real script; codex owns the encoding side | none | `-EncodedCommand` (and `-e`/`-ec`/`-enc`) base64/UTF-16LE decoded in `normalize.rs` and appended to the scan text, bounded (64 KiB × 8 payloads × 2 nesting rounds) and text-gated; decoding precedes the tier split so `enforcement = "off"` cannot restore the blind spot | **gap → closed 2026-07-27** — the floor was one base64 away from being off on Windows |
 
 ### Deliberately not ported (do not add these)
 
@@ -1198,6 +1206,20 @@ from the pre-revert build:
   harness pick the recovery strategy for it = no.* Aleph compresses the denial
   into context and the model re-plans. A future round that "helpfully" adds a
   retry matrix is reverting an architectural decision, not fixing an omission.
+- **codex's resident PowerShell AST parser** (`command_safety/powershell_parser.ps1`
+  + a cached child process per executable, id-tagged request/response over
+  stdio). It is the right tool for codex's job — deciding whether an argv is
+  *safe enough to auto-approve* — and it buys real precision: it can tell
+  `echo del /f x` from `del /f x`, which a regex cannot. Aleph does not take it,
+  for three reasons that are unlikely to change: it puts a PowerShell round-trip
+  on **every** sandboxed exec (R3 core minimalism, R10 thin harness), it makes
+  the catastrophic floor **depend on PowerShell being installed and healthy** on
+  a path whose whole point is to fail closed, and Aleph's approval-side analogue
+  (`exec_approval/` + exec tier) is a different layer from this one. What *was*
+  ported is the semantics — same-segment matching, order-free verb/flag/target,
+  the complete `Remove-Item` alias set. The accepted cost is the
+  `echo del /s C:\` class of false positive; that is a **known trade**, recorded
+  in FEATURE_LOCATOR §3.8, not an omission to fix later.
 - **pi's approve-with-modification** (the gate mutates `event.input` in place).
   Tempting, but pi does **no re-validation after mutation**, and Aleph has no
   consumer for a third "allow-if-rewritten" state that a tier enum cannot express.

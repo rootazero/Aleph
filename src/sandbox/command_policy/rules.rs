@@ -21,9 +21,127 @@
 //!   that never bypass, even under `--yolo`.
 //! * [`default_rules`] — high-signal but occasionally-legitimate shapes that an
 //!   operator can downgrade (`warn`) or disable (`off`) for staged rollout.
+//!
+//! # Shared pattern fragments
+//!
+//! Several rules must agree on what "a raw block device" or "a bare Windows
+//! volume root" looks like. Those vocabularies live in the `macro_rules!`
+//! fragments below and are spliced in with [`concat!`], so the alternations
+//! cannot drift apart the way hand-copied ones do — an earlier revision carried
+//! the device class three times under a "kept in sync" comment, which is the
+//! documentation of a hazard rather than a defence against it.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Canonical raw-block-device class shared by the `dd` / redirect / device-wipe
+/// rules. Written **once** here so a newly-covered device class can never drift
+/// out of sync across the three device rules — the alternation was previously
+/// pasted in three to four separate copies, and adding a class to one rule but
+/// not another was a silent bypass (exactly the failure that let
+/// `dd of=/dev/mapper/vg-root` escape the catastrophic floor). Covers:
+/// SCSI/SATA (`sd`), NVMe, macOS (`disk`, which also matches Linux
+/// `/dev/disk/by-*` symlinks), legacy IDE (`hd`), Xen/AWS-EC2 root volumes
+/// (`xvd`), virtio (`vd`), SD/eMMC (`mmcblk`), loop, optical (`sr`), persistent
+/// memory (`pmem`), device-mapper / LVM (`dm-`, `mapper`), software-RAID (`md`),
+/// and the kernel-memory nodes (`mem`/`kmem`/`port`) a raw write to which
+/// compromises or crashes the host. The alternation is anchored right after
+/// `/dev/`, and every rule only tests match *presence*, so alternation order
+/// does not affect matching.
+macro_rules! unix_block_device {
+    () => {
+        r"(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|mapper|md|mem|kmem|port)"
+    };
+}
+
+/// Shared `rm` + recursive-flag prefix for the two recursive-remove rules
+/// (hardline [`rm_rf_root`](hardline_rules) and tunable
+/// [`rm_rf_system_path`](default_rules)), single-sourced so the notion of "a
+/// recursive rm" cannot drift between the floor and the warn. Matches `rm`
+/// then, in any flag order, a recursive flag — a combined cluster
+/// (`-rf`/`-fr`/`-R`), a bare short `-r`, or long `--recursive` — with any
+/// other flags allowed before/after. The trailing `\s+` leaves the scan
+/// positioned at the target argument, which each rule then constrains.
+macro_rules! rm_recursive_prefix {
+    () => {
+        r"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+"
+    };
+}
+
+/// Bare-root target for the hardline [`rm_rf_root`] rule: one-or-more `/` (so
+/// `//`, `///` — all POSIX root — are covered, closing the `rm -rf //`
+/// bypass), an optional trailing `.` (`/.`), then a terminator or the root
+/// glob `*`. A redundant-slash *subdir* (`//tmp`) does not match: the char
+/// after the slash run is a path segment, not a terminator.
+macro_rules! rm_root_target {
+    () => {
+        r#"["']?/+\.?(?:\s|\*|$|["';&|])"#
+    };
+}
+
+/// Gap between two tokens that must belong to the **same command segment**.
+///
+/// `[^\n]*` spans the whole line, which lets an unrelated later statement
+/// supply the second half of a rule: `del /s build\* & echo C:\` matched the
+/// drive-root floor because `echo C:\` sat on the same line. Excluding the
+/// shell statement separators (`&`, `|`, `;` — cmd, PowerShell and POSIX all
+/// use these) keeps a verb bound to its own arguments. Rules that deliberately
+/// straddle a pipe (the download cradles) keep `[^\n]*` instead.
+macro_rules! seg {
+    () => {
+        r"[^\n&|;]*"
+    };
+}
+
+/// Every spelling of "delete this recursively" an agent can reach on Windows:
+/// the cmd built-ins plus the PowerShell cmdlet **and its aliases**, which all
+/// resolve to `Remove-Item` (`ri`, `rm`, `rd`, `rmdir`, `del`, `erase`). A rule
+/// that only knew the literal `remove-item` was bypassed by every alias.
+macro_rules! win_delete_verb {
+    () => {
+        r#"(?:^|[\s;&|({"'])(?:remove-item|erase|rmdir|del|rd|ri|rm)\b"#
+    };
+}
+
+/// Recursive-delete flag in either dialect: PowerShell's `-Recurse` (and every
+/// prefix abbreviation it accepts, plus POSIX clusters like `-rf`) or cmd's
+/// `/s`.
+macro_rules! win_recursive_flag {
+    () => {
+        r"(?:-r[a-z]*|/s)\b"
+    };
+}
+
+/// A **bare** Windows volume or registry-hive root, as a standalone argument.
+///
+/// Includes the leading token boundary and the trailing terminator, because
+/// "bare" is the whole point: `C:\Users\me\build` shares the `C:` prefix with
+/// `C:\` and only the terminator tells them apart. Covers the literal drive
+/// letter, the environment-variable spellings cmd and PowerShell expand to the
+/// same thing (`%SystemDrive%`, `$env:SystemDrive`), and the hive roots that
+/// PowerShell's registry provider exposes as drives.
+///
+/// The optional `\\?` is what makes this work in both normalisation views: the
+/// POSIX view has folded the separator away, the native view still carries it
+/// (see [`super::normalize`]).
+macro_rules! win_bare_root {
+    () => {
+        r#"["'\s](?:[a-z]:|%systemdrive%|\$\{?env:systemdrive\}?|hk(?:lm|cu|cr|u|ey_local_machine|ey_current_user|ey_classes_root|ey_users):)\\?(?:\*|\s|["';&|]|$)"#
+    };
+}
+
+/// A Windows system location whose recursive removal breaks the host: anything
+/// under `\Windows` / `\ProgramData` / `\Program Files`, the *bare* `\Users`
+/// root, and the environment-variable spellings of the same places.
+///
+/// `\Users\<someone>\...` is deliberately **not** here — an agent workspace
+/// normally lives there, so matching subpaths would warn on every ordinary
+/// build-directory cleanup.
+macro_rules! win_system_path {
+    () => {
+        r#"["'\s](?:(?:[a-z]:)?[\\/](?:windows|winnt|programdata|program files(?: \(x86\))?)(?:[\\/]|["'\s;&|*]|$)|(?:[a-z]:)?[\\/]users(?:["'\s;&|*]|$)|%(?:systemroot|windir|programfiles|programdata)%|\$\{?env:(?:systemroot|windir|programfiles|programdata)\}?)"#
+    };
+}
 
 /// What a matched rule asks the policy to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -97,36 +215,35 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
         },
         PolicyRule {
             name: "rm_rf_root",
-            description: "recursive rm of the bare filesystem root (/ or /*) — irreversible whole-disk wipe",
+            description: "recursive rm of the bare filesystem root (/, //, /. or /*) — irreversible whole-disk wipe",
             action: Block,
             // The catastrophic sibling of the tunable `rm_rf_system_path`: a
-            // recursive remove whose target is the *bare* root `/` (or the root
-            // glob `/*`), which `rm_no_preserve_root` misses entirely on the
-            // platforms where it bites hardest — busybox/Alpine `rm -rf /` has
-            // no `--preserve-root` guard, and GNU `rm -rf /*` expands the glob so
-            // the `--preserve-root` refusal never triggers. Force is optional: in
-            // the agent's non-interactive shell `rm -r /` deletes without a
-            // prompt. A recursive flag (combined `-rf`/`-fr`, short `-r`/`-R`, or
-            // long `--recursive`) plus a bare-root target is the precise,
-            // never-legitimate shape — a subdir target (`/etc`, `/tmp/x`) does
-            // not match because the char after `/` must be a terminator, leaving
-            // those to the tunable `rm_rf_system_path` warn.
-            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?/(?:\s|\*|$|["';&|])"#,
+            // recursive remove whose target is the *bare* root `/` (or `//`,
+            // `/.`, the root glob `/*`), which `rm_no_preserve_root` misses
+            // entirely on the platforms where it bites hardest — busybox/Alpine
+            // `rm -rf /` has no `--preserve-root` guard, and GNU `rm -rf /*`
+            // expands the glob so the `--preserve-root` refusal never triggers.
+            // Force is optional: in the agent's non-interactive shell `rm -r /`
+            // deletes without a prompt. Recursive flag + bare-root target is the
+            // precise, never-legitimate shape — a subdir target (`/etc`,
+            // `/tmp/x`, `//tmp`) does not match because the char after the slash
+            // run must be a terminator, leaving those to the tunable
+            // `rm_rf_system_path` warn. Prefix + root fragment single-sourced in
+            // `rm_recursive_prefix!` / `rm_root_target!`.
+            pattern: concat!(rm_recursive_prefix!(), rm_root_target!()),
         },
-        // Canonical raw-block-device class shared by the dd / redirect / wipe
-        // rules below: SCSI/SATA (`sd`), NVMe, macOS (`disk`), legacy IDE
-        // (`hd`), virtio (`vd`), Xen/AWS-EC2 root volumes (`xvd` — previously
-        // uncovered, so `dd of=/dev/xvda` wiped an EC2 root disk undetected),
-        // SD/eMMC (`mmcblk`), loop, optical (`sr`), persistent memory (`pmem`),
-        // device-mapper/LVM (`dm-`) and software-RAID (`md`). Kept in sync
-        // across all three device rules. `xvd` precedes `vd` only for reading
-        // clarity — the alternation is anchored right after `/dev/`, so order
-        // does not affect matching.
+        // Raw-block-device rules. The device class itself is single-sourced in
+        // `unix_block_device!()` and composed into each pattern via
+        // `concat!`, so a device class added there is covered by all three at
+        // once — no more manual "keep in sync" across four pasted copies.
         PolicyRule {
             name: "dd_to_block_device",
             description: "dd writing directly to a raw block device (disk-wipe / overwrite)",
             action: Block,
-            pattern: r#"\bdd\b[^\n]*\bof\s*=\s*["']?/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
+            pattern: concat!(
+                r#"\bdd\b[^\n]*\bof\s*=\s*["']?/dev/"#,
+                unix_block_device!()
+            ),
         },
         PolicyRule {
             name: "mkfs_device",
@@ -138,7 +255,7 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             name: "redirect_to_block_device",
             description: "shell redirect overwriting a raw block device",
             action: Block,
-            pattern: r#">\s*["']?/dev/(sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
+            pattern: concat!(r#">\s*["']?/dev/"#, unix_block_device!()),
         },
         PolicyRule {
             name: "device_wipe_tools",
@@ -149,54 +266,139 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             // file-shredder (`shred -u secret.txt`), so it is catastrophic only
             // when its target is a raw device — hence the explicit `/dev/<class>`
             // requirement keeps file-level `shred` off the floor.
-            pattern: r#"\b(?:wipefs|blkdiscard)\b[^\n]*\s["']?/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)|\bshred\b[^\n]*\s["']?/dev/(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|md)"#,
+            pattern: concat!(
+                r#"\b(?:wipefs|blkdiscard)\b[^\n]*\s["']?/dev/"#,
+                unix_block_device!(),
+                r#"|\bshred\b[^\n]*\s["']?/dev/"#,
+                unix_block_device!()
+            ),
         },
         // --- Windows catastrophic shapes (cmd.exe / PowerShell) -------------
         // The Unix floor above does not cover the native Windows command
         // surface an agent reaches through `cmd.exe /c …` or `powershell -c …`.
         // These are the Windows analogues — disk format, drive-root recursive
-        // delete, shadow-copy destruction (ransomware precursor), boot-config
-        // deletion, registry-hive wipe — each essentially never legitimate in a
-        // per-session workspace. A leading `(?:^|[\s;&|(])` boundary keeps the
-        // common words (`format`, `del`) from matching flag fragments such as
-        // `git log --format=` or a `--del` long-option.
+        // delete, shadow-copy and backup-catalog destruction (the ransomware
+        // precursors), boot-config deletion, registry-hive wipe — each
+        // essentially never legitimate in a per-session workspace. A leading
+        // boundary keeps the common words (`format`, `del`) from matching flag
+        // fragments such as `git log --format=` or a `--del` long-option.
         PolicyRule {
             name: "win_format_volume",
             description: "Windows `format <drive:>` / `Format-Volume` — wipes an entire volume",
             action: Block,
-            pattern: r"(?:^|[\s;&|(])(?:format\s+(?:/\S+\s+)*[a-z]:|format-volume\b)",
+            pattern: r#"(?:^|[\s;&|("'])(?:format\s+(?:/\S+\s+)*["']?[a-z]:|format-volume\b)"#,
         },
         PolicyRule {
             name: "win_recursive_root_delete",
-            description: "cmd `del`/`rd`/`rmdir /s` targeting a bare drive root (recursive wipe)",
+            description: "recursive delete of a bare drive root or registry hive root (cmd `del`/`rd /s`, PowerShell `Remove-Item -Recurse` and its aliases)",
             action: Block,
-            // Requires the recursive `/s` switch AND a bare drive root
-            // (`C:\`, `C:`, `C:\*`) — a recursive delete of a *subdir*
-            // (`C:\Users\me\build`) does not match because the char after the
-            // drive root must be a terminator, not another path segment.
-            pattern: r"(?:^|[\s;&|(])(?:del|erase|rd|rmdir)\b[^\n]*\s/s\b[^\n]*[\s\x22\x27][a-z]:\\?(?:\*|\s|\x22|$)",
-        },
-        PolicyRule {
-            name: "win_powershell_recursive_root_delete",
-            description: "PowerShell `Remove-Item -Recurse` of a drive root or registry hive root",
-            action: Block,
-            // No `\b` before `-r`: a `\b` between a space and `-` never matches
-            // (both non-word). The `-r(?:ecurse)?\b` flag plus a bare drive /
-            // hive root (the normaliser has already stripped path backslashes,
-            // so `\\?` is optional) is what makes this catastrophic-precise.
-            pattern: r"\bremove-item\b[^\n]*-r(?:ecurse)?\b[^\n]*\s(?:[a-z]:\\?|hk(?:lm|cu|cr|u):\\?)(?:\*|\s|\x22|\x27|$)",
+            // One rule for both dialects: cmd and PowerShell share the verb
+            // namespace (`rm`/`rd`/`del` are all `Remove-Item` aliases), so
+            // splitting them only produced two half-blind rules — the cmd one
+            // did not know `-Recurse`, the PowerShell one did not know its own
+            // aliases.
+            //
+            // Both argument orders are spelled out because the regex crate has
+            // no lookaround, and both orders are valid shell: `del /s /q C:\`
+            // and `del C:\ /s /q` do the same thing, but only the first matched
+            // a flag-then-target pattern. codex reaches the same place with an
+            // order-free token-set test (`has_delete && has_force`).
+            pattern: concat!(
+                win_delete_verb!(),
+                "(?:",
+                seg!(),
+                r"\s",
+                win_recursive_flag!(),
+                seg!(),
+                win_bare_root!(),
+                "|",
+                seg!(),
+                win_bare_root!(),
+                seg!(),
+                win_recursive_flag!(),
+                ")"
+            ),
         },
         PolicyRule {
             name: "win_delete_shadow_copies",
             description: "volume shadow-copy destruction (vssadmin / wmic / Win32_ShadowCopy) — ransomware precursor",
             action: Block,
-            pattern: r"\bvssadmin\b[^\n]*\bdelete\b[^\n]*\bshadows?\b|\bwmic\b[^\n]*\bshadowcopy\b[^\n]*\bdelete\b|\bwin32_shadowcopy\b[^\n]*\bdelete\b",
+            pattern: concat!(
+                r"\bvssadmin\b",
+                seg!(),
+                r"\bdelete\b",
+                seg!(),
+                r"\bshadows?\b|\bwmic\b",
+                seg!(),
+                r"\bshadowcopy\b",
+                seg!(),
+                // The WMI object form genuinely straddles a pipe
+                // (`gwmi win32_shadowcopy | remove-wmiobject`), so that
+                // alternative keeps the line-wide gap.
+                r"\bdelete\b|\bwin32_shadowcopy\b[^\n]*\b(?:delete|remove-wmiobject|remove-ciminstance)\b"
+            ),
+        },
+        PolicyRule {
+            name: "win_backup_catalog_destruction",
+            description: "`wbadmin delete catalog|backup|systemstatebackup` — destroys the Windows backup catalog, the other half of the shadow-copy ransomware precursor",
+            action: Block,
+            // The twin of `win_delete_shadow_copies`: real-world destruction
+            // playbooks pair `vssadmin delete shadows` with
+            // `wbadmin delete catalog`, and the floor previously knew only the
+            // first of the two.
+            pattern: concat!(
+                r"\bwbadmin\b",
+                seg!(),
+                r"\bdelete\b",
+                seg!(),
+                r"\b(?:catalog|backup|systemstatebackup)\b|\bremove-wbbackupset\b"
+            ),
+        },
+        PolicyRule {
+            name: "win_disk_wipe_tools",
+            description: "raw-disk destruction on Windows (`Clear-Disk -RemoveData`, `diskpart … clean`, a write to `\\\\.\\PhysicalDriveN`) — the Windows analogue of dd-to-/dev/sda",
+            action: Block,
+            // `\\.\PhysicalDriveN` reaches the normaliser as a plain
+            // `PhysicalDriveN` (the device-namespace prefix is canonicalised
+            // away), so no backslashes appear here.
+            //
+            // Coverage note: `diskpart /s script.txt` carries its `clean` in a
+            // file this filter never sees. The OS sandbox is the backstop for
+            // that form; the inline and piped spellings are what match here.
+            pattern: concat!(
+                r"\bclear-disk\b",
+                seg!(),
+                r"-remove(?:data|oem)\b|-remove(?:data|oem)\b",
+                seg!(),
+                r"\bclear-disk\b|\bdiskpart\b[^\n]*\bclean\b|\bclean\b[^\n]*\|[^\n]*\bdiskpart\b",
+                r#"|(?:>|\bof\s*=)\s*["']?\\?\.?\\?physicaldrive\d"#
+            ),
         },
         PolicyRule {
             name: "win_bcdedit_delete",
             description: "`bcdedit /delete` — destroys Windows boot configuration entries",
             action: Block,
-            pattern: r"\bbcdedit\b[^\n]*/delete",
+            pattern: concat!(r"\bbcdedit\b", seg!(), r"/delete"),
+        },
+        PolicyRule {
+            name: "win_boot_recovery_disable",
+            description: "`bcdedit /set … recoveryenabled No` / `bootstatuspolicy ignoreallfailures` — disables Windows recovery so a damaged system cannot self-repair",
+            action: Block,
+            pattern: concat!(
+                r"\bbcdedit\b",
+                seg!(),
+                r"/set\b",
+                seg!(),
+                r"\brecoveryenabled\b",
+                seg!(),
+                r"\bno\b|\bbcdedit\b",
+                seg!(),
+                r"/set\b",
+                seg!(),
+                r"\bbootstatuspolicy\b",
+                seg!(),
+                r"\bignoreallfailures\b"
+            ),
         },
         PolicyRule {
             name: "win_registry_hive_delete",
@@ -205,7 +407,11 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             // Whitespace right after the hive name = deleting the entire hive;
             // a subkey delete (`reg delete HKLM\Software\App /f`) has a `\`
             // there and is intentionally excluded.
-            pattern: r"\breg\b\s+delete\s+(?:hklm|hkcu|hkcr|hku|hkey_local_machine|hkey_current_user|hkey_classes_root)\s+[^\n]*/f\b",
+            pattern: concat!(
+                r"\breg\b\s+delete\s+(?:hklm|hkcu|hkcr|hku|hkey_local_machine|hkey_current_user|hkey_classes_root)\s+",
+                seg!(),
+                r"/f\b"
+            ),
         },
     ]
 }
@@ -227,17 +433,19 @@ pub fn default_rules() -> Vec<PolicyRule> {
             description: "recursive remove targeting an absolute root / system / home path",
             action: Warn,
             // Requires rm + a recursive flag + an absolute root / system / home
-            // target on the same line. The recursive flag is matched as a
+            // target on the same line. The recursive flag (shared with the hardline
+            // `rm_rf_root` via `rm_recursive_prefix!`) is matched as a
             // combined cluster (`-rf`/`-fr`/`-R`), a bare short `-r`, OR the long
             // `--recursive`, with any other flags before/after it — so the split
             // form `rm -r -f /etc` and the recursive-only `rm -r /etc` (which
             // deletes without a prompt in the agent's non-interactive shell) are
-            // both caught. The previous pattern required the recursive *and*
-            // force letters in a single token, so `rm -r -f /etc` and
-            // `rm -r /etc` evaded it. Force is no longer required: `-r` alone is
-            // destructive here. Relative targets (`build/`, `./target`) are
-            // excluded by the absolute-path requirement.
-            pattern: r#"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#,
+            // both caught. Force is not required: `-r` alone is destructive here.
+            // Relative targets (`build/`, `./target`) are excluded by the
+            // absolute-path requirement.
+            pattern: concat!(
+                rm_recursive_prefix!(),
+                r#"["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#
+            ),
         },
         PolicyRule {
             name: "pipe_to_shell",
@@ -293,6 +501,19 @@ pub fn default_rules() -> Vec<PolicyRule> {
             pattern: r"\bshutdown\b[^\n]*(?:\s/[sr]\b|\s-{1,2}(?:h|r|p|halt|reboot|poweroff)\b|\bnow\b|\s\+\d)|(?:^|[\s;&|(])(?:reboot|poweroff)\b|\bsystemctl\b[^\n]*\b(?:poweroff|reboot|halt)\b|\b(?:init|telinit)\s+[06]\b|\b(?:stop-computer|restart-computer)\b",
         },
         PolicyRule {
+            name: "proc_sysrq_trigger",
+            description:
+                "writing the magic SysRq trigger (/proc/sysrq-trigger) — instant host crash/reboot (`echo c` panics the kernel, `echo b` reboots) bypassing a clean sync/shutdown",
+            action: Warn,
+            // Same reversible "host availability" tier as `system_shutdown` (the
+            // machine comes back), so it audits rather than joins the
+            // irreversible hardline floor — but it is a sneakier takedown than a
+            // plain `reboot`, so it earns its own paper trail. Matches only a
+            // *write* into the trigger (redirect `>`/`>>` or `tee`); reading
+            // ordinary procfs stays clean.
+            pattern: r"(?:>>?|\btee\b[^\n]*)\s*/proc/sysrq-trigger\b",
+        },
+        PolicyRule {
             name: "sudo_privilege_stdin",
             description:
                 "sudo reading a password from stdin (-S/--stdin/--askpass) or spawning a root shell (-s) — password-guessing / privilege-escalation vector",
@@ -316,9 +537,32 @@ pub fn default_rules() -> Vec<PolicyRule> {
         },
         // --- Windows high-signal shapes (cmd.exe / PowerShell) -------------
         // Audited, not blocked: each is occasionally legitimate (an installer,
-        // a CI bootstrap) but is the Windows analogue of the Unix `curl|sh`
-        // download-cradle and the "disable my own defences" shapes worth a
-        // paper trail.
+        // a CI bootstrap, an ops runbook) but is the Windows analogue of a Unix
+        // shape this ruleset already audits — the `curl|sh` download cradle, the
+        // `authorized_keys` backdoor, the "disable my own defences" family.
+        PolicyRule {
+            name: "win_rm_system_path",
+            description: "recursive delete targeting a Windows system location (\\Windows, \\Program Files, \\ProgramData, the bare \\Users root, %SystemRoot%)",
+            action: Warn,
+            // The Windows twin of `rm_rf_system_path`, and the reason the
+            // normaliser keeps a path-preserving view at all: the POSIX reading
+            // folds `C:\Windows` into `C:Windows`, which no rule can name.
+            pattern: concat!(
+                win_delete_verb!(),
+                "(?:",
+                seg!(),
+                r"\s",
+                win_recursive_flag!(),
+                seg!(),
+                win_system_path!(),
+                "|",
+                seg!(),
+                win_system_path!(),
+                seg!(),
+                win_recursive_flag!(),
+                ")"
+            ),
+        },
         PolicyRule {
             name: "win_download_cradle",
             description:
@@ -327,10 +571,35 @@ pub fn default_rules() -> Vec<PolicyRule> {
             pattern: r"\b(?:iex|invoke-expression)\b[^\n]*\b(?:downloadstring|downloaddata|invoke-webrequest|invoke-restmethod|iwr|irm|webclient)\b|\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n]*\|[^\n]*\b(?:iex|invoke-expression)\b|\bcertutil\b[^\n]*-urlcache\b[^\n]*\bhttp|\bbitsadmin\b[^\n]*/transfer\b",
         },
         PolicyRule {
-            name: "win_disable_defender",
-            description: "disabling Microsoft Defender (Set-MpPreference -DisableRealtimeMonitoring / Add-MpPreference -ExclusionPath)",
+            name: "win_encoded_command",
+            description:
+                "PowerShell `-EncodedCommand <base64>` — the script is hidden from plain reading (its decoded text is scanned separately by every other rule)",
             action: Warn,
-            pattern: r"\b(?:set-mppreference|add-mppreference)\b[^\n]*-(?:disablerealtimemonitoring|exclusionpath|exclusionprocess|exclusionextension|disableioavprotection)\b",
+            // The payload itself is unwrapped by `normalize::normalize_for_matching`
+            // and judged on its merits, so this rule is purely the paper trail
+            // for *having encoded it*: a clean payload still runs.
+            pattern: concat!(
+                r"\b(?:powershell|pwsh)(?:\.exe)?\b",
+                seg!(),
+                r#"\s[-/]e(?:c|n[a-z]*)?\s+["']?[a-z0-9+/]{20,}"#
+            ),
+        },
+        PolicyRule {
+            name: "win_disable_defender",
+            description: "disabling Microsoft Defender (Set-MpPreference -DisableRealtimeMonitoring / -ExclusionPath, or stopping/deleting the WinDefend service)",
+            action: Warn,
+            pattern: concat!(
+                r"\b(?:set-mppreference|add-mppreference)\b[^\n]*-(?:disablerealtimemonitoring|exclusionpath|exclusionprocess|exclusionextension|disableioavprotection)\b",
+                r"|\b(?:sc|net)\b",
+                seg!(),
+                r"\b(?:stop|delete|config)\b",
+                seg!(),
+                r"\bwindefend\b|\b(?:stop-service|set-service)\b",
+                seg!(),
+                r"\bwindefend\b|\buninstall-windowsfeature\b",
+                seg!(),
+                r"\bwindows-defender\b"
+            ),
         },
         PolicyRule {
             name: "win_disable_firewall",
@@ -339,13 +608,86 @@ pub fn default_rules() -> Vec<PolicyRule> {
             pattern: r"\bnetsh\b[^\n]*\badvfirewall\b[^\n]*\bset\b[^\n]*\bstate\b[^\n]*\boff\b|\bnetsh\b[^\n]*\bfirewall\b[^\n]*\bset\b[^\n]*\bopmode\b[^\n]*\bdisable\b",
         },
         PolicyRule {
+            name: "win_execution_policy_bypass",
+            description: "weakening the PowerShell execution policy (`Set-ExecutionPolicy Bypass|Unrestricted`, `-ExecutionPolicy Bypass`)",
+            action: Warn,
+            pattern: concat!(
+                r"\bexecutionpolicy\b",
+                seg!(),
+                r"\b(?:bypass|unrestricted)\b"
+            ),
+        },
+        PolicyRule {
+            name: "win_amsi_bypass",
+            description: "AMSI tampering (AmsiUtils / amsiInitFailed / AmsiScanBuffer) — disables in-process script scanning",
+            action: Warn,
+            pattern: r"\bamsiutils\b|\bamsiinitfailed\b|\bamsiscanbuffer\b|\bamsicontext\b",
+        },
+        PolicyRule {
+            name: "win_event_log_clear",
+            description: "clearing Windows event logs (`wevtutil cl`, `Clear-EventLog`) — anti-forensics",
+            action: Warn,
+            pattern: concat!(
+                r"\bwevtutil\b",
+                seg!(),
+                r"\b(?:cl|clear-log)\b|\b(?:clear-eventlog|remove-eventlog)\b"
+            ),
+        },
+        PolicyRule {
+            name: "win_local_admin_backdoor",
+            description: "creating a local account or adding one to Administrators (`net user … /add`, `net localgroup administrators … /add`) — the Windows twin of an authorized_keys backdoor",
+            action: Warn,
+            pattern: concat!(
+                r"\bnet\b",
+                seg!(),
+                r"\b(?:user|localgroup)\b",
+                seg!(),
+                r"/add\b|\b(?:new-localuser|add-localgroupmember)\b"
+            ),
+        },
+        PolicyRule {
             name: "win_registry_run_persistence",
             description: "registry autorun persistence (`reg add … \\CurrentVersion\\Run`)",
             action: Warn,
-            // Backslashes are optional: the normaliser strips path separators
-            // (`…\CurrentVersion\Run` → `…CurrentVersionRun`) before matching,
-            // so the keyword run is anchored without relying on the `\`.
+            // The trailing backslash is optional because the POSIX normalisation
+            // view has folded path separators away
+            // (`…\CurrentVersion\Run` → `…CurrentVersionRun`); the native view
+            // still carries them.
             pattern: r"\breg\b\s+add\b[^\n]*currentversion\\?run(?:once)?\b",
+        },
+        PolicyRule {
+            name: "win_persistence_task_service",
+            description: "scheduled-task or service persistence (`schtasks /create`, `Register-ScheduledTask`, `sc create … binPath=`, `New-Service`)",
+            action: Warn,
+            // The sibling of `win_registry_run_persistence` — same goal, the two
+            // other autostart surfaces Windows offers.
+            pattern: concat!(
+                r"\bschtasks\b",
+                seg!(),
+                r"/create\b|\bregister-scheduledtask\b|\bnew-service\b|\bsc\b",
+                seg!(),
+                r"\bcreate\b",
+                seg!(),
+                r"\bbinpath\b"
+            ),
+        },
+        PolicyRule {
+            name: "win_acl_takeover_root",
+            description: "rewriting ownership / ACLs on a drive or hive root (`takeown /f C:\\ /r`, `icacls C:\\ /grant …`) — makes the system unbootable as surely as deleting it",
+            action: Warn,
+            pattern: concat!(
+                r"\btakeown\b",
+                seg!(),
+                r"/f\b",
+                seg!(),
+                win_bare_root!(),
+                seg!(),
+                r"/r\b|\bicacls\b",
+                seg!(),
+                win_bare_root!(),
+                seg!(),
+                r"/(?:grant|deny|reset|setowner|inheritance)\b"
+            ),
         },
     ]
 }
@@ -385,6 +727,17 @@ mod tests {
     }
 
     #[test]
+    fn tunable_rules_are_all_warn_action() {
+        // The curated tunable set is an audit layer: anything that should
+        // *refuse* belongs on the undisableable floor instead, where an
+        // operator's `enforcement` setting cannot silence it.
+        assert!(
+            default_rules().iter().all(|r| r.action == RuleAction::Warn),
+            "curated tunable rules audit rather than refuse"
+        );
+    }
+
+    #[test]
     fn enforcement_and_action_defaults() {
         assert_eq!(EnforcementMode::default(), EnforcementMode::Block);
         assert_eq!(RuleAction::default(), RuleAction::Block);
@@ -400,5 +753,27 @@ mod tests {
             serde_json::from_str::<RuleAction>("\"warn\"").unwrap(),
             RuleAction::Warn
         );
+    }
+
+    #[test]
+    fn shared_fragments_are_spliced_not_copied() {
+        // The device class exists once; every rule that needs it must carry the
+        // identical text. A hand-edited copy would show up here as a rule that
+        // no longer contains the canonical fragment.
+        let hardline = hardline_rules();
+        for name in [
+            "dd_to_block_device",
+            "redirect_to_block_device",
+            "device_wipe_tools",
+        ] {
+            let rule = hardline
+                .iter()
+                .find(|r| r.name == name)
+                .expect("rule present");
+            assert!(
+                rule.pattern.contains(unix_block_device!()),
+                "{name} must splice the canonical device class"
+            );
+        }
     }
 }

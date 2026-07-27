@@ -178,22 +178,25 @@ fn parse_anthropic_error_envelope(body: &str) -> (Option<String>, Option<String>
 }
 
 /// Map an Anthropic non-2xx HTTP response to a typed [`AlephError`] carrying the
-/// correct retry semantics (cf. [`crate::providers::retry`]).
+/// correct retry semantics — as read by
+/// [`crate::providers::failover::decide`], the only thing that acts on them.
 ///
 /// Mirrors hermes-agent / pi typed error handling, mapped onto Rust's error
 /// enum so classification is total and compiler-checked rather than ad-hoc
 /// string sniffing:
 /// - `401` / `403` (or `authentication_error` / `permission_error`) → auth, fatal
-/// - `429` (or `rate_limit_error`) → distinct rate-limit, fatal (retry amplifies)
+/// - `429` (or `rate_limit_error`) → distinct rate-limit carrying the server
+///   `Retry-After`; cools this model and tries a sibling, never retried in place
+///   (retry amplifies)
 /// - `529` (or `overloaded_error`) → transient, **retryable**
 /// - `400` / `422` (or `invalid_request_error`) → client error, fatal
-/// - `5xx` / `api_error` → keeps the numeric status so the retry policy's
-///   status-code list (`500/502/503/504`) decides
+/// - `5xx` / `api_error` → plain `ProviderError`, whose `ErrorClass::Transient`
+///   is what earns the in-place retry; the numeric status rides along for
+///   diagnosis only
 ///
 /// The previous inline logic only special-cased `429` and otherwise emitted a
-/// bare `provider("... ({status}): {body}")`, which left `529` (not in the
-/// default retryable status list) classified as fatal and surfaced raw JSON
-/// bodies to the user.
+/// bare `provider("... ({status}): {body}")`, which left `529` reading as a
+/// nondescript provider failure and surfaced raw JSON bodies to the user.
 fn classify_anthropic_error_response(
     status: u16,
     retry_after: Option<&str>,
@@ -224,8 +227,8 @@ fn classify_anthropic_error_response(
             }
         }
         // Overloaded is transient. Keep the literal "overloaded" token in the
-        // message so `retry::is_overloaded_message` classifies it retryable —
-        // 529 is deliberately absent from the default retryable status list.
+        // message so `llm_retry::classify` sees a transient overload even when
+        // the status is a plain 500 carrying an `overloaded_error` envelope.
         _ if overloaded => {
             AlephError::provider(format!("Anthropic API overloaded ({status}): {detail}"))
         }
@@ -233,8 +236,10 @@ fn classify_anthropic_error_response(
         400 | 422 => {
             AlephError::provider(format!("Anthropic invalid request ({status}): {detail}"))
         }
-        // Everything else (incl. 500/502/503/504) keeps the numeric status in
-        // the message so the retry policy's status-code match decides.
+        // Everything else (incl. 500/502/503/504) stays a `ProviderError`,
+        // which is `ErrorClass::Transient` — so `failover::decision::decide`
+        // retries it in place and then advances the chain. The numeric status
+        // is kept in the message for diagnosis, not for classification.
         _ => AlephError::provider(format!("Anthropic API error ({status}): {detail}")),
     }
 }
@@ -686,11 +691,8 @@ impl ProtocolAdapter for AnthropicProtocol {
     ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
         let status = response.status();
         if !status.is_success() {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+            let retry_after =
+                crate::providers::protocols::http_client::retry_after_secs(response.headers());
             let error_text =
                 crate::providers::protocols::http_client::read_error_body(response).await;
             return Err(classify_anthropic_error_response(
@@ -832,8 +834,9 @@ impl ProtocolAdapter for AnthropicProtocol {
                         // unflagged the `DeltaCollector` defaults to `EndTurn`, so a
                         // partial answer is silently accepted as a clean finish and
                         // never retried. Surface a retryable network error instead
-                        // (classified transient by `providers::retry`), mirroring
-                        // pi's `sawMessageStart && !sawMessageEnd` throw.
+                        // (a typed `NetworkError` is `ErrorClass::Transient`, so
+                        // `failover::decide` retries it), mirroring pi's
+                        // `sawMessageStart && !sawMessageEnd` throw.
                         if stream_was_truncated(
                             state.saw_terminal,
                             queue_has_terminal(&state.pending),
@@ -1060,15 +1063,26 @@ mod truncation_guard_tests {
 
 /// Tests for typed HTTP error-response classification (hermes-agent / pi typed
 /// error parity). Confirms each Anthropic error maps to the right `AlephError`
-/// variant AND the right retry verdict via `providers::retry`.
+/// variant AND the decision the failover walk actually takes on it.
 #[cfg(test)]
 mod error_classification_tests {
+    use std::time::Duration;
+
     use super::{classify_anthropic_error_response, parse_anthropic_error_envelope};
     use crate::error::AlephError;
-    use crate::providers::retry::retryable_reason;
+    use crate::providers::failover::{decide, Decision};
 
+    /// Whether the failover walk retries this error **in place** before moving
+    /// on — asked of `decide`, the function the walk actually calls, so the
+    /// assertion cannot drift from the behaviour it claims to pin.
+    ///
+    /// This used to ask `providers::retry`'s own predicate, which matched
+    /// `RetryPolicy::retryable_status_codes` — a table production never
+    /// consulted. Every assertion below could therefore hold while the live path
+    /// did something else; the adapter comment about "the retry policy's
+    /// status-code match" pointed at the same dead path.
     fn is_retryable(e: &AlephError) -> bool {
-        retryable_reason(e).is_some()
+        matches!(decide(e, 0, 2), Decision::RetrySame(_))
     }
 
     #[test]
@@ -1095,8 +1109,15 @@ mod error_classification_tests {
         }
     }
 
+    /// A model-specific 429 is neither an in-place retry nor "fatal" — the
+    /// claim the boolean form of this test used to make. The walk sidelines
+    /// *this model* for the server's `Retry-After` and prefers a sibling; only
+    /// an account/quota 429 is terminal, and that one classifies `Fatal`
+    /// upstream. Asserting the whole `Decision` also pins the hint surviving
+    /// the header → suggestion → typed-delay round trip, which is the only
+    /// reason the adapter stashes it in `suggestion` at all.
     #[test]
-    fn rate_limit_is_typed_with_retry_after_and_not_retryable() {
+    fn rate_limit_sidelines_the_model_for_the_server_retry_after() {
         let e = classify_anthropic_error_response(
             429,
             Some("12"),
@@ -1108,9 +1129,10 @@ mod error_classification_tests {
             }
             other => panic!("expected RateLimitError, got {other:?}"),
         }
-        assert!(
-            !is_retryable(&e),
-            "rate limit retry amplifies — must be fatal"
+        assert_eq!(
+            decide(&e, 0, 2),
+            Decision::RateLimited(Some(Duration::from_secs(12))),
+            "a model-specific 429 cools this model for the server's hint"
         );
     }
 
@@ -1147,10 +1169,17 @@ mod error_classification_tests {
         assert!(format!("{e}").contains("bad tool schema"));
     }
 
+    /// 5xx retries in place, but not "via a status list" — no such table is
+    /// consulted in production. The message ("Anthropic API error (500):
+    /// upstream down") carries nothing the string classifier calls transient;
+    /// the retry comes from the *typed* error being a `ProviderError`, i.e.
+    /// `ErrorClass::Transient`. Naming the dead mechanism is what let the
+    /// assertion look like it covered the live one.
     #[test]
-    fn server_5xx_remains_retryable_via_status_list() {
+    fn server_5xx_retries_in_place_as_a_transient_provider_error() {
         for status in [500u16, 502, 503, 504] {
             let e = classify_anthropic_error_response(status, None, "upstream down");
+            assert!(matches!(e, AlephError::ProviderError { .. }));
             assert!(is_retryable(&e), "{status} should retry");
         }
     }

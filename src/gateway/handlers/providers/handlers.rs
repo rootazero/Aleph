@@ -590,10 +590,20 @@ async fn handle_test_inner(
                     error!(error = %e, "Failed to save config after test");
                 }
             }
-            // Reset health to Healthy after successful connection test
+            // Reset health to Healthy after successful connection test.
             if let Some(registry) = multi_registry {
                 use crate::thinker::ProviderRegistry;
                 registry.reset_health(name);
+            }
+            // The registry's health map only feeds the `ModelResolved` badge;
+            // the map that decides whether a request is even *dialed* is the
+            // failover circuit breaker. Resetting only the first was why a
+            // rotated credential stayed shut out for the full 10-minute
+            // permanent-failure cooldown despite "Test connection" going green.
+            if let Some(obs) = crate::providers::route_observe::global_route_observability() {
+                if obs.health.reset(name).await {
+                    info!(provider = %name, "connection test passed; failover circuit reset");
+                }
             }
         }
     }

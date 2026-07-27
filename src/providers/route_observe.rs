@@ -50,8 +50,17 @@ pub struct RouteObservability {
     /// Live primary slot (hot-reload aware): `current().name()` is the
     /// provider the next request dials first.
     pub primary: Arc<dyn DefaultProviderHandle>,
-    /// Boot-time fallback chain composition, in configured order.
+    /// Boot-time fallback chain composition, in configured order. Chain
+    /// *membership* for the rendered snapshot is recomputed through
+    /// [`effective_fallback_names`](crate::providers::failover::effective_fallback_names)
+    /// — the same function the walk uses — so the reported chain is the chain
+    /// that will actually be dialed. This vec supplies the per-name model list
+    /// and tier, and is the whole answer for an operator-configured chain.
     pub fallbacks: Vec<ChainCandidate>,
+    /// Whether the chain was *auto-derived* (no operator
+    /// `[fallback_provider].chain`), in which case membership is re-derived
+    /// from the live registry on every request.
+    pub auto_derived: bool,
     /// Shared circuit-breaker map (same instance the chains mutate).
     pub health: FailoverHealth,
     /// Shared per-(provider, model) 429 sideline map.
@@ -133,6 +142,32 @@ impl RouteObservability {
         };
 
         let primary_name = self.primary.current().name().to_string();
+        // Chain membership for the *next* request, through the same function the
+        // walk uses. An auto-derived chain re-derives from the live registry
+        // every request, so the boot snapshot alone would report providers that
+        // have since been removed and hide ones added at runtime.
+        let configured: Vec<String> = self.fallbacks.iter().map(|c| c.name.clone()).collect();
+        let member_names = crate::providers::failover::effective_fallback_names(
+            &self.primary.provider_names(),
+            &primary_name,
+            &configured,
+            self.auto_derived,
+        );
+        let chain: Vec<ChainCandidate> = member_names
+            .into_iter()
+            .map(|name| {
+                let boot = self.fallbacks.iter().find(|c| c.name == name);
+                ChainCandidate {
+                    // rust-doctor-disable-next-line excessive-clone
+                    models: boot.map(|c| c.models.clone()).unwrap_or_default(),
+                    // Mirrors `FailoverProvider::node_tier`: a provider that
+                    // joined after boot has no catalog entry and is treated as
+                    // cloud — the conservative side of gating and cost ranking.
+                    tier: boot.map_or(EndpointTier::Cloud, |c| c.tier),
+                    name,
+                }
+            })
+            .collect();
         let health = self.health.snapshot().await;
         let pacing = self.provider_cooldown.snapshot().await;
         let cooling = self.model_cooldown.snapshot().await;
@@ -144,7 +179,7 @@ impl RouteObservability {
         // rust-doctor-disable-next-line excessive-clone
         names.insert(primary_name.clone());
         // rust-doctor-disable-next-line excessive-clone
-        names.extend(self.fallbacks.iter().map(|c| c.name.clone()));
+        names.extend(chain.iter().map(|c| c.name.clone()));
         // rust-doctor-disable-next-line excessive-clone
         names.extend(health.iter().map(|h| h.provider.clone()));
         // rust-doctor-disable-next-line excessive-clone
@@ -162,8 +197,7 @@ impl RouteObservability {
             loads.iter().map(|(n, m)| (n.as_str(), *m)).collect();
         // Provider → first model, the model the cost-aware sort prices (it is the
         // head of each candidate's model walk). Built from the boot chain.
-        let model_by: std::collections::HashMap<&str, &str> = self
-            .fallbacks
+        let model_by: std::collections::HashMap<&str, &str> = chain
             .iter()
             .filter_map(|c| c.models.first().map(|m| (c.name.as_str(), m.as_str())))
             .collect();
@@ -172,11 +206,8 @@ impl RouteObservability {
         // where it did (free local sorts first; unknown-cost cloud sorts last).
         // The live-primary slot is absent here — its tier is intentionally
         // unresolved (`Unknown`), mirroring its `null` price.
-        let tier_by: std::collections::HashMap<&str, EndpointTier> = self
-            .fallbacks
-            .iter()
-            .map(|c| (c.name.as_str(), c.tier))
-            .collect();
+        let tier_by: std::collections::HashMap<&str, EndpointTier> =
+            chain.iter().map(|c| (c.name.as_str(), c.tier)).collect();
 
         let providers: serde_json::Map<String, serde_json::Value> = names
             .into_iter()
@@ -203,7 +234,13 @@ impl RouteObservability {
                     "tpm_used": m.tpm_used,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
-                    "utilization_percent": util_permille / 10,
+                    // Per-mille, not percent: integer-dividing by 10 rendered
+                    // every provider under 10% of its ceiling as `0` — the same
+                    // value "no limit configured" produces, so the one field an
+                    // operator would use to ask "why was this deprioritised"
+                    // could not tell idle from unconfigured.
+                    "utilization_permille": util_permille,
+                    "rate_limited": limits.ceiling(name.as_str()).is_some(),
                     "over_limit": over_limit,
                     "price_milli_per_mtok": price,
                     "endpoint_tier": tier_by.get(name.as_str()).copied().map(tier_str),
@@ -221,8 +258,11 @@ impl RouteObservability {
                 "cloud": targets.cloud_provider.clone(),
             },
             "primary": primary_name,
-            "fallback_chain": self
-                .fallbacks
+            // Where the chain came from, so an operator reading a surprising
+            // member knows whether to edit `[fallback_provider].chain` or to
+            // look at which providers are registered.
+            "chain_source": if self.auto_derived { "auto_derived" } else { "configured" },
+            "fallback_chain": chain
                 .iter()
                 .map(|c| {
                     json!({
@@ -293,6 +333,7 @@ mod tests {
         RouteObservability {
             primary: Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
             fallbacks,
+            auto_derived: false,
             health: FailoverHealth::default(),
             model_cooldown: ModelCooldown::default(),
             provider_cooldown: ProviderCooldown::default(),

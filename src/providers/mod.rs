@@ -58,7 +58,6 @@ use std::pin::Pin;
 // Sub-modules
 pub mod adapter;
 pub mod anthropic;
-pub mod auth_profiles;
 pub mod bridge;
 pub mod capability_gate;
 pub mod catalog;
@@ -83,8 +82,6 @@ pub mod ollama;
 pub mod openai;
 pub mod presets;
 pub mod probe;
-pub mod profile_config;
-pub mod profile_manager;
 pub mod protocols;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod recording_mock;
@@ -102,7 +99,6 @@ pub mod think_level_provider;
 pub use adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-pub use auth_profiles::{calculate_cooldown_ms, AuthProfileFailureReason};
 pub use default_handle::{DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
@@ -121,16 +117,8 @@ pub use model_catalog::{
 pub use model_override_provider::ModelOverrideProvider;
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
-pub use profile_config::{
-    ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfileTier, ProfilesConfig,
-};
-pub use profile_manager::{
-    AgentState, AuthProfileManager, EffectiveProfile, ProfileInfo, ProfileManagerError,
-    ProfileManagerResult, ProfileOverride, ProfileUsage, RuntimeStatus,
-};
 pub use protocols::OpenAiProtocol;
 pub use registry::ProviderRegistry;
-pub use retry::retry_with_backoff;
 pub use think_level_provider::ThinkLevelProvider;
 
 use crate::config::ProviderConfig;
@@ -300,25 +288,53 @@ pub trait AiProvider: Send + Sync {
         None
     }
 
+    /// Whether calling [`execute_streaming_dyn`](AiProvider::execute_streaming_dyn)
+    /// produces *live* deltas rather than one replayed batch at the end.
+    ///
+    /// Must be asked of the OUTERMOST provider: a decorator stack is only as
+    /// streaming-capable as its weakest link, because a decorator that forgets
+    /// to override `execute_streaming_dyn` collapses the call to `process` and
+    /// the deltas arrive all at once. Default `false`; a provider opts in only
+    /// by genuinely forwarding the sink, and a decorator by delegating.
+    ///
+    /// This is the honest replacement for gating streaming on
+    /// [`as_http_provider`](AiProvider::as_http_provider), which asked "are you
+    /// literally an `HttpProvider`" — a question every real production stack
+    /// answers "no" (the failover chain sits in the middle and is not one).
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
     /// Streaming twin of [`AiProvider::process`]: forward incremental deltas to
     /// `sink` while producing the same structured [`ProviderResponse`].
     ///
-    /// The default routes to `process` (ignoring `sink`, so no live deltas), so a
-    /// decorator that only overrides `process` still runs its per-call logic on
-    /// the streaming path. `HttpProvider` overrides this to actually stream; the
-    /// per-run decorators (`ThinkLevelProvider`, `MeteringProvider`) override it
-    /// to apply their side effect then delegate, exactly as they do for
-    /// `process`. Before this existed, the harness reached the raw inner
-    /// `HttpProvider` via `as_http_provider()` for streaming, silently skipping
-    /// both decorators every streamed turn (dropping the declared `think_level`
-    /// and never emitting `ProviderUsage`).
+    /// `HttpProvider` overrides this to actually stream; the per-run decorators
+    /// (`ThinkLevelProvider`, `MeteringProvider`, `ModelOverrideProvider`) and
+    /// `FailoverProvider` override it to apply their side effect / walk their
+    /// chain and delegate, exactly as they do for `process`. Before this
+    /// existed, the harness reached the raw inner `HttpProvider` via
+    /// `as_http_provider()` for streaming, silently skipping every decorator
+    /// (dropping the declared `think_level`, never emitting `ProviderUsage`).
+    ///
+    /// The default calls `process` and then **replays** the finished response
+    /// through `sink`. Replaying (rather than dropping `sink`) is what makes the
+    /// contract usable as a contract: *whoever calls this always sees the
+    /// response on the sink*, so a caller that suppresses its own once-per-turn
+    /// emit — which is exactly what the harness does — can never end up
+    /// delivering nothing because some link in the stack did not override this
+    /// method. Overriding it upgrades the delivery from batched to live; it is
+    /// not the difference between delivery and silence. There is no double-emit
+    /// risk: this path hands `process` no sink, so nothing below ever sees one.
     fn execute_streaming_dyn<'a>(
         &'a self,
         payload: adapter::RequestPayload<'a>,
         sink: &'a dyn DeltaSink,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-        let _ = sink;
-        self.process(payload)
+        Box::pin(async move {
+            let response = self.process(payload).await?;
+            delta::replay_response_to_sink(&response, sink).await;
+            Ok(response)
+        })
     }
 }
 

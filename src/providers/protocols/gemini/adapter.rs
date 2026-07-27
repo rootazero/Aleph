@@ -172,11 +172,8 @@ impl ProtocolAdapter for GeminiProtocol {
     ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
         let status = response.status();
         if !status.is_success() {
-            let header_retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+            let header_retry_after =
+                crate::providers::protocols::http_client::retry_after_secs(response.headers());
             let error_text =
                 crate::providers::protocols::http_client::read_error_body(response).await;
             // Parse Gemini's error envelope for a clean message; fall back to raw text.

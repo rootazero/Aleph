@@ -20,8 +20,6 @@ pub struct RoutingOutcome {
     pub token_breakdown: TokenBreakdown,
     pub estimated_cost: Option<f64>,
     pub duration_ms: u64,
-    pub context_tokens: u32,
-    pub context_window: u32,
     pub tool_error_count: u32,
     pub tool_call_total: u32,
 }
@@ -76,8 +74,17 @@ impl RoutingExperienceStore {
             tok_reasoning: outcome.token_breakdown.reasoning as i64,
             estimated_cost: outcome.estimated_cost,
             duration_ms: outcome.duration_ms as i64,
-            context_tokens: outcome.context_tokens as i64,
-            context_window: outcome.context_window as i64,
+            // The two context-pressure columns are written as 0 and stay in the
+            // schema for row compatibility. They were `RoutingOutcome` fields,
+            // which made them look producible — but the only production producer
+            // (`observer::outcome_from_session_completed`) hardcoded 0 because
+            // `LoopTraceEvent::SessionCompleted` carries no context-pressure
+            // fact, and no renderer read them back. Removing them from the type
+            // stops the struct from advertising a value nothing can supply;
+            // filling them for real means putting the fact on the trace event
+            // first, which is a harness change.
+            context_tokens: 0,
+            context_window: 0,
             created_at,
         };
         self.backend
@@ -161,8 +168,6 @@ mod tests {
             token_breakdown: TokenBreakdown::default(),
             estimated_cost: None,
             duration_ms: 10,
-            context_tokens: 0,
-            context_window: 0,
             tool_error_count: 0,
             tool_call_total: 1,
         };

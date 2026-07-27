@@ -17,59 +17,25 @@ pub enum DmScope {
     PerChannelPeer,
 }
 
-/// Configuration for inbound message routing
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Configuration for inbound message routing.
+///
+/// One field, because only one was ever read. `default_agent`,
+/// `auto_start_channels` and `pairing_code_expiry_secs` looked operator-settable
+/// — serde defaults and all — while nothing anywhere consulted them: the
+/// inbound router hardcodes its default agent, and the pairing store uses its
+/// own constant. A knob that cannot change anything is worse than a missing one,
+/// because it answers the operator's question with a lie. Removing them is
+/// backward compatible: serde ignores unknown keys, so an existing config still
+/// loads.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoutingConfig {
-    /// Default agent ID for routing
-    #[serde(default = "default_agent_id")]
-    pub default_agent: String,
-
-    /// How to scope DM sessions
+    /// How to scope DM sessions.
     #[serde(default)]
     pub dm_scope: DmScope,
-
-    /// Whether to auto-start channels on gateway startup
-    #[serde(default = "default_true")]
-    pub auto_start_channels: bool,
-
-    /// Pairing code expiry in seconds (0 = never)
-    #[serde(default = "default_pairing_expiry")]
-    pub pairing_code_expiry_secs: u64,
-}
-
-fn default_agent_id() -> String {
-    "main".to_string()
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-const fn default_pairing_expiry() -> u64 {
-    86400 // 24 hours
-}
-
-impl Default for RoutingConfig {
-    fn default() -> Self {
-        Self {
-            default_agent: default_agent_id(),
-            dm_scope: DmScope::default(),
-            auto_start_channels: true,
-            pairing_code_expiry_secs: default_pairing_expiry(),
-        }
-    }
 }
 
 impl RoutingConfig {
-    /// Create a new routing config with default agent
-    pub fn new(default_agent: impl Into<String>) -> Self {
-        Self {
-            default_agent: default_agent.into(),
-            ..Default::default()
-        }
-    }
-
-    /// Set DM scope
+    /// Set DM scope.
     #[must_use]
     pub const fn with_dm_scope(mut self, scope: DmScope) -> Self {
         self.dm_scope = scope;
@@ -99,9 +65,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = RoutingConfig::default();
-        assert_eq!(config.default_agent, "main");
         assert_eq!(config.dm_scope, DmScope::PerPeer);
-        assert!(config.auto_start_channels);
     }
 
     #[test]
@@ -115,10 +79,19 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = RoutingConfig::new("custom-agent").with_dm_scope(DmScope::Main);
-
-        assert_eq!(config.default_agent, "custom-agent");
+        let config = RoutingConfig::default().with_dm_scope(DmScope::Main);
         assert_eq!(config.dm_scope, DmScope::Main);
+    }
+
+    #[test]
+    fn unknown_keys_from_an_older_config_still_deserialise() {
+        // The three removed knobs may still be sitting in a deployed config.
+        // Dropping them must not turn an existing file into a parse error.
+        let cfg: RoutingConfig = serde_json::from_str(
+            r#"{"default_agent":"main","auto_start_channels":true,"pairing_code_expiry_secs":86400,"dm_scope":"main"}"#,
+        )
+        .expect("legacy keys are ignored, not rejected");
+        assert_eq!(cfg.dm_scope, DmScope::Main);
     }
 
     #[test]

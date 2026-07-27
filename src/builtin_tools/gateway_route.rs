@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
+use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::routing::{
-    resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, SessionConfig,
+    resolve_route, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, SessionConfig,
 };
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -43,11 +46,20 @@ pub struct GatewayRouteDetails {
     pub main_session_key: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GatewayRouteTool {
     bindings: Vec<crate::routing::RouteBinding>,
     session_config: SessionConfig,
     default_agent: String,
+    /// Per-channel `agent_switch` / Panel bindings — the runtime overlay on top
+    /// of the config `[[bindings]]` table. Without it the tool answers from
+    /// config alone and reports the wrong agent on any channel that was switched
+    /// at runtime (which is *every* zero-config deployment, where the config
+    /// table is empty and the switch is the only thing routing anything).
+    channel_bindings: Option<Arc<AgentEnvStore>>,
+    /// Runtime agent registry, so a binding that outlived its agent is reported
+    /// as the fall-through the gateway actually performs rather than as a ghost.
+    agent_registry: Option<Arc<AgentRegistry>>,
 }
 
 impl GatewayRouteTool {
@@ -61,12 +73,54 @@ impl GatewayRouteTool {
             bindings,
             session_config,
             default_agent,
+            channel_bindings: None,
+            agent_registry: None,
         }
+    }
+
+    /// Attach the runtime stores the gateway consults on top of config.
+    ///
+    /// Both are optional so the tool still answers (from config alone) in test
+    /// and non-gateway contexts — but in production both must be wired, or the
+    /// tool is back to describing a routing table nobody uses.
+    #[must_use]
+    pub fn with_runtime_bindings(
+        mut self,
+        channel_bindings: Option<Arc<AgentEnvStore>>,
+        agent_registry: Option<Arc<AgentRegistry>>,
+    ) -> Self {
+        self.channel_bindings = channel_bindings;
+        self.agent_registry = agent_registry;
+        self
     }
 
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(Vec::new(), SessionConfig::default(), "main".to_string())
+    }
+
+    /// The channel's explicit runtime binding, validated to still exist —
+    /// the same two-step the inbound router performs before honouring one.
+    async fn validated_channel_override(&self, channel: &str) -> Option<String> {
+        let agent_id = self
+            .channel_bindings
+            .as_ref()?
+            .get_active_agent(channel)
+            .ok()
+            .flatten()?;
+        if !self.agent_exists(&agent_id).await {
+            return None;
+        }
+        Some(agent_id)
+    }
+
+    /// Whether `agent_id` exists in the runtime registry. `true` when no
+    /// registry is wired — the same trust-config fallback the router uses.
+    async fn agent_exists(&self, agent_id: &str) -> bool {
+        match &self.agent_registry {
+            Some(reg) => reg.contains(agent_id).await,
+            None => true,
+        }
     }
 }
 
@@ -82,10 +136,13 @@ impl AlephTool for GatewayRouteTool {
     const DESCRIPTION: &'static str =
         "Query Aleph's routing engine to determine which agent and session a message \
         would be routed to. Returns the target agent, session key, and how the match \
-        was made (peer/guild/team/account/channel/default). Use this when agents need \
-        to self-route or coordinate cross-channel communication. This is a deterministic, \
-        config-driven channel→agent lookup over the configured `[routing]` bindings — it \
-        does NOT classify the message's intent (that is the model's job).";
+        was made: peer/guild/team/account/channel/default from the configured \
+        `[routing]` bindings, `channel_override` when an `agent_switch` binding beats \
+        them, or `binding_agent_missing` when a binding names a deleted agent and the \
+        route falls through. Use this when agents need to self-route or coordinate \
+        cross-channel communication. This is a deterministic, config-driven \
+        channel→agent lookup — it does NOT classify the message's intent (that is the \
+        model's job).";
 
     type Args = GatewayRouteArgs;
     type Output = GatewayRouteOutput;
@@ -132,26 +189,48 @@ impl AlephTool for GatewayRouteTool {
             &input,
         );
 
-        let matched_by_str = match resolved.matched_by {
-            MatchedBy::Peer => "peer",
-            MatchedBy::Guild => "guild",
-            MatchedBy::Team => "team",
-            MatchedBy::Account => "account",
-            MatchedBy::Channel => "channel",
-            MatchedBy::Default => "default",
+        // Config answers only half the question. Apply the same runtime overlay
+        // the gateway does — the channel's `agent_switch` binding, and whether a
+        // specifically-bound agent still exists — through the shared decision.
+        let channel_override = self.validated_channel_override(&resolved.channel).await;
+        let overlaid = crate::routing::overlay_route(
+            &resolved.agent_id,
+            resolved.matched_by,
+            &crate::routing::RuntimeOverlay {
+                channel_override: channel_override.as_deref(),
+                bound_agent_exists: self.agent_exists(&resolved.agent_id).await,
+            },
+        );
+        // A dropped ghost binding falls through to the deployment's default
+        // agent, exactly as the gateway's Tier 3 does.
+        let agent_id = overlaid
+            .agent_id
+            .unwrap_or_else(|| crate::routing::normalize_agent_id(&self.default_agent));
+        // The session key belongs to whoever actually serves the message. When
+        // the overlay changed the agent, the key `resolve_route` computed (for
+        // the config agent) addresses a different conversation.
+        let (session_key, main_session_key) = if agent_id == resolved.agent_id {
+            (resolved.session_key, resolved.main_session_key)
+        } else {
+            crate::routing::resolve::session_keys_for(
+                &agent_id,
+                &resolved.channel,
+                input.peer.as_ref(),
+                &self.session_config,
+            )
         };
 
         let output = GatewayRouteOutput {
-            agent_id: resolved.agent_id.clone(),
-            session_key: resolved.session_key.to_key_string(),
-            matched_by: matched_by_str.to_string(),
+            session_key: session_key.to_key_string(),
+            matched_by: overlaid.source.as_str().to_string(),
             workspace: resolved.workspace,
             details: Some(GatewayRouteDetails {
                 channel: resolved.channel,
                 account_id: resolved.account_id,
-                session_key: resolved.session_key.to_key_string(),
-                main_session_key: resolved.main_session_key.to_key_string(),
+                session_key: session_key.to_key_string(),
+                main_session_key: main_session_key.to_key_string(),
             }),
+            agent_id,
         };
 
         info!(

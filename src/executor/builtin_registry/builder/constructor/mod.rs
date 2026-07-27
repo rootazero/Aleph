@@ -1157,7 +1157,15 @@ impl BuiltinToolRegistry {
                     )
                 }
                 None => crate::builtin_tools::gateway_route::GatewayRouteTool::with_defaults(),
-            },
+            }
+            // The config table is only half the routing answer: an `agent_switch`
+            // binding beats a default match, and a binding whose agent was
+            // deleted is dropped. Both are runtime state, so both must be wired
+            // here or the tool reports a route the gateway would not take.
+            .with_runtime_bindings(
+                config.workspace_manager.clone(),
+                config.agent_registry.clone(),
+            ),
             task_create_tool,
             task_update_tool,
             task_list_tool,

@@ -972,21 +972,58 @@ audits a slightly larger suspicious set; it never reasons about model intent.
   `Stop-Computer`), `sudo -S`/`--stdin`/`--askpass`/`-s` (password-stdin /
   privilege escalation), and writes into `~/.ssh/authorized_keys` (SSH
   backdoor persistence).
-- **Windows shapes** (added 2026-06-15 — the `cmd.exe` / PowerShell command
-  surface an agent reaches via `cmd /c …` / `powershell -c …`): `Block` =
-  `format <drive:>` / `Format-Volume`, `del`/`rd`/`rmdir /s` of a *bare drive
-  root*, `Remove-Item -Recurse` of a drive/registry-hive root, shadow-copy
-  destruction (`vssadmin delete shadows` / `wmic shadowcopy delete` —
-  ransomware precursor), `bcdedit /delete`, and whole-hive `reg delete HKLM /f`.
-  `Warn` = PowerShell download-execute cradles (`IEX (…).DownloadString`,
-  `iwr … | iex`, `certutil -urlcache`, `bitsadmin /transfer`), disabling
-  Defender (`Set-MpPreference -DisableRealtimeMonitoring`), disabling the
-  firewall (`netsh advfirewall set … state off`), and `…\CurrentVersion\Run`
-  autorun persistence. Precision is preserved by a leading word-boundary and a
-  *bare-root* terminator: `git log --format=`, a recursive subdir delete, and
-  a `reg delete HKLM\Software\App` subkey delete do **not** match. The
-  normaliser also folds cmd `^` and PowerShell `` ` `` escapes (alongside the
-  POSIX `\`) so `de^l` / `` Remo`ve-Item `` cannot evade the floor.
+- **Windows shapes** (added 2026-06-15, deepened 2026-07-27 — the `cmd.exe` /
+  PowerShell command surface an agent reaches via `cmd /c …` /
+  `powershell -c …`): `Block` = `format <drive:>` / `Format-Volume`; a
+  recursive delete of a *bare drive root or registry hive root* — **one rule
+  spanning both dialects** (`del`/`rd`/`rmdir /s` and `Remove-Item -Recurse`
+  with every alias PowerShell resolves to it: `ri`, `rm`, `rd`, `rmdir`,
+  `del`, `erase`), matched in **either argument order**; shadow-copy
+  destruction (`vssadmin delete shadows` / `wmic shadowcopy delete`);
+  backup-catalog destruction (`wbadmin delete catalog|systemstatebackup` —
+  the other half of the ransomware precursor); raw-disk destruction
+  (`Clear-Disk -RemoveData`, `diskpart … clean`, a write to
+  `\\.\PhysicalDriveN`); `bcdedit /delete` and `bcdedit /set … recoveryenabled
+  No` / `bootstatuspolicy ignoreallfailures`; and whole-hive
+  `reg delete HKLM /f`.
+  `Warn` = recursive delete of a Windows system location (`\Windows`,
+  `\Program Files`, `\ProgramData`, the bare `\Users` root, `%SystemRoot%` —
+  the twin of `rm_rf_system_path`); `powershell -EncodedCommand` (the wrapper
+  itself, since the payload is decoded and judged separately); PowerShell
+  download-execute cradles (`IEX (…).DownloadString`, `iwr … | iex`,
+  `certutil -urlcache`, `bitsadmin /transfer`); disabling Defender
+  (`Set-MpPreference -DisableRealtimeMonitoring`, or stopping/deleting the
+  `WinDefend` service); disabling the firewall (`netsh advfirewall set …
+  state off`); weakening the execution policy (`Set-ExecutionPolicy Bypass`);
+  AMSI tampering (`AmsiUtils` / `amsiInitFailed`); event-log clearing
+  (`wevtutil cl`, `Clear-EventLog`); local-account backdoors (`net user … /add`,
+  `net localgroup administrators … /add` — the Windows twin of the
+  `authorized_keys` rule); autostart persistence via `…\CurrentVersion\Run`,
+  `schtasks /create`, `Register-ScheduledTask`, `sc create … binPath=`; and
+  ACL takeover of a drive root (`takeown /f C:\ /r`, `icacls C:\ /grant …`).
+  Precision is preserved by a leading word-boundary, a *bare-root* terminator,
+  and same-segment gaps: `git log --format=`, a recursive subdir delete, a
+  `reg delete HKLM\Software\App` subkey delete, and
+  `del /s build\* & echo C:\` (two unrelated statements) do **not** match.
+- **Normalisation** (`normalize.rs`) folds the evasions the shell would
+  execute verbatim: invisible characters, cmd `^` and PowerShell `` ` ``
+  escapes, empty quote pairs, and three Windows-specific readings —
+  1. **Two views of `\`.** It is POSIX sh's escape *and* Windows' path
+     separator, so the matching copy carries both readings (POSIX-folded and
+     path-preserving) joined by a newline. Folding unconditionally is what let
+     `\\?\C:\` normalise to `\?C:` and slip the floor, and what made
+     `C:\Windows` unnameable by any rule.
+  2. **Path-prefix canonicalisation.** `\\?\C:\` and `\\.\C:\` address exactly
+     what `C:\` addresses; `\\?\UNC\srv\share` is `\\srv\share`.
+  3. **`-EncodedCommand` expansion.** `powershell -enc <base64>` hid the entire
+     script from every rule at once — the catastrophic floor was one base64
+     away from being switched off on Windows. Payloads (and every
+     abbreviation PowerShell accepts: `-e`, `-ec`, `-enc`, …) are
+     base64/UTF-16LE decoded and appended to the scan text, bounded to 64 KiB
+     over at most 8 payloads and 2 nesting rounds, and gated on the decode
+     reading as text so a stray long argument cannot inject noise. Because
+     this happens in the normaliser, ahead of the tier split,
+     `enforcement = "off"` cannot restore the blind spot.
 - **Config** (`[sandbox.command_policy]`): `enabled`, `enforcement`
   (`block` / `warn` — global observe mode that downgrades every block to an
   audit / `off`), `use_default_rules`, and `custom_rules[]` (`{name, regex,
@@ -1000,6 +1037,35 @@ audits a slightly larger suspicious set; it never reasons about model intent.
 - **Non-breaking:** defaults block only patterns with essentially no
   legitimate workspace use; relative-path `rm -rf build/` and ordinary
   commands are unaffected. The OS sandbox remains the real enforcer.
+- **Linux hardening (2026-07-27, codex-sandbox-informed):**
+  - **`rm_rf_root` multi-slash / dot bypass closed.** The bare-root floor
+    matched exactly one `/` + terminator, so `rm -rf //`, `///`, `//*`, and
+    `/.` — all resolving to the POSIX root — slipped past the *hardline* into a
+    mere tunable warn. The root target is now `/+\.?` (one-or-more slashes,
+    optional dot), so every pure-root spelling blocks under **every** enforcement
+    mode. A redundant-slash *subdir* (`//tmp`) is not over-blocked — it stays a
+    `rm_rf_system_path` warn.
+  - **Raw-device class widened** to cover LVM device-mapper nodes
+    (`/dev/mapper/vg-root`) and the kernel-memory devices (`/dev/mem`,
+    `/dev/kmem`, `/dev/port`), so `dd of=/dev/mapper/…` (wipe an LVM volume) and
+    `dd of=/dev/mem` / `> /dev/mem` (clobber kernel memory) no longer escape the
+    dd / redirect / device-wipe floor.
+  - **New `Warn` rule `proc_sysrq_trigger`** — writing the magic SysRq trigger
+    (`echo c > /proc/sysrq-trigger` panics the kernel, `echo b` reboots without a
+    clean sync), a Linux-native host takedown that bypasses the audited
+    `shutdown` path. Same reversible "host availability" tier as `system_shutdown`
+    → audit, not block. Only a *write* (`>`/`>>`/`tee`) matches; reading procfs
+    is clean.
+  - **De-duplication (entropy reduction).** The raw-block-device alternation was
+    hand-pasted in four rules and the `rm` recursive-flag prefix in two — the
+    exact drift hazard behind the device-class gap. Both are now single-sourced
+    (`RAW_BLOCK_DEVICE_CLASS` / `RM_RECURSIVE_PREFIX` consts composed into the
+    patterns via `LazyLock`), so a newly-covered device or a change to "what
+    counts as a recursive rm" lands in one place and every affected rule sees it.
+  - Still a pure deterministic hard-filter (R7): no LLM/intent reasoning was
+    added; codex's landlock+seccomp is mirrored by `sandbox_init.rs`, and its
+    positive safe-command allowlist deliberately stays in the exec-tier /
+    approval layer, not here.
 
 ## References
 

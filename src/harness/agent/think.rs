@@ -551,7 +551,7 @@ impl AgentHarness {
         // `on_delta` further down.
         let provider_streams = may_stream_deltas(
             self.deps.guardrails.as_deref(),
-            self.deps.llm.as_http_provider().is_some(),
+            self.deps.llm.supports_streaming(),
         );
         let primary_call = if provider_streams {
             self.stream_llm_call(payload, callback, parent_cancel, started)

@@ -29,9 +29,13 @@
 //!   operator's enforcement posture (`block` / `warn` / `off`).
 //!
 //! Before matching, the scanned text is de-obfuscated by [`normalize`]
-//! (invisible characters, backslash escapes, empty quote pairs) so cheap
-//! evasions the shell would execute verbatim cannot slip past the literal
-//! regexes. The original command is never mutated.
+//! (invisible characters, shell escapes, empty quote pairs, Windows path
+//! prefixes) so cheap evasions the shell would execute verbatim cannot slip
+//! past the literal regexes. Because `\` is POSIX sh's escape *and* Windows'
+//! path separator, the matching copy carries both readings; and because
+//! `powershell -EncodedCommand <base64>` hides an entire script from every rule
+//! at once, its payload is decoded and appended. The original command is never
+//! mutated.
 //!
 //! # Where it runs
 //!
@@ -62,6 +66,12 @@ pub use rules::{default_rules, hardline_rules, EnforcementMode, PolicyRule, Rule
 /// head and tail windows are scanned (see [`CommandPolicy::evaluate`]) so a
 /// padded front cannot bury a dangerous command in an unscanned tail. The OS
 /// sandbox remains the backstop for any residual middle band.
+///
+/// The bound is applied to the raw command *before* normalisation, which may
+/// then emit up to two readings of it plus a capped amount of decoded
+/// `-EncodedCommand` text (see [`normalize`]). Matching stays linear in that
+/// total, so the ceiling is a small constant factor above this window rather
+/// than this window exactly.
 const MAX_SCAN_BYTES: usize = 256 * 1024;
 
 /// A compiled command policy: a [`RegexSet`] of tunable rules (with parallel
@@ -255,9 +265,10 @@ impl CommandPolicy {
             &scan_buf
         };
 
-        // De-obfuscate a matching copy (invisible chars, backslash escapes,
-        // empty quote pairs). The original command is unchanged; this only
-        // affects what the regexes see. Borrowed (no allocation) when clean.
+        // De-obfuscate a matching copy (invisible chars, shell escapes, empty
+        // quote pairs, Windows path prefixes) and expand any encoded payload.
+        // The original command is unchanged; this only affects what the regexes
+        // see. Borrowed (no allocation) when clean.
         let normalized = normalize::normalize_for_matching(windowed);
         let scan: &str = &normalized;
 
@@ -630,6 +641,104 @@ mod tests {
     }
 
     #[test]
+    fn blocks_rm_rf_multislash_and_dot_root() {
+        // Bypass regression: `//`, `///` and `/.` all resolve to the filesystem
+        // root on POSIX, but the old floor required exactly one `/` followed by a
+        // terminator, so `rm -rf //` slipped past the hardline into a mere warn.
+        // Every pure-root spelling must join the undisableable floor.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "rm -rf //",
+            "rm -rf ///",
+            "rm -rf //*",
+            "rm -rf /.",
+            "rm -r //",
+            "rm --recursive //",
+        ] {
+            assert!(
+                p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "multi-slash / dot root recursive rm must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn rm_rf_multislash_subdir_is_not_hardline_root() {
+        // `//tmp` normalises to `/tmp` (a subdir), NOT root — the tightened
+        // root regex must not over-block a redundant-slash subdir path.
+        let p = policy(EnforcementMode::Block);
+        for cmd in ["rm -rf //tmp", "rm -rf //home/user", "rm -rf /./build"] {
+            assert!(
+                !p.evaluate(cmd).blocked.contains(&"rm_rf_root".to_string()),
+                "redundant-slash subdir must not trip the bare-root floor: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_dd_to_lvm_mapper_and_kernel_memory() {
+        // Gap: the raw-device class omitted LVM device-mapper nodes
+        // (`/dev/mapper/vg-root`) and kernel-memory devices
+        // (`/dev/mem`/`/dev/kmem`/`/dev/port`), so `dd of=/dev/mapper/vg-root`
+        // (wipe an LVM volume) and `dd of=/dev/mem` (clobber kernel memory)
+        // escaped the catastrophic floor. Both must now block on dd, redirect,
+        // and wipe surfaces.
+        let p = policy(EnforcementMode::Block);
+        for dev in ["/dev/mapper/vg-root", "/dev/mem", "/dev/kmem", "/dev/port"] {
+            assert!(
+                p.evaluate(&format!("dd if=/dev/zero of={dev} bs=1M"))
+                    .blocked
+                    .contains(&"dd_to_block_device".to_string()),
+                "dd to {dev} must block"
+            );
+            assert!(
+                p.evaluate(&format!("echo x > {dev}"))
+                    .blocked
+                    .contains(&"redirect_to_block_device".to_string()),
+                "redirect to {dev} must block"
+            );
+        }
+        assert!(
+            p.evaluate("wipefs -a /dev/mapper/vg-root")
+                .blocked
+                .contains(&"device_wipe_tools".to_string()),
+            "wipefs of an LVM mapper node must block"
+        );
+    }
+
+    #[test]
+    fn warns_on_proc_sysrq_trigger_write() {
+        // Linux instant-host-takedown vector: `echo c > /proc/sysrq-trigger`
+        // panics the kernel and `echo b` reboots without a clean unmount /
+        // sync, both bypassing the audited `shutdown` path. Same reversible
+        // "host availability" tier as `system_shutdown` → warn, not block.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "echo c > /proc/sysrq-trigger",
+            "echo b >> /proc/sysrq-trigger",
+            "cat trigger | tee /proc/sysrq-trigger",
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(
+                e.blocked.is_empty(),
+                "sysrq trigger must warn, not block: {cmd}"
+            );
+            assert!(
+                e.warned.contains(&"proc_sysrq_trigger".to_string()),
+                "sysrq-trigger write must warn: {cmd} -> {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_proc_is_clean() {
+        // Only *writing* the sysrq trigger is the takedown shape — reading
+        // ordinary procfs must stay clean.
+        let e = policy(EnforcementMode::Block).evaluate("cat /proc/cpuinfo");
+        assert!(e.is_clean(), "reading procfs must be clean: {e:?}");
+    }
+
+    #[test]
     fn warns_on_rm_rf_split_and_recursive_only_flags() {
         // Regression: the previous `rm_rf_system_path` required the recursive
         // and force letters in a *single* token, so the split form `rm -r -f`
@@ -864,13 +973,22 @@ mod tests {
 
     #[test]
     fn blocks_windows_recursive_root_delete() {
+        // One rule now covers both dialects: cmd's `/s` switches and
+        // PowerShell's `-Recurse` (plus every `Remove-Item` alias), against a
+        // bare drive root or a registry hive root.
         let p = policy(EnforcementMode::Block);
-        for cmd in ["cmd /c del /s /q C:\\", "rd /s /q D:\\", "del /s /q C:\\*"] {
+        for cmd in [
+            "cmd /c del /s /q C:\\",
+            "rd /s /q D:\\",
+            "del /s /q C:\\*",
+            "Remove-Item -Recurse -Force C:\\",
+            "Remove-Item -Recurse -Force HKLM:\\",
+        ] {
             assert!(
                 p.evaluate(cmd)
                     .blocked
                     .contains(&"win_recursive_root_delete".to_string()),
-                "drive-root recursive delete must block: {cmd}"
+                "drive/hive-root recursive delete must block: {cmd}"
             );
         }
     }
@@ -879,27 +997,106 @@ mod tests {
     fn windows_recursive_subdir_delete_is_not_hardline() {
         // Recursively deleting a *subdirectory* is legitimate and must not trip
         // the catastrophic drive-root rule.
-        let e = policy(EnforcementMode::Block).evaluate("del /s /q C:\\Users\\me\\build");
-        assert!(
-            !e.blocked.contains(&"win_recursive_root_delete".to_string()),
-            "subdir recursive delete must not block: {e:?}"
-        );
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "del /s /q C:\\Users\\me\\build",
+            "Remove-Item -Recurse -Force C:\\Users\\me\\proj\\target",
+            "Remove-Item -Recurse -Force .\\dist",
+        ] {
+            assert!(
+                !p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_recursive_root_delete".to_string()),
+                "subdir recursive delete must not block: {cmd}"
+            );
+        }
     }
 
     #[test]
-    fn blocks_windows_powershell_recursive_root_delete() {
+    fn blocks_root_delete_with_the_target_before_the_recursive_flag() {
+        // Regression: the rule required `verb … flag … target` in that order,
+        // but `del C:\ /s /q` is the same command with the arguments swapped —
+        // valid shell that walked straight through the catastrophic floor.
         let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "cmd /c del C:\\ /s /q",
+            "Remove-Item -LiteralPath C:\\ -Recurse -Force",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_recursive_root_delete".to_string()),
+                "argument order must not decide the verdict: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_root_delete_through_remove_item_aliases() {
+        // Regression: the PowerShell rule matched the literal `Remove-Item`
+        // only, so every alias PowerShell resolves to it (`ri`, `rm`, `rd`, …)
+        // reached the same catastrophic call unblocked.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "ri -Recurse -Force C:\\",
+            "rm -r -fo C:\\",
+            "rmdir -Recurse D:\\",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_recursive_root_delete".to_string()),
+                "Remove-Item alias must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_root_delete_through_the_extended_length_path_prefix() {
+        // Regression: `\\?\C:\` is the Win32 extended-length spelling of `C:\`
+        // — the same target — but it normalised to `\?C:` and matched nothing.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "cmd /c del /s /q \\\\?\\C:\\",
+            "cmd /c rd /s /q \\\\.\\C:\\",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_recursive_root_delete".to_string()),
+                "namespace-prefixed drive root must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_root_delete_named_through_an_environment_variable() {
+        // `%SystemDrive%` and `$env:SystemDrive` expand to the drive root, so
+        // they are the same command wearing a different name.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "cmd /c rd /s /q %SystemDrive%\\",
+            "Remove-Item -Recurse -Force $env:SystemDrive\\",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_recursive_root_delete".to_string()),
+                "environment-named drive root must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_later_statement_cannot_complete_an_earlier_verb() {
+        // Regression: rule gaps were `[^\n]*`, so an unrelated statement later
+        // on the same line supplied the missing half — `del /s build\*` plus a
+        // benign `echo C:\` read as a drive-root wipe and was refused on the
+        // *undisableable* floor, where no config could turn it off.
+        let e = policy(EnforcementMode::Block).evaluate("cmd /c del /s build\\* & echo C:\\");
         assert!(
-            p.evaluate("Remove-Item -Recurse -Force C:\\")
-                .blocked
-                .contains(&"win_powershell_recursive_root_delete".to_string()),
-            "Remove-Item -Recurse of a drive root must block"
-        );
-        assert!(
-            p.evaluate("Remove-Item -Recurse -Force HKLM:\\")
-                .blocked
-                .contains(&"win_powershell_recursive_root_delete".to_string()),
-            "Remove-Item -Recurse of a registry hive root must block"
+            e.is_clean(),
+            "separate statements must not be stitched together: {e:?}"
         );
     }
 
@@ -1013,6 +1210,246 @@ mod tests {
         );
     }
 
+    // --- Encoded commands ------------------------------------------------
+
+    /// Encode `script` the way `powershell -EncodedCommand` expects it.
+    fn encoded(script: &str) -> String {
+        use base64::Engine as _;
+        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        base64::engine::general_purpose::STANDARD.encode(utf16)
+    }
+
+    #[test]
+    fn encoded_payload_is_judged_by_the_hardline_floor() {
+        // Regression, and the sharpest one in this round: `-EncodedCommand`
+        // hid the *entire* script from every rule at once, so the catastrophic
+        // floor was a single base64 away from being switched off on Windows.
+        let p = policy(EnforcementMode::Block);
+        let cmd = format!(
+            "powershell -NoProfile -EncodedCommand {}",
+            encoded("Remove-Item -Recurse -Force C:\\")
+        );
+        let e = p.evaluate(&cmd);
+        assert!(
+            e.blocked.contains(&"win_recursive_root_delete".to_string()),
+            "the decoded payload must reach the floor: {e:?}"
+        );
+    }
+
+    #[test]
+    fn encoding_a_command_is_itself_audited() {
+        // Even a clean payload leaves a paper trail: an agent has no reason to
+        // base64 its own script, so the wrapper is worth a warn on its own.
+        let e = policy(EnforcementMode::Block)
+            .evaluate(&format!("powershell -enc {}", encoded("Get-ChildItem .")));
+        assert!(
+            e.blocked.is_empty(),
+            "a clean payload must still run: {e:?}"
+        );
+        assert!(
+            e.warned.contains(&"win_encoded_command".to_string()),
+            "encoding must be audited: {e:?}"
+        );
+    }
+
+    #[test]
+    fn encoded_payload_blocks_under_every_enforcement_mode() {
+        // The decoding happens in the normaliser, ahead of the tier split, so
+        // `enforcement = "off"` cannot restore the blind spot.
+        let cmd = format!(
+            "powershell -enc {}",
+            encoded("vssadmin delete shadows /all")
+        );
+        for mode in [
+            EnforcementMode::Block,
+            EnforcementMode::Warn,
+            EnforcementMode::Off,
+        ] {
+            let e = policy(mode).evaluate(&cmd);
+            assert!(
+                e.blocked.contains(&"win_delete_shadow_copies".to_string()),
+                "decoded catastrophic payload must block under {mode:?}: {e:?}"
+            );
+        }
+    }
+
+    // --- Ransomware-chain floor additions --------------------------------
+
+    #[test]
+    fn blocks_backup_catalog_and_boot_recovery_destruction() {
+        // The other two thirds of the destruction chain whose first third
+        // (`vssadmin delete shadows`) the floor already knew.
+        let p = policy(EnforcementMode::Block);
+        for (cmd, rule) in [
+            (
+                "wbadmin delete catalog -quiet",
+                "win_backup_catalog_destruction",
+            ),
+            (
+                "wbadmin delete systemstatebackup -keepversions:0",
+                "win_backup_catalog_destruction",
+            ),
+            (
+                "bcdedit /set {default} recoveryenabled No",
+                "win_boot_recovery_disable",
+            ),
+            (
+                "bcdedit /set {current} bootstatuspolicy ignoreallfailures",
+                "win_boot_recovery_disable",
+            ),
+        ] {
+            assert!(
+                p.evaluate(cmd).blocked.contains(&rule.to_string()),
+                "{cmd} must block on {rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_windows_raw_disk_destruction() {
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "Clear-Disk -Number 0 -RemoveData -Confirm:$false",
+            "echo clean | diskpart",
+            "dd if=/dev/zero of=\\\\.\\PhysicalDrive0",
+        ] {
+            assert!(
+                p.evaluate(cmd)
+                    .blocked
+                    .contains(&"win_disk_wipe_tools".to_string()),
+                "raw-disk destruction must block: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn reading_disk_state_is_clean() {
+        // The wipe rules key on the destructive switch, not the noun — listing
+        // disks must stay ordinary.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "Get-Disk",
+            "Get-PhysicalDisk | Format-Table",
+            "wbadmin get status",
+        ] {
+            assert!(
+                p.evaluate(cmd).blocked.is_empty(),
+                "read-only disk inspection must not block: {cmd}"
+            );
+        }
+    }
+
+    // --- Windows audit-tier additions ------------------------------------
+
+    #[test]
+    fn warns_on_windows_system_path_delete() {
+        // The Windows twin of `rm_rf_system_path`, and the reason the
+        // normaliser keeps a path-preserving reading at all.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "Remove-Item -Recurse -Force C:\\Windows\\System32",
+            "rd /s /q C:\\Program Files",
+            "Remove-Item -Recurse %SystemRoot%",
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(
+                e.warned.contains(&"win_rm_system_path".to_string()),
+                "system-path delete must warn: {cmd} -> {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_relative_delete_does_not_warn_as_a_system_path() {
+        // An agent workspace normally lives under `C:\Users\<name>`, so
+        // matching that subtree would warn on every build-directory cleanup.
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "Remove-Item -Recurse -Force C:\\Users\\me\\proj\\target",
+            "rd /s /q build",
+        ] {
+            assert!(
+                p.evaluate(cmd).is_clean(),
+                "ordinary cleanup must stay quiet: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_on_windows_defence_and_forensics_tampering() {
+        let p = policy(EnforcementMode::Block);
+        for (cmd, rule) in [
+            ("sc.exe delete WinDefend", "win_disable_defender"),
+            ("net stop windefend", "win_disable_defender"),
+            ("wevtutil cl Security", "win_event_log_clear"),
+            ("Clear-EventLog -LogName Application", "win_event_log_clear"),
+            (
+                "Set-ExecutionPolicy Bypass -Scope Process -Force",
+                "win_execution_policy_bypass",
+            ),
+            (
+                "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')",
+                "win_amsi_bypass",
+            ),
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(e.blocked.is_empty(), "must warn, not block: {cmd}");
+            assert!(
+                e.warned.contains(&rule.to_string()),
+                "{cmd} must warn on {rule}: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_on_windows_account_and_persistence_backdoors() {
+        // The Windows counterparts of `write_ssh_authorized_keys` (account
+        // backdoor) and `win_registry_run_persistence` (autostart).
+        let p = policy(EnforcementMode::Block);
+        for (cmd, rule) in [
+            (
+                "net localgroup administrators evil /add",
+                "win_local_admin_backdoor",
+            ),
+            ("net user svc P@ssw0rd /add", "win_local_admin_backdoor"),
+            (
+                "schtasks /create /tn evil /tr evil.exe /sc onlogon",
+                "win_persistence_task_service",
+            ),
+            (
+                "sc create evil binPath= C:\\evil.exe start= auto",
+                "win_persistence_task_service",
+            ),
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(
+                e.warned.contains(&rule.to_string()),
+                "{cmd} must warn on {rule}: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn warns_on_acl_takeover_of_a_drive_root() {
+        let p = policy(EnforcementMode::Block);
+        for cmd in [
+            "takeown /f C:\\ /r /d y",
+            "icacls C:\\ /grant everyone:F /t",
+        ] {
+            let e = p.evaluate(cmd);
+            assert!(
+                e.warned.contains(&"win_acl_takeover_root".to_string()),
+                "drive-root ACL takeover must warn: {cmd} -> {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_acl_change_is_clean() {
+        let e = policy(EnforcementMode::Block).evaluate("icacls C:\\app\\logs /grant users:M");
+        assert!(e.is_clean(), "subdirectory ACL change must be clean: {e:?}");
+    }
+
     #[test]
     fn windows_clean_commands_pass() {
         let p = policy(EnforcementMode::Block);
@@ -1021,6 +1458,10 @@ mod tests {
             "powershell -c Get-ChildItem .",
             "del build\\app.exe",
             "reg query HKLM\\Software\\Microsoft",
+            "powershell -ExecutionPolicy Restricted -File build.ps1",
+            "net use Z: \\\\srv\\share",
+            "sc query WinDefend",
+            "robocopy C:\\src C:\\dst /s /e",
         ] {
             assert!(
                 p.evaluate(cmd).is_clean(),

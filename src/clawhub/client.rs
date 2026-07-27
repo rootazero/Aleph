@@ -363,11 +363,16 @@ impl ClawHubClient {
             403 => "Skill blocked by ClawHub (malware detected)".to_string(),
             423 => "Skill is pending security review, try again later".to_string(),
             429 => {
+                // Same sentence shape as the provider adapters build, so the
+                // same normalisation: RFC 7231 also allows an HTTP-date here,
+                // and splicing one in raw reads "Retry after Wed, 21 Oct 2026
+                // 07:28:00 GMT seconds".
                 let retry_after = resp
                     .headers()
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
-                    .unwrap_or("60");
+                    .and_then(crate::providers::llm_retry::retry_after_header_secs)
+                    .unwrap_or(60);
                 format!("ClawHub rate limit exceeded. Retry after {retry_after} seconds")
             }
             _ => {

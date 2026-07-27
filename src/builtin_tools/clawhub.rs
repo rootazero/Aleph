@@ -141,12 +141,6 @@ impl ClawHubTool {
         })
     }
 
-    /// Access the underlying HTTP client (for gateway handlers to reuse).
-    #[must_use]
-    pub const fn client(&self) -> &ClawHubClient {
-        &self.client
-    }
-
     /// Skills installation directory: ~/.aleph/skills/
     fn skills_dir() -> Result<PathBuf> {
         crate::utils::paths::get_skills_dir()

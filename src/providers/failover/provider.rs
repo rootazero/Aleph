@@ -17,7 +17,7 @@ use crate::providers::route_policy::{
     classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
     RateLimits, RouteTargets,
 };
-use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::providers::{AiProvider, DefaultProviderHandle, DeltaSink, ProviderDelta};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
@@ -47,6 +47,141 @@ const fn unpriced_cost(tier: EndpointTier) -> u64 {
     }
 }
 
+/// Every token this call put through the provider's rate window.
+///
+/// [`TokenUsage`](crate::providers::adapter::TokenUsage) counters are
+/// **disjoint** by adapter post-condition — `input_tokens` excludes both cache
+/// counters — so the prompt is only whole once all three are added. Summing
+/// input+output alone understates a cache-heavy turn by the entire cached
+/// prefix (a 48k-token cached prompt reads as ~120 tokens), which silently
+/// disarms everything downstream of the rate window: `over_limit` never trips,
+/// so the saturated-provider deprioritisation and `usage_based` ordering sit
+/// idle while the account is being throttled for real, and `route_status`
+/// reports the same understated figure back to whoever is diagnosing it.
+///
+/// Providers bill cached reads at a discount, but the rate *limit* counts them
+/// at face value — this is a throughput ceiling, not a bill.
+pub(super) fn billed_tokens(usage: &crate::providers::adapter::TokenUsage) -> u64 {
+    u64::from(usage.input_tokens)
+        + u64::from(usage.output_tokens)
+        + u64::from(usage.cache_read_tokens.unwrap_or(0))
+        + u64::from(usage.cache_creation_tokens.unwrap_or(0))
+}
+
+/// Which slot of the chain a candidate occupies.
+///
+/// Only the walk's *model-list* resolution needs this, and it needs it to be
+/// exact: an explicitly pinned request model (a `select_model` pick, an agent
+/// `model_hint`, a `BrainRef::Strict` model — whatever `ModelOverrideProvider`
+/// stamped onto `payload.model`) belongs to the endpoint the caller actually
+/// chose, i.e. the primary slot. Stamping it onto a cross-provider fallback
+/// dials that fallback with a model id it does not serve.
+///
+/// This used to be inferred from `tier == EndpointTier::Unknown`, a proxy that
+/// was wrong in **both** directions:
+///
+/// * a *pinned* chain tags its primary with the pin's real tier
+///   (`with_primary_tier`, only ever `Local`/`Cloud`), so the pinned model was
+///   silently discarded and the provider's first catalog model used instead;
+/// * a *live-derived* fallback was tagged `Unknown`, so every fallback was
+///   treated as the primary slot and dialed with the primary's model.
+///
+/// The slot is now carried explicitly, so tier means only "local or cloud".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotKind {
+    /// The caller's chosen endpoint — owns any explicitly pinned request model.
+    Primary,
+    /// A cross-provider safety net — always walks its own model catalog.
+    Fallback,
+}
+
+/// Fallback chain **membership** for the next request, in order.
+///
+/// The single description of "who is in the chain", shared by the walk
+/// ([`FailoverProvider::candidates`]) and the `route_status` renderer
+/// ([`crate::providers::route_observe`]) so the diagnostic can never disagree
+/// with the chain it is describing. Three cases, matching how the chain was
+/// assembled:
+///
+/// * the handle exposes no live registry (tests / non-registry boot) → the
+///   boot-time configured order verbatim;
+/// * `derive_live` (an *auto-derived* chain, i.e. no operator
+///   `[fallback_provider].chain`) → every currently-registered provider, so one
+///   added or removed at runtime joins/leaves without a restart;
+/// * otherwise → the operator's configured order, minus entries that no longer
+///   exist in the live registry.
+///
+/// The primary is excluded in every case (its own slot already covers it).
+pub(crate) fn effective_fallback_names(
+    live_names: &[String],
+    primary_name: &str,
+    configured_names: &[String],
+    derive_live: bool,
+) -> Vec<String> {
+    let configured_minus_primary = || {
+        configured_names
+            .iter()
+            .filter(|n| n.as_str() != primary_name)
+            .cloned()
+            .collect::<Vec<String>>()
+    };
+    if live_names.is_empty() {
+        return configured_minus_primary();
+    }
+    if derive_live {
+        return live_names
+            .iter()
+            .filter(|n| n.as_str() != primary_name)
+            .cloned()
+            .collect();
+    }
+    let live: std::collections::HashSet<&str> = live_names.iter().map(String::as_str).collect();
+    configured_minus_primary()
+        .into_iter()
+        .filter(|n| live.contains(n.as_str()))
+        .collect()
+}
+
+/// A [`DeltaSink`] pass-through that remembers whether any *content* reached
+/// the caller.
+///
+/// The failover walk needs one bit the sink itself does not expose: has the user
+/// already been shown part of an answer? Bookkeeping-only deltas
+/// ([`Usage`](ProviderDelta::Usage), [`Done`](ProviderDelta::Done),
+/// [`Error`](ProviderDelta::Error)) do not count — they carry nothing a second
+/// candidate's answer could contradict.
+struct EmissionGuard<'a> {
+    inner: &'a dyn DeltaSink,
+    emitted: std::sync::atomic::AtomicBool,
+}
+
+impl<'a> EmissionGuard<'a> {
+    const fn new(inner: &'a dyn DeltaSink) -> Self {
+        Self {
+            inner,
+            emitted: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn has_emitted(&self) -> bool {
+        self.emitted.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[async_trait::async_trait]
+impl DeltaSink for EmissionGuard<'_> {
+    async fn on_delta(&self, delta: &ProviderDelta) {
+        if !matches!(
+            delta,
+            ProviderDelta::Usage(_) | ProviderDelta::Done(_) | ProviderDelta::Error(_)
+        ) {
+            self.emitted
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.inner.on_delta(delta).await;
+    }
+}
+
 /// An `AiProvider` that fails over across an ordered provider/model chain.
 pub struct FailoverProvider {
     /// Live primary slot. `current()` is read on every call so a UI
@@ -57,6 +192,14 @@ pub struct FailoverProvider {
     /// Provider name → model list. Boot snapshot; lets the live primary
     /// resolve its model list by name.
     model_catalog: HashMap<String, Vec<String>>,
+    /// Provider name → endpoint tier. Boot snapshot from the same
+    /// `provider_tier(base_url)` derivation the static chain uses, so a
+    /// *live-derived* fallback carries its real local/cloud tier instead of the
+    /// `Unknown` placeholder that made `AlwaysLocal` a no-op and inverted
+    /// `CostAware` for on-machine endpoints. A provider registered after boot is
+    /// absent here and resolves to [`EndpointTier::Cloud`] — the conservative
+    /// side of both decisions (gated under `AlwaysLocal`, never assumed free).
+    tier_catalog: HashMap<String, EndpointTier>,
     /// Shared circuit-breaker state.
     health: FailoverHealth,
     config: FailoverConfig,
@@ -132,6 +275,7 @@ impl FailoverProvider {
             primary,
             fallbacks,
             model_catalog,
+            tier_catalog: HashMap::new(),
             health,
             config,
             route_mode: RouteMode::Auto,
@@ -154,6 +298,19 @@ impl FailoverProvider {
     #[must_use]
     pub const fn with_live_fallback_derivation(mut self) -> Self {
         self.derive_fallbacks_live = true;
+        self
+    }
+
+    /// Attach the boot provider → endpoint-tier map.
+    ///
+    /// Required for [`with_live_fallback_derivation`](Self::with_live_fallback_derivation)
+    /// to be *correct*: without it every live-derived node falls back to
+    /// [`EndpointTier::Cloud`], and the route policy can only gate on the
+    /// conservative side. `build_failover_chain` supplies the same map the
+    /// static chain derives its node tiers from, so both paths gate identically.
+    #[must_use]
+    pub fn with_tier_catalog(mut self, tiers: HashMap<String, EndpointTier>) -> Self {
+        self.tier_catalog = tiers;
         self
     }
 
@@ -362,9 +519,9 @@ impl FailoverProvider {
     /// The primary is never reordered below its own fallbacks (it is the
     /// operator default or the explicitly-chosen provider); only the *fallback*
     /// list is run through [`order_candidates`] for local-first ordering, pin
-    /// promotion and tier gating. Each pair carries the [`CandidateAction`] the
-    /// walk must enforce.
-    fn candidates(&self) -> Vec<(FailoverNode, CandidateAction)> {
+    /// promotion and tier gating. Each entry carries the [`CandidateAction`] the
+    /// walk must enforce plus the [`SlotKind`] that decides whose model list wins.
+    async fn candidates(&self) -> Vec<(FailoverNode, CandidateAction, SlotKind)> {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -379,50 +536,44 @@ impl FailoverProvider {
             provider: primary,
             tier: self.primary_tier,
         };
-        // Raw fallback pool: live-derived from the primary handle's registry
-        // when configured (auto-derived chains). For explicit operator chains,
-        // still consult the live registry so a provider removed at runtime is
-        // dropped from the chain without a restart; the explicit order is
-        // preserved and unknown names are skipped. Live nodes are minimal —
-        // empty model list (→ the caller's model) and `Unknown` tier (→ always
-        // route-allowed). Falls back to the boot-time static snapshot only when
-        // the handle exposes no live providers (tests / non-registry boot paths).
+        // Chain membership comes from the one shared description
+        // ([`effective_fallback_names`]) so `route_status` cannot describe a
+        // different chain than the one that is walked. Each name is then
+        // materialised into a node: a boot node when the operator configured
+        // the chain (it already carries the built provider, its model list and
+        // its tier), otherwise a live registry lookup whose model list and
+        // endpoint tier come from the same boot catalogs the static path uses —
+        // a live-derived candidate is a real chain member, not a placeholder.
         let live_names = self.primary.provider_names();
-        let fallbacks: Vec<FailoverNode> = if live_names.is_empty() {
-            let mut v = Vec::with_capacity(self.fallbacks.len());
-            for fb in &self.fallbacks {
-                if fb.name == primary_name {
-                    continue; // dedup: the primary slot already covers it
+        let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
+        let member_names = effective_fallback_names(
+            &live_names,
+            &primary_name,
+            &configured,
+            self.derive_fallbacks_live,
+        );
+        let fallbacks: Vec<FailoverNode> = member_names
+            .into_iter()
+            .filter_map(|name| {
+                // An auto-derived chain dials the *live* provider instance, so
+                // one rebuilt at runtime (rotated key, edited base_url) is used
+                // without a restart; its model list and tier still come from the
+                // boot catalogs. An operator-configured chain uses its boot node
+                // verbatim (that node already carries all three).
+                if self.derive_fallbacks_live {
+                    if let Some(provider) = self.primary.provider_by_name(&name) {
+                        return Some(FailoverNode {
+                            models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
+                            tier: self.node_tier(&name),
+                            name,
+                            provider,
+                        });
+                    }
                 }
                 // rust-doctor-disable-next-line excessive-clone
-                v.push(fb.clone());
-            }
-            v
-        } else if self.derive_fallbacks_live {
-            live_names
-                .into_iter()
-                .filter(|name| name != &primary_name) // dedup: primary slot covers it
-                .filter_map(|name| {
-                    self.primary
-                        .provider_by_name(&name)
-                        .map(|provider| FailoverNode {
-                            name,
-                            models: Vec::new(),
-                            provider,
-                            tier: EndpointTier::Unknown,
-                        })
-                })
-                .collect()
-        } else {
-            // Explicit `[fallback_provider].chain`: keep operator order but
-            // drop entries that no longer exist in the live registry.
-            let live_set: std::collections::HashSet<String> = live_names.into_iter().collect();
-            self.fallbacks
-                .iter()
-                .filter(|fb| fb.name != primary_name && live_set.contains(&fb.name))
-                .cloned()
-                .collect()
-        };
+                self.fallbacks.iter().find(|fb| fb.name == name).cloned()
+            })
+            .collect();
         // One coherent route snapshot for the whole ordering pass — mode,
         // targets, strategy and limits all read from a single config generation.
         let route = self.route_snapshot();
@@ -432,10 +583,11 @@ impl FailoverProvider {
         // Classify the primary in place. A `Skip` (a hard-guardrail mode with
         // escalation off, on a cross-tier pin) drops it so the chain falls
         // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
-        let mut out: Vec<(FailoverNode, CandidateAction)> = Vec::with_capacity(fallbacks.len() + 1);
+        let mut out: Vec<(FailoverNode, CandidateAction, SlotKind)> =
+            Vec::with_capacity(fallbacks.len() + 1);
         match classify_candidate(mode, primary_node.tier, allow_escalation) {
             CandidateAction::Skip => {}
-            action => out.push((primary_node, action)),
+            action => out.push((primary_node, action, SlotKind::Primary)),
         }
         // Order the fallback pool. The balanced path runs when there is a load
         // registry AND either a non-`Ordered` strategy (sort by live signals) or
@@ -444,7 +596,19 @@ impl FailoverProvider {
         // configured-order path stays byte-identical to before.
         let strategy = route.load_balance;
         let limits = Arc::clone(&route.limits);
-        let needs_balance = strategy != LoadBalanceStrategy::Ordered || !limits.is_empty();
+        // Providers the shared breaker/pacing registries currently consider
+        // unhealthy. Gathered once per pass (the registries are async, the
+        // ordering closure is not) and folded into `LoadMetric.cooling`, so an
+        // outage shapes the *order of the next request* instead of only being
+        // discovered mid-walk. This is the feedback edge LiteLLM closes with
+        // `_filter_cooldown_deployments` ahead of every strategy; Aleph
+        // deprioritises rather than removes, so a chain of cooling providers
+        // still resolves instead of raising "no deployments available".
+        let sidelined = self
+            .sidelined_providers(fallbacks.iter().map(|n| n.name.as_str()))
+            .await;
+        let needs_balance =
+            strategy != LoadBalanceStrategy::Ordered || !limits.is_empty() || !sidelined.is_empty();
         let ordered = match &self.load {
             Some(load) if needs_balance => {
                 // One rotation tick per request drives RoundRobin; the sort
@@ -477,6 +641,7 @@ impl FailoverProvider {
                         let (util, over) = limits.assess(name, m.rpm_used, m.tpm_used);
                         m.utilization_permille = util;
                         m.over_limit = over;
+                        m.cooling = sidelined.contains(name);
                         // Price lookup only when it is the active sort key —
                         // every other strategy ignores `price_per_mtok`. The
                         // tier disambiguates an unpriced model (free local vs
@@ -502,8 +667,63 @@ impl FailoverProvider {
                 |n| n.name.as_str(),
             ),
         };
-        out.extend(ordered);
+        out.extend(
+            ordered
+                .into_iter()
+                .map(|(node, action)| (node, action, SlotKind::Fallback)),
+        );
         out
+    }
+
+    /// The subset of `names` the shared registries currently consider unhealthy:
+    /// circuit breaker open (cooldown not yet elapsed), or parked inside a
+    /// rate-limit pacing window.
+    ///
+    /// Strictly read-only — it must **not** perform the `Open → HalfOpen`
+    /// transition, which belongs to [`circuit_allows`](Self::circuit_allows) at
+    /// dial time. Ordering asks "is this a good bet right now"; only an actual
+    /// dial may spend the probe.
+    async fn sidelined_providers<'n>(
+        &self,
+        names: impl Iterator<Item = &'n str>,
+    ) -> std::collections::HashSet<String> {
+        // The nested-chain sentinel has no health of its own — the chain it
+        // delegates to breaks per real provider.
+        let names: Vec<&str> = names.filter(|n| *n != super::NESTED_CHAIN_NODE).collect();
+        let mut out = std::collections::HashSet::new();
+        {
+            let map = self.health.0.read().await;
+            for name in &names {
+                let open = map.get(*name).is_some_and(|st| {
+                    st.circuit == CircuitState::Open
+                        && !st
+                            .last_failure
+                            .is_some_and(|at| at.elapsed() >= st.cooldown)
+                });
+                if open {
+                    out.insert((*name).to_string());
+                }
+            }
+        }
+        if let Some(pc) = &self.provider_cooldown {
+            for name in &names {
+                if pc.remaining(name).await.is_some() {
+                    out.insert((*name).to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// This candidate's endpoint tier from the boot catalog, defaulting to
+    /// [`EndpointTier::Cloud`] for a provider registered after boot — the
+    /// conservative side of both decisions the tier drives (gated under
+    /// `AlwaysLocal`, never assumed free by `CostAware`).
+    fn node_tier(&self, name: &str) -> EndpointTier {
+        self.tier_catalog
+            .get(name)
+            .copied()
+            .unwrap_or(EndpointTier::Cloud)
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` once the
@@ -573,9 +793,14 @@ impl FailoverProvider {
         }
     }
 
-    /// Whether `name`'s circuit is currently open. Diagnostic accessor used by
-    /// tests; the provider-health status surface is [`FailoverHealth::snapshot`]
-    /// (rendered by `route_observe` for the `route_status` tool action).
+    /// Whether `name`'s circuit is currently open.
+    ///
+    /// Test-only: the operator/model-facing status surface is
+    /// [`FailoverHealth::snapshot`] (rendered by `route_observe` for the
+    /// `route_status` tool action), and the walk itself uses
+    /// [`circuit_allows`](Self::circuit_allows). Gated so it cannot quietly
+    /// become a second, half-featured status API.
+    #[cfg(test)]
     pub async fn circuit_open(&self, name: &str) -> bool {
         self.health
             .0
@@ -584,13 +809,25 @@ impl FailoverProvider {
             .get(name)
             .is_some_and(|h| h.circuit == CircuitState::Open)
     }
-}
 
-impl AiProvider for FailoverProvider {
+    /// The failover walk, shared by [`AiProvider::process`] (`sink: None`) and
+    /// [`AiProvider::execute_streaming_dyn`] (`sink: Some(..)`).
+    ///
+    /// One body, one set of retry / breaker / cooldown / route-policy rules, so
+    /// the streaming path can never drift from the non-streaming one. The only
+    /// difference is how a single attempt is issued — and one extra safety rule
+    /// that only streaming needs: once a candidate has pushed content to the
+    /// sink, the user has *seen* that text, so a later failure can no longer be
+    /// papered over by advancing the chain (the next candidate's answer would be
+    /// appended to a half-written one). Emission therefore makes the current
+    /// error terminal. Nothing is emitted before the model starts answering, so
+    /// the ordinary failure modes — connect errors, 401/403, 429, model-not-found
+    /// — all still fail over exactly as they do today.
     // rust-doctor-disable-next-line high-cyclomatic-complexity
-    fn process<'a>(
+    fn walk<'a>(
         &'a self,
         payload: RequestPayload<'a>,
+        sink: Option<&'a dyn DeltaSink>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         // The big fields (conversation, system prompt, tool defs) are `&'a`
         // borrows of the caller's data — copy the references so a failover
@@ -618,11 +855,14 @@ impl AiProvider for FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let candidates = self.candidates();
+            let candidates = self.candidates().await;
             let total = candidates.len();
             let mut last_error: Option<AlephError> = None;
+            // Records whether any candidate has already pushed content to the
+            // caller's sink; see the note on `walk`.
+            let emission = sink.map(EmissionGuard::new);
 
-            for (idx, (cand, action)) in candidates.into_iter().enumerate() {
+            for (idx, (cand, action, slot)) in candidates.into_iter().enumerate() {
                 // Route gate: an approval-gated cross-tier candidate (borrow
                 // cloud under AlwaysLocal) is skipped unless the user approves
                 // — fail-closed, exactly like an open circuit. Cloud→local
@@ -660,31 +900,35 @@ impl AiProvider for FailoverProvider {
 
                 // Model-list resolution, in precedence:
                 //
-                // 1. An *explicitly pinned* request model on the primary/default
-                //    slot (tier `Unknown`). This is the dynamic-routing model
-                //    directive — a `select_model` pick, an agent `model_hint`,
-                //    or a `BrainRef::Strict` model — that `ModelOverrideProvider`
-                //    stamped onto `payload.model`. It targets the operator's
-                //    configured default endpoint, so it overrides that slot's
-                //    static catalog walk (otherwise the catalog silently
-                //    discarded the model the LLM/agent explicitly chose). Still
-                //    passed through the C floor (fail-open) for consistency.
-                //    Fallback slots keep their own catalog — the pinned model
-                //    belongs to the default endpoint, not its cross-provider
-                //    safety net.
-                // 2. Empty catalog → a single attempt with the caller's model
-                //    (or the provider's own default when that is `None` too).
+                // 1. An *explicitly pinned* request model on the PRIMARY slot.
+                //    This is the dynamic-routing model directive — a
+                //    `select_model` pick, an agent `model_hint`, or a
+                //    `BrainRef::Strict` model — that `ModelOverrideProvider`
+                //    stamped onto `payload.model`. It targets the endpoint the
+                //    caller chose, so it overrides that slot's static catalog
+                //    walk (otherwise the catalog silently discarded the model
+                //    the LLM/agent explicitly chose). Still passed through the C
+                //    floor (fail-open) for consistency. The slot is carried
+                //    explicitly ([`SlotKind`]) rather than inferred from
+                //    `tier == Unknown`, which mis-fired on a *pinned* chain
+                //    (real tier ⇒ the pin was discarded) and on every
+                //    *live-derived* fallback (placeholder tier ⇒ the fallback
+                //    was dialed with the primary's model id).
+                // 2. Empty catalog → a single attempt: the caller's model on the
+                //    primary slot, the provider's own default on a fallback (a
+                //    cross-provider safety net cannot serve the primary's model
+                //    id, so forwarding it there is a guaranteed 404).
                 // 3. Otherwise the C floor drops models that structurally cannot
                 //    serve this request (no vision / no tools / over context
                 //    window), failing open so the chain is never emptied.
-                let models: Vec<Option<String>> = match (cand.tier, &req_model) {
-                    (EndpointTier::Unknown, Some(pinned)) => {
+                let models: Vec<Option<String>> = match (slot, &req_model) {
+                    (SlotKind::Primary, Some(pinned)) => {
                         retain_capable_models(vec![pinned.clone()], &reqs)
                             .into_iter()
                             .map(Some)
                             .collect()
                     }
-                    _ if cand.models.is_empty() => vec![req_model.clone()],
+                    _ if cand.models.is_empty() => vec![None],
                     // rust-doctor-disable-next-line excessive-clone
                     _ => retain_capable_models(cand.models.clone(), &reqs)
                         .into_iter()
@@ -695,22 +939,38 @@ impl AiProvider for FailoverProvider {
                 // healthy sibling (fail-open if all are cooling).
                 let models = self.drop_cooling_models(&cand.name, models).await;
 
-                // Proactive rate-limit pacing: if this provider 429'd recently
-                // and is still inside its recorded cooldown, wait out the
-                // *remaining* window before re-dialing it instead of eating a
-                // fresh 429. Only the candidate we are about to try is paced
-                // (skipped candidates `continue` above). Keeps a single paid
-                // primary (e.g. Kimi) in use rather than bouncing to a fallback
-                // every turn; capped so a turn never blocks unboundedly (the
-                // harness per-turn watchdog is the outer bound). Mirrors hermes'
-                // `nous_rate_limit_remaining()` pre-request wait.
+                // Proactive rate-limit pacing: this provider 429'd recently and
+                // is still inside its recorded cooldown.
+                //
+                // Waiting it out keeps a single paid primary (e.g. Kimi) in use
+                // instead of eating a fresh 429 — but only when there is nothing
+                // else to try. With a healthy candidate still ahead in the
+                // chain, blocking the turn for up to two minutes to insist on
+                // the parked provider is strictly worse than answering now: the
+                // window expires on its own and the provider returns to the head
+                // of the chain next turn. So the rule mirrors the circuit
+                // breaker's exactly — skip while a later candidate remains, and
+                // only wait when this is the last resort. (LiteLLM and Bifrost
+                // both drop a cooling deployment from selection outright; Aleph
+                // keeps it as the terminal candidate so a single-provider setup
+                // still gets its request served.)
                 if let Some(pc) = &self.provider_cooldown {
                     if let Some(remaining) = pc.remaining(&cand.name).await {
+                        if idx + 1 < total {
+                            tracing::debug!(
+                                provider = %cand.name,
+                                remaining_ms = remaining.as_millis() as u64,
+                                "failover: provider cooling from a recent 429, \
+                                 deferring to a later candidate",
+                            );
+                            continue;
+                        }
                         let wait = remaining.min(MAX_OVERLOAD_RETRY_DELAY);
                         tracing::warn!(
                             provider = %cand.name,
                             wait_ms = wait.as_millis() as u64,
-                            "failover: provider cooling from a recent 429, pacing before re-request",
+                            "failover: last candidate is cooling from a recent 429, \
+                             pacing before re-request",
                         );
                         tokio::time::sleep(wait).await;
                     }
@@ -738,9 +998,22 @@ impl AiProvider for FailoverProvider {
                         // Count this attempt as in-flight for the duration of
                         // the await (RAII: decremented on Ok, Err, retry, and
                         // panic alike). `None` load → no-op, zero overhead.
-                        let _load_guard = self.load.as_ref().map(|l| l.begin(&cand.name));
+                        // The nested-chain sentinel is excluded: it is not an
+                        // endpoint, and the inner chain records the real
+                        // provider a moment later — counting both would publish
+                        // a phantom provider row whose latency is the sum of two
+                        // nested dials (see `NESTED_CHAIN_NODE`).
+                        let _load_guard = self
+                            .load
+                            .as_ref()
+                            .filter(|_| cand.name != super::NESTED_CHAIN_NODE)
+                            .map(|l| l.begin(&cand.name));
                         let started = Instant::now();
-                        match cand.provider.process(inner).await {
+                        let attempt_result = match &emission {
+                            Some(guard) => cand.provider.execute_streaming_dyn(inner, guard).await,
+                            None => cand.provider.process(inner).await,
+                        };
+                        match attempt_result {
                             Ok(resp) => {
                                 // Feed the successful round-trip into the EWMA so
                                 // LatencyAware ordering reflects reality, and the
@@ -749,20 +1022,36 @@ impl AiProvider for FailoverProvider {
                                 if let Some(g) = &_load_guard {
                                     g.record_latency(started.elapsed());
                                     if let Some(u) = &resp.usage {
-                                        g.record_tokens(
-                                            u64::from(u.input_tokens) + u64::from(u.output_tokens),
-                                        );
+                                        g.record_tokens(billed_tokens(u));
                                     }
                                 }
                                 self.mark_healthy(&cand.name).await;
                                 return Ok(resp);
                             }
+                            // Content already reached the caller's sink: the user
+                            // has seen a partial answer, and no later candidate
+                            // can un-show it. Retrying or advancing would append
+                            // a second answer to a half-written one, so the error
+                            // is terminal here even when it would otherwise be
+                            // retryable. Only reachable on the streaming path
+                            // (`emission` is `None` for `process`), and only
+                            // after the model has started answering — connect
+                            // errors, auth failures, 429s and model-not-found all
+                            // still fail over normally.
+                            Err(e) if emission.as_ref().is_some_and(EmissionGuard::has_emitted) => {
+                                tracing::warn!(
+                                    provider = %cand.name, model = ?model, error = %e,
+                                    "failover: stream failed after partial output; \
+                                     surfacing instead of restarting on another candidate",
+                                );
+                                return Err(e);
+                            }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
                                 Decision::RetrySame(delay) => {
                                     // Grow the wait exponentially per in-place
                                     // attempt (capped at MAX_RETRY_DELAY), then
-                                    // jitter. The exponential growth mirrors
-                                    // `llm_retry::retry_async` so a stubborn
+                                    // jitter. The exponential growth comes from
+                                    // `llm_retry::backoff_delay` so a stubborn
                                     // throttle is ridden out instead of hammered
                                     // at a flat interval; D3: the jitter keeps
                                     // concurrent agents hitting the same
@@ -869,6 +1158,37 @@ impl AiProvider for FailoverProvider {
                 AlephError::provider(format!("all {total} failover candidates failed"))
             }))
         })
+    }
+}
+
+impl AiProvider for FailoverProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.walk(payload, None)
+    }
+
+    /// Stream through the chain: the same walk, issuing each attempt as a
+    /// streaming call so live deltas reach the caller from whichever candidate
+    /// ends up serving the request.
+    ///
+    /// Missing this override is what made live streaming unreachable in
+    /// production — every real stack runs through this decorator, and without
+    /// the override the trait default collapsed the call to `process`.
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+        sink: &'a dyn DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.walk(payload, Some(sink))
+    }
+
+    /// The chain streams if the slot it dials first does. A fallback that
+    /// cannot stream still *delivers* (the trait default replays its response
+    /// through the sink), so the answer is never lost — only batched.
+    fn supports_streaming(&self) -> bool {
+        self.primary.current().supports_streaming()
     }
 
     fn name(&self) -> &str {

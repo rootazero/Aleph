@@ -1,23 +1,18 @@
-//! LLM call retry with error classification and exponential backoff.
+//! LLM error classification and backoff shape.
 //!
-//! Classifies errors as transient (rate-limit, overloaded, connection) or fatal,
-//! then retries transient failures with exponential backoff. Backoff waits are
-//! cancellation-aware via `CancellationToken`.
+//! The single answer to "is this error worth retrying, and how long should the
+//! next attempt wait" — consumed by the failover walk (`failover::decision`,
+//! `failover::provider`) and the reactive-compaction rescue. Classification is
+//! by error *shape* (HTTP status, provider error text), never by anything the
+//! user wrote, so it stays infrastructure.
+//!
+//! It does **not** drive a retry loop of its own. It used to also carry
+//! `retry_async`, a standalone cancellation-aware driver with no callers: the
+//! failover walk owns the loop (it has to — only it knows the candidate chain,
+//! the breaker and the per-provider cooldowns), and a second implementation of
+//! the same backoff was one more place for the two to disagree.
 
-use std::future::Future;
 use std::time::Duration;
-
-use tokio_util::sync::CancellationToken;
-
-/// Maximum delay cap for exponential backoff.
-const MAX_DELAY: Duration = Duration::from_secs(30);
-
-/// Jitter factor for `retry_async`'s backoff sleep — equal-jitter shape,
-/// matches `RetryPolicy::default().jitter_factor`. Concurrent agents that
-/// share a rate-limited provider would otherwise retry in lockstep; the
-/// spread of `[0, base * factor]` decorrelates the storm without ever
-/// shortening the backoff below the deterministic floor.
-const LLM_RETRY_JITTER_FACTOR: f64 = 0.25;
 
 /// Outcome of classifying an error for retry decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,12 +28,6 @@ pub enum RetryVerdict {
 }
 
 /// Extract token gap from "prompt is too long: X tokens > Y maximum" error messages.
-#[must_use]
-pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
-    parse_token_gap_str(&err.to_string())
-}
-
-/// String-based core of [`parse_token_gap`] — operates on a raw error message.
 #[must_use]
 pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     let lower = msg.to_lowercase();
@@ -75,18 +64,12 @@ pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
 
 /// Classify an error AFTER all retries are exhausted.
 ///
-/// Called by the main loop when `retry_async` returns its final error.
-/// Reclassifies transient errors as `Fallback` since retries didn't help.
-/// 413 errors pass through as `CompactAndRetry` (handled separately).
-/// 400 errors remain `Fatal` (request itself is broken).
-#[must_use]
-pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
-    classify_exhausted(&err.to_string())
-}
-
-/// String-based core of [`classify_exhausted_error`].
+/// Final verdict once the in-place retry budget is spent.
 ///
-/// Used by `FailoverProvider`, which classifies `AlephError` display strings.
+/// Reclassifies transient errors as `Fallback` since retrying did not help.
+/// 413 stays `CompactAndRetry` (the turn driver owns that recovery); 400 stays
+/// `Fatal` (the request itself is broken). Called by `FailoverProvider` on
+/// `AlephError` display strings.
 #[must_use]
 // rust-doctor-disable-next-line high-cyclomatic-complexity
 pub fn classify_exhausted(raw: &str) -> RetryVerdict {
@@ -147,6 +130,32 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
 
     // Everything else stays Fatal
     RetryVerdict::Fatal
+}
+
+/// Normalise a raw `Retry-After` **header value** to whole seconds.
+///
+/// RFC 7231 allows two forms and providers use both: a delay in seconds
+/// (`"120"`) and an HTTP-date (`"Wed, 21 Oct 2026 07:28:00 GMT"`). The adapters
+/// interpolate this value into a `"Rate limited. Retry after {v} seconds."`
+/// suggestion that the failover layer parses back out, so a date reaching that
+/// format string is not merely ugly — [`extract_retry_after_str`] takes the
+/// first digit run it finds and reads the *day of month* as a delay. A server
+/// asking for several hours would be re-dialed 21 seconds later, every 21
+/// seconds. Normalising here means only one shape ever reaches the formatter.
+///
+/// A date already in the past yields `0` (retry immediately), never a negative
+/// or wrapped value.
+#[must_use]
+pub fn retry_after_header_secs(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if let Ok(secs) = trimmed.parse::<u64>() {
+        return Some(secs);
+    }
+    let at = httpdate::parse_http_date(trimmed).ok()?;
+    Some(
+        at.duration_since(std::time::SystemTime::now())
+            .map_or(0, |d| d.as_secs()),
+    )
 }
 
 /// Extract a Retry-After delay from a raw error message.
@@ -288,15 +297,10 @@ const CONTEXT_OVERFLOW_PATTERNS: &[&str] = &[
     "input token count",
 ];
 
-/// Inspect an `anyhow::Error` display string and decide whether to retry.
-#[must_use]
-pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
-    classify(&err.to_string())
-}
-
-/// String-based core of [`classify_error`] — classifies a raw error message.
+/// Classify a raw error message and decide whether to retry it in place.
 ///
-/// `FailoverProvider` calls this directly on `AlephError` display strings.
+/// The single classifier: `FailoverProvider` calls it on `AlephError` display
+/// strings, and the reactive-compaction rescue calls it on its own.
 #[must_use]
 pub fn classify(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
@@ -354,86 +358,16 @@ pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Durat
     Duration::from_millis(delay_ms.min(u64::try_from(max_delay.as_millis()).unwrap_or(u64::MAX)))
 }
 
-/// Retry an async operation with error classification and exponential backoff.
-///
-/// Calls `make_future()` up to `max_retries + 1` times. On transient errors the
-/// wait is cancellation-aware: if `cancel` fires during the backoff sleep the
-/// function returns immediately with a cancellation error.
-pub async fn retry_async<F, Fut, T>(
-    make_future: F,
-    cancel: &CancellationToken,
-    max_retries: usize,
-) -> anyhow::Result<T>
-where
-    F: Fn() -> Fut,
-    Fut: Future<Output = anyhow::Result<T>>,
-{
-    let mut attempt: u32 = 0;
-
-    loop {
-        match make_future().await {
-            Ok(val) => return Ok(val),
-            Err(err) => {
-                let verdict = classify_error(&err);
-                let retries_left = max_retries.saturating_sub(attempt as usize);
-
-                match verdict {
-                    RetryVerdict::Fatal
-                    | RetryVerdict::CompactAndRetry { .. }
-                    | RetryVerdict::Fallback { .. } => {
-                        return Err(err);
-                    }
-                    RetryVerdict::Retry { .. } if retries_left == 0 => {
-                        return Err(err);
-                    }
-                    _ => {}
-                }
-
-                let base_delay = match &verdict {
-                    RetryVerdict::Retry { delay } => *delay,
-                    _ => unreachable!(),
-                };
-
-                // Spread retry storms across concurrent agents that share a
-                // rate-limited provider (see `retry::apply_jitter`). Floor
-                // remains at the deterministic exponential backoff; ceiling
-                // grows by up to LLM_RETRY_JITTER_FACTOR.
-                let delay = crate::providers::retry::apply_jitter(
-                    backoff_delay(base_delay, attempt, MAX_DELAY),
-                    LLM_RETRY_JITTER_FACTOR,
-                );
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    delay_ms = delay.as_millis() as u64,
-                    error = %err,
-                    "Transient error, retrying after backoff"
-                );
-
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {}
-                    _ = cancel.cancelled() => {
-                        return Err(anyhow::anyhow!("Cancelled during retry backoff"));
-                    }
-                }
-
-                attempt += 1;
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_classify_rate_limit_model_specific_fallback() {
         // Default 429 → Fallback (try switching provider)
         let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -442,7 +376,7 @@ mod tests {
     fn test_classify_rate_limit_message_fallback() {
         let err = anyhow::anyhow!("Rate limit exceeded: 4500 requests per minute");
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -450,13 +384,13 @@ mod tests {
     #[test]
     fn test_classify_rate_limit_account_wide_fatal() {
         let err = anyhow::anyhow!("429 account quota exceeded");
-        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
     fn test_classify_rate_limit_org_fatal() {
         let err = anyhow::anyhow!("429 organization rate limit");
-        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
@@ -494,10 +428,53 @@ mod tests {
     }
 
     #[test]
+    fn retry_after_header_reads_the_delay_seconds_form() {
+        assert_eq!(retry_after_header_secs("120"), Some(120));
+        assert_eq!(retry_after_header_secs(" 0 "), Some(0));
+    }
+
+    /// RFC 7231's second form. These assertions used to live on a parser with
+    /// no callers (`providers::retry::parse_retry_after`) — which is exactly how
+    /// the live path went on reading a date as its day-of-month unnoticed. They
+    /// belong on the function production calls.
+    ///
+    /// The date is built from `now`, so what is pinned is the delta, not a
+    /// fixed clock.
+    #[test]
+    fn retry_after_header_converts_an_http_date_to_a_delay() {
+        const THREE_HOURS: u64 = 3 * 3600;
+        let at = std::time::SystemTime::now() + Duration::from_secs(THREE_HOURS);
+        let secs = retry_after_header_secs(&httpdate::fmt_http_date(at))
+            .expect("an HTTP-date is a valid Retry-After");
+        assert!(
+            (THREE_HOURS - 5..=THREE_HOURS).contains(&secs),
+            "expected ~3h, got {secs}s"
+        );
+    }
+
+    #[test]
+    fn retry_after_header_date_in_the_past_means_retry_now() {
+        let at = std::time::SystemTime::now() - Duration::from_secs(3600);
+        assert_eq!(
+            retry_after_header_secs(&httpdate::fmt_http_date(at)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn retry_after_header_rejects_what_it_cannot_read() {
+        // No guess is better than a wrong one: the caller falls back to a
+        // suggestion that carries no number at all.
+        assert_eq!(retry_after_header_secs("soon"), None);
+        assert_eq!(retry_after_header_secs("-1"), None);
+        assert_eq!(retry_after_header_secs(""), None);
+    }
+
+    #[test]
     fn test_classify_overloaded() {
         let err = anyhow::anyhow!("HTTP 529 overloaded");
         assert_eq!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::Retry {
                 delay: Duration::from_secs(2)
             }
@@ -518,9 +495,9 @@ mod tests {
              \"type\":\"error\"}}"
         );
         assert!(
-            matches!(classify_error(&err), RetryVerdict::Retry { .. }),
+            matches!(classify(&err.to_string()), RetryVerdict::Retry { .. }),
             "kimi-shaped 429+overloaded must be Retry (transient), got {:?}",
-            classify_error(&err)
+            classify(&err.to_string())
         );
     }
 
@@ -530,14 +507,14 @@ mod tests {
     #[test]
     fn test_classify_account_429_overloaded_still_fatal() {
         let err = anyhow::anyhow!("429 account quota exceeded; server overloaded");
-        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
     fn test_classify_connection_error() {
         let err = anyhow::anyhow!("connection reset by peer");
         assert_eq!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::Retry {
                 delay: Duration::from_millis(300)
             }
@@ -547,7 +524,7 @@ mod tests {
     #[test]
     fn test_classify_fatal() {
         let err = anyhow::anyhow!("HTTP 401 Unauthorized");
-        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
@@ -579,7 +556,7 @@ mod tests {
     #[test]
     fn test_classify_unknown_fatal() {
         let err = anyhow::anyhow!("something completely unknown went wrong");
-        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
@@ -604,19 +581,19 @@ mod tests {
     #[test]
     fn test_parse_token_gap_standard_format() {
         let err = anyhow::anyhow!("prompt is too long: 137500 tokens > 135000 maximum");
-        assert_eq!(parse_token_gap(&err), Some(2500));
+        assert_eq!(parse_token_gap_str(&err.to_string()), Some(2500));
     }
 
     #[test]
     fn test_parse_token_gap_no_match() {
         let err = anyhow::anyhow!("HTTP 413 Payload Too Large");
-        assert_eq!(parse_token_gap(&err), None);
+        assert_eq!(parse_token_gap_str(&err.to_string()), None);
     }
 
     #[test]
     fn test_parse_token_gap_large_gap() {
         let err = anyhow::anyhow!("prompt is too long: 200000 tokens > 128000 maximum");
-        assert_eq!(parse_token_gap(&err), Some(72000));
+        assert_eq!(parse_token_gap_str(&err.to_string()), Some(72000));
     }
 
     // --- classify_error 413/prompt_too_long tests ---
@@ -625,7 +602,7 @@ mod tests {
     fn test_classify_413_status() {
         let err = anyhow::anyhow!("HTTP 413 Payload Too Large");
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::CompactAndRetry { token_gap: None }
         ));
     }
@@ -640,7 +617,7 @@ mod tests {
              because the context window is full"
         );
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::CompactAndRetry { token_gap: None }
         ));
     }
@@ -649,7 +626,7 @@ mod tests {
     fn test_classify_prompt_too_long_with_gap() {
         let err = anyhow::anyhow!("prompt is too long: 137500 tokens > 135000 maximum");
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::CompactAndRetry {
                 token_gap: Some(2500)
             }
@@ -660,7 +637,7 @@ mod tests {
     fn test_classify_prompt_too_long_no_numbers() {
         let err = anyhow::anyhow!("Error: prompt_too_long");
         assert!(matches!(
-            classify_error(&err),
+            classify(&err.to_string()),
             RetryVerdict::CompactAndRetry { token_gap: None }
         ));
     }
@@ -713,88 +690,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_retry_succeeds_first_try() {
-        let cancel = CancellationToken::new();
-        let result = retry_async(|| async { Ok::<_, anyhow::Error>(42) }, &cancel, 3).await;
-        assert_eq!(result.unwrap(), 42);
-    }
-
-    #[tokio::test]
-    async fn test_retry_succeeds_after_transient_failure() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let cancel = CancellationToken::new();
-
-        let c = counter.clone();
-        let result = retry_async(
-            move || {
-                let c = c.clone();
-                async move {
-                    let n = c.fetch_add(1, Ordering::SeqCst);
-                    if n < 2 {
-                        Err(anyhow::anyhow!("connection reset"))
-                    } else {
-                        Ok(99)
-                    }
-                }
-            },
-            &cancel,
-            5,
-        )
-        .await;
-
-        assert_eq!(result.unwrap(), 99);
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn test_retry_fatal_no_retry() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let cancel = CancellationToken::new();
-
-        let c = counter.clone();
-        let result: anyhow::Result<i32> = retry_async(
-            move || {
-                let c = c.clone();
-                async move {
-                    c.fetch_add(1, Ordering::SeqCst);
-                    Err(anyhow::anyhow!("HTTP 401 Unauthorized"))
-                }
-            },
-            &cancel,
-            5,
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn test_retry_cancelled_during_backoff() {
-        let cancel = CancellationToken::new();
-
-        // Cancel after 50ms
-        let cancel_clone = cancel.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            cancel_clone.cancel();
-        });
-
-        let result: anyhow::Result<i32> = retry_async(
-            || async { Err(anyhow::anyhow!("connection timeout")) },
-            &cancel,
-            10,
-        )
-        .await;
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Cancelled during retry backoff"),
-            "Expected cancellation error, got: {err_msg}"
-        );
-    }
-
     // --- classify_exhausted_error tests ---
 
     #[test]
@@ -802,7 +697,7 @@ mod tests {
         // Default 429 → Fallback (model-specific, try another provider)
         let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -814,7 +709,7 @@ mod tests {
             "Rate limit error: OpenAI Chat API rate limited (429): 请求频率达到限制：1分钟内最多4500次"
         );
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -822,14 +717,14 @@ mod tests {
     #[test]
     fn test_classify_exhausted_account_rate_limit_is_fatal() {
         let err = anyhow::anyhow!("429 account quota exceeded");
-        assert_eq!(classify_exhausted_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify_exhausted(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
     fn test_classify_exhausted_overloaded() {
         let err = anyhow::anyhow!("HTTP 529 overloaded");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -838,7 +733,7 @@ mod tests {
     fn test_classify_exhausted_network() {
         let err = anyhow::anyhow!("connection reset by peer");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -847,7 +742,7 @@ mod tests {
     fn test_classify_exhausted_404() {
         let err = anyhow::anyhow!("HTTP 404 model not found");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -856,7 +751,7 @@ mod tests {
     fn test_classify_exhausted_401() {
         let err = anyhow::anyhow!("HTTP 401 Unauthorized");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::Fallback { .. }
         ));
     }
@@ -864,19 +759,18 @@ mod tests {
     #[test]
     fn test_classify_exhausted_400_stays_fatal() {
         let err = anyhow::anyhow!("HTTP 400 Bad Request: invalid parameter");
-        assert_eq!(classify_exhausted_error(&err), RetryVerdict::Fatal);
+        assert_eq!(classify_exhausted(&err.to_string()), RetryVerdict::Fatal);
     }
 
     #[test]
     fn test_classify_exhausted_413_stays_compact() {
         let err = anyhow::anyhow!("HTTP 413 prompt is too long: 137500 tokens > 135000 maximum");
         assert!(matches!(
-            classify_exhausted_error(&err),
+            classify_exhausted(&err.to_string()),
             RetryVerdict::CompactAndRetry { .. }
         ));
     }
-
-    #[tokio::test]
+#[tokio::test]
     async fn test_retry_exhausted_rate_limit() {
         let counter = Arc::new(AtomicUsize::new(0));
         let cancel = CancellationToken::new();

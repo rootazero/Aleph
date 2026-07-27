@@ -98,6 +98,8 @@ struct ModelLifecycle { status, successor: Option<&str>, note: Option<&str> }
 
 叠加 2026-06-26 引入的 `unpriced_cost(Cloud) = u64::MAX`（该条本身正确：成本未知 ≠ 零），结果是 **`cost_aware` 路由把常常最便宜的那一档一律排在最后**。路由语义被静默反转了一个月。
 
+> **第三次反转，同一个函数（2026-07-27，修在 §3.6 那一轮）**：价表这次是对的，错的是喂给 `unpriced_cost` 的 **tier**。默认（auto-derived）失败链的候选是**运行时派生**的，而派生路径没有节点可抄 tier，一律填 `EndpointTier::Unknown` ⇒ 走 `u64::MAX` 分支 ⇒ 真正免费的自托管端点排最后。教训与前两次同形：**`unpriced_cost` 的正确性完全取决于它的输入，而这个输入在两条装配路径上是分别产生的**——静态链从 `node_for` 拿，live 链现在从 `with_tier_catalog` 拿同一份 `provider_tier` 派生。给这个函数加分支之前，先确认**每一条**能到达它的路径都供得出真 tier。
+
 现在 `lookup_rates` 两趟：
 
 1. **Direct** — provider id 归一到某个有价的 vendor，且该节有匹配行。
@@ -245,7 +247,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | 某模型支不支持 vision/tool-use | `model_catalog/capabilities.rs` + `capability_gate.rs` |
 | 本地还是云端 | `model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
-| 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group` |
+| 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行（带 successor）** |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |

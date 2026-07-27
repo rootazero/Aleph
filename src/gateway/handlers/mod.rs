@@ -48,7 +48,6 @@ pub mod bundled_sync;
 pub mod channel;
 pub mod chat;
 pub mod clarification;
-pub mod clawhub;
 pub mod cluster;
 pub mod commands;
 pub mod config;
@@ -92,7 +91,6 @@ pub mod moa;
 pub mod oauth;
 pub mod pairing;
 pub mod plugins;
-pub mod profiles;
 pub mod projects;
 pub mod providers;
 pub mod pty;
@@ -437,12 +435,6 @@ impl HandlerRegistry {
         registry.register("skills.remove", skills::handle_remove);
         registry.register("skills.install", markdown_skills::handle_install);
         registry.register("bundled.sync", bundled_sync::handle_sync);
-
-        // ClawHub handlers
-        registry.register("clawhub.search", clawhub::handle_search);
-        registry.register("clawhub.browse", clawhub::handle_browse);
-        registry.register("clawhub.detail", clawhub::handle_detail);
-        registry.register("clawhub.install", clawhub::handle_install);
 
         // Identity handlers (identity.get/set/clear/list) are wired against the
         // live agent identity directory via `SharedIdentityCtx` by

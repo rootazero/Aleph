@@ -25,6 +25,20 @@ pub(crate) fn build_provider_http_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// The response's `Retry-After` as a decimal seconds string, or `None` when the
+/// header is absent or unparseable.
+///
+/// Every protocol adapter reads this header the same way and interpolates it
+/// into a `"Rate limited. Retry after {v} seconds."` suggestion that the
+/// failover layer parses back into a real delay. Going through one normaliser
+/// ([`retry_after_header_secs`](crate::providers::llm_retry::retry_after_header_secs))
+/// is what makes that round-trip safe: an HTTP-date value would otherwise be
+/// spliced in verbatim and read back as its day-of-month.
+pub(crate) fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let raw = headers.get("retry-after")?.to_str().ok()?;
+    crate::providers::llm_retry::retry_after_header_secs(raw).map(|s| s.to_string())
+}
+
 /// Read a non-2xx response body with a hard cap.
 ///
 /// `build_provider_http_client` deliberately sets no overall request timeout
@@ -84,5 +98,47 @@ mod tests {
         )
         .await;
         assert_eq!(out, "<error response body read timed out>");
+    }
+
+    fn headers_with_retry_after(value: &str) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", value.parse().expect("valid header value"));
+        headers
+    }
+
+    /// The whole reason this normaliser exists, asserted end to end: header →
+    /// the sentence every adapter builds → the delay the failover walk parses
+    /// back out. Splicing an HTTP-date in verbatim used to make
+    /// `extract_retry_after_str` return the *day of month*, so a server asking
+    /// for hours was re-dialed every ~21 seconds.
+    #[test]
+    fn http_date_retry_after_survives_the_suggestion_round_trip() {
+        const THREE_HOURS: u64 = 3 * 3600;
+        let at = std::time::SystemTime::now() + Duration::from_secs(THREE_HOURS);
+        let normalised = retry_after_secs(&headers_with_retry_after(&httpdate::fmt_http_date(at)))
+            .expect("an HTTP-date is a valid Retry-After");
+
+        let suggestion = format!("Rate limited. Retry after {normalised} seconds.");
+        let delay = crate::providers::llm_retry::extract_retry_after_str(&suggestion)
+            .expect("the adapters' suggestion must parse back into a delay");
+
+        assert!(
+            delay >= Duration::from_secs(THREE_HOURS - 5),
+            "a multi-hour Retry-After must come back as hours, got {delay:?}"
+        );
+    }
+
+    #[test]
+    fn delay_seconds_retry_after_passes_through() {
+        assert_eq!(
+            retry_after_secs(&headers_with_retry_after("42")).as_deref(),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn absent_or_unreadable_retry_after_yields_no_hint() {
+        assert_eq!(retry_after_secs(&reqwest::header::HeaderMap::new()), None);
+        assert_eq!(retry_after_secs(&headers_with_retry_after("soon")), None);
     }
 }

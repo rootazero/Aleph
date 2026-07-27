@@ -654,6 +654,12 @@ impl AiProvider for HttpProvider {
         Box::pin(async move { self.execute_streaming(payload, sink).await })
     }
 
+    /// The one leaf that genuinely streams — every decorator's answer is a
+    /// delegation that bottoms out here.
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
     fn supports_native_tools(&self) -> bool {
         self.adapter.supports_native_tools()
     }

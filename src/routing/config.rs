@@ -75,6 +75,66 @@ pub struct PeerMatchConfig {
     pub id: String,
 }
 
+/// Problems that make a binding unable to route anything, in operator terms.
+///
+/// A misconfigured `[[bindings]]` entry has exactly one symptom today — "my
+/// routing config does nothing" — because a rule that can never match is
+/// indistinguishable at match time from a rule that simply did not apply. These
+/// checks turn the three ways to write an unmatchable binding into a startup
+/// log line naming the entry and the fix.
+///
+/// Returns one message per problem, in binding order. Empty = nothing to say.
+/// Deliberately *reporting* rather than rejecting: a bad binding must not stop
+/// the daemon from booting, and the rest of the table still routes.
+#[must_use]
+pub fn binding_problems(bindings: &[RouteBinding]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, b) in bindings.iter().enumerate() {
+        let who = if b.agent_id.trim().is_empty() {
+            format!("[[bindings]] #{i}")
+        } else {
+            format!("[[bindings]] #{i} (agent_id = \"{}\")", b.agent_id)
+        };
+        if b.agent_id.trim().is_empty() {
+            out.push(format!(
+                "{who}: agent_id is empty — this binding routes to the default agent, \
+                 which is what happens with no binding at all"
+            ));
+        }
+        let r = &b.match_rule;
+        if let Some(peer) = &r.peer {
+            let kind = peer.kind.trim();
+            if !["dm", "group", "channel"].contains(&kind.to_ascii_lowercase().as_str()) {
+                out.push(format!(
+                    "{who}: match.peer.kind = \"{}\" is not one of dm|group|channel — \
+                     this binding can never match",
+                    peer.kind
+                ));
+            }
+            if peer.id.trim().is_empty() {
+                out.push(format!(
+                    "{who}: match.peer.id is empty — this binding can never match"
+                ));
+            }
+        }
+        if r.channel.is_none()
+            && r.peer.is_none()
+            && r.guild_id.is_none()
+            && r.team_id.is_none()
+            && r.account_id
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|a| a == "*")
+        {
+            out.push(format!(
+                "{who}: matches every message on every channel — it shadows every \
+                 binding after it; put it last or give it a scope"
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
