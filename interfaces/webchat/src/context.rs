@@ -994,8 +994,8 @@ impl DashboardState {
                                 .into(),
                             );
                         }
-                        // If the drop carries an auth signal — e.g. the gateway closed us with
-                        // `token_rotated` after a token rotation — route straight to the login
+                        // If the drop carries an auth signal — the gateway closed us with
+                        // `token_rotated` or `device_revoked` — route straight to the login
                         // wall instead of burning a backoff cycle: set the typed failure so
                         // reconnect()'s AuthRequired short-circuit fires immediately. Set ONLY
                         // connection_failure (NOT connection_error): ConnectionPhase::derive keys
@@ -1008,6 +1008,14 @@ impl DashboardState {
                             state
                                 .connection_failure
                                 .set(Some(ConnectionFailure::AuthRequired));
+                            // That short-circuit skips the handshake, so the two things
+                            // the handshake's wall path does must happen here instead.
+                            // We were authorized a moment ago and got kicked *for an auth
+                            // reason*, so by construction a credential existed and the
+                            // server has already killed it: say so in the wall copy, and
+                            // drop it so the next page load doesn't re-present a corpse.
+                            state.token_was_rejected.set(true);
+                            clear_credentials();
                         }
                         state.is_connected.set(false);
                         // Clear the dead rpc_tx so the next rpc_call() won't

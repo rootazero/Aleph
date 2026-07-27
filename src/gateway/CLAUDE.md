@@ -27,6 +27,12 @@
   仍会以 operator 身份被服务完——`tokio::select!` 两条臂是伪随机调度，不存在"事件一定先到"。
   （反过来不必担心自撤销收不到回包：响应由**派发它的那条 read 臂**同步写出，事件臂要下一轮
   select 才被 poll。）
+  ⚠️ **地雷 2b（关 socket 只做了一半）**：踢人的 close reason 必须同时登记进客户端的
+  `shared/ui_logic/src/connection/failure.rs::AUTH_KICK_REASONS`。漏登记不会报错——Panel
+  把这次踢当成普通掉线，先花一个 backoff 延迟拿**已经死掉的凭据**再连一次，然后才由握手
+  兜到登录墙；更糟的是那条短路径同时是登录墙判断"凭据被拒 vs 从未有过凭据"的地方，漏了
+  就会用**首次登录**文案迎接一个刚被踢下线的人，并且把死凭据继续留在 localStorage 里。
+  `device_revoked` 就是这么漏的（2026-07-27 真机 QA 抓到，同轮修）。
   ⚠️ **地雷 3（命名空间）**：`devices` 是 panel 与 cluster 节点**共用的一张表**，且两边的
   `device_id` 都是**对端自报**的；`upsert_device` 的 ON CONFLICT **有意不改写 `device_type`**
   （否则配对能把节点行改姓），而 `list_panel_devices` 恰恰按 `device_type='panel'` 过滤。
