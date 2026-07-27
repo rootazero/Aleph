@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// List all configured AI providers
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("providers.list", None::<()>).await?;
 
@@ -35,8 +35,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// Get details of a specific AI provider
-pub async fn get(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn get(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("providers.get", Some(params)).await?;
@@ -97,13 +97,14 @@ pub async fn get(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 /// Add a new AI provider
 pub async fn add(
     server_url: &str,
+    config: &CliConfig,
     name: &str,
     provider_type: &str,
     api_key: &str,
     base_url: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({
         "name": name,
@@ -127,8 +128,8 @@ pub async fn add(
 }
 
 /// Test provider connectivity
-pub async fn test(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn test(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("providers.test", Some(params)).await?;
@@ -156,8 +157,13 @@ pub async fn test(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 }
 
 /// Set a provider as the default
-pub async fn set_default(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn set_default(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("providers.setDefault", Some(params)).await?;
@@ -173,8 +179,8 @@ pub async fn set_default(server_url: &str, name: &str, json: bool) -> CliResult<
 }
 
 /// Remove a provider
-pub async fn remove(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn remove(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("providers.delete", Some(params)).await?;

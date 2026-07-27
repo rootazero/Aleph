@@ -5,7 +5,7 @@
 //!
 //! ```ignore
 //! let _spin = Spinner::start("Connecting to gateway");
-//! let client = AlephClient::connect(url).await?;
+//! let client = AlephClient::connect(url, config).await?;
 //! // _spin clears the line when it drops.
 //! ```
 //!

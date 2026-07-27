@@ -103,12 +103,12 @@ async fn dispatch(
     verbose: bool,
 ) -> CliResult<()> {
     match cmd {
-        Commands::Health => commands::health::run(server_url, json).await,
-        Commands::Info => commands::info::run(server_url, json).await,
+        Commands::Health => commands::health::run(server_url, config, json).await,
+        Commands::Info => commands::info::run(server_url, config, json).await,
         Commands::Tools { category, action } => {
-            dispatch_tools(server_url, category, action, json).await
+            dispatch_tools(server_url, config, category, action, json).await
         }
-        Commands::Calls { action } => dispatch_calls(server_url, action, json).await,
+        Commands::Calls { action } => dispatch_calls(server_url, config, action, json).await,
         Commands::Connect { device } => {
             commands::connect::run(server_url, &device, config, json).await
         }
@@ -154,20 +154,26 @@ async fn dispatch(
         Commands::Session { action } => dispatch_session(server_url, action, config, json).await,
         Commands::Config { action } => dispatch_config(server_url, action, config, json).await,
         Commands::Cron { action } => dispatch_cron(server_url, action, config, json).await,
-        Commands::Heartbeat { action } => dispatch_heartbeat(server_url, action, json).await,
+        Commands::Heartbeat { action } => {
+            dispatch_heartbeat(server_url, config, action, json).await
+        }
         Commands::Channels { action } => dispatch_channels(server_url, action, config, json).await,
         Commands::Daemon { action } => dispatch_daemon(action, json),
-        Commands::Providers { action } => dispatch_providers(server_url, action, json).await,
-        Commands::Memory { action } => dispatch_memory(server_url, action, json).await,
-        Commands::Plugin { action } => dispatch_plugin(server_url, action, json).await,
-        Commands::Services { action } => dispatch_services(server_url, action, json).await,
-        Commands::Skills { action } => dispatch_skills(server_url, action, json).await,
-        Commands::Workspace { action } => dispatch_workspace(server_url, action, json).await,
-        Commands::Gateway { action } => dispatch_gateway(server_url, action, json).await,
-        Commands::Logs { action } => dispatch_logs(server_url, action, json).await,
-        Commands::Trace { action } => dispatch_trace(server_url, action, json).await,
-        Commands::Identity { action } => dispatch_identity(server_url, action, json).await,
-        Commands::Mcp { action } => dispatch_mcp(server_url, action, json).await,
+        Commands::Providers { action } => {
+            dispatch_providers(server_url, config, action, json).await
+        }
+        Commands::Memory { action } => dispatch_memory(server_url, config, action, json).await,
+        Commands::Plugin { action } => dispatch_plugin(server_url, config, action, json).await,
+        Commands::Services { action } => dispatch_services(server_url, config, action, json).await,
+        Commands::Skills { action } => dispatch_skills(server_url, config, action, json).await,
+        Commands::Workspace { action } => {
+            dispatch_workspace(server_url, config, action, json).await
+        }
+        Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
+        Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
+        Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,
+        Commands::Identity { action } => dispatch_identity(server_url, config, action, json).await,
+        Commands::Mcp { action } => dispatch_mcp(server_url, config, action, json).await,
         Commands::Sandbox { action } => dispatch_sandbox(action),
         Commands::ChatControl { action } => {
             dispatch_chat_control(server_url, action, config, json).await
@@ -177,8 +183,8 @@ async fn dispatch(
             commands::completion::run(shell);
             Ok(())
         }
-        Commands::Secret { action } => dispatch_secret(server_url, action, json).await,
-        Commands::Hooks { action } => dispatch_hooks(server_url, action, json).await,
+        Commands::Secret { action } => dispatch_secret(server_url, config, action, json).await,
+        Commands::Hooks { action } => dispatch_hooks(server_url, config, action, json).await,
         Commands::Webhook { action } => dispatch_webhook(action, json).await,
         Commands::Proxy { action } => dispatch_proxy(action, json).await,
         Commands::Open => commands::open_cmd::run(server_url, json).await,
@@ -206,23 +212,33 @@ async fn dispatch_proxy(action: ProxyAction, json: bool) -> CliResult<()> {
     }
 }
 
-async fn dispatch_secret(server_url: &str, action: SecretAction, json: bool) -> CliResult<()> {
+async fn dispatch_secret(
+    server_url: &str,
+    config: &CliConfig,
+    action: SecretAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::secret_cmd;
     match action {
-        SecretAction::List => secret_cmd::list(server_url, json).await,
+        SecretAction::List => secret_cmd::list(server_url, config, json).await,
         SecretAction::Set { name, value } => {
-            secret_cmd::set(server_url, &name, value.as_deref(), json).await
+            secret_cmd::set(server_url, config, &name, value.as_deref(), json).await
         }
-        SecretAction::Delete { name } => secret_cmd::delete(server_url, &name, json).await,
-        SecretAction::Verify { name } => secret_cmd::verify(server_url, &name, json).await,
-        SecretAction::Providers => secret_cmd::providers(server_url, json).await,
+        SecretAction::Delete { name } => secret_cmd::delete(server_url, config, &name, json).await,
+        SecretAction::Verify { name } => secret_cmd::verify(server_url, config, &name, json).await,
+        SecretAction::Providers => secret_cmd::providers(server_url, config, json).await,
     }
 }
 
-async fn dispatch_hooks(server_url: &str, action: HooksAction, json: bool) -> CliResult<()> {
+async fn dispatch_hooks(
+    server_url: &str,
+    config: &CliConfig,
+    action: HooksAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::hooks_cmd;
     match action {
-        HooksAction::List => hooks_cmd::list(server_url, json).await,
+        HooksAction::List => hooks_cmd::list(server_url, config, json).await,
         HooksAction::Add {
             event,
             command,
@@ -234,6 +250,7 @@ async fn dispatch_hooks(server_url: &str, action: HooksAction, json: bool) -> Cl
         } => {
             hooks_cmd::add(
                 server_url,
+                config,
                 &event,
                 command.as_deref(),
                 prompt.as_deref(),
@@ -249,14 +266,15 @@ async fn dispatch_hooks(server_url: &str, action: HooksAction, json: bool) -> Cl
             event,
             command,
             index,
-        } => hooks_cmd::remove(server_url, &event, command.as_deref(), index, json).await,
-        HooksAction::Reload => hooks_cmd::reload(server_url, json).await,
-        HooksAction::Events => hooks_cmd::events(server_url, json).await,
+        } => hooks_cmd::remove(server_url, config, &event, command.as_deref(), index, json).await,
+        HooksAction::Reload => hooks_cmd::reload(server_url, config, json).await,
+        HooksAction::Events => hooks_cmd::events(server_url, config, json).await,
     }
 }
 
 async fn dispatch_tools(
     server_url: &str,
+    config: &CliConfig,
     category: Option<String>,
     action: Option<ToolsAction>,
     json: bool,
@@ -264,27 +282,39 @@ async fn dispatch_tools(
     match action {
         // `aleph tools` (no subcommand) — preserve legacy list behaviour, honouring
         // the global `--category` shortcut.
-        None => commands::tools::run(server_url, category.as_deref(), json).await,
+        None => commands::tools::run(server_url, config, category.as_deref(), json).await,
         Some(ToolsAction::List { category: sub }) => {
             // Sub-flag wins; falls back to the parent --category if absent.
             let effective = sub.or(category);
-            commands::tools::run(server_url, effective.as_deref(), json).await
+            commands::tools::run(server_url, config, effective.as_deref(), json).await
         }
         Some(ToolsAction::Describe { name }) => {
-            commands::tools::describe(server_url, &name, json).await
+            commands::tools::describe(server_url, config, &name, json).await
         }
         Some(ToolsAction::Invoke { name, args, agent }) => {
-            commands::tools::invoke(server_url, &name, args.as_deref(), agent.as_deref(), json)
-                .await
+            commands::tools::invoke(
+                server_url,
+                config,
+                &name,
+                args.as_deref(),
+                agent.as_deref(),
+                json,
+            )
+            .await
         }
     }
 }
 
-async fn dispatch_calls(server_url: &str, action: CallsAction, json: bool) -> CliResult<()> {
+async fn dispatch_calls(
+    server_url: &str,
+    config: &CliConfig,
+    action: CallsAction,
+    json: bool,
+) -> CliResult<()> {
     match action {
-        CallsAction::List => commands::calls::list(server_url, json).await,
+        CallsAction::List => commands::calls::list(server_url, config, json).await,
         CallsAction::Cancel { call_id } => {
-            commands::calls::cancel(server_url, &call_id, json).await
+            commands::calls::cancel(server_url, config, &call_id, json).await
         }
     }
 }
@@ -424,13 +454,16 @@ async fn dispatch_cron(
 
 async fn dispatch_heartbeat(
     server_url: &str,
+    config: &CliConfig,
     action: HeartbeatAction,
     json: bool,
 ) -> CliResult<()> {
     use commands::heartbeat_cmd;
     match action {
-        HeartbeatAction::List => heartbeat_cmd::list(server_url, json).await,
-        HeartbeatAction::Get { task_id } => heartbeat_cmd::get(server_url, &task_id, json).await,
+        HeartbeatAction::List => heartbeat_cmd::list(server_url, config, json).await,
+        HeartbeatAction::Get { task_id } => {
+            heartbeat_cmd::get(server_url, config, &task_id, json).await
+        }
         HeartbeatAction::Create {
             name,
             interval,
@@ -442,6 +475,7 @@ async fn dispatch_heartbeat(
         } => {
             heartbeat_cmd::create(
                 server_url,
+                config,
                 &name,
                 &interval,
                 &tool,
@@ -463,6 +497,7 @@ async fn dispatch_heartbeat(
         } => {
             heartbeat_cmd::update(
                 server_url,
+                config,
                 &task_id,
                 name.as_deref(),
                 agent.as_deref(),
@@ -474,18 +509,18 @@ async fn dispatch_heartbeat(
             .await
         }
         HeartbeatAction::Delete { task_id } => {
-            heartbeat_cmd::delete(server_url, &task_id, json).await
+            heartbeat_cmd::delete(server_url, config, &task_id, json).await
         }
         HeartbeatAction::Toggle {
             task_id,
             enable,
             disable,
-        } => heartbeat_cmd::toggle(server_url, &task_id, enable, disable, json).await,
+        } => heartbeat_cmd::toggle(server_url, config, &task_id, enable, disable, json).await,
         HeartbeatAction::Wake { task_id, reason } => {
-            heartbeat_cmd::wake(server_url, &task_id, reason.as_deref(), json).await
+            heartbeat_cmd::wake(server_url, config, &task_id, reason.as_deref(), json).await
         }
         HeartbeatAction::Runs { task_id, limit } => {
-            heartbeat_cmd::runs(server_url, &task_id, limit, json).await
+            heartbeat_cmd::runs(server_url, config, &task_id, limit, json).await
         }
     }
 }
@@ -526,13 +561,14 @@ fn dispatch_daemon(action: DaemonAction, json: bool) -> CliResult<()> {
 
 async fn dispatch_providers(
     server_url: &str,
+    config: &CliConfig,
     action: ProvidersAction,
     json: bool,
 ) -> CliResult<()> {
     use commands::providers_cmd;
     match action {
-        ProvidersAction::List => providers_cmd::list(server_url, json).await,
-        ProvidersAction::Get { name } => providers_cmd::get(server_url, &name, json).await,
+        ProvidersAction::List => providers_cmd::list(server_url, config, json).await,
+        ProvidersAction::Get { name } => providers_cmd::get(server_url, config, &name, json).await,
         ProvidersAction::Add {
             name,
             r#type,
@@ -541,6 +577,7 @@ async fn dispatch_providers(
         } => {
             providers_cmd::add(
                 server_url,
+                config,
                 &name,
                 &r#type,
                 &api_key,
@@ -549,43 +586,59 @@ async fn dispatch_providers(
             )
             .await
         }
-        ProvidersAction::Test { name } => providers_cmd::test(server_url, &name, json).await,
-        ProvidersAction::SetDefault { name } => {
-            providers_cmd::set_default(server_url, &name, json).await
+        ProvidersAction::Test { name } => {
+            providers_cmd::test(server_url, config, &name, json).await
         }
-        ProvidersAction::Remove { name } => providers_cmd::remove(server_url, &name, json).await,
+        ProvidersAction::SetDefault { name } => {
+            providers_cmd::set_default(server_url, config, &name, json).await
+        }
+        ProvidersAction::Remove { name } => {
+            providers_cmd::remove(server_url, config, &name, json).await
+        }
     }
 }
 
-async fn dispatch_memory(server_url: &str, action: MemoryAction, json: bool) -> CliResult<()> {
+async fn dispatch_memory(
+    server_url: &str,
+    config: &CliConfig,
+    action: MemoryAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::memory_cmd;
     match action {
         MemoryAction::Search { query, limit } => {
-            memory_cmd::search(server_url, &query, limit, json).await
+            memory_cmd::search(server_url, config, &query, limit, json).await
         }
-        MemoryAction::Stats => memory_cmd::stats(server_url, json).await,
-        MemoryAction::Clear { facts_only } => memory_cmd::clear(server_url, facts_only, json).await,
-        MemoryAction::Compress => memory_cmd::compress(server_url, json).await,
-        MemoryAction::Delete { id } => memory_cmd::delete(server_url, &id, json).await,
+        MemoryAction::Stats => memory_cmd::stats(server_url, config, json).await,
+        MemoryAction::Clear { facts_only } => {
+            memory_cmd::clear(server_url, config, facts_only, json).await
+        }
+        MemoryAction::Compress => memory_cmd::compress(server_url, config, json).await,
+        MemoryAction::Delete { id } => memory_cmd::delete(server_url, config, &id, json).await,
     }
 }
 
-async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> CliResult<()> {
+async fn dispatch_plugin(
+    server_url: &str,
+    config: &CliConfig,
+    action: PluginAction,
+    json: bool,
+) -> CliResult<()> {
     use aleph_client::{AlephClient, CliError};
     use commands::{plugin_cmd, plugins_cmd};
 
     match action {
         // Lifecycle (server-connected)
-        PluginAction::List => plugins_cmd::list(server_url, json).await,
+        PluginAction::List => plugins_cmd::list(server_url, config, json).await,
         PluginAction::Install { source, scope } => {
             // Local-file / GitHub sources need client-side I/O (read the zip,
             // fetch the release) and stay here. Everything else is forwarded
             // raw to the daemon, which owns the marketplace-vs-git-url
             // classification (R4: the shell no longer decides).
             if source.starts_with("github:") || source.ends_with(".zip") {
-                plugins_cmd::install(server_url, &source, json).await
+                plugins_cmd::install(server_url, config, &source, json).await
             } else {
-                let (client, _events) = AlephClient::connect(server_url).await?;
+                let (client, _events) = AlephClient::connect(server_url, config).await?;
                 let result: serde_json::Value = client
                     .call(
                         "plugin.install",
@@ -602,18 +655,20 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
             }
         }
         PluginAction::Uninstall { name, .. } => {
-            plugins_cmd::uninstall(server_url, &name, json).await
+            plugins_cmd::uninstall(server_url, config, &name, json).await
         }
-        PluginAction::Enable { name } => plugins_cmd::enable(server_url, &name, json).await,
-        PluginAction::Disable { name } => plugins_cmd::disable(server_url, &name, json).await,
+        PluginAction::Enable { name } => plugins_cmd::enable(server_url, config, &name, json).await,
+        PluginAction::Disable { name } => {
+            plugins_cmd::disable(server_url, config, &name, json).await
+        }
         PluginAction::Call {
             plugin,
             tool,
             params,
-        } => plugins_cmd::call(server_url, &plugin, &tool, params.as_deref(), json).await,
-        PluginAction::Update { name } => plugins_cmd::update(server_url, &name, json).await,
-        PluginAction::Reload { name } => plugins_cmd::reload(server_url, &name, json).await,
-        PluginAction::Info { name } => plugins_cmd::info(server_url, &name, json).await,
+        } => plugins_cmd::call(server_url, config, &plugin, &tool, params.as_deref(), json).await,
+        PluginAction::Update { name } => plugins_cmd::update(server_url, config, &name, json).await,
+        PluginAction::Reload { name } => plugins_cmd::reload(server_url, config, &name, json).await,
+        PluginAction::Info { name } => plugins_cmd::info(server_url, config, &name, json).await,
         // Dev tools (local, no server)
         PluginAction::Init {
             name,
@@ -631,21 +686,22 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
             plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())
         }
         PluginAction::Doctor => plugin_cmd::doctor(json),
-        PluginAction::Sync => commands::skills_cmd::sync(server_url, "plugins", json).await,
+        PluginAction::Sync => commands::skills_cmd::sync(server_url, config, "plugins", json).await,
         // Marketplace
         PluginAction::Marketplace { action } => {
-            dispatch_marketplace(server_url, action, json).await
+            dispatch_marketplace(server_url, config, action, json).await
         }
     }
 }
 
 async fn dispatch_marketplace(
     server_url: &str,
+    config: &CliConfig,
     action: MarketplaceAction,
     json: bool,
 ) -> CliResult<()> {
     use aleph_client::AlephClient;
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let (method, params) = match action {
         MarketplaceAction::Add { source } => (
             "plugin.marketplace.add",
@@ -676,83 +732,127 @@ async fn dispatch_marketplace(
     Ok(())
 }
 
-async fn dispatch_services(server_url: &str, action: ServicesAction, json: bool) -> CliResult<()> {
+async fn dispatch_services(
+    server_url: &str,
+    config: &CliConfig,
+    action: ServicesAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::services_cmd;
     match action {
         ServicesAction::List { plugin, state } => {
-            services_cmd::list(server_url, plugin.as_deref(), state.as_deref(), json).await
+            services_cmd::list(
+                server_url,
+                config,
+                plugin.as_deref(),
+                state.as_deref(),
+                json,
+            )
+            .await
         }
         ServicesAction::Status {
             plugin_id,
             service_id,
-        } => services_cmd::status(server_url, &plugin_id, &service_id, json).await,
+        } => services_cmd::status(server_url, config, &plugin_id, &service_id, json).await,
         ServicesAction::Start {
             plugin_id,
             service_id,
-        } => services_cmd::start(server_url, &plugin_id, &service_id, json).await,
+        } => services_cmd::start(server_url, config, &plugin_id, &service_id, json).await,
         ServicesAction::Stop {
             plugin_id,
             service_id,
-        } => services_cmd::stop(server_url, &plugin_id, &service_id, json).await,
+        } => services_cmd::stop(server_url, config, &plugin_id, &service_id, json).await,
     }
 }
 
-async fn dispatch_skills(server_url: &str, action: SkillsAction, json: bool) -> CliResult<()> {
+async fn dispatch_skills(
+    server_url: &str,
+    config: &CliConfig,
+    action: SkillsAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::skills_cmd;
     match action {
-        SkillsAction::List => skills_cmd::list(server_url, json).await,
-        SkillsAction::Install { source } => skills_cmd::install(server_url, &source, json).await,
-        SkillsAction::Delete { name } => skills_cmd::delete(server_url, &name, json).await,
-        SkillsAction::Sync => skills_cmd::sync(server_url, "skills", json).await,
+        SkillsAction::List => skills_cmd::list(server_url, config, json).await,
+        SkillsAction::Install { source } => {
+            skills_cmd::install(server_url, config, &source, json).await
+        }
+        SkillsAction::Delete { name } => skills_cmd::delete(server_url, config, &name, json).await,
+        SkillsAction::Sync => skills_cmd::sync(server_url, config, "skills", json).await,
     }
 }
 
 async fn dispatch_workspace(
     server_url: &str,
+    config: &CliConfig,
     action: WorkspaceAction,
     json: bool,
 ) -> CliResult<()> {
     use commands::workspace_cmd;
     match action {
-        WorkspaceAction::List => workspace_cmd::list(server_url, json).await,
+        WorkspaceAction::List => workspace_cmd::list(server_url, config, json).await,
         WorkspaceAction::Create { name, description } => {
-            workspace_cmd::create(server_url, &name, description.as_deref(), json).await
+            workspace_cmd::create(server_url, config, &name, description.as_deref(), json).await
         }
-        WorkspaceAction::Archive { name } => workspace_cmd::archive(server_url, &name, json).await,
+        WorkspaceAction::Archive { name } => {
+            workspace_cmd::archive(server_url, config, &name, json).await
+        }
     }
 }
 
-async fn dispatch_gateway(server_url: &str, action: GatewayAction, json: bool) -> CliResult<()> {
+async fn dispatch_gateway(
+    server_url: &str,
+    config: &CliConfig,
+    action: GatewayAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::gateway_cmd;
     match action {
         GatewayAction::Call { method, params } => {
-            gateway_cmd::call(server_url, &method, params.as_deref(), json).await
+            gateway_cmd::call(server_url, config, &method, params.as_deref(), json).await
         }
     }
 }
 
-async fn dispatch_logs(server_url: &str, action: LogsAction, json: bool) -> CliResult<()> {
+async fn dispatch_logs(
+    server_url: &str,
+    config: &CliConfig,
+    action: LogsAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::logs_cmd;
     match action {
-        LogsAction::Level => logs_cmd::level(server_url, json).await,
-        LogsAction::SetLevel { level } => logs_cmd::set_level(server_url, &level, json).await,
-        LogsAction::Dir => logs_cmd::dir(server_url, json).await,
+        LogsAction::Level => logs_cmd::level(server_url, config, json).await,
+        LogsAction::SetLevel { level } => {
+            logs_cmd::set_level(server_url, config, &level, json).await
+        }
+        LogsAction::Dir => logs_cmd::dir(server_url, config, json).await,
     }
 }
 
-async fn dispatch_trace(server_url: &str, action: TraceAction, json: bool) -> CliResult<()> {
+async fn dispatch_trace(
+    server_url: &str,
+    config: &CliConfig,
+    action: TraceAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::trace_cmd;
     match action {
-        TraceAction::List { limit } => trace_cmd::list(server_url, limit, json).await,
-        TraceAction::Show { task_id } => trace_cmd::show(server_url, &task_id, json).await,
+        TraceAction::List { limit } => trace_cmd::list(server_url, config, limit, json).await,
+        TraceAction::Show { task_id } => trace_cmd::show(server_url, config, &task_id, json).await,
     }
 }
 
-async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool) -> CliResult<()> {
+async fn dispatch_identity(
+    server_url: &str,
+    config: &CliConfig,
+    action: IdentityAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::identity_cmd;
     match action {
         IdentityAction::Get { agent } => {
-            identity_cmd::get(server_url, agent.as_deref(), json).await
+            identity_cmd::get(server_url, config, agent.as_deref(), json).await
         }
         IdentityAction::Set {
             content,
@@ -762,6 +862,7 @@ async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool)
         } => {
             identity_cmd::set(
                 server_url,
+                config,
                 content.as_deref(),
                 file.as_deref(),
                 file_name.as_deref(),
@@ -771,25 +872,39 @@ async fn dispatch_identity(server_url: &str, action: IdentityAction, json: bool)
             .await
         }
         IdentityAction::Clear { file_name, agent } => {
-            identity_cmd::clear(server_url, file_name.as_deref(), agent.as_deref(), json).await
+            identity_cmd::clear(
+                server_url,
+                config,
+                file_name.as_deref(),
+                agent.as_deref(),
+                json,
+            )
+            .await
         }
         IdentityAction::List { agent } => {
-            identity_cmd::list(server_url, agent.as_deref(), json).await
+            identity_cmd::list(server_url, config, agent.as_deref(), json).await
         }
     }
 }
 
-async fn dispatch_mcp(server_url: &str, action: McpAction, json: bool) -> CliResult<()> {
+async fn dispatch_mcp(
+    server_url: &str,
+    config: &CliConfig,
+    action: McpAction,
+    json: bool,
+) -> CliResult<()> {
     use commands::mcp_cmd;
     match action {
-        McpAction::Pending => mcp_cmd::pending(server_url, json).await,
+        McpAction::Pending => mcp_cmd::pending(server_url, config, json).await,
         McpAction::Approve { request_id, reason } => {
-            mcp_cmd::approve(server_url, &request_id, reason.as_deref(), json).await
+            mcp_cmd::approve(server_url, config, &request_id, reason.as_deref(), json).await
         }
         McpAction::Reject { request_id, reason } => {
-            mcp_cmd::reject(server_url, &request_id, reason.as_deref(), json).await
+            mcp_cmd::reject(server_url, config, &request_id, reason.as_deref(), json).await
         }
-        McpAction::Cancel { request_id } => mcp_cmd::cancel(server_url, &request_id, json).await,
+        McpAction::Cancel { request_id } => {
+            mcp_cmd::cancel(server_url, config, &request_id, json).await
+        }
     }
 }
 

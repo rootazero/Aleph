@@ -41,11 +41,32 @@ pub struct AlephClient {
     _event_tx: mpsc::Sender<StreamEvent>,
     /// Whether client is connected
     connected: Arc<std::sync::atomic::AtomicBool>,
+    /// Server-assigned role from the `connect` handshake.
+    role: String,
 }
 
 impl AlephClient {
-    /// Connect to Aleph Gateway
-    pub async fn connect(url: &str) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+    /// Connect to Aleph Gateway and complete the `connect` handshake.
+    ///
+    /// The handshake is not optional and is deliberately not a separate public
+    /// step: the gateway enforces that the first frame on a connection is
+    /// `connect` and *closes the socket* otherwise (`server::handler`), so a
+    /// client that skipped it could never issue a single working call. Folding
+    /// it in here means a caller cannot hold an un-handshaken `AlephClient` —
+    /// twenty of twenty-eight CLI command modules used to skip it because the
+    /// two steps were separable, and every one of their subcommands was dead
+    /// against a live server.
+    pub async fn connect(
+        url: &str,
+        config: &CliConfig,
+    ) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
+        let (mut client, events) = Self::open(url).await?;
+        client.role = client.handshake(config).await?;
+        Ok((client, events))
+    }
+
+    /// Open the socket and spawn the read loop, without handshaking.
+    async fn open(url: &str) -> CliResult<(Self, mpsc::Receiver<StreamEvent>)> {
         info!("Connecting to {}", url);
 
         let (ws_stream, _) = connect_async(url)
@@ -65,6 +86,7 @@ impl AlephClient {
             id_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             _event_tx: event_tx.clone(),
             connected: connected.clone(),
+            role: String::new(),
         };
 
         // Spawn read task with write access for responding to Server requests
@@ -335,9 +357,11 @@ impl AlephClient {
     /// no credentials — it only declares a surface identity (`device_name`)
     /// and receives the session baseline back: `{ role, state_version,
     /// keepalive }`. No token is minted, stored, or replayed. Returns the
-    /// server-assigned role (always `"operator"` under LAN-trust) so callers
-    /// can surface it.
-    pub async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
+    /// server-assigned role (always `"operator"` under LAN-trust), which
+    /// [`Self::connect`] latches into [`Self::role`].
+    ///
+    /// Private on purpose — see [`Self::connect`].
+    async fn handshake(&self, config: &CliConfig) -> CliResult<String> {
         #[derive(Serialize)]
         struct ConnectParams<'a> {
             device_name: &'a str,
@@ -357,6 +381,15 @@ impl AlephClient {
         Ok(result.role)
     }
 
+    /// The server-assigned role latched at the `connect` handshake.
+    ///
+    /// Always `"operator"` under LAN-trust; surfaced so `aleph connect` can
+    /// report what the server granted.
+    #[must_use]
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
     /// Whether the WebSocket connection is still live.
     ///
     /// Reads the atomic the read loop clears when the socket drops (and that
@@ -374,5 +407,65 @@ impl AlephClient {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// The gateway rejects and *closes* any connection whose first frame is
+    /// not `connect`, so a client that hands back a live handle before
+    /// handshaking is useless — every later call dies on a dead socket. This
+    /// pins the wire-level invariant that made twenty CLI command modules
+    /// silently non-functional when the handshake was a separate opt-in step.
+    #[tokio::test]
+    async fn connect_handshakes_before_handing_back_the_client() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // Bounded so a regression that drops the handshake fails the test
+            // instead of hanging it: with nothing sent, `next()` never returns.
+            let first = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                .await
+                .expect("client sent no frame — the handshake was skipped")
+                .unwrap()
+                .unwrap();
+            let req: Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
+            let reply = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": { "role": "operator" },
+            });
+            ws.send(Message::Text(reply.to_string().into()))
+                .await
+                .unwrap();
+            req
+        });
+
+        let mut config = CliConfig::default();
+        config.device_name = "test-device".to_string();
+        let (client, _events) = AlephClient::connect(&format!("ws://{addr}"), &config)
+            .await
+            .unwrap();
+
+        let first = server.await.unwrap();
+        assert_eq!(
+            first["method"], "connect",
+            "the first frame on the wire must be the handshake"
+        );
+        assert_eq!(
+            first["params"]["device_name"], "test-device",
+            "the handshake must carry the configured device name"
+        );
+        assert_eq!(
+            client.role(),
+            "operator",
+            "the server-assigned role must be latched for callers to read"
+        );
     }
 }

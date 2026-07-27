@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// List all workspaces
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("workspace.list", None::<()>).await?;
 
@@ -34,11 +34,12 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 /// Create a new workspace
 pub async fn create(
     server_url: &str,
+    config: &CliConfig,
     name: &str,
     description: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({ "name": name });
     if let Some(desc) = description {
@@ -58,8 +59,13 @@ pub async fn create(
 }
 
 /// Archive a workspace
-pub async fn archive(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn archive(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("workspace.archive", Some(params)).await?;

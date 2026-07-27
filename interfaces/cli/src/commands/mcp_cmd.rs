@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// List pending tool approval requests
-pub async fn pending(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn pending(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client
         .call("mcp.list_pending_approvals", None::<()>)
@@ -52,11 +52,12 @@ pub async fn pending(server_url: &str, json: bool) -> CliResult<()> {
 /// Approve a tool execution request
 pub async fn approve(
     server_url: &str,
+    config: &CliConfig,
     request_id: &str,
     reason: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({
         "request_id": request_id,
@@ -81,11 +82,12 @@ pub async fn approve(
 /// Reject a tool execution request
 pub async fn reject(
     server_url: &str,
+    config: &CliConfig,
     request_id: &str,
     reason: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({
         "request_id": request_id,
@@ -108,8 +110,13 @@ pub async fn reject(
 }
 
 /// Cancel a pending approval request
-pub async fn cancel(server_url: &str, request_id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn cancel(
+    server_url: &str,
+    config: &CliConfig,
+    request_id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "request_id": request_id });
     let result: Value = client.call("mcp.cancel_approval", Some(params)).await?;

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 #[derive(Debug, Deserialize)]
 struct InFlightCall {
@@ -37,8 +37,8 @@ struct CancelResponse {
 }
 
 /// `aleph calls list` — show every in-flight tool call.
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     if json {
         let result: serde_json::Value = client.call("tools.in_flight", None::<()>).await?;
@@ -77,8 +77,13 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// `aleph calls cancel <call_id>` — fire the per-call cancellation token.
-pub async fn cancel(server_url: &str, call_id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn cancel(
+    server_url: &str,
+    config: &CliConfig,
+    call_id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = json!({ "call_id": call_id });
     if json {

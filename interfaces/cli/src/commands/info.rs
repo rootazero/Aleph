@@ -1,7 +1,7 @@
 //! Server info command
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Format bytes into a human-readable string (e.g., "4.2 GB")
 fn format_bytes(bytes: u64) -> String {
@@ -31,8 +31,8 @@ fn format_uptime(secs: u64) -> String {
 }
 
 /// Run info command
-pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn run(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Get health info
     let health: serde_json::Value = client.call("health", None::<()>).await?;

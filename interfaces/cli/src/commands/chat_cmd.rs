@@ -18,8 +18,7 @@ pub async fn send(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, mut events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, mut events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({ "message": message });
     if let Some(s) = session {
@@ -78,8 +77,7 @@ pub async fn abort(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "run_id": run_id });
     let result: Value = client.call("chat.abort", Some(params)).await?;
@@ -110,8 +108,7 @@ pub async fn history(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({ "session_key": session_key });
     if let Some(l) = limit {
@@ -201,8 +198,7 @@ pub async fn clear(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({ "session_key": session_key });
     if keep_system {

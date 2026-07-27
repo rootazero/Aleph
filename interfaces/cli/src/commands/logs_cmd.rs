@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Get current log level
-pub async fn level(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn level(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("logs.getLevel", None::<()>).await?;
 
@@ -26,8 +26,13 @@ pub async fn level(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// Set log level
-pub async fn set_level(server_url: &str, level: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn set_level(
+    server_url: &str,
+    config: &CliConfig,
+    level: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client
         .call("logs.setLevel", Some(serde_json::json!({"level": level})))
@@ -44,8 +49,8 @@ pub async fn set_level(server_url: &str, level: &str, json: bool) -> CliResult<(
 }
 
 /// Show log directory path
-pub async fn dir(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn dir(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("logs.getDirectory", None::<()>).await?;
 

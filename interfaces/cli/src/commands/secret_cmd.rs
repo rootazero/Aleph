@@ -10,15 +10,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 #[derive(Debug, Deserialize)]
 struct ListResponse {
     secrets: Vec<String>,
 }
 
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("secrets.list", None::<()>).await?;
     if json {
         output::print_json(&result);
@@ -39,7 +39,13 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
     Ok(())
 }
 
-pub async fn set(server_url: &str, name: &str, value: Option<&str>, json: bool) -> CliResult<()> {
+pub async fn set(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    value: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
     let resolved = match value {
         Some(v) if !v.is_empty() => v.to_string(),
         _ => prompt_for_secret(json)?,
@@ -48,7 +54,7 @@ pub async fn set(server_url: &str, name: &str, value: Option<&str>, json: bool) 
         return Err(CliError::Other("secret value cannot be empty".into()));
     }
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let body = json!({ "key": name, "value": resolved });
     let result: Value = client.call("secrets.set", Some(body)).await?;
     if json {
@@ -61,8 +67,8 @@ pub async fn set(server_url: &str, name: &str, value: Option<&str>, json: bool) 
     Ok(())
 }
 
-pub async fn delete(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn delete(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let body = json!({ "key": name });
     let result: Value = client.call("secrets.delete", Some(body)).await?;
     if json {
@@ -74,8 +80,8 @@ pub async fn delete(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     Ok(())
 }
 
-pub async fn verify(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn verify(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let body = json!({ "key": name });
     let result: Value = client.call("secrets.verify", Some(body)).await?;
     if json {
@@ -110,8 +116,8 @@ struct ProvidersResponse {
     providers: Vec<ProviderEntry>,
 }
 
-pub async fn providers(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn providers(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("secrets.providers", None::<()>).await?;
     if json {
         output::print_json(&result);

@@ -6,11 +6,11 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// List all installed skills via the unified `skills.status` RPC.
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("skills.status", None::<()>).await?;
 
@@ -42,8 +42,13 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 ///
 /// The server-side handler auto-detects the source type, so the CLI just
 /// forwards the raw source string.
-pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn install(
+    server_url: &str,
+    config: &CliConfig,
+    source: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "url": source });
     let result: Value = client.call("skills.install", Some(params)).await?;
@@ -59,8 +64,8 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
 }
 
 /// Remove an installed skill by name via `skills.remove`.
-pub async fn delete(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn delete(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "skill_id": name });
     let result: Value = client.call("skills.remove", Some(params)).await?;
@@ -76,8 +81,8 @@ pub async fn delete(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 }
 
 /// Refresh official content from the external repos via `bundled.sync`.
-pub async fn sync(server_url: &str, kind: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn sync(server_url: &str, config: &CliConfig, kind: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let params = serde_json::json!({ "kind": kind });
     let result: Value = client.call("bundled.sync", Some(params)).await?;
     if json {

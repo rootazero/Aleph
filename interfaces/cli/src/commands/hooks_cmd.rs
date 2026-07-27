@@ -9,10 +9,10 @@
 use serde_json::{json, Value};
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
-pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json_out: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("hooks.list", None::<()>).await?;
     if json_out {
         output::print_json(&result);
@@ -86,6 +86,7 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
 #[allow(clippy::too_many_arguments)]
 pub async fn add(
     server_url: &str,
+    config: &CliConfig,
     event: &str,
     command: Option<&str>,
     prompt: Option<&str>,
@@ -129,7 +130,7 @@ pub async fn add(
         body.insert("timeout_secs".into(), json!(t));
     }
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("hooks.add", Some(Value::Object(body))).await?;
     if json_out {
         output::print_json(&result);
@@ -142,6 +143,7 @@ pub async fn add(
 
 pub async fn remove(
     server_url: &str,
+    config: &CliConfig,
     event: &str,
     command: Option<&str>,
     index: Option<usize>,
@@ -161,7 +163,7 @@ pub async fn remove(
         body.insert("index".into(), json!(i));
     }
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client
         .call("hooks.remove", Some(Value::Object(body)))
         .await?;
@@ -181,8 +183,8 @@ pub async fn remove(
     Ok(())
 }
 
-pub async fn reload(server_url: &str, json_out: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn reload(server_url: &str, config: &CliConfig, json_out: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("hooks.reload", None::<()>).await?;
     if json_out {
         output::print_json(&result);
@@ -197,8 +199,8 @@ pub async fn reload(server_url: &str, json_out: bool) -> CliResult<()> {
     Ok(())
 }
 
-pub async fn events(server_url: &str, json_out: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn events(server_url: &str, config: &CliConfig, json_out: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("hooks.events", None::<()>).await?;
     if json_out {
         output::print_json(&result);

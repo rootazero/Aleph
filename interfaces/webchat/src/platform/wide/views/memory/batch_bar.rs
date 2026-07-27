@@ -5,11 +5,10 @@
 //! the reference implementation (memos `MemoriesView`) documents having had to
 //! back that out.
 
-use std::collections::HashSet;
-
 use leptos::prelude::*;
 
 use super::data::EXPORT_MAX;
+use super::selection::AgentSelection;
 use crate::components::ui::{Button, ButtonSize, ButtonVariant, ConfirmButton};
 use crate::i18n::{t, t_string, use_i18n};
 
@@ -51,7 +50,11 @@ fn plan_export(selected_count: usize) -> ExportPlan {
 #[component]
 #[must_use]
 pub fn BatchBar(
-    selected: RwSignal<HashSet<String>>,
+    selected: RwSignal<AgentSelection>,
+    /// The agent the visible rows belong to. Every read of `selected` goes
+    /// through it, so the bar reports (and acts on) nothing after a switch
+    /// until the user ticks boxes under the new agent.
+    agent: Signal<String>,
     /// Ids currently rendered, for the select-page toggle.
     page_ids: Signal<Vec<String>>,
     /// `Some((done, total))` while a clipboard export is in flight.
@@ -62,11 +65,12 @@ pub fn BatchBar(
     let i18n = use_i18n();
     let confirm = RwSignal::new(false);
 
-    let count = Signal::derive(move || selected.get().len());
+    let count = Signal::derive(move || selected.get().len_for(&agent.get()));
     let page_all_selected = Signal::derive(move || {
         let sel = selected.get();
+        let a = agent.get();
         let ids = page_ids.get();
-        !ids.is_empty() && ids.iter().all(|id| sel.contains(id))
+        !ids.is_empty() && ids.iter().all(|id| sel.contains(&a, id))
     });
     let over_cap = Signal::derive(move || plan_export(count.get()).is_capped());
     let busy = Signal::derive(move || exporting.get().is_some());
@@ -99,11 +103,10 @@ pub fn BatchBar(
                                hover:text-text-primary transition-colors"
                         on:click=move |_| {
                             let ids = page_ids.get_untracked();
+                            let a = agent.get_untracked();
                             let all_in = page_all_selected.get_untracked();
                             selected.update(|s| {
-                                for id in ids {
-                                    if all_in { s.remove(&id); } else { s.insert(id); }
-                                }
+                                if all_in { s.remove_all(&ids); } else { s.extend(&a, ids); }
                             });
                         }
                     >
@@ -175,7 +178,7 @@ pub fn BatchBar(
 
                     <button
                         class="text-xs text-text-tertiary hover:text-text-secondary"
-                        on:click=move |_| { selected.set(HashSet::new()); confirm.set(false); }
+                        on:click=move |_| { selected.update(AgentSelection::clear); confirm.set(false); }
                     >
                         {t!(i18n, memory.batch_clear)}
                     </button>

@@ -28,8 +28,7 @@ struct CronJob {
 
 /// List all cron jobs
 pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("cron.list", None::<()>).await?;
 
@@ -67,8 +66,7 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 
 /// Show cron scheduler status
 pub async fn status(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("cron.status", None::<()>).await?;
 
@@ -84,8 +82,7 @@ pub async fn status(server_url: &str, config: &CliConfig, json: bool) -> CliResu
 
 /// Trigger a cron job manually
 pub async fn run(server_url: &str, job_id: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "job_id": job_id });
     let result: Value = client.call("cron.run", Some(params)).await?;
@@ -102,8 +99,7 @@ pub async fn run(server_url: &str, job_id: &str, config: &CliConfig, json: bool)
 
 /// Inspect a single job (cron.get).
 pub async fn get(server_url: &str, job_id: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = json!({ "job_id": job_id });
     let result: Value = client.call("cron.get", Some(params)).await?;
@@ -126,8 +122,7 @@ pub async fn runs(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = json!({ "job_id": job_id, "limit": limit });
     let result: Value = client.call("cron.runs", Some(params)).await?;
@@ -214,8 +209,7 @@ pub async fn create(
         tags_csv,
     )?;
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("cron.create", Some(body)).await?;
 
     if json {
@@ -338,8 +332,7 @@ pub async fn update(
         clear_timeout,
     )?;
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("cron.update", Some(body)).await?;
 
     if json {
@@ -358,8 +351,7 @@ pub async fn delete(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = json!({ "job_id": job_id });
     let result: Value = client.call("cron.delete", Some(params)).await?;
@@ -382,8 +374,7 @@ pub async fn toggle(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut body = serde_json::Map::new();
     body.insert("job_id".into(), Value::String(job_id.into()));

@@ -3,15 +3,15 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 use aleph_protocol::{
     present_agent_trace_event_with_preset, AgentTracePresentationPreset, AgentTraceReplay,
     AgentTraceReplayListItem,
 };
 
 /// List recent persisted trace replays.
-pub async fn list(server_url: &str, limit: usize, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, limit: usize, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client
         .call("trace.list", Some(serde_json::json!({ "limit": limit })))
@@ -47,8 +47,13 @@ pub async fn list(server_url: &str, limit: usize, json: bool) -> CliResult<()> {
 }
 
 /// Show a structured replay for a persisted task.
-pub async fn show(server_url: &str, task_id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn show(
+    server_url: &str,
+    config: &CliConfig,
+    task_id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client
         .call("trace.get", Some(serde_json::json!({ "task_id": task_id })))

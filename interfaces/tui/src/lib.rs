@@ -29,10 +29,9 @@ pub async fn run(
     verbose: bool,
 ) -> CliResult<()> {
     // Connect to gateway
-    let (client, events) = AlephClient::connect(server_url).await?;
+    let (client, events) = AlephClient::connect(server_url, config).await?;
 
     // Handshake (LAN-trust: no credentials)
-    client.handshake(config).await?;
 
     // Determine session key
     let session_key = session

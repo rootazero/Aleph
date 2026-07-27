@@ -3,16 +3,17 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// List background services
 pub async fn list(
     server_url: &str,
+    config: &CliConfig,
     plugin: Option<&str>,
     state: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({});
     if let Some(p) = plugin {
@@ -57,11 +58,12 @@ pub async fn list(
 /// Get service status
 pub async fn status(
     server_url: &str,
+    config: &CliConfig,
     plugin_id: &str,
     service_id: &str,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "plugin_id": plugin_id, "service_id": service_id });
     let result: Value = client.call("services.status", Some(params)).await?;
@@ -125,11 +127,12 @@ pub async fn status(
 /// Start a service
 pub async fn start(
     server_url: &str,
+    config: &CliConfig,
     plugin_id: &str,
     service_id: &str,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "plugin_id": plugin_id, "service_id": service_id });
     let result: Value = client.call("services.start", Some(params)).await?;
@@ -147,11 +150,12 @@ pub async fn start(
 /// Stop a service
 pub async fn stop(
     server_url: &str,
+    config: &CliConfig,
     plugin_id: &str,
     service_id: &str,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "plugin_id": plugin_id, "service_id": service_id });
     let result: Value = client.call("services.stop", Some(params)).await?;

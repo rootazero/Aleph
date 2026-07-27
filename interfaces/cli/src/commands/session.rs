@@ -25,10 +25,9 @@ struct SessionListResponse {
 
 /// List all sessions
 pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Handshake (LAN-trust: no credentials)
-    client.handshake(config).await?;
 
     if json {
         let result: serde_json::Value = client.call("sessions.list", None::<()>).await?;
@@ -70,10 +69,9 @@ pub async fn create(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Handshake (LAN-trust: no credentials)
-    client.handshake(config).await?;
 
     #[derive(Serialize)]
     struct CreateParams {
@@ -104,10 +102,9 @@ pub async fn create(
 
 /// Delete a session
 pub async fn delete(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Handshake (LAN-trust: no credentials)
-    client.handshake(config).await?;
 
     #[derive(Serialize)]
     struct DeleteParams {
@@ -132,8 +129,7 @@ pub async fn delete(server_url: &str, key: &str, config: &CliConfig, json: bool)
 
 /// Show session usage statistics
 pub async fn usage(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "session_key": key });
     let result: serde_json::Value = client.call("session.usage", Some(params)).await?;
@@ -213,8 +209,7 @@ pub async fn truncate(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "session_key": key, "keep": keep });
     let result: serde_json::Value = client.call("session.truncate", Some(params)).await?;
@@ -241,8 +236,7 @@ pub async fn truncate(
 
 /// Compact a session (compress history)
 pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "session_key": key });
     let result: serde_json::Value = client.call("session.compact", Some(params)).await?;
@@ -293,8 +287,7 @@ pub async fn export(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // No `limit` ⇒ the server returns the entire message log.
     let params = serde_json::json!({ "session_key": key });

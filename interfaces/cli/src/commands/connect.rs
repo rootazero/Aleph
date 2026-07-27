@@ -11,28 +11,23 @@ pub async fn run(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = {
-        let _spin = (!json).then(|| output::Spinner::start(format!("Connecting to {server_url}")));
-        let result = AlephClient::connect(server_url).await;
-        if let Some(s) = _spin {
-            s.stop().await;
-        }
-        result?
-    };
-
-    // Create a modified config with the device name for the handshake.
+    // The handshake now happens inside `connect`, so the device-name override
+    // has to be applied to the config *before* connecting rather than to a
+    // second, separate step.
     let mut config = config.clone();
     config.device_name = device_name.to_string();
 
-    let role = {
-        let _spin =
-            (!json).then(|| output::Spinner::start(format!("Connecting as '{device_name}'")));
-        let result = client.handshake(&config).await;
+    let (client, _events) = {
+        let _spin = (!json).then(|| {
+            output::Spinner::start(format!("Connecting to {server_url} as '{device_name}'"))
+        });
+        let result = AlephClient::connect(server_url, &config).await;
         if let Some(s) = _spin {
             s.stop().await;
         }
         result?
     };
+    let role = client.role().to_string();
 
     if json {
         let result = serde_json::json!({

@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 /// Build the optional `{ "agent_id": … }` params for a read-only call.
 fn agent_param(agent: Option<&str>) -> Option<Value> {
@@ -16,8 +16,13 @@ fn agent_param(agent: Option<&str>) -> Option<Value> {
 }
 
 /// Get the live identity (SOUL.md) plus identity-file status.
-pub async fn get(server_url: &str, agent: Option<&str>, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn get(
+    server_url: &str,
+    config: &CliConfig,
+    agent: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("identity.get", agent_param(agent)).await?;
 
@@ -64,6 +69,7 @@ pub async fn get(server_url: &str, agent: Option<&str>, json: bool) -> CliResult
 /// Write an identity file from inline content or a `--file` path.
 pub async fn set(
     server_url: &str,
+    config: &CliConfig,
     content: Option<&str>,
     file: Option<&str>,
     file_name: Option<&str>,
@@ -87,7 +93,7 @@ pub async fn set(
         }
     };
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = json!({ "content": content });
     if let Some(name) = file_name {
@@ -118,11 +124,12 @@ pub async fn set(
 /// Remove a custom identity file, reverting to the default persona.
 pub async fn clear(
     server_url: &str,
+    config: &CliConfig,
     file_name: Option<&str>,
     agent: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut obj = serde_json::Map::new();
     if let Some(name) = file_name {
@@ -158,8 +165,13 @@ pub async fn clear(
 }
 
 /// List identity files (exists / size / path).
-pub async fn list(server_url: &str, agent: Option<&str>, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(
+    server_url: &str,
+    config: &CliConfig,
+    agent: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("identity.list", agent_param(agent)).await?;
 

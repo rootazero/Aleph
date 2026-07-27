@@ -19,8 +19,7 @@ struct ChannelInfo {
 
 /// List all channels
 pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("channels.list", None::<()>).await?;
 
@@ -62,8 +61,7 @@ pub async fn status(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = name.map(|n| serde_json::json!({ "name": n }));
     let result: Value = client.call("channels.status", params).await?;

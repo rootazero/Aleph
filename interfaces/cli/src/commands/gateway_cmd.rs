@@ -3,16 +3,17 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 /// Call any Gateway RPC method directly
 pub async fn call(
     server_url: &str,
+    config: &CliConfig,
     method: &str,
     params_json: Option<&str>,
     json_mode: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params: Option<Value> = match params_json {
         Some(s) => {

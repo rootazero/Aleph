@@ -2,7 +2,7 @@
 //!
 //! Handles name conflicts when registering tools from different sources.
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::super::types::{
     ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource, UnifiedTool,
@@ -179,11 +179,15 @@ impl ConflictResolver {
     /// Uses a single write lock to prevent TOCTOU races between conflict
     /// check and tool insertion.
     ///
-    /// Aliases participate in conflict detection: a later tool whose `name`
-    /// or any `alias` collides with an existing canonical name (or alias)
-    /// is treated as a conflict and resolved via the same priority rules.
-    /// This stops a low-priority registrant from shadowing a high-priority
-    /// builtin alias like `/model` or `/compact`.
+    /// **Only canonical-name collisions are conflicts.** A canonical name is a
+    /// tool's identity; an alias is a nickname. Nickname collisions — a new
+    /// alias against an existing name, a new name against an existing alias, or
+    /// two tools claiming the same alias — are settled at *lookup* time by
+    /// [`super::query`]'s tier ordering (canonical beats alias; ties by source
+    /// priority), which is strictly better than settling them here: it is
+    /// order-independent, and it is reversible, because deactivating or
+    /// uninstalling the winner lets the loser's nickname resolve again. A
+    /// rename is permanent and asymmetric in registration order.
     ///
     /// # Arguments
     ///
@@ -203,42 +207,27 @@ impl ConflictResolver {
         let mut tools = self.tools.write().await;
 
         // Inline conflict check under write lock (no TOCTOU race).
-        // Match against the new tool's canonical name OR any of its aliases.
         let name_lower = tool.name.to_lowercase();
-        let alias_lowers: Vec<String> = tool
-            .aliases
-            .iter()
-            .map(|a| a.to_lowercase())
-            .collect();
+
+        // A new canonical name that matches an existing tool's alias is NOT a
+        // conflict — but it does change which tool `/name` reaches, so say so.
+        // The original complaint about this case was that it happened
+        // *silently*; a log line answers that without the destructive remedy of
+        // renaming a tool because someone else claimed its nickname.
+        for shadowed in tools
+            .values()
+            .filter(|t| t.aliases.iter().any(|a| a.to_lowercase() == name_lower))
+        {
+            warn!(
+                "Tool '{}' takes over /{} from '{}', whose alias now only \
+                 resolves while '{}' is inactive",
+                tool.name, name_lower, shadowed.name, tool.name
+            );
+        }
+
         let conflict = tools
             .values()
-            .find(|t| {
-                let existing_name_lower = t.name.to_lowercase();
-                if existing_name_lower == name_lower {
-                    return true;
-                }
-                // New's aliases vs existing canonical name.
-                if alias_lowers.contains(&existing_name_lower) {
-                    return true;
-                }
-                let existing_alias_lowers: Vec<String> = t
-                    .aliases
-                    .iter()
-                    .map(|a| a.to_lowercase())
-                    .collect();
-                // New canonical name vs existing aliases — prevents silently
-                // overwriting a tool whose alias matches the new tool's name.
-                if existing_alias_lowers.contains(&name_lower) {
-                    return true;
-                }
-                // Alias↔alias collisions: e.g. plugin `aliases = ["x"]` vs
-                // builtin `aliases = ["x"]`. Two tools claiming the same
-                // shortcut must resolve via the priority rules, not silently
-                // shadow each other.
-                existing_alias_lowers
-                    .iter()
-                    .any(|ea| alias_lowers.contains(ea))
-            })
+            .find(|t| t.name.to_lowercase() == name_lower)
             .map(|t| ConflictInfo {
                 existing_id: t.id.clone(),
                 existing_name: t.name.clone(),

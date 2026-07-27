@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use leptos::leptos_dom::helpers::set_timeout_with_handle;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -20,6 +18,7 @@ mod facets;
 mod loader;
 mod pager;
 mod provenance;
+mod selection;
 mod stats;
 mod toast;
 
@@ -34,6 +33,7 @@ use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
 use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow};
 use pager::Pager;
+use selection::AgentSelection;
 use stats::{MemoryHeader, StatCards};
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
 
@@ -78,7 +78,7 @@ pub fn Memory() -> impl IntoView {
     let raw_query = RwSignal::new(String::new());
     let local_query = RwSignal::new(String::new());
     let search_live = RwSignal::new(false);
-    let selected = RwSignal::new(HashSet::<String>::new());
+    let selected = RwSignal::new(AgentSelection::default());
     let drawer_target = RwSignal::new(None::<DrawerTarget>);
     let highlight_id = RwSignal::new(None::<String>);
     let exporting = RwSignal::new(None::<(usize, usize)>);
@@ -129,19 +129,24 @@ pub fn Memory() -> impl IntoView {
         load_raw(state, agent, q, size, p * size, raws);
     });
 
-    // ── Cross-agent selection safety (C1) ───────────────────────────────────
+    // ── Cross-agent hygiene on switch (C1) ──────────────────────────────────
     // `selected`, `drawer_target`, and `highlight_id` all key off note *paths*
     // — `category/filename` over a small, fixed category set, so a collision
     // like `preference/coding-style` across two agents is entirely plausible.
-    // `on_delete`/`on_copy_md` resolve the agent at click time
-    // (`mem.agent_id.get_untracked()`), so a selection made under agent A that
-    // survives a switch to agent B gets sent to B's store on the next batch
-    // action: a colliding path silently deletes/exports B's note under A's
-    // stale checkbox state. Whenever the agent actually changes -- not on
-    // every unrelated refresh, which must leave an in-progress selection
-    // alone -- drop all cross-agent-unsafe UI state computed against the old
-    // agent. `agent_switched` is the pure "did it actually change" decision;
-    // see its unit tests below.
+    //
+    // Safety no longer lives here. `AgentSelection` and `DrawerTarget::Note`
+    // both carry the agent they were built under, and every consumer reads
+    // through that stamp, so a stale selection or a drawer left open across a
+    // switch cannot reach the new agent's store even if this Effect never ran.
+    // What remains is housekeeping: clear the boxes and close the drawer so
+    // the view matches the agent on screen. `highlight_id` is the one piece
+    // with no stamp of its own — it only tints a row, and a tinted row under
+    // the wrong agent is cosmetic, not destructive.
+    //
+    // Fires only when the agent actually changes, never on an unrelated
+    // refresh, which must leave an in-progress selection alone.
+    // `agent_switched` is the pure "did it actually change" decision; see its
+    // unit tests below.
     let last_agent = StoredValue::new(mem.agent_id.get_untracked());
     Effect::new(move || {
         let agent = mem.agent_id.get();
@@ -149,7 +154,7 @@ pub fn Memory() -> impl IntoView {
             return;
         }
         last_agent.set_value(agent);
-        selected.set(HashSet::new());
+        selected.update(AgentSelection::clear);
         drawer_target.set(None);
         highlight_id.set(None);
     });
@@ -281,21 +286,28 @@ pub fn Memory() -> impl IntoView {
         }
         let path = path.expect("note_param_decision only processes when has_path was true");
         let window = window.expect("note_param_decision only processes when window_ready was true");
+        // The window was loaded for this agent, so it is the agent the opened
+        // note belongs to — stamp it rather than letting the drawer re-resolve.
+        let agent = mem.agent_id.get_untracked();
         match locate_note(&window.facts, &path, page_size.get_untracked()) {
             Some((f, pg)) => {
                 facet.set(f);
                 page.set(pg);
                 highlight_id.set(Some(path.clone()));
                 if let Some(found) = window.facts.iter().find(|x| x.path == path) {
-                    drawer_target.set(Some(DrawerTarget::Note(found.clone())));
+                    drawer_target.set(Some(DrawerTarget::Note {
+                        agent,
+                        fact: found.clone(),
+                    }));
                 }
             }
             None => {
                 // Outside the loaded window: open it directly rather than
                 // shrugging with "not in the current window" like the old view.
-                drawer_target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
-                    &path,
-                ))));
+                drawer_target.set(Some(DrawerTarget::Note {
+                    agent,
+                    fact: CompressedFact::stub_from_path(&path),
+                }));
             }
         }
         // Still worth scrubbing the DOM: a genuine F5 reload reads the real
@@ -312,17 +324,22 @@ pub fn Memory() -> impl IntoView {
         let Some(window) = notes.get().as_ready().cloned() else {
             return;
         };
+        let agent = mem.agent_id.get_untracked();
         if let Some((f, pg)) = locate_note(&window.facts, &path, page_size.get()) {
             facet.set(f);
             page.set(pg);
             highlight_id.set(Some(path.clone()));
             if let Some(found) = window.facts.iter().find(|x| x.path == path) {
-                drawer_target.set(Some(DrawerTarget::Note(found.clone())));
+                drawer_target.set(Some(DrawerTarget::Note {
+                    agent,
+                    fact: found.clone(),
+                }));
             }
         } else {
-            drawer_target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
-                &path,
-            ))));
+            drawer_target.set(Some(DrawerTarget::Note {
+                agent,
+                fact: CompressedFact::stub_from_path(&path),
+            }));
         }
         mem.highlight_note_id.set(None);
     });
@@ -380,13 +397,14 @@ pub fn Memory() -> impl IntoView {
                     on_select=Callback::new(move |f: MemoryFacet| {
                         facet.set(f);
                         page.set(0);
-                        selected.set(HashSet::new());
+                        selected.update(AgentSelection::clear);
                     })
                 />
             </div>
 
             <BatchBar
                 selected=selected
+                agent=Signal::derive(move || mem.agent_id.get())
                 page_ids=Signal::derive(move || {
                     if is_notes.get() {
                         note_page_rows.get().into_iter().map(|f| f.path).collect()
@@ -396,11 +414,14 @@ pub fn Memory() -> impl IntoView {
                 })
                 exporting=exporting
                 on_copy_md=move || {
-                    let sel = selected.get_untracked();
+                    // Resolve the agent first and read the selection *through*
+                    // it: ids ticked under a different agent yield an empty set
+                    // here, which is the same no-op as ticking nothing.
+                    let agent = mem.agent_id.get_untracked();
+                    let sel = selected.get_untracked().ids_for(&agent);
                     if sel.is_empty() || sel.len() > EXPORT_MAX {
                         return;
                     }
-                    let agent = mem.agent_id.get_untracked();
                     if is_notes.get_untracked() {
                         let rows: Vec<CompressedFact> = note_rows
                             .get_untracked()
@@ -501,7 +522,13 @@ pub fn Memory() -> impl IntoView {
                     }
                 }
                 on_delete=move || {
-                    let ids: Vec<String> = selected.get_untracked().into_iter().collect();
+                    // Same order as `on_copy_md`, and for a stronger reason:
+                    // reading the selection through the live agent is what
+                    // makes it impossible to delete agent B's notes with boxes
+                    // ticked under agent A.
+                    let agent = mem.agent_id.get_untracked();
+                    let ids: Vec<String> =
+                        selected.get_untracked().ids_for(&agent).into_iter().collect();
                     if ids.is_empty() {
                         return;
                     }
@@ -510,7 +537,6 @@ pub fn Memory() -> impl IntoView {
                     // (memory.delete). Sending a note path to memory.delete is
                     // exactly the mix-up that produced undeletable ghost rows.
                     let notes_layer = is_notes.get_untracked();
-                    let agent = mem.agent_id.get_untracked();
                     spawn_local(async move {
                         let mut failed = 0usize;
                         for id in ids {
@@ -523,7 +549,7 @@ pub fn Memory() -> impl IntoView {
                                 failed += 1;
                             }
                         }
-                        selected.set(HashSet::new());
+                        selected.update(AgentSelection::clear);
                         refresh_nonce.update(|n| *n += 1);
                         if failed > 0 {
                             push_toast(toast_slot, format!("{} ({failed})", t_string!(i18n, memory.toast_delete_failed)), ToastKind::Error);
@@ -575,10 +601,13 @@ pub fn Memory() -> impl IntoView {
                                 view! {
                                     <NoteCard
                                         fact=fact
-                                        checked=Signal::derive(move || selected.get().contains(&p_sel))
+                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &p_sel))
                                         highlighted=Signal::derive(move || highlight_id.get().as_deref() == Some(p_hl.as_str()))
-                                        on_toggle=move || selected.update(|s| { if !s.remove(&p_tog) { s.insert(p_tog.clone()); } })
-                                        on_open=move || drawer_target.set(Some(DrawerTarget::Note(fact_open.clone())))
+                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), &p_tog))
+                                        on_open=move || drawer_target.set(Some(DrawerTarget::Note {
+                                            agent: mem.agent_id.get_untracked(),
+                                            fact: fact_open.clone(),
+                                        }))
                                         on_locate=move || {
                                             mem.selected_node.set(Some(p_loc.clone()));
                                             mem.memory_view.set(MemoryView::Graph);
@@ -640,8 +669,8 @@ pub fn Memory() -> impl IntoView {
                                 view! {
                                     <RawCard
                                         raw=raw
-                                        checked=Signal::derive(move || selected.get().contains(&id_sel))
-                                        on_toggle=move || selected.update(|s| { if !s.remove(&id_tog) { s.insert(id_tog.clone()); } })
+                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &id_sel))
+                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), &id_tog))
                                         on_open=move || drawer_target.set(Some(DrawerTarget::Raw(raw_open.clone())))
                                         on_delete={
                                             let id_del = id_del.clone();

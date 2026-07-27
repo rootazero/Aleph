@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Truncate a string to a maximum character length, appending "..." if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -42,8 +42,14 @@ fn search_rows(result: &Value) -> Vec<Vec<String>> {
 }
 
 /// Search memory
-pub async fn search(server_url: &str, query: &str, limit: usize, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn search(
+    server_url: &str,
+    config: &CliConfig,
+    query: &str,
+    limit: usize,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "query": query, "limit": limit });
     let result: Value = client.call("memory.search", Some(params)).await?;
@@ -87,8 +93,8 @@ fn stats_pairs(result: &Value) -> Vec<(&'static str, String)> {
 }
 
 /// Show memory statistics
-pub async fn stats(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn stats(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("memory.stats", None::<()>).await?;
 
@@ -100,8 +106,13 @@ pub async fn stats(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// Clear memory
-pub async fn clear(server_url: &str, facts_only: bool, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn clear(
+    server_url: &str,
+    config: &CliConfig,
+    facts_only: bool,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let method = if facts_only {
         "memory.clearFacts"
@@ -124,8 +135,8 @@ pub async fn clear(server_url: &str, facts_only: bool, json: bool) -> CliResult<
 }
 
 /// Compress and optimize memory
-pub async fn compress(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn compress(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("memory.compress", None::<()>).await?;
 
@@ -144,8 +155,8 @@ pub async fn compress(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// Delete a specific memory entry
-pub async fn delete(server_url: &str, id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn delete(server_url: &str, config: &CliConfig, id: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "id": id });
     let result: Value = client.call("memory.delete", Some(params)).await?;

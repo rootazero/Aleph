@@ -99,7 +99,7 @@ impl DoctorCheck {
 /// is the capability the reference doctors (codex / openclaw / hermes) lack —
 /// they stop at mechanical repair plus human-readable hints.
 pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) -> CliResult<()> {
-    let checks = run_all_checks(server_url).await;
+    let checks = run_all_checks(server_url, config).await;
 
     // JSON / CI path: non-interactive and byte-identical to the original —
     // emit the report and gate the exit code. Repair is never offered here so
@@ -136,7 +136,7 @@ pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) ->
                 // doctors stop at "re-run to verify"; we verify in-process.
                 eprintln!();
                 eprintln!("Verifying repairs…");
-                let after = run_all_checks(server_url).await;
+                let after = run_all_checks(server_url, config).await;
                 render_verification(before_failing, &after);
                 if after.iter().any(|c| !c.passed && c.required) {
                     std::process::exit(2);
@@ -158,7 +158,7 @@ pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) ->
 
 /// Run the full diagnostic battery once. Shared by the initial report and
 /// the post-repair verification pass so both observe identical checks.
-async fn run_all_checks(server_url: &str) -> Vec<DoctorCheck> {
+async fn run_all_checks(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
     let mut checks: Vec<DoctorCheck> = vec![
         // 1. System
         check_cli_binary(),
@@ -170,15 +170,15 @@ async fn run_all_checks(server_url: &str) -> Vec<DoctorCheck> {
     ];
 
     // 3. Runtime (only meaningful if the daemon is reachable)
-    let gateway_check = check_gateway_reachable(server_url).await;
+    let gateway_check = check_gateway_reachable(server_url, config).await;
     let gateway_reachable = gateway_check.passed;
     checks.push(gateway_check);
 
     if gateway_reachable {
-        checks.push(check_daemon_version(server_url).await);
-        checks.extend(check_providers(server_url).await);
-        checks.push(check_mcp_servers(server_url).await);
-        checks.push(check_vault(server_url).await);
+        checks.push(check_daemon_version(server_url, config).await);
+        checks.extend(check_providers(server_url, config).await);
+        checks.push(check_mcp_servers(server_url, config).await);
+        checks.push(check_vault(server_url, config).await);
     }
 
     // 4. Sandbox (independent of daemon — uses sibling binary directly)
@@ -265,8 +265,7 @@ async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) ->
     eprintln!();
     eprintln!("Launching AI-assisted repair…");
 
-    let (client, mut events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, mut events) = AlephClient::connect(server_url, config).await?;
 
     let session_key = config
         .default_session
@@ -544,8 +543,13 @@ fn check_logs_dir() -> DoctorCheck {
 
 // ── Checks: runtime ──────────────────────────────────────────────────────
 
-async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
-    match tokio::time::timeout(Duration::from_secs(5), AlephClient::connect(server_url)).await {
+async fn check_gateway_reachable(server_url: &str, config: &CliConfig) -> DoctorCheck {
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        AlephClient::connect(server_url, config),
+    )
+    .await
+    {
         Ok(Ok((client, _events))) => {
             let outcome: Result<Value, _> = client.call("health", None::<()>).await;
             let _ = client.close().await;
@@ -595,9 +599,9 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
 /// VERSION into Cargo.toml) but diverge whenever VERSION is bumped ahead of the
 /// manifest — using `CARGO_PKG_VERSION` there would compare different sources and
 /// fire a spurious "restart the daemon" warning against an identical build.
-async fn check_daemon_version(server_url: &str) -> DoctorCheck {
+async fn check_daemon_version(server_url: &str, config: &CliConfig) -> DoctorCheck {
     let cli = env!("ALEPH_VERSION");
-    match call_rpc(server_url, "gateway.identity.get").await {
+    match call_rpc(server_url, config, "gateway.identity.get").await {
         Ok(value) => {
             let daemon = value.get("version").and_then(|v| v.as_str()).unwrap_or("");
             if daemon.is_empty() {
@@ -644,8 +648,8 @@ async fn check_daemon_version(server_url: &str) -> DoctorCheck {
 /// `providers.healthcheck` sweep and emits one row per provider with latency or
 /// error. Falls back to a plain count via `providers.list` when the daemon
 /// predates the healthcheck endpoint (backward compatible).
-async fn check_providers(server_url: &str) -> Vec<DoctorCheck> {
-    match call_rpc(server_url, "providers.healthcheck").await {
+async fn check_providers(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
+    match call_rpc(server_url, config, "providers.healthcheck").await {
         Ok(value) => match value.get("providers").and_then(|v| v.as_array()) {
             Some(rows) if !rows.is_empty() => rows.iter().map(provider_row_to_check).collect(),
             Some(_) => vec![DoctorCheck::ok(
@@ -655,9 +659,9 @@ async fn check_providers(server_url: &str) -> Vec<DoctorCheck> {
                 false,
                 "no providers configured (add one via the panel or setup)",
             )],
-            None => check_providers_count(server_url).await,
+            None => check_providers_count(server_url, config).await,
         },
-        Err(_) => check_providers_count(server_url).await,
+        Err(_) => check_providers_count(server_url, config).await,
     }
 }
 
@@ -697,8 +701,8 @@ fn provider_row_to_check(row: &Value) -> DoctorCheck {
 }
 
 /// Count-only fallback for daemons without `providers.healthcheck`.
-async fn check_providers_count(server_url: &str) -> Vec<DoctorCheck> {
-    match call_rpc(server_url, "providers.list").await {
+async fn check_providers_count(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
+    match call_rpc(server_url, config, "providers.list").await {
         Ok(value) => {
             let count = count_array_or_obj_array(&value, "providers");
             vec![DoctorCheck::ok(
@@ -719,10 +723,10 @@ async fn check_providers_count(server_url: &str) -> Vec<DoctorCheck> {
     }
 }
 
-async fn check_mcp_servers(server_url: &str) -> DoctorCheck {
+async fn check_mcp_servers(server_url: &str, config: &CliConfig) -> DoctorCheck {
     // Best-effort: many deployments don't enable MCP. Failure here is
     // surfaced as a warning, not a hard error.
-    match call_rpc(server_url, "mcp.list").await {
+    match call_rpc(server_url, config, "mcp.list").await {
         Ok(value) => {
             let count = count_array_or_obj_array(&value, "servers");
             DoctorCheck::ok(
@@ -743,11 +747,11 @@ async fn check_mcp_servers(server_url: &str) -> DoctorCheck {
     }
 }
 
-async fn check_vault(server_url: &str) -> DoctorCheck {
+async fn check_vault(server_url: &str, config: &CliConfig) -> DoctorCheck {
     // Vault health is probed via `secrets.list` — the live secret-store
     // endpoint. (The old `vault.status` method was removed when key
     // management consolidated onto the `secrets.*` RPC surface.)
-    match call_rpc(server_url, "secrets.list").await {
+    match call_rpc(server_url, config, "secrets.list").await {
         Ok(value) => {
             let count = count_array_or_obj_array(&value, "secrets");
             DoctorCheck::ok(
@@ -821,8 +825,8 @@ fn aleph_home() -> PathBuf {
         .join(".aleph")
 }
 
-async fn call_rpc(server_url: &str, method: &str) -> CliResult<Value> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+async fn call_rpc(server_url: &str, config: &CliConfig, method: &str) -> CliResult<Value> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call(method, None::<()>).await?;
     let _ = client.close().await;
     Ok(result)

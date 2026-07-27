@@ -19,8 +19,29 @@ use crate::state::memory::MemoryState;
 /// What the drawer is currently showing.
 #[derive(Clone)]
 pub enum DrawerTarget {
-    Note(CompressedFact),
+    /// A note, stamped with the agent it was opened under.
+    ///
+    /// Note paths (`category/filename`) collide readily across agents, and
+    /// every mutation this drawer issues is agent-scoped. Resolving the agent
+    /// at click time instead — from the live signal — means a drawer that
+    /// outlives an agent switch by even one frame sends `graph.update_note` /
+    /// `rename_note` / `delete_note` for a path resolved under the old agent
+    /// to the new agent's store. Carrying the agent with the target makes the
+    /// drawer act on what it is actually displaying.
+    Note { agent: String, fact: CompressedFact },
+    /// A raw conversation row. Read-only here, so no stamp is needed: nothing
+    /// in `RawDetail` mutates, and `memory.delete` is not agent-scoped.
     Raw(RawMemory),
+}
+
+impl DrawerTarget {
+    /// Open a note by path under `agent`, without a loaded row to show yet.
+    fn note_stub(agent: &str, path: &str) -> Self {
+        Self::Note {
+            agent: agent.to_string(),
+            fact: CompressedFact::stub_from_path(path),
+        }
+    }
 }
 
 #[component]
@@ -32,9 +53,9 @@ pub fn DetailDrawer(
     view! {
         {move || match target.get() {
             None => view! { <div></div> }.into_any(),
-            Some(DrawerTarget::Note(fact)) => view! {
+            Some(DrawerTarget::Note { agent, fact }) => view! {
                 <DrawerShell target=target>
-                    <NoteDetail fact=fact target=target toast_slot=toast_slot on_mutated=on_mutated />
+                    <NoteDetail agent=agent fact=fact target=target toast_slot=toast_slot on_mutated=on_mutated />
                 </DrawerShell>
             }
             .into_any(),
@@ -75,6 +96,9 @@ fn DrawerShell(target: RwSignal<Option<DrawerTarget>>, children: Children) -> im
 
 #[component]
 fn NoteDetail(
+    /// The agent this note was opened under. Every RPC below uses it rather
+    /// than re-reading the live agent signal — see [`DrawerTarget::Note`].
+    agent: String,
     fact: CompressedFact,
     target: RwSignal<Option<DrawerTarget>>,
     toast_slot: ToastSlot,
@@ -105,9 +129,10 @@ fn NoteDetail(
     // Fetch full content + backlinks once on mount.
     {
         let path = path.clone();
+        let agent = agent.clone();
         Effect::new(move |_| {
             let path = path.clone();
-            let agent = mem.agent_id.get_untracked();
+            let agent = agent.clone();
             spawn_local(async move {
                 match GraphApi::node_detail(&state, &agent, &path).await {
                     Ok(d) => {
@@ -122,13 +147,14 @@ fn NoteDetail(
 
     let save = {
         let path = path.clone();
+        let agent = agent.clone();
         move |_| {
             if is_saving.get_untracked() {
                 return;
             }
             let content = draft.get_untracked();
             let path = path.clone();
-            let agent = mem.agent_id.get_untracked();
+            let agent = agent.clone();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
@@ -157,6 +183,7 @@ fn NoteDetail(
 
     let do_rename = {
         let path = path.clone();
+        let agent = agent.clone();
         move |_| {
             if is_saving.get_untracked() {
                 return;
@@ -167,15 +194,13 @@ fn NoteDetail(
                 return;
             }
             let path = path.clone();
-            let agent = mem.agent_id.get_untracked();
+            let agent = agent.clone();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
                 match GraphApi::rename_note(&state, &agent, &path, &new_title).await {
                     Ok(new_id) => {
-                        target.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
-                            &new_id,
-                        ))));
+                        target.set(Some(DrawerTarget::note_stub(&agent, &new_id)));
                         is_saving.set(false);
                         is_renaming.set(false);
                         push_toast(
@@ -201,6 +226,7 @@ fn NoteDetail(
 
     let do_delete = {
         let path = path.clone();
+        let agent = agent.clone();
         move |_| {
             if is_saving.get_untracked() || !confirm_delete.get_untracked() {
                 // First tap: arm the confirm
@@ -209,7 +235,7 @@ fn NoteDetail(
             }
             // Second tap: execute delete
             let path = path.clone();
-            let agent = mem.agent_id.get_untracked();
+            let agent = agent.clone();
             is_saving.set(true);
             error.set(None);
             spawn_local(async move {
@@ -234,6 +260,13 @@ fn NoteDetail(
             });
         }
     };
+
+    // The view's stamp lives in a `StoredValue` because a bare `String` is not
+    // `Copy`: moving it into a nested `on:click` handler would consume it from
+    // the enclosing reactive closure, leaving that closure `FnOnce` where the
+    // renderer needs `FnMut`. (The pre-stamp code read `mem`, which is `Copy`,
+    // so the question never arose.)
+    let agent_v = StoredValue::new(agent);
 
     view! {
         <div>
@@ -320,7 +353,7 @@ fn NoteDetail(
                                                 inner_html=render_excerpt(&md)
                                                 on:click=move |ev| {
                                                     if let Some(t) = wikilink_click_target(&ev) {
-                                                        navigate_drawer(&state, &mem, target, t);
+                                                        navigate_drawer(&state, &agent_v.get_value(), target, t);
                                                     }
                                                 }
                                             ></div>
@@ -390,7 +423,7 @@ fn NoteDetail(
                                 view! {
                                     <li
                                         style="font-size:11px;color:var(--cat-reference);padding:3px 6px;border-radius:4px;background:rgba(96,165,250,0.08);cursor:pointer;word-break:break-all;font-family:monospace"
-                                        on:click=move |_| navigate_drawer(&state, &mem, target, b_click.clone())
+                                        on:click=move |_| navigate_drawer(&state, &agent_v.get_value(), target, b_click.clone())
                                     >
                                         {b}
                                     </li>
@@ -402,7 +435,7 @@ fn NoteDetail(
             }}
 
             <ProvenanceSection
-                agent=Signal::derive(move || mem.agent_id.get())
+                agent=Signal::derive(move || agent_v.get_value())
                 target=path.clone()
                 kind=TraceKind::Note
             />
@@ -421,26 +454,25 @@ fn NoteDetail(
 /// new note on its own.
 fn navigate_drawer(
     state: &DashboardState,
-    mem: &MemoryState,
+    agent: &str,
     target_signal: RwSignal<Option<DrawerTarget>>,
     wl: String,
 ) {
     let state = *state;
-    let mem = *mem;
+    // Following a wikilink stays inside the agent whose note contained it —
+    // both the `graph.search` resolution and the new target keep the stamp.
+    let agent = agent.to_string();
     spawn_local(async move {
         let id = if wl.contains('/') {
             Some(wl)
         } else {
-            let agent = mem.agent_id.get_untracked();
             GraphApi::search(&state, &agent, &wl, 1)
                 .await
                 .ok()
                 .and_then(|r| r.results.first().map(|f| f.id.clone()))
         };
         if let Some(id) = id {
-            target_signal.set(Some(DrawerTarget::Note(CompressedFact::stub_from_path(
-                &id,
-            ))));
+            target_signal.set(Some(DrawerTarget::note_stub(&agent, &id)));
         }
     });
 }
@@ -448,8 +480,11 @@ fn navigate_drawer(
 #[component]
 fn RawDetail(raw: RawMemory) -> impl IntoView {
     let i18n = use_i18n();
-    let mem = expect_context::<MemoryState>();
     let raw_id = raw.id.clone();
+    // A raw row states its own owner (`memory.list` always fills `agent_id`
+    // from the stored row), so the trace is scoped to the row on screen rather
+    // than to whichever agent happens to be selected when the drawer is read.
+    let raw_agent = StoredValue::new(raw.agent_id.clone());
     view! {
         <div>
             <div class="text-[10px] uppercase tracking-widest text-text-tertiary mb-2">
@@ -459,7 +494,7 @@ fn RawDetail(raw: RawMemory) -> impl IntoView {
                 {raw.display_text()}
             </pre>
             <ProvenanceSection
-                agent=Signal::derive(move || mem.agent_id.get())
+                agent=Signal::derive(move || raw_agent.get_value())
                 target=raw_id.clone()
                 kind=TraceKind::Raw
             />

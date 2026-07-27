@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 #[derive(Deserialize)]
 struct Command {
@@ -27,8 +27,13 @@ struct CommandsResponse {
 }
 
 /// Run commands list
-pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn run(
+    server_url: &str,
+    config: &CliConfig,
+    category: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     if json {
         let result: serde_json::Value = client.call("commands.list", None::<()>).await?;
@@ -95,8 +100,13 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
 /// `aleph tools describe <name>` — pull `commands.list` and emit the entry
 /// matching `name`. We do the filter client-side so the server doesn't need a
 /// new RPC (R4: I/O-only interface).
-pub async fn describe(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn describe(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let raw: Value = client.call("commands.list", None::<()>).await?;
     client.close().await?;
 
@@ -162,6 +172,7 @@ pub async fn describe(server_url: &str, name: &str, json: bool) -> CliResult<()>
 /// path; reserved for E2E/automation).
 pub async fn invoke(
     server_url: &str,
+    config: &CliConfig,
     name: &str,
     args: Option<&str>,
     agent: Option<&str>,
@@ -180,7 +191,7 @@ pub async fn invoke(
         body.insert("agent_id".into(), Value::String(a.to_string()));
     }
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client
         .call("tools.invoke", Some(Value::Object(body)))
         .await?;

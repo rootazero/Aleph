@@ -883,6 +883,96 @@ async fn test_unregister_canonical_restores_existing_alias() {
     );
 }
 
+/// The same two tools must land the same way whichever order they register in.
+///
+/// Registration-time renaming made this asymmetric: registering the alias
+/// holder first renamed the newcomer's canonical name, and registering it
+/// second renamed the alias holder's — so a tool's own name depended on
+/// startup ordering it does not control. Lookup-time tier ordering has no such
+/// dependence, and this pins that.
+#[tokio::test]
+async fn registration_order_does_not_decide_a_canonical_vs_alias_collision() {
+    let alias_holder = || {
+        UnifiedTool::new("custom:goto", "goto", "Go somewhere", ToolSource::Builtin)
+            .with_aliases(["go"])
+    };
+    let namesake = || UnifiedTool::new("custom:go", "go", "The real go", ToolSource::Builtin);
+
+    for (label, first, second) in [
+        ("alias holder first", alias_holder(), namesake()),
+        ("namesake first", namesake(), alias_holder()),
+    ] {
+        let registry = ToolCatalog::new();
+        registry.register_with_conflict_resolution(first).await;
+        registry.register_with_conflict_resolution(second).await;
+
+        let names: Vec<String> = registry
+            .list_all()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            names.contains(&"go".to_string()) && names.contains(&"goto".to_string()),
+            "{label}: neither tool may be renamed over a nickname collision, got {names:?}"
+        );
+        assert_eq!(
+            registry.resolve_command("/go").await.unwrap().tool.name,
+            "go",
+            "{label}: the canonical name must win"
+        );
+    }
+}
+
+/// Two tools may claim the same alias. Neither is renamed; the lookup tier
+/// picks by source priority, and the loser's alias is a live fallback rather
+/// than a casualty.
+#[tokio::test]
+async fn two_tools_may_share_an_alias_and_the_loser_keeps_it_as_a_fallback() {
+    let registry = ToolCatalog::new();
+    let low = UnifiedTool::new(
+        "skill:notes",
+        "take_notes",
+        "Take notes",
+        ToolSource::Skill {
+            id: "notes".to_string(),
+        },
+    )
+    .with_aliases(["n"]);
+    let high = UnifiedTool::new(
+        "builtin:navigate",
+        "navigate",
+        "Navigate",
+        ToolSource::Builtin,
+    )
+    .with_aliases(["n"]);
+    let low_id = registry.register_with_conflict_resolution(low).await;
+    let high_id = registry.register_with_conflict_resolution(high).await;
+
+    for id in [&low_id, &high_id] {
+        let tool = registry.get_by_id(id).await.unwrap();
+        assert!(
+            !tool.was_renamed,
+            "sharing an alias must not rename '{}'",
+            tool.name
+        );
+        assert!(tool.aliases.iter().any(|a| a == "n"));
+    }
+
+    assert_eq!(
+        registry.resolve_command("/n").await.unwrap().tool.name,
+        "navigate",
+        "the higher-priority source wins the shared alias"
+    );
+
+    assert!(registry.set_tool_active(&high_id, false).await);
+    assert_eq!(
+        registry.resolve_command("/n").await.unwrap().tool.name,
+        "take_notes",
+        "deactivating the winner must hand the alias to the other claimant"
+    );
+}
+
 #[tokio::test]
 async fn test_suggest_commands_scores_name_and_alias() {
     let registry = ToolCatalog::new();
@@ -1164,7 +1254,11 @@ async fn seeded_shorthand_alias_resolves_and_is_discoverable() {
 
     let registry = ToolCatalog::new();
     let aliases = shorthand_aliases_for("select_model");
-    assert_eq!(aliases, vec!["model"], "single source must map /model → select_model");
+    assert_eq!(
+        aliases,
+        vec!["model"],
+        "single source must map /model → select_model"
+    );
 
     let tool = UnifiedTool::new(
         "builtin:select_model",

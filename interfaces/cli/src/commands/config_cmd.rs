@@ -18,8 +18,7 @@ pub async fn get(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = section.map(|s| serde_json::json!({ "section": s }));
     let result: Value = client.call("config.get", params).await?;
@@ -42,8 +41,7 @@ pub async fn set(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Parse value as JSON, fall back to string
     let json_value: Value = serde_json::from_str(value).unwrap_or(Value::String(value.to_string()));
@@ -73,8 +71,7 @@ pub async fn set(
 
 /// Validate current configuration
 pub async fn validate(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("config.validate", None::<()>).await?;
 
@@ -106,8 +103,7 @@ pub async fn validate(server_url: &str, config: &CliConfig, json: bool) -> CliRe
 
 /// Reload configuration on the server
 pub async fn reload(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("config.reload", None::<()>).await?;
 
@@ -128,8 +124,7 @@ pub async fn schema(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
-    client.handshake(config).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("config.schema", None::<()>).await?;
     let schema = result.get("schema").cloned().unwrap_or(result);

@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 /// Read a local plugin zip and wrap its bytes as base64 `data` params for
 /// `plugins.installFromZip`.
@@ -61,8 +61,8 @@ fn parse_github_source(source: &str) -> CliResult<(String, String, Option<String
 }
 
 /// List installed plugins
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("plugins.list", None::<()>).await?;
 
@@ -89,7 +89,12 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
 }
 
 /// Install a plugin from source (URL, path, zip, or github:owner/repo[/name])
-pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()> {
+pub async fn install(
+    server_url: &str,
+    config: &CliConfig,
+    source: &str,
+    json: bool,
+) -> CliResult<()> {
     // Handle github: prefix — fetch latest release from GitHub API and install from ZIP
     if source.starts_with("github:") {
         let (owner, repo, _plugin_name) = parse_github_source(source)?;
@@ -153,7 +158,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         download_file(&download_url, &zip_path)?;
 
         // Now install via the zip: the daemon expects base64-encoded content.
-        let (client, _events) = AlephClient::connect(server_url).await?;
+        let (client, _events) = AlephClient::connect(server_url, config).await?;
         let params = zip_install_params(&zip_path)?;
         let result: Value = client.call("plugins.installFromZip", Some(params)).await?;
 
@@ -169,7 +174,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         return Ok(());
     }
 
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     // Field names must match the daemon's RPC param structs:
     //   plugins.install        → InstallParams { url }
@@ -196,8 +201,13 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
 }
 
 /// Uninstall a plugin
-pub async fn uninstall(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn uninstall(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("plugins.uninstall", Some(params)).await?;
@@ -213,8 +223,8 @@ pub async fn uninstall(server_url: &str, name: &str, json: bool) -> CliResult<()
 }
 
 /// Enable a disabled plugin
-pub async fn enable(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn enable(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("plugins.enable", Some(params)).await?;
@@ -230,8 +240,13 @@ pub async fn enable(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 }
 
 /// Disable a plugin
-pub async fn disable(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn disable(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("plugins.disable", Some(params)).await?;
@@ -249,12 +264,13 @@ pub async fn disable(server_url: &str, name: &str, json: bool) -> CliResult<()> 
 /// Call a plugin tool
 pub async fn call(
     server_url: &str,
+    config: &CliConfig,
     plugin: &str,
     tool: &str,
     params_json: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let tool_params: Value = match params_json {
         Some(s) => serde_json::from_str(s)
@@ -286,8 +302,8 @@ pub async fn call(
 }
 
 /// Update an installed plugin to its latest marketplace version (`plugin.update`).
-pub async fn update(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn update(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "name": name });
     let result: Value = client.call("plugin.update", Some(params)).await?;
@@ -303,8 +319,8 @@ pub async fn update(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 }
 
 /// Hot-reload a single installed plugin by name (`plugin.reload`).
-pub async fn reload(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn reload(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let params = serde_json::json!({ "pluginId": name });
     let result: Value = client.call("plugin.reload", Some(params)).await?;
@@ -320,8 +336,8 @@ pub async fn reload(server_url: &str, name: &str, json: bool) -> CliResult<()> {
 }
 
 /// Show detailed info about a specific plugin
-pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn info(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("plugins.list", None::<()>).await?;
 

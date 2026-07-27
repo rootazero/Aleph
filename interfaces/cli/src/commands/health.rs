@@ -3,7 +3,7 @@
 use serde::Deserialize;
 
 use crate::output;
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 #[derive(Deserialize)]
 struct HealthResponse {
@@ -12,8 +12,8 @@ struct HealthResponse {
 }
 
 /// Run health check
-pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn run(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     if json {
         let result: serde_json::Value = client.call("health", None::<()>).await?;

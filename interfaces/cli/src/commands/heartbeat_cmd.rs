@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::output;
-use aleph_client::{AlephClient, CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -45,8 +45,8 @@ struct ListResponse {
     tasks: Vec<TaskView>,
 }
 
-pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let result: Value = client.call("heartbeat.list", None::<()>).await?;
 
     if json {
@@ -79,8 +79,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
     Ok(())
 }
 
-pub async fn get(server_url: &str, task_id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn get(server_url: &str, config: &CliConfig, task_id: &str, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let params = json!({ "task_id": task_id });
     let result: Value = client.call("heartbeat.get", Some(params)).await?;
 
@@ -96,6 +96,7 @@ pub async fn get(server_url: &str, task_id: &str, json: bool) -> CliResult<()> {
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     server_url: &str,
+    config: &CliConfig,
     name: &str,
     interval: &str,
     tool: &str,
@@ -105,7 +106,7 @@ pub async fn create(
     disabled: bool,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let probe_params = match params {
         Some(s) => Some(
@@ -153,6 +154,7 @@ pub async fn create(
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
     server_url: &str,
+    config: &CliConfig,
     task_id: &str,
     name: Option<&str>,
     agent: Option<&str>,
@@ -161,7 +163,7 @@ pub async fn update(
     disable: bool,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut body = serde_json::Map::new();
     body.insert("task_id".into(), Value::String(task_id.to_string()));
@@ -192,8 +194,13 @@ pub async fn update(
     Ok(())
 }
 
-pub async fn delete(server_url: &str, task_id: &str, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn delete(
+    server_url: &str,
+    config: &CliConfig,
+    task_id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let params = json!({ "task_id": task_id });
     let result: Value = client.call("heartbeat.delete", Some(params)).await?;
     if json {
@@ -207,12 +214,13 @@ pub async fn delete(server_url: &str, task_id: &str, json: bool) -> CliResult<()
 
 pub async fn toggle(
     server_url: &str,
+    config: &CliConfig,
     task_id: &str,
     enable: bool,
     disable: bool,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let mut body = serde_json::Map::new();
     body.insert("task_id".into(), Value::String(task_id.to_string()));
     if enable {
@@ -238,11 +246,12 @@ pub async fn toggle(
 
 pub async fn wake(
     server_url: &str,
+    config: &CliConfig,
     task_id: &str,
     reason: Option<&str>,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let mut body = serde_json::Map::new();
     body.insert("task_id".into(), Value::String(task_id.to_string()));
     if let Some(r) = reason {
@@ -260,8 +269,14 @@ pub async fn wake(
     Ok(())
 }
 
-pub async fn runs(server_url: &str, task_id: &str, limit: usize, json: bool) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+pub async fn runs(
+    server_url: &str,
+    config: &CliConfig,
+    task_id: &str,
+    limit: usize,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
     let params = json!({ "task_id": task_id, "limit": limit });
     let result: Value = client.call("heartbeat.runs", Some(params)).await?;
     if json {
