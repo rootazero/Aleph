@@ -350,7 +350,9 @@ fn tokenize_with_offsets(content: &str) -> Vec<(usize, String)> {
         if ch.is_whitespace() {
             if let Some(s) = start.take() {
                 let trimmed = cur.trim_matches(|c: char| !c.is_alphanumeric());
-                tokens.push((s, trimmed.to_string()));
+                if !trimmed.is_empty() {
+                    tokens.push((s, trimmed.to_string()));
+                }
                 cur.clear();
             }
         } else {
@@ -362,7 +364,9 @@ fn tokenize_with_offsets(content: &str) -> Vec<(usize, String)> {
     }
     if let Some(s) = start {
         let trimmed = cur.trim_matches(|c: char| !c.is_alphanumeric());
-        tokens.push((s, trimmed.to_string()));
+        if !trimmed.is_empty() {
+            tokens.push((s, trimmed.to_string()));
+        }
     }
     tokens
 }

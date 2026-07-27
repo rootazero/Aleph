@@ -206,7 +206,6 @@ fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<Fallbac
                 "code_exec",
                 "longer-running runtime; bash inherits a strict per-call budget",
             )],
-            ToolErrorKind::Permission => vec![],
             _ => vec![],
         }),
 

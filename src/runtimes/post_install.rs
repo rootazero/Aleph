@@ -107,8 +107,12 @@ async fn run_subcommand(
 }
 
 async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
-    // Parse `fnm list` output to find the just-installed version token.
     let list = run_cmd_with_timeout(Command::new("fnm").args(["list"])).await?;
+    if !list.status.success() {
+        return Err(PostInstallError::SubcommandFailed {
+            stderr: String::from_utf8_lossy(&list.stderr).into(),
+        });
+    }
     let text = String::from_utf8_lossy(&list.stdout);
     let version = text
         .lines()

@@ -83,6 +83,7 @@ impl SearchProvider for ExaProvider {
         let results = exa_response
             .results
             .into_iter()
+            .take(options.validated_max_results())
             .map(|r| SearchResult {
                 title: r.title.unwrap_or_default(),
                 url: r.url,

@@ -104,18 +104,22 @@ pub fn is_block_class_secret(name: &str) -> bool {
 /// redaction tags win for inputs they already matched (byte-identical scrub for
 /// pre-existing patterns); the vendor catalog only widens coverage.
 #[must_use]
-pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
-    SECRET_PATTERN_SOURCES
-        .iter()
-        .chain(super::vendor_patterns::VENDOR_SECRET_PATTERNS.iter())
-        .map(|(name, src)| {
-            (
-                *name,
-                // rust-doctor-disable-next-line unwrap-in-production
-                regex::bytes::Regex::new(src).expect("static pattern compiles"),
-            )
-        })
-        .collect()
+pub fn default_patterns_bytes() -> &'static [(&'static str, regex::bytes::Regex)] {
+    use std::sync::LazyLock;
+    static DEFAULT_BYTE_PATTERNS: LazyLock<Vec<(&'static str, regex::bytes::Regex)>> =
+        LazyLock::new(|| {
+            SECRET_PATTERN_SOURCES
+                .iter()
+                .chain(super::vendor_patterns::VENDOR_SECRET_PATTERNS.iter())
+                .map(|(name, src)| {
+                    (
+                        *name,
+                        regex::bytes::Regex::new(src).expect("static pattern compiles"),
+                    )
+                })
+                .collect()
+        });
+    &DEFAULT_BYTE_PATTERNS
 }
 
 /// Known secret format patterns.

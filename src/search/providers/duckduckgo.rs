@@ -37,7 +37,7 @@ impl DuckDuckGoProvider {
 impl Default for DuckDuckGoProvider {
     fn default() -> Self {
         Self {
-            client: build_client().unwrap_or_else(|_| Client::new()),
+            client: build_client().expect("DuckDuckGo default client construction failed"),
         }
     }
 }

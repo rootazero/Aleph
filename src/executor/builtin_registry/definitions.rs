@@ -815,6 +815,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Send media files (images, videos, audio) directly to the user in the chat",
         requires_config: false,
     },
+    // Deliverable publisher — needs only the artifact store, which resolves
+    // from the data directory at first use.
+    BuiltinToolDefinition {
+        name: "artifact_publish",
+        description: "Publish the finished work product (report, analysis, plan) as a standalone document that opens in the user's browser",
+        requires_config: false,
+    },
     // Human-in-the-loop clarification tool — requires ChannelRegistry +
     // ClarificationManager (deferred injection).
     BuiltinToolDefinition {
@@ -1045,6 +1052,9 @@ pub fn create_tool_boxed(
             .map(|tool| Box::new(tool) as Box<dyn AlephToolDyn>),
         "media_send" => Some(Box::new(
             crate::builtin_tools::media_send::MediaSendTool::new(),
+        )),
+        "artifact_publish" => Some(Box::new(
+            crate::builtin_tools::artifact_publish::ArtifactPublishTool::new(),
         )),
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().

@@ -50,6 +50,7 @@ impl NotificationService {
     ) -> A2AResult<PushNotificationConfig> {
         validate_url_async(&config.url, &SsrfPolicy::default())
             .await
+            .map(|(_, _pinned)| ())
             .map_err(|e| {
                 A2AError::InvalidParams(format!(
                     "pushNotificationConfig.url rejected by SSRF policy: {e}"

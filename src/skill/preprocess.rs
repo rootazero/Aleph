@@ -229,7 +229,7 @@ async fn run_snippet(cmd: &str, ctx: &SkillPreprocessContext) -> String {
     let (shell, flag) = if cfg!(windows) {
         ("cmd", "/C")
     } else {
-        ("/bin/sh", "-c")
+        ("sh", "-c")
     };
 
     let mut command = tokio::process::Command::new(shell);

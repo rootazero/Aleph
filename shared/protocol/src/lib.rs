@@ -14,6 +14,7 @@
 //! - [`invitation`] - Guest invitation types
 //! - [`discovery`] - Service discovery types
 
+pub mod artifact;
 pub mod auth;
 pub mod canvas_format;
 pub mod desktop_bridge;

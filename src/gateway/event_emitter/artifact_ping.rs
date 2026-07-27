@@ -27,14 +27,17 @@ use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 
 /// Topic every artifact invalidation is published on.
 ///
-/// The Panel's subscriber (`interfaces/webchat/src/api/artifacts.rs`) must
-/// match this string exactly.
-pub const ARTIFACT_TOPIC: &str = "session.artifact";
+/// Re-exported from `aleph_protocol` rather than spelled again: the Panel's
+/// subscriber matches this literally, and both crates now read one declaration.
+pub use aleph_protocol::artifact::TOPIC as ARTIFACT_TOPIC;
 
 /// Build the ping frame for `session_key`.
 #[must_use]
 pub fn artifact_ping_event(session_key: &str) -> TopicEvent {
-    TopicEvent::new(ARTIFACT_TOPIC, json!({ "session_key": session_key }))
+    TopicEvent::new(
+        ARTIFACT_TOPIC,
+        json!({ aleph_protocol::artifact::TOPIC_SESSION_KEY: session_key }),
+    )
 }
 
 /// Publish on a bus the caller already holds.

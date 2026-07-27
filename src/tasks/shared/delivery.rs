@@ -230,17 +230,23 @@ impl DeliveryEngine {
 
 // ── Helper ───────────────────────────────────────────────────────────
 
-/// Check if delivery should be skipped due to agent already sending.
+/// Classify whether delivery should be skipped before attempting it.
+///
+/// Returns `NotRequested` for `None` mode, `AlreadySentByAgent` when the agent
+/// already handled it, and `NotDelivered` otherwise — the caller must then
+/// perform actual delivery and overwrite the status with the real outcome.
 #[must_use]
-pub const fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
+pub const fn pre_delivery_status(
+    agent_already_sent: bool,
+    mode: &DeliveryMode,
+) -> DeliveryStatus {
     if matches!(mode, DeliveryMode::None) {
         return DeliveryStatus::NotRequested;
     }
     if agent_already_sent {
         return DeliveryStatus::AlreadySentByAgent;
     }
-    // Caller proceeds with actual delivery
-    DeliveryStatus::Delivered // placeholder — actual delivery logic returns real status
+    DeliveryStatus::NotDelivered
 }
 
 #[cfg(test)]
@@ -457,22 +463,22 @@ mod tests {
 
     #[test]
     fn should_skip_when_agent_sent() {
-        let status = should_skip_delivery(true, &DeliveryMode::Primary);
+        let status = pre_delivery_status(true, &DeliveryMode::Primary);
         assert_eq!(status, DeliveryStatus::AlreadySentByAgent);
     }
 
     #[test]
     fn should_not_skip_normally() {
-        let status = should_skip_delivery(false, &DeliveryMode::Primary);
-        assert_eq!(status, DeliveryStatus::Delivered);
+        let status = pre_delivery_status(false, &DeliveryMode::Primary);
+        assert_eq!(status, DeliveryStatus::NotDelivered);
     }
 
     #[test]
     fn none_mode_always_skips() {
-        let status = should_skip_delivery(false, &DeliveryMode::None);
+        let status = pre_delivery_status(false, &DeliveryMode::None);
         assert_eq!(status, DeliveryStatus::NotRequested);
 
-        let status = should_skip_delivery(true, &DeliveryMode::None);
+        let status = pre_delivery_status(true, &DeliveryMode::None);
         assert_eq!(status, DeliveryStatus::NotRequested);
     }
 }

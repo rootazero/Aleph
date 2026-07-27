@@ -219,8 +219,10 @@ pub struct SysinfoLoadProbe {
 impl SysinfoLoadProbe {
     #[must_use]
     pub fn new() -> Self {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_all();
         Self {
-            sys: crate::sync_primitives::Mutex::new(sysinfo::System::new()),
+            sys: crate::sync_primitives::Mutex::new(sys),
         }
     }
 }

@@ -28,11 +28,11 @@ fn first_sentence_head(desc: &str) -> Option<&str> {
             .rsplit(|c: char| c.is_whitespace())
             .next()
             .unwrap_or("");
-        // Skip boundaries that fall right after a known abbreviation token.
-        if !ABBREVS.iter().any(|a| last_word.eq_ignore_ascii_case(a)) {
-            return Some(head);
+        if head.is_empty() || ABBREVS.iter().any(|a| last_word.eq_ignore_ascii_case(a)) {
+            search_from = end + 2;
+            continue;
         }
-        search_from = end + 2; // move past this ". "
+        return Some(head);
     }
     None
 }

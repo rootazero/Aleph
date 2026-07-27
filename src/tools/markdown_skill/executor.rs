@@ -200,7 +200,7 @@ impl MarkdownCliTool {
         // Pass environment variables and extra flags (filtered through allowlist)
         self.push_docker_runtime_args(&mut docker_args);
 
-        docker_args.push(container_image);
+        docker_args.push(container_image.clone());
         docker_args.push(bin.clone());
         docker_args.extend_from_slice(cli_args);
 
@@ -228,8 +228,7 @@ impl MarkdownCliTool {
         if !output.status.success() {
             let exit_code = output.status.code().unwrap_or(-1);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let image = self.get_docker_image().unwrap_or_default();
-            check_docker_exit_code(exit_code, &stderr, bin, &image)?;
+            check_docker_exit_code(exit_code, &stderr, bin, &container_image)?;
             warn!(
                 tool = %self.spec.name,
                 exit_code = exit_code,

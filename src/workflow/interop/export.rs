@@ -27,7 +27,10 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
     // containing `*/` (glob/regex/C-comment) cannot terminate the embed block
     // early; `import`'s serde_json parse reads `\/` back transparently.
     let manifest_json = serde_json::to_string(manifest)
-        .unwrap_or_else(|_| "{}".to_string())
+        .unwrap_or_else(|e| {
+            tracing::error!(%e, "WorkflowManifest serialization failed");
+            "{}".to_string()
+        })
         .replace("*/", "*\\/");
     let mut out = String::new();
 

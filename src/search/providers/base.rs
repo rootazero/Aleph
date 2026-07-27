@@ -2,7 +2,7 @@ use crate::error::{AlephError, Result};
 use reqwest::{Client, Response, StatusCode};
 use std::time::Duration;
 
-/// Build a default HTTP client with 30-second connect timeout.
+/// Build a default HTTP client with 30-second request timeout.
 pub(crate) fn build_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(30))

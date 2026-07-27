@@ -64,6 +64,7 @@ impl MediaPipeline {
         if let MediaInput::Url { url } = input {
             crate::security::ssrf::validate_url_async(url, &crate::security::ssrf::SsrfPolicy::default())
                 .await
+                .map(|(_, _pinned)| ())
                 .map_err(|e| MediaError::ProviderError {
                     provider: "ssrf".to_string(),
                     message: format!("media URL blocked: {e}"),

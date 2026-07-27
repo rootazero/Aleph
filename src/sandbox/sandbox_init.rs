@@ -647,16 +647,18 @@ fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
 /// crashed `sandbox-init` never leaks a bridge process. Mirrors codex.
 #[cfg(target_os = "linux")]
 fn set_parent_death_signal() -> std::io::Result<()> {
+    // SAFETY: `getppid` returns the parent PID without side effects.
+    // Cache before prctl to avoid TOCTOU: the parent could die after
+    // prctl succeeds but before getppid returns, making the child appear
+    // adopted by init (PID 1) and falsely reporting the parent as dead.
+    // rust-doctor-disable-next-line unsafe-block-audit
+    let parent_pid = unsafe { libc::getppid() };
     // SAFETY: prctl(PR_SET_PDEATHSIG) only sets a per-task attribute.
     // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     if rc != 0 {
         Err(std::io::Error::last_os_error())
-    // SAFETY: `getppid` returns the parent PID without side effects.
-    // rust-doctor-disable-next-line unsafe-block-audit
-    } else if unsafe { libc::getppid() } == 1 {
-        // Parent already reaped between fork and prctl → bail so we don't
-        // linger as an orphan serving a bridge nobody will tear down.
+    } else if parent_pid == 1 {
         Err(std::io::Error::other("parent process already exited"))
     } else {
         Ok(())

@@ -25,6 +25,7 @@ pub mod a2a_tools;
 pub mod acp_tools;
 pub mod agent_identity;
 pub mod agent_manage;
+pub mod artifact_publish;
 pub mod ask_user;
 pub mod automation_tool;
 pub mod bash_exec;

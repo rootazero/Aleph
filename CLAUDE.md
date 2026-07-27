@@ -263,6 +263,10 @@
 
 > **⚠️ `agent_trace` 流是有意有损的镜像**: `AgentTraceEmitSink` 用 bounded `mpsc(256)` + `try_send` 把 harness trace 镜像到 WS（满即丢，注释明写 best-effort），这是**刻意的**——绝不能让慢消费者背压 agent 循环。推论：**任何消费方都不得把逐事件流当作终态真源**。工具调用的权威终态在 `run_complete` 的 `summary.tool_summaries[]`（core 由 harness `tool_timeline` 构建，`tool_id` 与流事件同源 `call.id`），失败原因在 `summary.errors[]`，**执行清单（todo/plan）的终态在 `summary.plan`**（`aleph_protocol::plan::PlanSnapshot`，core 在自己那条不丢帧的 `event_drain` 里闩存）。新写消费者（Panel / channel / 外部 bridge）必须在流末对账，否则丢一帧就留下永久"进行中"的幽灵状态。Panel 侧参考实现见 FEATURE_LOCATOR §6.1（工具行 `reconcile_tools` + `settle_orphan_tools`；todo 条 `settle_plan`）。
 
+> **交付物 ≠ 聊天记录 (Deliverable ≠ Transcript)**: Aleph 会生成**两种** HTML，混淆它们是这条注记存在的唯一原因。**交付物**＝模型主动调 `artifact_publish` 发布的成品（报告 / 分析 / 方案），落 `ArtifactOrigin::Deliverable`，在右栏置顶并**自动在系统浏览器打开**；**对话记录**＝`session.export_html` 手动导出的整段 transcript（按钮文案「导出对话」），是「给我看当时怎么做的」而不是「把结果给我」。把后者当结果递给用户，等于把答案埋进产生它的过程里。**什么算成品 100% 归模型判断（R7）**——`deliverable` 这个 origin 只可能由那次工具调用产生，任何"扫最终答案 / 看 run 结束了没"的启发式都越线。两者共用 `src/export/page.rs` 的文档外壳、CSP 与字节预算；**导出文档零 `<script>` 是硬约束**（与 Panel 同源，只有零 script 才配得上 `default-src 'none'`，加一个脚本就把这条兜底论证全部作废）。右栏**不再镜像工具调用**（与聊天列折叠内容逐字重复，旧 `components/inspector/` 整套已删）——想给右栏加面之前先问它是不是聊天列已经显示过的东西。详见 FEATURE_LOCATOR §6.7。
+
+> **⚠️ `MessageRecord.timestamp` 单位有歧义**: SQLite backend 写秒、file backend 写 `timestamp_millis()`（同一文件里 `created_at`/`last_active_at` 却写 `timestamp()`），trait 文档说秒——**三种说法同时为真**，两种拼写同时在盘上。曾有**五处**读取点各自 `from_timestamp(ts, 0)`，于是导出里出现 58536 年、Panel 侧栏给 7 月的对话标「03-02」。**一律走 `MessageRecord::instant()` / `rfc3339()`**（`src/gateway/session_store/types.rs`，1e11 分界），裸格式化就是这个 bug 的下一次复发。源头未改是**有意的**：该值同时是 `get_history_before` 的分页游标，改单位要连全部存量会话一起迁移。
+
 ### Windows 构建
 
 `just shell-build` / `just shell-dev` 在 Windows 同样适用（justfile 已守卫 macOS 专属步骤、自动追加 `.exe`），产物为 NSIS `.exe` + `.msi`。一次性前置依赖（MSVC / WebView2 / protoc / wasm 目标 / `wasm-bindgen-cli` 版本对齐 / `cargo-tauri` / Git for Windows `usr\bin` 入 PATH）与全量构建步骤详见 [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md)。

@@ -170,12 +170,10 @@ fn compress_snapshot(output: &str) -> String {
         let capped: Vec<String> = lines[..summary_lines].iter().map(|l| cap_line(l)).collect();
         let mut result = capped.join("\n");
         if lines.len() > summary_lines {
-            let total_line_word = if lines.len() == 1 { "line" } else { "lines" };
             result.push_str(&format!(
-                "\n[Snapshot compressed: no interactive elements; kept first {} of {} {}]",
+                "\n[Snapshot compressed: no interactive elements; kept first {} of {} lines]",
                 summary_lines,
                 lines.len(),
-                total_line_word
             ));
         }
         return result;

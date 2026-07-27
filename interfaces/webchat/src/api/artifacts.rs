@@ -13,7 +13,11 @@ use serde_json::{json, Value};
 /// content-free by design (`{"session_key": …}`), so the Panel must re-read
 /// [`ArtifactsApi::list`] — the authoritative source — rather than trying to
 /// patch its local list from the frame.
-pub const ARTIFACT_TOPIC: &str = "session.artifact";
+///
+/// Re-exported from the shared protocol crate: this used to be a second literal
+/// copy of the core's constant, and a drift between them would silently stop
+/// the pane refreshing with nothing failing on either side.
+pub use aleph_protocol::artifact::TOPIC as ARTIFACT_TOPIC;
 
 /// One row of `artifacts.list`. Mirrors the backend `ArtifactRecord` plus the
 /// capability-scoped `url` the handler mints (`/artifact/{cap}/{id}/{name}`).
@@ -23,7 +27,12 @@ pub struct ArtifactItem {
     pub filename: String,
     pub mime_type: String,
     pub size: u64,
-    /// `"inbound"` | `"outbound"` | `"export"`.
+    /// One of `aleph_protocol::artifact::ORIGIN_*`.
+    ///
+    /// Deliberately a `String` and not a typed enum: a core newer than this
+    /// Panel may name an origin it has never heard of, and such a row must
+    /// still render with a default badge rather than fail the whole list's
+    /// deserialization.
     pub origin: String,
     #[serde(default)]
     pub run_id: Option<String>,
@@ -40,6 +49,18 @@ impl ArtifactItem {
     #[must_use]
     pub fn is_image(&self) -> bool {
         self.mime_type.starts_with("image/")
+    }
+
+    /// True when the agent published this row as the finished work product.
+    ///
+    /// Deliverables are what the user asked for; everything else in the pane is
+    /// the material that produced them. That is why this predicate exists at
+    /// all — the pane pins these to the top and opens the newest in a browser,
+    /// and doing that to a transcript export or a scratch screenshot would be
+    /// exactly the confusion this distinction was introduced to end.
+    #[must_use]
+    pub fn is_deliverable(&self) -> bool {
+        self.origin == aleph_protocol::artifact::ORIGIN_DELIVERABLE
     }
 
     /// Human-readable size, matching the core's export copy (KB/MB, 1 decimal).
@@ -108,7 +129,9 @@ impl ArtifactsApi {
 /// the same discipline `team.*` events already follow.
 #[must_use]
 pub fn ping_is_for_session(data: &Value, session_key: &str) -> bool {
-    data.get("session_key").and_then(Value::as_str) == Some(session_key)
+    data.get(aleph_protocol::artifact::TOPIC_SESSION_KEY)
+        .and_then(Value::as_str)
+        == Some(session_key)
 }
 
 #[cfg(test)]
@@ -155,6 +178,35 @@ mod tests {
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(2048), "2.0 KB");
         assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
+    }
+
+    #[test]
+    fn an_origin_this_panel_has_never_heard_of_still_deserializes() {
+        // Forward compatibility is the reason `origin` is a String: a newer
+        // core naming a fifth origin must not break the whole list.
+        let j = r#"{"id":"a","filename":"x.bin","mime_type":"application/octet-stream",
+                    "size":1,"origin":"something_new","created_at":1,"url":"/artifact/c/a/x"}"#;
+        let it: ArtifactItem = serde_json::from_str(j).unwrap();
+        assert!(!it.is_deliverable());
+        assert_eq!(it.origin, "something_new");
+    }
+
+    #[test]
+    fn only_the_deliverable_origin_is_a_deliverable() {
+        use aleph_protocol::artifact as wire;
+        for (origin, expected) in [
+            (wire::ORIGIN_DELIVERABLE, true),
+            (wire::ORIGIN_EXPORT, false),
+            (wire::ORIGIN_OUTBOUND, false),
+            (wire::ORIGIN_INBOUND, false),
+        ] {
+            let j = format!(
+                r#"{{"id":"a","filename":"f","mime_type":"text/html","size":1,
+                     "origin":"{origin}","created_at":1,"url":"/artifact/c/a/f"}}"#
+            );
+            let it: ArtifactItem = serde_json::from_str(&j).unwrap();
+            assert_eq!(it.is_deliverable(), expected, "origin {origin}");
+        }
     }
 
     #[test]

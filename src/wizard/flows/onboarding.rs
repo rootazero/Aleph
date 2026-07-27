@@ -398,7 +398,6 @@ impl WizardFlow for QuickSetupFlow {
     async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
         prompter.intro("Quick Setup").await?;
 
-        // Just get the API key for Claude
         let api_key = prompter
             .text("Enter your Anthropic API key:", Some("sk-ant-..."), true)
             .await?;
@@ -408,6 +407,10 @@ impl WizardFlow for QuickSetupFlow {
                 "API key is required".to_string(),
             ));
         }
+
+        tracing::warn!(
+            "QuickSetupFlow: API key collected but configuration persistence is not yet implemented"
+        );
 
         let progress = prompter.progress("Setting up");
         progress.update("Configuring Claude Sonnet 4...");
@@ -462,6 +465,9 @@ impl WizardFlow for ProviderSetupFlow {
                     true,
                 )
                 .await?;
+            tracing::warn!(
+                "ProviderSetupFlow: API key collected for provider '{provider}' but configuration persistence is not yet implemented"
+            );
         }
 
         let _model: String = prompter
@@ -470,6 +476,10 @@ impl WizardFlow for ProviderSetupFlow {
                 OnboardingFlow::model_options(&provider),
             )
             .await?;
+
+        tracing::warn!(
+            "ProviderSetupFlow: model selection collected for provider '{provider}' but configuration persistence is not yet implemented"
+        );
 
         let confirmed = prompter
             .confirm("Save this provider configuration?", true)

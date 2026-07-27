@@ -124,7 +124,7 @@ impl ClaudeVisionProvider {
         }
     }
 
-    fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
+    async fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
         match image {
             ImageInput::Base64 { data, format } => {
                 // Enforce the same size ceiling as the FilePath branch so an
@@ -152,8 +152,9 @@ impl ClaudeVisionProvider {
                 })
             }
             ImageInput::FilePath { path } => {
-                let bytes =
-                    std::fs::read(path).map_err(|e| VisionError::ImageError(e.to_string()))?;
+                let bytes = tokio::fs::read(path)
+                    .await
+                    .map_err(|e| VisionError::ImageError(e.to_string()))?;
                 if bytes.len() as u64 > MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
                         "image file exceeds maximum size of {} MB",
@@ -266,7 +267,7 @@ impl VisionProvider for ClaudeVisionProvider {
         image: &ImageInput,
         prompt: &str,
     ) -> Result<VisionResult, VisionError> {
-        let image_block = self.to_content_block(image)?;
+        let image_block = self.to_content_block(image).await?;
         let text_block = ContentBlock::Text {
             text: prompt.to_string(),
             cache_control: None,
@@ -280,7 +281,7 @@ impl VisionProvider for ClaudeVisionProvider {
     }
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
-        let image_block = self.to_content_block(image)?;
+        let image_block = self.to_content_block(image).await?;
         let text_block = ContentBlock::Text {
             text: "Extract all text from this image.".to_string(),
             cache_control: None,

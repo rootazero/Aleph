@@ -370,18 +370,12 @@ impl SearchRegistry {
                 }
             }
             Err(e) => {
-                let error_type = match e {
-                    AlephError::AuthenticationError { .. } => "auth",
-                    AlephError::RateLimitError { .. } => "rate-limit",
-                    AlephError::NetworkError { .. } | AlephError::Timeout { .. } => "network",
-                    _ => "config",
-                };
-
+                let error_type = classify_search_error(&e).to_string();
                 ProviderTestResult {
                     success: false,
                     latency_ms: 0,
                     error_message: e.to_string(),
-                    error_type: error_type.to_string(),
+                    error_type,
                 }
             }
         };

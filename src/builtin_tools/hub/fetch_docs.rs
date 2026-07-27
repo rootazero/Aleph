@@ -45,7 +45,7 @@ impl AlephTool for HubFetchDocsTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // SSRF protection: reject private/reserved IP ranges before the request.
         let ssrf_policy = SsrfPolicy::default();
-        validate_url_async(&args.url, &ssrf_policy)
+        let (_url, _pinned) = validate_url_async(&args.url, &ssrf_policy)
             .await
             .map_err(|e| AlephError::network(format!("SSRF blocked for URL '{}': {e}", args.url)))?;
 

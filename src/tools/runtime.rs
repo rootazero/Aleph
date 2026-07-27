@@ -348,7 +348,7 @@ impl LoopToolRegistry {
     /// rebuilding a full `ToolDefinition`.
     #[must_use]
     pub fn max_result_tokens_for(&self, name: &str) -> Option<usize> {
-        let tool = self.tools.get(name)?;
+        let tool = self.resolve(name)?;
         tool.max_result_tokens()
     }
 }

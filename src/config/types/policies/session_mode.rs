@@ -461,6 +461,10 @@ mod tests {
             "skill_read",
             "bash", // collapsed out of core, but still listed
             "media_understand", // users paste images into chat — carve-out
+            // Handing the user a finished document is a conversational outcome
+            // as much as a working one ("write this up as a report"), and the
+            // schema is one small object. Resident in every mode on purpose.
+            "artifact_publish",
         ] {
             assert!(
                 !SessionMode::Chat.defers_tool(name),
@@ -480,6 +484,7 @@ mod tests {
             "bash",
             "apply_patch",
             "media_understand", // screenshot debugging — carve-out
+            "artifact_publish", // design docs and analyses are code-mode output
         ] {
             assert!(
                 !SessionMode::Code.defers_tool(name),

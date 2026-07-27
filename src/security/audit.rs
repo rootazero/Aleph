@@ -124,7 +124,7 @@ impl SecurityAuditLog {
 
     pub fn log(&self, entry: AuditEntry) {
         if let Err(e) = self.sender.try_send(entry) {
-            let count = self.dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
+            let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
             if count == 1 || count.is_multiple_of(100) {
                 error!(
                     "Security audit log channel full, dropping entry (total dropped: {}): {}",
@@ -147,7 +147,7 @@ impl SecurityAuditLog {
     /// Returns the number of audit entries dropped due to channel backpressure.
     #[must_use]
     pub fn dropped_count(&self) -> u64 {
-        self.dropped_count.load(Ordering::Relaxed)
+        self.dropped_count.load(Ordering::Acquire)
     }
 }
 
