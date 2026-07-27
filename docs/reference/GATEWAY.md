@@ -443,7 +443,10 @@ onboarding); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
 credential = full operator authority (identical to local); a missing/invalid
 one is walled — the WS dispatch refuses every method but `connect`.
 Revocation is token rotation (`gateway.token.rotate`, which also force-closes
-live remote sockets) or per-device revoke (`gateway.devices.revoke`). The WS
+live remote sockets) or per-device revoke (`gateway.devices.revoke`, which
+drops that device's live sessions to the login wall and then closes their
+sockets with WS 4001 `device_revoked`) — both effective immediately, not at the
+next handshake. The WS
 Origin check (`src/gateway/origin_policy.rs`) additionally blocks public web
 pages from cross-origin-driving the local daemon. See
 [SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full model.
@@ -482,6 +485,12 @@ reconnects. A rejected remote `connect` is recorded in the security audit log
 > `bootstrap_ticket` on first pairing (receiving a `device_token` back), then
 > `device_token` on every reconnect. `token` (the legacy shared Gateway token)
 > is accepted as a fallback.
+>
+> `device_id` is **client-asserted** and the `devices` table is one namespace
+> shared with cluster nodes, so the exchange refuses a `device_id` that already
+> names a non-Panel device (and `cluster::admit_node` refuses the mirror case).
+> Without that guard one ticket buys an operator token the Panel roster cannot
+> see and no revoke path can reach.
 
 ---
 

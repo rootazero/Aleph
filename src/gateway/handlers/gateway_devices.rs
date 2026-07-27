@@ -13,12 +13,16 @@
 //! connection — the WS login wall refuses every non-`connect` method to an
 //! unauthorized caller, so no extra per-method gate is needed.
 //!
-//! Known limitation: revocation takes effect at the next `connect` handshake
-//! (device tokens are validated there). An already-open socket is not force
-//! closed; `gateway.token.rotate` remains the immediate kick-everyone path.
+//! Revocation is immediate, not deferred to the next handshake: the store write
+//! stops future `connect`s, and the wiring site (`start/mod.rs`) then downgrades
+//! the device's live sessions to the login wall and publishes `DeviceRevoked` to
+//! close their sockets. This handler stays pure I/O (R4) — it reports *what* was
+//! revoked; the session side effects belong to the site that owns the connection
+//! map and the event bus.
 
 use serde_json::json;
 
+use crate::gateway::presence::PresenceTracker;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::gateway::security::DeviceTokenManager;
 use crate::sync_primitives::Arc;
@@ -27,13 +31,21 @@ use crate::sync_primitives::Arc;
 #[derive(Clone)]
 pub struct DevicesHandlerContext {
     pub device_token_mgr: Arc<DeviceTokenManager>,
+    /// Live-connection roster, used to mark which paired devices are online
+    /// right now. Presence entries carry the `device_id` latched at the
+    /// `connect` handshake, so this is a join, not a guess.
+    pub presence: Arc<PresenceTracker>,
 }
 
 /// `gateway.devices.list` — list paired remote Panel devices.
 ///
 /// Response: `{ "devices": [{ device_id, device_name, created_at,
-/// last_seen_at }] }`. Also opportunistically prunes expired bootstrap tickets
-/// / device tokens (no dedicated daemon task).
+/// last_seen_at, connected }] }`. `connected` is a live join against the
+/// presence roster (mirrors openclaw's `device.pair.list` `connected` flag) —
+/// without it "Last seen 3 minutes ago" is the only signal an operator has, and
+/// revoking is now a session-killing action that deserves to say so up front.
+/// Also opportunistically prunes expired bootstrap tickets / device tokens (no
+/// dedicated daemon task).
 pub async fn handle_devices_list(
     request: JsonRpcRequest,
     ctx: Arc<DevicesHandlerContext>,
@@ -54,10 +66,18 @@ pub async fn handle_devices_list(
         }
     };
 
+    let online: std::collections::HashSet<String> = ctx
+        .presence
+        .list()
+        .into_iter()
+        .filter_map(|e| e.device_id)
+        .collect();
+
     let list: Vec<_> = devices
         .into_iter()
         .map(|d| {
             json!({
+                "connected": online.contains(&d.device_id),
                 "device_id": d.device_id,
                 "device_name": d.device_name,
                 "created_at": d.created_at,
@@ -72,8 +92,13 @@ pub async fn handle_devices_list(
 /// `gateway.devices.revoke` — revoke one paired Panel device by id.
 ///
 /// Request params: `{ "device_id": "device-…" }` (required).
-/// Response: `{ "revoked": bool }` — `false` when the id is unknown, already
-/// revoked, or is not a Panel device (e.g. a cluster node).
+/// Response: `{ "revoked": bool, "device_id": "device-…" }` — `revoked` is
+/// `false` when the id is unknown, already revoked, or is not a Panel device
+/// (e.g. a cluster node). `device_id` is echoed so the wiring site can drive the
+/// live-session kick (`invalidate_device_sessions` + `DeviceRevoked`) off the
+/// **response** rather than re-parsing the request — one source for "what was
+/// actually revoked", which is also what a no-op `revoked: false` must not
+/// trigger.
 pub async fn handle_devices_revoke(
     request: JsonRpcRequest,
     ctx: Arc<DevicesHandlerContext>,
@@ -95,7 +120,10 @@ pub async fn handle_devices_revoke(
     };
 
     match ctx.device_token_mgr.revoke_panel_device(device_id) {
-        Ok(revoked) => JsonRpcResponse::success(request.id, json!({ "revoked": revoked })),
+        Ok(revoked) => JsonRpcResponse::success(
+            request.id,
+            json!({ "revoked": revoked, "device_id": device_id }),
+        ),
         Err(e) => JsonRpcResponse::error(
             request.id,
             crate::gateway::protocol::INTERNAL_ERROR,
@@ -114,6 +142,7 @@ mod tests {
             device_token_mgr: Arc::new(DeviceTokenManager::new(Arc::new(
                 SecurityStore::in_memory().unwrap(),
             ))),
+            presence: Arc::new(PresenceTracker::new()),
         })
     }
 
@@ -132,6 +161,51 @@ mod tests {
         let arr = devices.get("devices").and_then(|v| v.as_array()).unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].get("device_id").unwrap(), "panel-1");
+    }
+
+    #[tokio::test]
+    async fn connected_flag_joins_the_presence_roster() {
+        let ctx = ctx();
+        let ticket = ctx.device_token_mgr.create_bootstrap_ticket(None).unwrap();
+        for id in ["panel-online", "panel-offline"] {
+            let t = if id == "panel-online" {
+                ticket.clone()
+            } else {
+                ctx.device_token_mgr.create_bootstrap_ticket(None).unwrap()
+            };
+            ctx.device_token_mgr
+                .exchange_bootstrap_ticket(&t, Some(id.to_string()), None, None)
+                .unwrap();
+        }
+        ctx.presence.upsert(
+            "conn-1".to_string(),
+            crate::gateway::presence::PresenceEntry {
+                conn_id: "conn-1".to_string(),
+                device_id: Some("panel-online".to_string()),
+                device_name: "phone".to_string(),
+                platform: "ios".to_string(),
+                role: crate::gateway::presence::ConnectionRole::User,
+                connected_at: chrono::Utc::now(),
+                last_heartbeat: chrono::Utc::now(),
+            },
+        );
+
+        let req = JsonRpcRequest::with_id("gateway.devices.list", None, json!(1));
+        let resp = handle_devices_list(req, ctx).await;
+        let devices = resp.result.unwrap();
+        let arr = devices.get("devices").and_then(|v| v.as_array()).unwrap();
+        let flag = |id: &str| {
+            arr.iter()
+                .find(|d| d.get("device_id").unwrap() == id)
+                .and_then(|d| d.get("connected"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap()
+        };
+        assert!(
+            flag("panel-online"),
+            "an open session must read as connected"
+        );
+        assert!(!flag("panel-offline"));
     }
 
     #[tokio::test]

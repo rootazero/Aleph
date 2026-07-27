@@ -231,6 +231,17 @@ pub enum GatewayEventFrame {
     /// intercepts it to close *remote* (token-authorized) sessions with
     /// 4001/`token_rotated`; loopback sessions ignore it. Payload-free.
     TokenRotated,
+    /// Emitted when one paired Panel device is revoked (`gateway.devices.revoke`).
+    /// The connection loop intercepts it and closes only the sessions bound to
+    /// that `device_id` (4001/`device_revoked`); every other session — loopback,
+    /// legacy shared-token, other devices — is unaffected. This is the per-device
+    /// counterpart to [`Self::TokenRotated`]'s kick-everyone hammer; without it a
+    /// revoked device kept operator authority on its open socket until it happened
+    /// to reconnect. Never forwarded to clients (it names a device id and no
+    /// client renders it).
+    DeviceRevoked {
+        device_id: String,
+    },
     /// Emitted whenever a cron job is mutated server-side (created / updated
     /// / deleted / enabled / disabled / forced-run / state-changed by a
     /// scheduler tick). The panel subscribes to `cron.job.changed` so it can
@@ -536,6 +547,7 @@ impl GatewayEventFrame {
             Self::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
             Self::AcpSessionsChanged => "acp.sessions.changed",
             Self::TokenRotated => "gateway.token.rotated",
+            Self::DeviceRevoked { .. } => "gateway.device.revoked",
             Self::CronJobChanged { .. } => "cron.job.changed",
             Self::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
             Self::TeamChanged { .. } => "team.changed",

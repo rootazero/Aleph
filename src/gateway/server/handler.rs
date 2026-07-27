@@ -347,6 +347,43 @@ fn rotated_should_close_remote(event_json: &str, is_loopback: bool) -> bool {
     !is_loopback && is_token_rotated_frame(event_json)
 }
 
+/// Wire `topic` under which a single paired-device revocation is published (see
+/// [`crate::gateway::events::GatewayEventFrame::DeviceRevoked`]). A drift-guard
+/// test keeps this equal to `DeviceRevoked{..}.topic_name()`.
+const DEVICE_REVOKED_TOPIC: &str = "gateway.device.revoked";
+
+/// The `device_id` carried by a `device_revoked` event frame, or `None` for any
+/// other event.
+///
+/// Same wire shape as [`is_token_rotated_frame`]: `publish_frame` wraps every
+/// non-stream event as `{"topic": …, "data": <frame>}`, so the discriminant is
+/// the **top-level `topic`** and the payload lives under `data`. Reading a
+/// top-level `type` here is the mistake that once turned the rotation kick into
+/// a dud — do not reintroduce it.
+fn device_revoked_id(event_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
+    if v.get("topic").and_then(|t| t.as_str()) != Some(DEVICE_REVOKED_TOPIC) {
+        return None;
+    }
+    v.get("data")
+        .and_then(|d| d.get("device_id"))
+        .and_then(|d| d.as_str())
+        .map(String::from)
+}
+
+/// Whether this connection must be torn down because *its own* paired device was
+/// revoked. True only when the event names exactly the device this session
+/// authenticated as — an unbound session (loopback, legacy shared token, or a
+/// still-walled connection) has no `device_id` and is never matched, so a
+/// per-device revoke can never collaterally kick the operator's own local App.
+/// Pure for host testing.
+fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>) -> bool {
+    match (device_revoked_id(event_json), session_device_id) {
+        (Some(revoked), Some(mine)) => revoked == mine,
+        _ => false,
+    }
+}
+
 /// Handle a single WebSocket connection
 async fn handle_connection(
     socket: WebSocket,
@@ -416,6 +453,14 @@ async fn handle_connection(
     let mut flood_guard = super::flood_guard::UnauthorizedFloodGuard::new(
         super::flood_guard::MAX_UNAUTHORIZED_STRIKES,
     );
+    // The paired device this session authenticated as, latched at the `connect`
+    // handshake (`ConnectAuthOutcome::{Authorized,BootstrapExchanged}.device_id`).
+    // `None` for loopback, legacy shared-token and still-walled connections —
+    // they are not bound to a device record. Read only by the per-device
+    // revocation kick below; kept as a connection local rather than in the shared
+    // `ConnectionState` because exactly one reader exists (R10 "zero consumers ⇒
+    // no abstraction").
+    let mut session_device_id: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -903,6 +948,10 @@ async fn handle_connection(
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::BootstrapExchanged { device_token, device_id } => (true, "operator", Some(device_token.clone()), Some(device_id.clone())),
                                                         crate::gateway::handlers::connect::ConnectAuthOutcome::Unauthorized => (false, "guest", None, None),
                                                     };
+                                                    // Bind this session to the paired device it authenticated
+                                                    // as, so `gateway.devices.revoke` can close exactly this
+                                                    // socket (and no other) the moment the revocation lands.
+                                                    session_device_id.clone_from(&authed_device_id);
                                                     // A device-token reconnect (or fresh pairing) refreshes the
                                                     // paired device's `last_seen_at`, so the Paired-devices roster
                                                     // reflects real activity, not the pairing date. Token
@@ -962,6 +1011,14 @@ async fn handle_connection(
                                                             // Single-tier role for the login-wall gate:
                                                             // operator (authorized) or guest (walled).
                                                             state.caller_role = panel_role.to_string();
+                                                            // Device binding for the per-device revoke.
+                                                            // Same value as the connection-local latch
+                                                            // above, written under this one lock: the
+                                                            // local serves the per-event hot path (no
+                                                            // lock per event), this copy serves
+                                                            // `invalidate_device_sessions`, which has
+                                                            // only the shared map to look in.
+                                                            state.device_id.clone_from(&authed_device_id);
                                                         }
                                                     }
                                                     // Cluster: a node both *enrolls* and *registers*
@@ -1050,6 +1107,27 @@ async fn handle_connection(
                                                                 "Refusing node {}: device record was revoked by cluster.deregister",
                                                                 node_id
                                                             );
+                                                            Some(serde_json::json!({
+                                                                "node_id": node_id,
+                                                                "status": "deregistered",
+                                                            }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::IdentityConflict {
+                                                                node_id,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Refusing node {}: that id already belongs to a paired Panel device",
+                                                                node_id
+                                                            );
+                                                            // Same terminal wire status as a deregistration:
+                                                            // the node client treats it as "stop retrying,
+                                                            // an operator must intervene", which is exactly
+                                                            // right for an id collision. Keeping one status
+                                                            // avoids rippling a new verdict into the node
+                                                            // client for a case only an operator can fix.
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
@@ -1186,6 +1264,28 @@ async fn handle_connection(
                         }
                         // Loopback receives token_rotated: swallow silently, do not forward.
                         if is_token_rotated_frame(&event_json) {
+                            continue;
+                        }
+                        // Per-device revocation kick: close only the sessions bound
+                        // to the revoked device. `gateway.devices.revoke` already
+                        // downgraded this connection to the login wall synchronously
+                        // (`invalidate_device_sessions`), so anything pipelined ahead
+                        // of this frame is refused rather than served; this closes the
+                        // socket so the client stops holding a dead session open.
+                        if device_revoked_should_close(&event_json, session_device_id.as_deref()) {
+                            info!("device revoked — closing session {}", conn_id);
+                            let _ = write
+                                .send(WsMessage::Close(Some(CloseFrame {
+                                    code: 4001,
+                                    reason: "device_revoked".into(),
+                                })))
+                                .await;
+                            break;
+                        }
+                        // Everyone else: the revocation names another device (or none
+                        // of ours). Never forwarded — it carries a device id and no
+                        // client renders it.
+                        if device_revoked_id(&event_json).is_some() {
                             continue;
                         }
                         // Try to extract topic from event for filtering
@@ -1568,6 +1668,80 @@ mod token_rotation_tests {
             r#"{"type":"token_rotated"}"#,
             false
         ));
+    }
+}
+
+#[cfg(test)]
+mod device_revocation_tests {
+    use super::{device_revoked_id, device_revoked_should_close, DEVICE_REVOKED_TOPIC};
+    use crate::gateway::events::GatewayEventFrame;
+
+    /// The exact wire string `publish_frame` emits — the wrapped TopicEvent form
+    /// `{"topic": …, "data": <frame>}`, built from the real `topic_name()` and
+    /// serde output. Same discipline as the rotation tests: feeding the bare
+    /// inner frame is what once let a dud predicate stay green.
+    fn revoked_wire_frame(device_id: &str) -> String {
+        let frame = GatewayEventFrame::DeviceRevoked {
+            device_id: device_id.to_string(),
+        };
+        serde_json::json!({
+            "topic": frame.topic_name(),
+            "data": serde_json::to_value(&frame).unwrap(),
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn topic_constant_matches_frame_topic_name() {
+        assert_eq!(
+            GatewayEventFrame::DeviceRevoked {
+                device_id: "x".into()
+            }
+            .topic_name(),
+            DEVICE_REVOKED_TOPIC
+        );
+    }
+
+    #[test]
+    fn reads_device_id_from_the_real_publish_frame_wire_form() {
+        assert_eq!(
+            device_revoked_id(&revoked_wire_frame("device-7")).as_deref(),
+            Some("device-7")
+        );
+        // Bare inner frame is not the wire form.
+        assert!(device_revoked_id(r#"{"type":"device_revoked","device_id":"device-7"}"#).is_none());
+    }
+
+    #[test]
+    fn closes_only_the_named_device() {
+        let frame = revoked_wire_frame("device-7");
+        assert!(device_revoked_should_close(&frame, Some("device-7")));
+        // A different paired device keeps its session.
+        assert!(!device_revoked_should_close(&frame, Some("device-8")));
+    }
+
+    #[test]
+    fn never_closes_an_unbound_session() {
+        // Loopback, legacy shared-token, and still-walled connections carry no
+        // device_id. A per-device revoke must never collaterally kick the
+        // operator's own local App — that is `gateway.token.rotate`'s job.
+        assert!(!device_revoked_should_close(
+            &revoked_wire_frame("device-7"),
+            None
+        ));
+    }
+
+    #[test]
+    fn other_events_never_trigger_close() {
+        assert!(!device_revoked_should_close(
+            r#"{"topic":"gateway.token.rotated","data":{}}"#,
+            Some("device-7")
+        ));
+        assert!(!device_revoked_should_close(
+            r#"{"topic":"acp.sessions.changed"}"#,
+            Some("device-7")
+        ));
+        assert!(!device_revoked_should_close("not json", Some("device-7")));
     }
 }
 

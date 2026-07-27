@@ -38,6 +38,13 @@ pub enum NodeAdmission {
     /// otherwise a kicked node would just self-revive on the next backoff
     /// reconnect cycle.
     Deregistered { node_id: String },
+    /// Rejected: the presented id already names a **paired remote Panel**
+    /// (`device_type = "panel"`), not a node. Refused rather than adopted so the
+    /// two halves of the shared `devices` namespace cannot take over each
+    /// other's rows. Carried as its own variant (not folded into
+    /// [`Self::Deregistered`]) so the log line and the regression test stay
+    /// honest; both refusals are terminal and share one wire status.
+    IdentityConflict { node_id: String },
 }
 
 /// Mint a **fresh** `role=node` device record and return its `node_id` (UUID).
@@ -146,11 +153,17 @@ pub fn enroll_node_device(
 /// Decision order:
 /// 1. Has id AND that record is **revoked** → [`NodeAdmission::Deregistered`]
 ///    (deregistration sticks).
-/// 2. Has id AND record is active → reuse as-is (stable identity).
-/// 3. Has id but **no such record** (center DB reset / switched centers) →
+/// 2. Has id AND that record is a **paired Panel** → [`NodeAdmission::IdentityConflict`].
+///    `devices` is one namespace shared by nodes and paired Panels, and both ids
+///    are peer-asserted, so a node claiming a Panel's id would take over that
+///    row's `last_seen_at` and put the Panel one `cluster.deregister` away from
+///    losing its credential. Mirror of the guard in
+///    `DeviceTokenManager::exchange_bootstrap_ticket`.
+/// 3. Has id AND record is active → reuse as-is (stable identity).
+/// 4. Has id but **no such record** (center DB reset / switched centers) →
 ///    adopt the id and backfill the row so the node keeps its persisted identity
 ///    without re-registering.
-/// 4. No id (first boot) → try to adopt an operator's pre-enrolled row by name
+/// 5. No id (first boot) → try to adopt an operator's pre-enrolled row by name
 ///    first, else mint new; `minted=true` signals the node to persist the id.
 ///
 /// Store read/write failures always degrade to "adopt/mint without persisting";
@@ -165,6 +178,14 @@ pub fn admit_node(
         match store.get_device(id) {
             Ok(Some(row)) if row.revoked_at.is_some() => {
                 return NodeAdmission::Deregistered {
+                    node_id: id.to_string(),
+                };
+            }
+            Ok(Some(row))
+                if row.device_type.as_deref()
+                    == Some(crate::gateway::security::PANEL_DEVICE_TYPE) =>
+            {
+                return NodeAdmission::IdentityConflict {
                     node_id: id.to_string(),
                 };
             }
@@ -432,6 +453,40 @@ mod tests {
                 node_id: node_id.clone()
             },
             "deregistration must stick across the node's reconnect backoff"
+        );
+    }
+
+    /// Mirror of `exchange_bootstrap_ticket`'s namespace guard, from the node
+    /// side: `devices` is one table shared with paired Panels and both ids are
+    /// peer-asserted, so a node-shaped `connect` presenting a Panel's device id
+    /// must be refused — not adopted. Adopting it let the squatter take over the
+    /// Panel's `last_seen_at` and put its credential one `cluster.deregister`
+    /// away from being revoked.
+    #[test]
+    fn node_claiming_a_paired_panel_id_is_refused() {
+        let s = store();
+        s.upsert_device(&DeviceUpsertData {
+            device_id: "device-abc",
+            device_name: "Chrome on macOS",
+            device_type: Some(crate::gateway::security::PANEL_DEVICE_TYPE),
+            public_key: b"",
+            fingerprint: "device-abc",
+            role: "operator",
+            scopes: &["*".to_string()],
+        })
+        .unwrap();
+
+        assert_eq!(
+            admit_node(&s, Some("device-abc"), "worker-1"),
+            NodeAdmission::IdentityConflict {
+                node_id: "device-abc".to_string()
+            }
+        );
+        // And the Panel row keeps its type — no silent takeover.
+        let row = s.get_device("device-abc").unwrap().unwrap();
+        assert_eq!(
+            row.device_type.as_deref(),
+            Some(crate::gateway::security::PANEL_DEVICE_TYPE)
         );
     }
 

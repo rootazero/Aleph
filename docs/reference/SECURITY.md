@@ -28,23 +28,42 @@ reaching a LAN core behaves exactly like a browser opening the core's IP:
 
 - **Loopback** (the local desktop App / same machine): always authorized as
   **operator**, no token (single-machine zero-config).
-- **Remote** (LAN): must present the shared Gateway token (`aleph-<uuid>`,
-  provisioned at boot by `SharedTokenManager`) in the `connect` handshake.
-  A valid token grants the **same** operator authority as local — there is no
-  Chat/Config sub-tier. A missing / invalid token leaves the connection
-  unauthorized behind a **login wall**.
-- **Revocation**: rotate the token (`gateway.token.rotate`), which invalidates
-  every previously authorized remote. No per-device sessions.
+- **Remote** (LAN): must present a credential in the `connect` handshake.
+  `connect::resolve_connect_auth` accepts three, in priority order — a
+  **device token** (`aleph-dt-*`, long-lived, bound to one paired device), a
+  **bootstrap ticket** (`aleph-bt-*`, single-use, minutes-long, exchanged
+  in-handshake for a device token), or the legacy **shared Gateway token**
+  (`aleph-<uuid>`, provisioned at boot by `SharedTokenManager`). Any valid
+  credential grants the **same** operator authority as local — there is no
+  Chat/Config sub-tier. Nothing valid ⇒ the connection stays behind a
+  **login wall** (`connect` is the only method it may call).
+- **Revocation**, two granularities, both effective immediately:
+  - `gateway.token.rotate` — regenerates the shared token, revokes **every**
+    paired device, and closes every remote socket (`TokenRotated`).
+  - `gateway.devices.revoke {device_id}` — one device: its live sessions are
+    dropped to the login wall synchronously, then their sockets are closed
+    (`DeviceRevoked`, WS 4001). `gateway.devices.list` is the inventory, with a
+    live `connected` flag. Both are scoped to `device_type = 'panel'` and never
+    touch cluster nodes.
 
-Two ways to present the token, both equivalent to a browser login:
+Three ways to authorize a device, all equivalent to a browser login:
 
-- **Token box** — open the core IP, the Panel shows a token input; paste the
-  token → authorized.
-- **QR / link** — scan the QR (or open `http://<ip>:<port>/?token=<token>`)
-  shown in **Settings → Security → Gateway token**; the token rides the URL.
+- **QR / link** — `Settings → Security → Pair a new device` mints a ticket and
+  shows `http(s)://<ip>:<port>/?bt=<ticket>`. **The URL is resolved by the
+  server** (`gateway.ticket.create` → `urls`, from
+  `tls::discover_interface_ips`), not by the browser: a Panel building it from
+  its own `window.location` emits `http://127.0.0.1:<port>/…` whenever the
+  operator generates it from the local desktop App.
+- **Typed pairing code** — the same ticket, read off the QR and typed into the
+  Panel's authorize box. The only path when a phone cannot scan.
+- **Shared token** — recovery / manual entry. It never expires and doubles as
+  the secret vault's master key, so it must **never** ride a URL or QR; the
+  ticket flow exists precisely to keep long-lived credentials out of browser
+  history, `Referer` headers, and access logs.
 
-Operators read the token via that Settings section or the
-`aleph-server bootstrap-token` CLI.
+Headless cores mint a ticket with `aleph-server pair` (opens the 0600
+`security.db` directly, WAL — the daemon need not be running).
+`aleph-server bootstrap-token` prints the shared token for recovery.
 
 ### Enforcement
 
@@ -883,7 +902,10 @@ invalid one is walled (the WS dispatch refuses every method but `connect`, and
 a flood guard closes a connection that keeps probing). Revocation is token
 rotation (`gateway.token.rotate` — regenerates the shared token, revokes all
 paired Panel devices, and force-closes live remote sockets) or per-device
-revoke (`gateway.devices.revoke`). Rejected remote connects and flood-guard
+revoke (`gateway.devices.revoke` — drops that device's live sessions to the
+login wall, then closes their sockets; the roster `gateway.devices.list` marks
+which devices are connected right now). Both take effect immediately rather
+than at the next handshake. Rejected remote connects and flood-guard
 closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
 ### Network boundary = reachability
