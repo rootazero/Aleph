@@ -139,7 +139,12 @@ fn is_usable_san_ip(ip: &IpAddr) -> bool {
 
 /// Enumerate this host's usable non-loopback interface IPs. Best-effort: any
 /// failure yields an empty vec (the cert still gets loopback + configured SANs).
-pub(crate) fn discover_interface_ips() -> Vec<IpAddr> {
+///
+/// Also the address source for pairing URLs (`gateway.ticket.create`,
+/// `aleph-server pair`): "which addresses is this core reachable on" has exactly
+/// one right answer, and a self-signed cert's SAN list and a QR code must not
+/// disagree about it.
+pub fn discover_interface_ips() -> Vec<IpAddr> {
     match if_addrs::get_if_addrs() {
         Ok(ifaces) => ifaces.into_iter().map(|i| i.ip()).filter(is_usable_san_ip).collect(),
         Err(e) => {

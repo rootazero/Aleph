@@ -134,6 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Print the shared Gateway token: pure read of the 0600 security.db,
         // no tokio runtime and no instance lock required (mirrors `secret`).
         Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
+        // Mint a pairing ticket: one INSERT into the same 0600 security.db
+        // (WAL + busy_timeout), so it works with or without a live daemon.
+        Some(Command::Pair { ttl }) => return commands::handle_pair(args.config.clone(), ttl),
         // Version check + delegate to the official installer. Network/process
         // only — no tokio runtime, no instance lock (must not contend with a
         // running daemon).
@@ -306,6 +309,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             | Command::Identity { .. }
             | Command::Service { .. }
             | Command::BootstrapToken
+            | Command::Pair { .. }
             | Command::Update { .. }
             | Command::Status { .. }
             | Command::Hooks { .. }

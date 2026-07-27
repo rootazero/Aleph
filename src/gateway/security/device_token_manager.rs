@@ -26,6 +26,14 @@ const DEFAULT_BOOTSTRAP_TTL_MS: i64 = 5 * 60 * 1000;
 /// Default device token lifetime: 10 years (effectively indefinite for MVP).
 const DEFAULT_DEVICE_TOKEN_TTL_MS: i64 = 10 * 365 * 24 * 60 * 60 * 1000;
 
+/// `devices.device_type` value for a paired remote Panel.
+///
+/// Single source: the roster filter, the pairing upsert, and the id-namespace
+/// guard must all agree, or a device becomes listable-but-unpairable (or worse,
+/// pairable-but-unlistable — see [`DeviceTokenManager::exchange_bootstrap_ticket`]).
+/// Cluster nodes are `role = "node"` with a NULL `device_type`.
+pub const PANEL_DEVICE_TYPE: &str = "panel";
+
 /// Device-token manager errors.
 #[derive(Debug, thiserror::Error)]
 pub enum DeviceTokenError {
@@ -33,8 +41,12 @@ pub enum DeviceTokenError {
     Storage(String),
     #[error("Invalid or expired bootstrap ticket")]
     InvalidBootstrapTicket,
-    #[error("Device token not found or revoked")]
-    InvalidDeviceToken,
+    /// The client-asserted `device_id` already names a device that is **not** a
+    /// paired Panel (a cluster node, or any row minted outside this flow).
+    /// Pairing onto it would issue an operator token the Panel device roster
+    /// cannot see or revoke — see [`DeviceTokenManager::exchange_bootstrap_ticket`].
+    #[error("Device id {0} already belongs to a non-Panel device")]
+    DeviceIdConflict(String),
 }
 
 impl From<BootstrapTicketError> for DeviceTokenError {
@@ -85,6 +97,19 @@ impl DeviceTokenManager {
     ///
     /// If `device_id` is not provided, a random UUID is assigned. The device
     /// record is created with operator role and wildcard scope for the MVP.
+    ///
+    /// `device_id` is **client-asserted** (the Panel keeps it in localStorage),
+    /// and the `devices` table is one flat namespace shared with cluster nodes.
+    /// `upsert_device`'s ON CONFLICT deliberately does not rewrite `device_type`
+    /// — so pairing onto an existing non-Panel row would leave the row typed
+    /// `node`/NULL while [`Self::issue_device_token`] minted a working operator
+    /// token, producing a credential that [`Self::list_panel_devices`] hides and
+    /// that `revoke_all_panel_devices` (hence `gateway.token.rotate`) cannot
+    /// reach. That is the same shape as the 2026-07-17 "revoked device
+    /// resurrects" bug, one namespace over, so this fails closed **before** the
+    /// ticket is consumed (a collision must not burn the operator's one-time
+    /// ticket, and a ticket holder learns nothing it could not learn by pairing
+    /// successfully and calling `gateway.devices.list`).
     pub fn exchange_bootstrap_ticket(
         &self,
         ticket: &str,
@@ -94,6 +119,12 @@ impl DeviceTokenManager {
     ) -> Result<BootstrapExchangeResult, DeviceTokenError> {
         let device_id = device_id.unwrap_or_else(|| format!("device-{}", Uuid::new_v4()));
         let device_name = device_name.unwrap_or_else(|| "Remote Panel".to_string());
+
+        if let Some(existing) = self.store.get_device(&device_id)? {
+            if existing.device_type.as_deref() != Some(PANEL_DEVICE_TYPE) {
+                return Err(DeviceTokenError::DeviceIdConflict(device_id));
+            }
+        }
 
         // Atomically consume the ticket before issuing the device token.
         let _consumed: ConsumedBootstrapTicket = self
@@ -105,7 +136,7 @@ impl DeviceTokenManager {
         self.store.upsert_device(&DeviceUpsertData {
             device_id: &device_id,
             device_name: &device_name,
-            device_type: Some("panel"),
+            device_type: Some(PANEL_DEVICE_TYPE),
             public_key: b"",
             fingerprint: &device_id,
             role: "operator",
@@ -171,7 +202,7 @@ impl DeviceTokenManager {
             .store
             .list_devices()?
             .into_iter()
-            .filter(|d| d.device_type.as_deref() == Some("panel"))
+            .filter(|d| d.device_type.as_deref() == Some(PANEL_DEVICE_TYPE))
             .collect())
     }
 
@@ -353,6 +384,66 @@ mod tests {
             .unwrap()
             .iter()
             .any(|d| d.device_id == "node-1"));
+    }
+
+    /// Regression: pairing must refuse a `device_id` that already names a
+    /// non-Panel device. The `device_id` is client-asserted and the `devices`
+    /// table is one namespace shared with cluster nodes, while
+    /// `upsert_device`'s ON CONFLICT never rewrites `device_type` — so without
+    /// this guard the exchange minted an operator token onto a `node`-typed row:
+    /// invisible to `list_panel_devices`, untouched by `revoke_all_panel_devices`,
+    /// and therefore surviving `gateway.token.rotate` (the "revoke everything"
+    /// hammer). Same shape as the revoked-device-resurrects bug, one namespace over.
+    #[test]
+    fn pairing_refuses_to_adopt_a_cluster_node_device_id() {
+        let mgr = manager();
+        seed_node(&mgr, "node-1");
+
+        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        let err = mgr
+            .exchange_bootstrap_ticket(&ticket, Some("node-1".to_string()), None, None)
+            .expect_err("pairing onto a cluster node id must fail closed");
+        assert!(
+            matches!(err, DeviceTokenError::DeviceIdConflict(ref id) if id == "node-1"),
+            "expected DeviceIdConflict, got {err:?}"
+        );
+
+        // The node row is untouched: still a node, still listed by the cluster
+        // path, still absent from the Panel roster.
+        let row = mgr.store.get_device("node-1").unwrap().unwrap();
+        assert_eq!(row.role, "node");
+        assert!(mgr.list_panel_devices().unwrap().is_empty());
+
+        // The rejection must not burn the operator's one-time ticket.
+        let ok = mgr
+            .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
+            .expect("ticket survives a rejected pairing");
+        assert_eq!(ok.device_id, "panel-1");
+    }
+
+    /// A node adopted by `cluster::admit_node`'s unknown-id backfill has a NULL
+    /// `device_type` (not `"node"`), so the guard must key on "is a panel",
+    /// never on "is a node".
+    #[test]
+    fn pairing_refuses_untyped_device_rows() {
+        let mgr = manager();
+        mgr.store
+            .upsert_device(&DeviceUpsertData {
+                device_id: "legacy-1",
+                device_name: "backfilled",
+                device_type: None,
+                public_key: b"",
+                fingerprint: "legacy-1",
+                role: "node",
+                scopes: &["node".to_string()],
+            })
+            .unwrap();
+
+        let ticket = mgr.create_bootstrap_ticket(None).unwrap();
+        assert!(matches!(
+            mgr.exchange_bootstrap_ticket(&ticket, Some("legacy-1".to_string()), None, None),
+            Err(DeviceTokenError::DeviceIdConflict(_))
+        ));
     }
 
     /// Regression: re-pairing a previously-revoked device must restore it to the

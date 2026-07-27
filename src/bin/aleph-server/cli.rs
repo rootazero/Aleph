@@ -158,8 +158,20 @@ pub enum Command {
     },
     /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
     BootstrapRuntime(BootstrapRuntimeArgs),
-    /// Print the shared Gateway token (authorizes a remote Panel: paste into the
-    /// token box or encode in a QR / LAN URL `http://<ip>:<port>/?token=<token>`)
+    /// Mint a one-time pairing ticket + LAN URL for a remote Panel (headless
+    /// equivalent of Settings → Security → "Pair new device"). Prefer this over
+    /// `bootstrap-token`: the ticket expires, is single-use, and is exchanged
+    /// for a per-device token you can revoke on its own.
+    Pair {
+        /// Ticket lifetime in seconds (default 300, clamped to 60..=86400).
+        #[arg(long, value_name = "SECONDS")]
+        ttl: Option<u64>,
+    },
+    /// Print the shared Gateway token — the recovery / manual-entry credential.
+    ///
+    /// It never expires, it is also the secret vault's master key, and any
+    /// device you paste it into keeps it. Never put it in a URL or QR code; use
+    /// `aleph-server pair` to authorize a device.
     BootstrapToken,
     /// Check for a newer Aleph release and update the standalone server.
     ///
