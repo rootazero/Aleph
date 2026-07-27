@@ -418,7 +418,8 @@ impl SwiftBridge {
             }
         };
 
-        if let Err(_write_err) = write_result {
+        if let Err(ref write_err) = write_result {
+            tracing::warn!(target: "bridge", "stdin write failed, will retry: {write_err}");
             // stdin write failed — this helper is likely dead. Reset state so the
             // retry below respawns.
             {

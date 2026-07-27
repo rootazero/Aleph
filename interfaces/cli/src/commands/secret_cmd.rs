@@ -4,7 +4,7 @@
 //! providers}` JSON-RPC. Values pass between TTY (rpassword) and the
 //! server only — they're never echoed or written to history.
 
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -146,6 +146,12 @@ fn prompt_for_secret(json: bool) -> CliResult<String> {
     if json {
         // In machine mode, read whatever stdin hands us — no prompt, no echo
         // suppression. Callers piping `echo ...` get exactly what they sent.
+        // Guard against interactive TTY (blocks waiting for EOF).
+        if std::io::stdin().is_terminal() {
+            return Err(CliError::Other(
+                "stdin is a terminal; pipe input or use non-JSON interactive mode".into(),
+            ));
+        }
         let mut buf = String::new();
         io::stdin()
             .read_to_string(&mut buf)

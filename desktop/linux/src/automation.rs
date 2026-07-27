@@ -105,7 +105,10 @@ impl AutomationCapability for LinuxAutomation {
                 c
             }
             ScriptLanguage::PowerShell => {
-                let mut c = tokio::process::Command::new("pwsh");
+                // Try pwsh first, fall back to powershell (older Ubuntu LTS).
+                let has_pwsh = which::which("pwsh").is_ok();
+                let bin = if has_pwsh { "pwsh" } else { "powershell" };
+                let mut c = tokio::process::Command::new(bin);
                 c.args(["-NoProfile", "-Command", source]);
                 c
             }

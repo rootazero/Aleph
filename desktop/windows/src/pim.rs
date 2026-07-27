@@ -12,6 +12,15 @@ fn ps_escape_dq(s: &str) -> String {
     s.replace('`', "``").replace('$', "`$").replace('"', "\"\"")
 }
 
+/// Escape PowerShell wildcard characters so a user-originated query placed
+/// inside `-like "*{query}*"` or `-Filter` is matched literally rather than
+/// treated as a wildcard pattern.
+fn escape_powershell_wildcards(s: &str) -> String {
+    s.replace('[', "`[")
+        .replace('*', "`*")
+        .replace('?', "`?")
+}
+
 pub struct WindowsPim;
 
 impl WindowsPim {
@@ -119,7 +128,7 @@ impl PimCapability for WindowsPim {
         limit: u32,
     ) -> Result<Vec<MailMessage>> {
         let folder_path = ps_escape_dq(folder.unwrap_or("Inbox"));
-        let escaped_query = ps_escape_dq(query);
+        let escaped_query = escape_powershell_wildcards(&ps_escape_dq(query));
         let script = format!(
             r#"
             try {{
