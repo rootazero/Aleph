@@ -195,10 +195,13 @@ impl Config {
         Ok(())
     }
 
-    /// Save configuration to default path with atomic write
+    /// Save configuration to this process's effective path with atomic write
     ///
-    /// This is a convenience method that saves to ~/.aleph/config.toml
-    /// using atomic write operation.
+    /// This is a convenience method that saves to the `--config` file when one
+    /// was pinned, else ~/.aleph/config.toml, using atomic write operation.
+    /// It must resolve the same way [`Self::load`] does: writing the default
+    /// file while reading the pinned one is how settings end up in a file
+    /// nothing reads.
     ///
     /// # Example
     /// ```rust,ignore
@@ -207,7 +210,7 @@ impl Config {
     /// config.save()?;
     /// ```
     pub fn save(&self) -> Result<()> {
-        self.save_to_file(Self::default_path())
+        self.save_to_file(Self::effective_path())
     }
 
     /// Save only specific sections to the config file (incremental update)
@@ -225,7 +228,7 @@ impl Config {
     /// 3. Only copy specified sections from current to existing
     /// 4. Write back with atomic operation
     pub fn save_incremental(&self, sections: &[&str]) -> Result<()> {
-        self.save_incremental_to_file(Self::default_path(), sections)
+        self.save_incremental_to_file(Self::effective_path(), sections)
     }
 
     /// Save only specific sections to a specific config file path (incremental update)

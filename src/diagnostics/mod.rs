@@ -43,10 +43,13 @@ impl DiagnosticEngine {
 
     /// Build the production registry against the real `~/.aleph` paths.
     pub fn default_registry() -> Result<Self> {
-        use crate::utils::paths::{get_config_file_path, get_data_dir};
+        use crate::utils::paths::get_data_dir;
 
         let data_dir = get_data_dir()?;
-        let config_path = get_config_file_path()?;
+        // The file this process actually runs on, not where config would live
+        // by default — a doctor that parses the wrong file reports health about
+        // a config nothing is using.
+        let config_path = crate::config::Config::effective_path();
 
         let checks: Vec<Arc<dyn HealthCheck>> = vec![
             Arc::new(checks::DataDirCheck::new(data_dir.clone())),

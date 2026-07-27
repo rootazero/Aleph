@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::Args;
-use crate::daemon::expand_path;
 
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
@@ -876,7 +875,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let aleph_dir = alephcore::utils::paths::get_config_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
     let agent_manager = Arc::new(alephcore::AgentManager::new(
-        alephcore::Config::default_path(),
+        alephcore::Config::effective_path(),
         aleph_dir.join("workspaces"),
         aleph_dir.join("agents"),
         aleph_dir.join("trash"),
@@ -1430,7 +1429,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let config_patcher = {
-        let config_path = alephcore::Config::default_path();
+        let config_path = alephcore::Config::effective_path();
         let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir()?, 10);
         // Wire the vault so a `health_check` provider patch (self_config
         // verify / Panel config.patch) can probe live reachability with the
@@ -2746,11 +2745,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    let config_path = args
-        .config
-        .clone()
-        .map(|p| expand_path(&p.to_string_lossy()))
-        .or_else(|| alephcore::utils::paths::get_config_file_path().ok());
+    // Same file `Config::load` / `ConfigPatcher` / `AgentManager` use — the
+    // watcher must not reload from a different one than the rest of the
+    // process reads (`config.path` RPC reports the watcher's answer).
+    let config_path = Some(alephcore::Config::effective_path());
     let _config_watcher = setup_config_watcher(
         &mut server,
         config_path,
