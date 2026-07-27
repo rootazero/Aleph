@@ -75,6 +75,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "audio_generate",
             "speech_generate",
             "media_send",
+            "artifact_publish",
         ],
     },
     ToolCategory {

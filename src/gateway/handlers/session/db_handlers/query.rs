@@ -195,11 +195,11 @@ pub async fn handle_history_db(
             let history: Vec<HistoryMessage> = messages
                 .into_iter()
                 .map(|m| HistoryMessage {
+                    // Timestamp first: `role`/`content` move out of `m`, and
+                    // the accessor needs `m` whole.
+                    timestamp: m.rfc3339(),
                     role: m.role,
                     content: m.content,
-                    timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_default(),
                     metadata: m.metadata,
                 })
                 .collect();
@@ -357,9 +357,7 @@ pub async fn handle_preview_db(
                     json!({
                         "role": m.role,
                         "content": m.content,
-                        "timestamp": chrono::DateTime::from_timestamp(m.timestamp, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default(),
+                        "timestamp": m.rfc3339(),
                         "metadata": m.metadata,
                     })
                 })

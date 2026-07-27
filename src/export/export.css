@@ -118,10 +118,17 @@ main {
   padding: 0.75rem 1rem;
 }
 
-.msg-body > *:first-child { margin-top: 0; }
-.msg-body > *:last-child { margin-bottom: 0; }
+/* ── Rendered Markdown (`.prose`) ────────────────────────────────────
+   Shared by both documents this stylesheet serves: a transcript message body
+   (`.msg-body prose`) and a published deliverable (`.doc prose`). The class is
+   separate from `.msg-body` on purpose — `.msg-body` carries the transcript's
+   own chrome (the user bubble), which a standalone document must not inherit,
+   while the typography below is identical for both and must not fork. */
 
-/* Transcripts carry tokens with no break opportunity at all — `data:` URLs,
+.prose > *:first-child { margin-top: 0; }
+.prose > *:last-child { margin-bottom: 0; }
+
+/* Model output carries tokens with no break opportunity at all — `data:` URLs,
    base64 blobs, long paths, signed links. Without this they render as one
    unbreakable line that pushes past the container and makes the whole PAGE
    scroll sideways, so every other message gets dragged out of view too.
@@ -129,41 +136,41 @@ main {
    preferring normal word boundaries when they exist. `pre` keeps its own
    `overflow-x: auto` below: code is the one place where a forced break would
    change what the text means, so it scrolls in its own box instead. */
-.msg-body {
+.prose {
   overflow-wrap: anywhere;
 }
 
-.msg-body h1, .msg-body h2, .msg-body h3,
-.msg-body h4, .msg-body h5, .msg-body h6 {
+.prose h1, .prose h2, .prose h3,
+.prose h4, .prose h5, .prose h6 {
   margin: 1.4em 0 0.5em;
   line-height: 1.3;
   font-weight: 650;
 }
 
-.msg-body h1 { font-size: 1.3rem; }
-.msg-body h2 { font-size: 1.15rem; }
-.msg-body h3 { font-size: 1.02rem; }
+.prose h1 { font-size: 1.3rem; }
+.prose h2 { font-size: 1.15rem; }
+.prose h3 { font-size: 1.02rem; }
 
-.msg-body p { margin: 0.7em 0; }
+.prose p { margin: 0.7em 0; }
 
-.msg-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-.msg-body a[href^="#disallowed-"] {
+.prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose a[href^="#disallowed-"] {
   color: var(--text-dim);
   text-decoration: line-through;
   cursor: not-allowed;
 }
 
-.msg-body ul, .msg-body ol { margin: 0.7em 0; padding-left: 1.5em; }
-.msg-body li { margin: 0.2em 0; }
+.prose ul, .prose ol { margin: 0.7em 0; padding-left: 1.5em; }
+.prose li { margin: 0.2em 0; }
 
-.msg-body blockquote {
+.prose blockquote {
   margin: 0.8em 0;
   padding: 0.1em 0 0.1em 0.9em;
   border-left: 3px solid var(--border);
   color: var(--text-dim);
 }
 
-.msg-body code {
+.prose code {
   font-family: var(--mono);
   font-size: 0.86em;
   background: var(--surface-2);
@@ -171,7 +178,7 @@ main {
   border-radius: 4px;
 }
 
-.msg-body pre {
+.prose pre {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -183,14 +190,14 @@ main {
   overflow-wrap: normal;
 }
 
-.msg-body pre code {
+.prose pre code {
   background: none;
   padding: 0;
   font-size: 0.84em;
   line-height: 1.55;
 }
 
-.msg-body table {
+.prose table {
   border-collapse: collapse;
   margin: 0.9em 0;
   display: block;
@@ -198,19 +205,26 @@ main {
   max-width: 100%;
 }
 
-.msg-body th, .msg-body td {
+.prose th, .prose td {
   border: 1px solid var(--border);
   padding: 0.4em 0.7em;
   text-align: left;
 }
 
-.msg-body th { background: var(--surface-2); font-weight: 600; }
+.prose th { background: var(--surface-2); font-weight: 600; }
 
-.msg-body img { max-width: 100%; height: auto; border-radius: 6px; }
+.prose img { max-width: 100%; height: auto; border-radius: 6px; }
 
-.msg-body hr { border: none; border-top: 1px solid var(--border); margin: 1.4em 0; }
+.prose hr { border: none; border-top: 1px solid var(--border); margin: 1.4em 0; }
 
 .empty { color: var(--text-dim); font-style: italic; }
+
+/* ── Deliverable document ───────────────────────────────────────────
+   A published work product has no speakers and no turns: it is one body of
+   prose under the shared page header, so it needs position on the page and
+   nothing else. Everything visual about it is already in `.prose`. */
+
+.doc { padding-top: 1.75rem; }
 
 /* ── Attachments ────────────────────────────────────────────── */
 

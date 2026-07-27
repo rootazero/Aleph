@@ -1,8 +1,15 @@
-//! Self-contained session export.
+//! Self-contained HTML documents.
 //!
-//! Renders a conversation plus the artifacts that passed through it into ONE
-//! HTML file that opens offline in any browser, with every image and document
-//! embedded as a `data:` URI.
+//! Two of them, deliberately distinct:
+//!
+//! * [`render_document_html`] — the **deliverable**: the finished work product
+//!   the agent published for the user. One title, one body, its figures.
+//! * [`render_session_html`] — the **transcript**: the whole conversation that
+//!   produced it, with every attachment that passed through.
+//!
+//! Both are ONE HTML file that opens offline in any browser, with every image
+//! and document embedded as a `data:` URI. They share their shell, policy and
+//! typography through [`page`]; only the middle differs.
 //!
 //! # Why there is no JavaScript in the output
 //!
@@ -27,9 +34,14 @@
 //! enforces both a per-artifact and a whole-document ceiling and degrades to a
 //! listed-but-not-embedded row rather than emitting an unbounded file.
 
+mod collect;
+mod document;
 mod markdown;
+mod page;
 mod session_html;
 
+pub use collect::collect_artifacts;
+pub use document::render_document_html;
 pub use session_html::render_session_html;
 
 /// Largest single artifact that may be inlined as a `data:` URI.
@@ -37,6 +49,24 @@ pub const MAX_INLINE_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Largest total volume of inlined artifact bytes in one document.
 pub const MAX_INLINE_TOTAL_BYTES: u64 = 24 * 1024 * 1024;
+
+/// A published deliverable, ready to render.
+///
+/// The agent decides all three fields. Nothing here is inferred from the
+/// conversation — a heuristic that guessed which part of a run was "the
+/// result" would be exactly the kind of reasoning that belongs to the model,
+/// not to the code around it.
+#[derive(Debug, Clone)]
+pub struct ExportDocument {
+    /// Document title. Escaped before display.
+    pub title: String,
+    /// One line of provenance under the title (who made it, when). Escaped
+    /// before display.
+    pub provenance: String,
+    /// The deliverable itself, as Markdown. Rendered through the sanitizing
+    /// pipeline in [`markdown`], never emitted raw.
+    pub markdown: String,
+}
 
 /// One conversation turn as it should appear in the export.
 ///

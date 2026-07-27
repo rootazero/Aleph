@@ -1161,6 +1161,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .await
             }),
 
+            // Deliverable publisher — reads the session from the turn context,
+            // so it needs nothing injected here either.
+            "artifact_publish" => Box::pin(async move {
+                crate::builtin_tools::artifact_publish::ArtifactPublishTool::new()
+                    .call_json(arguments)
+                    .await
+            }),
+
             // ACP delegate tool (unified)
             "acp_delegate" => Box::pin(async move {
                 let tool = self.acp_delegate_tool.as_ref().ok_or_else(|| {

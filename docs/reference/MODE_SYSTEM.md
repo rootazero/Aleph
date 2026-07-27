@@ -17,7 +17,11 @@
 | schema 常驻核 | 默认核 − dev 工具（bash/code_exec/file_write/file_edit/file_ops 折叠为占位，`get_tool_schema` 按需取回；code_check 走整族延迟不进减表） | `[tools] core` 原样（**字节等价旧行为**） | 默认核 + `apply_patch`/`ctx_search` |
 | 整族延迟（deferred，`tool_search` 可发现+晋升） | desktop/browser/team/task/node/arena/生成族/cron/automation/heartbeat/goal/loop/workflow/google_meet/hub/clawhub/skill_install·manage/a2a/acp/gateway_route/apply_patch/code_check/strategy/vault_store/session_collaborate·turn 族 + 精确名 media/media_send | 无 | desktop/google_meet/生成族 + 精确名 media/media_send |
 | prompt | `Usage mode: chat …` 一行 | `Usage mode: work …` 一行（deliverable-first 语域） | `Usage mode: code …` 一行（技术细节欢迎语域） |
-| Panel 右栏 | 不自动驱动（badge 计数） | 有计划后 live-follow Plan/进度面 | live-follow 工具/diff（现状） |
+| Panel 右栏 | 三档相同：产物面板（交付物置顶 / 附件 / 工作区文件），不随模式变化 |||
+
+> ⚠️ **右栏一行的订正（2026-07-26）**：上表此前写「chat 不自动驱动 / work live-follow Plan / code live-follow 工具·diff」，那描述的是**已删除的** `components/inspector/`。右栏现在是产物面板（FEATURE_LOCATOR §6.7），**不按模式分化**——模式只管工具呈现面，不管右栏渲染什么。
+>
+> **`artifact_publish` 三档常驻**（不在任何 defer 表里，`session_mode.rs` 的两处测试钉住）：把成品交到用户手里在 chat 里同样是合法结局（"帮我写成一份报告"），而它的 schema 只有一个小对象。
 
 **匹配语义（v2）**：族条目在 `_` 词边界匹配（`matches_family`——`desktop` 命中 `desktop`/`desktop_som`，
 永不命中 `desktops`；`goal` 不误伤 `goals_list`）；**MCP 限定名（`{server}__{tool}`）整体豁免**内建表

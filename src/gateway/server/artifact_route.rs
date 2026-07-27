@@ -179,17 +179,34 @@ fn is_active_document(mime: &str) -> bool {
     )
 }
 
+/// Whether Aleph's own renderer produced these bytes.
+///
+/// HTML is only ever served `inline` when the answer is yes: those documents
+/// come from [`crate::export`], which emits no `<script>` at all, so serving
+/// them same-origin as the Panel is safe. HTML that merely *passed through*
+/// Aleph — a file the user uploaded, bytes a tool returned — downloads instead,
+/// whatever it claims to be. The `match` is exhaustive on purpose: a fifth
+/// origin has to answer this question rather than inherit a default.
+const fn is_aleph_rendered(origin: crate::artifacts::ArtifactOrigin) -> bool {
+    use crate::artifacts::ArtifactOrigin as O;
+    match origin {
+        O::Export | O::Deliverable => true,
+        O::Inbound | O::Outbound => false,
+    }
+}
+
 /// `Content-Disposition` for a record.
 ///
-/// Images render in place and an exported transcript is meant to be opened, so
-/// both are `inline`; everything else downloads. The name is emitted twice —
-/// an ASCII-quoted `filename` every client understands, plus the RFC 5987
+/// Images render in place, and a document Aleph rendered itself — an exported
+/// transcript or a published deliverable — exists to be opened, so all three
+/// are `inline`; everything else downloads. The name is emitted twice — an
+/// ASCII-quoted `filename` every client understands, plus the RFC 5987
 /// `filename*` that carries the real UTF-8 name. Both are escaped: a quote or a
 /// newline reaching a header value verbatim is a breakout.
 fn content_disposition(record: &ArtifactRecord) -> String {
     let base = base_mime(&record.mime_type);
-    let inline = base.starts_with("image/")
-        || (record.origin == crate::artifacts::ArtifactOrigin::Export && base == "text/html");
+    let inline =
+        base.starts_with("image/") || (is_aleph_rendered(record.origin) && base == "text/html");
     let kind = if inline { "inline" } else { "attachment" };
 
     let ascii: String = record
@@ -692,6 +709,85 @@ mod tests {
             header_of(&response, header::CONTENT_SECURITY_POLICY).as_deref(),
             Some(ARTIFACT_DOCUMENT_CSP),
             "session-generated HTML must be sandboxed"
+        );
+    }
+
+    /// The whole point of a deliverable is that it opens. Serving it
+    /// `attachment` — which is what a whitelist naming only `Export` did —
+    /// downloads the report instead of showing it, and a CJK title made that
+    /// silent: the ASCII fallback name degrades to underscores, so the only
+    /// visible symptom was a file appearing in Downloads.
+    #[tokio::test]
+    async fn a_published_deliverable_opens_instead_of_downloading() {
+        let fx = fixture();
+        let session = unique_session("deliverable");
+        let published = fx
+            .store
+            .put(
+                &session,
+                None,
+                ArtifactOrigin::Deliverable,
+                "红色方块生成实验报告.html",
+                "text/html",
+                b"<p>report</p>",
+            )
+            .await
+            .expect("put");
+        let uploaded = fx
+            .store
+            .put(
+                &session,
+                None,
+                ArtifactOrigin::Inbound,
+                "sent-to-me.html",
+                "text/html",
+                b"<p>not ours</p>",
+            )
+            .await
+            .expect("put");
+        let cap = ArtifactCapabilities::mint(&session);
+
+        let doc = fx
+            .app
+            .clone()
+            .oneshot(request(
+                &format!(
+                    "/artifact/{cap}/{}/{}",
+                    published.id,
+                    utf8_percent_encode(&published.filename, ATTR_CHAR_ESCAPE_SET)
+                ),
+                [127, 0, 0, 1],
+            ))
+            .await
+            .expect("response");
+        let disposition = header_of(&doc, header::CONTENT_DISPOSITION).expect("disposition");
+        assert!(
+            disposition.starts_with("inline;"),
+            "a deliverable must render, got {disposition}"
+        );
+        assert!(
+            disposition.contains("filename*=UTF-8''"),
+            "the real name still travels: {disposition}"
+        );
+        assert_eq!(
+            header_of(&doc, header::CONTENT_SECURITY_POLICY).as_deref(),
+            Some(ARTIFACT_DOCUMENT_CSP),
+            "rendering inline is only safe under the sandbox policy"
+        );
+
+        let foreign = fx
+            .app
+            .oneshot(request(
+                &format!("/artifact/{cap}/{}/sent-to-me.html", uploaded.id),
+                [127, 0, 0, 1],
+            ))
+            .await
+            .expect("response");
+        assert!(
+            header_of(&foreign, header::CONTENT_DISPOSITION)
+                .expect("disposition")
+                .starts_with("attachment;"),
+            "HTML Aleph did not render must keep downloading"
         );
     }
 

@@ -60,36 +60,6 @@ fn resolve_session(request: &JsonRpcRequest, raw: &str) -> Result<SessionKey, Js
     })
 }
 
-/// Any `MessageRecord.timestamp` below this is read as seconds, at or above it
-/// as milliseconds. `1e11` seconds is the year 5138 and `1e11` milliseconds is
-/// 1973-03-03, so no real conversation can be ambiguous.
-const SECONDS_MILLIS_BOUNDARY: i64 = 100_000_000_000;
-
-/// Render one message's time, tolerating the store's mixed units.
-///
-/// `SessionStore::get_history` documents `MessageRecord.timestamp` as unix
-/// seconds, but the file backend writes `Utc::now().timestamp_millis()` for a
-/// message while writing plain `timestamp()` for the session's own
-/// `created_at` / `last_active_at`. Reading a millisecond value as seconds puts
-/// the message in the year 58536 — which is what this export printed, and what
-/// `chat.rs`'s identical `from_timestamp(m.timestamp, 0)` still prints into the
-/// Panel's session list.
-///
-/// Fixing the unit at the source is the real repair, but it is a store-contract
-/// change that also touches the `before` pagination cursor and every existing
-/// on-disk session, so it does not belong in this handler. What does belong
-/// here is refusing to render a nonsense date: this is a display boundary, and
-/// a boundary that normalizes what it is handed is the one place the ambiguity
-/// costs nothing.
-fn format_message_time(raw: i64) -> String {
-    let parsed = if raw.abs() >= SECONDS_MILLIS_BOUNDARY {
-        chrono::DateTime::from_timestamp_millis(raw)
-    } else {
-        chrono::DateTime::from_timestamp(raw, 0)
-    };
-    parsed.map(|dt| dt.to_rfc3339()).unwrap_or_default()
-}
-
 /// Build the capability URL for one record.
 fn artifact_url(cap: &str, record: &ArtifactRecord) -> String {
     let filename = utf8_percent_encode(&record.filename, URL_SEGMENT_ENCODE_SET);
@@ -189,9 +159,11 @@ pub async fn handle_export_html(
     let export_messages: Vec<crate::export::ExportMessage> = messages
         .into_iter()
         .map(|m| crate::export::ExportMessage {
+            // Timestamp first: `role`/`content` move out of `m`, and the
+            // accessor needs `m` whole.
+            timestamp: m.rfc3339(),
             role: m.role,
             text: m.content,
-            timestamp: format_message_time(m.timestamp),
         })
         .collect();
 
@@ -205,7 +177,9 @@ pub async fn handle_export_html(
             );
         }
     };
-    let export_artifacts = collect_export_artifacts(&store, &session_key, &records).await;
+    let embeddable = embeddable_records(&records);
+    let export_artifacts =
+        crate::export::collect_artifacts(&store, &session_key, &embeddable).await;
 
     let title = match sessions.get_metadata(&key).await {
         Ok(Some(meta)) => meta
@@ -254,92 +228,25 @@ pub async fn handle_export_html(
     )
 }
 
-/// Read the bytes for each record, obeying the inline budget published by
-/// [`crate::export`].
+/// Which of a session's artifacts a transcript export may embed.
 ///
-/// Over-budget artifacts are still listed in the document — they just carry
-/// `bytes: None`, so the renderer prints a name-and-size row instead of a data
-/// URL. Skipping the read (rather than reading and discarding) is why a session
-/// holding 200 × 50 MB blobs cannot be turned into an out-of-memory export.
-/// A record whose bytes cannot be read degrades the same way.
-///
-/// Earlier exports are skipped entirely. Every export is itself stored as an
-/// artifact of the session, so embedding them would make each export carry all
-/// of its predecessors — quadratic growth from a self-referential document.
-async fn collect_export_artifacts(
-    store: &ArtifactStore,
-    session_key: &str,
-    records: &[ArtifactRecord],
-) -> Vec<crate::export::ExportArtifact> {
-    let mut inlined_total: u64 = 0;
-    let mut out = Vec::with_capacity(records.len());
-
-    for record in records {
-        if record.origin == ArtifactOrigin::Export {
-            continue;
-        }
-
-        let fits = record.size <= crate::export::MAX_INLINE_ARTIFACT_BYTES
-            && inlined_total.saturating_add(record.size) <= crate::export::MAX_INLINE_TOTAL_BYTES;
-
-        let bytes = if fits {
-            match store.read(session_key, &record.id).await {
-                Ok((_, bytes)) => {
-                    inlined_total = inlined_total.saturating_add(record.size);
-                    Some(bytes)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        artifact_id = %record.id,
-                        error = %e,
-                        "artifact bytes unreadable; exporting it as a listed-only row"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        out.push(crate::export::ExportArtifact {
-            filename: record.filename.clone(),
-            mime_type: record.mime_type.clone(),
-            bytes,
-            size: record.size,
-        });
-    }
-
-    out
+/// Everything except earlier exports. An export is itself stored as an artifact
+/// of the session, so embedding one would make each export carry all of its
+/// predecessors — quadratic growth from a self-referential document. Published
+/// deliverables are *not* excluded: the transcript is the complete record of
+/// the session, and the work product is part of that record.
+fn embeddable_records(records: &[ArtifactRecord]) -> Vec<ArtifactRecord> {
+    records
+        .iter()
+        .filter(|r| r.origin != ArtifactOrigin::Export)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    /// Regression: a millisecond timestamp read as seconds dated messages to
-    /// the year 58536 in the exported transcript. Both units must land in the
-    /// same real instant.
-    #[test]
-    fn message_times_render_from_either_unit() {
-        // 2026-07-26T10:37:12Z, spelled both ways.
-        let secs = 1_785_062_232_i64;
-        let millis = 1_785_062_232_000_i64;
-        assert_eq!(format_message_time(secs), format_message_time(millis));
-        assert!(
-            format_message_time(millis).starts_with("2026-07-26T"),
-            "got {}",
-            format_message_time(millis)
-        );
-    }
-
-    #[test]
-    fn an_unrenderable_timestamp_yields_an_empty_string() {
-        // Never panic and never print a garbage date: the caption is simply
-        // omitted for a value no calendar can represent.
-        assert_eq!(format_message_time(i64::MAX), "");
-        assert_eq!(format_message_time(0), "1970-01-01T00:00:00+00:00");
-    }
 
     fn req(method: &str, params: serde_json::Value) -> JsonRpcRequest {
         JsonRpcRequest {
@@ -461,68 +368,10 @@ mod tests {
         assert_eq!(resp.error.expect("expected error").code, INVALID_PARAMS);
     }
 
+    /// Byte-budget behaviour is `export::collect_artifacts`' own business and
+    /// is tested there. What belongs here is the transcript's *selection* rule.
     #[tokio::test]
-    async fn oversized_artifacts_are_listed_but_not_inlined() {
-        let session_key = "agent:main:main";
-        let tmp = TempDir::new().expect("tempdir");
-        let store = ArtifactStore::new(tmp.path().to_path_buf());
-
-        let small = store
-            .put(
-                session_key,
-                None,
-                ArtifactOrigin::Inbound,
-                "small.txt",
-                "text/plain",
-                b"tiny",
-            )
-            .await
-            .expect("put small");
-        // Declaring a size past the per-artifact ceiling is enough: the reader
-        // consults the record, so no multi-MB fixture has to be written.
-        let mut huge = small.clone();
-        huge.filename = "huge.bin".to_string();
-        huge.size = crate::export::MAX_INLINE_ARTIFACT_BYTES + 1;
-
-        let collected = collect_export_artifacts(&store, session_key, &[huge, small]).await;
-
-        assert_eq!(collected.len(), 2, "over-budget artifacts stay listed");
-        assert!(collected[0].bytes.is_none(), "over-budget is not inlined");
-        assert_eq!(
-            collected[0].size,
-            crate::export::MAX_INLINE_ARTIFACT_BYTES + 1
-        );
-        assert_eq!(collected[1].bytes.as_deref(), Some(&b"tiny"[..]));
-    }
-
-    #[tokio::test]
-    async fn an_unreadable_artifact_degrades_to_a_listed_row() {
-        let session_key = "agent:main:main";
-        let tmp = TempDir::new().expect("tempdir");
-        let store = ArtifactStore::new(tmp.path().to_path_buf());
-
-        let mut ghost = store
-            .put(
-                session_key,
-                None,
-                ArtifactOrigin::Inbound,
-                "ghost.txt",
-                "text/plain",
-                b"gone",
-            )
-            .await
-            .expect("put");
-        // An id that no blob backs — the read fails, the row survives.
-        ghost.id = uuid::Uuid::new_v4().to_string();
-
-        let collected = collect_export_artifacts(&store, session_key, &[ghost]).await;
-        assert_eq!(collected.len(), 1);
-        assert!(collected[0].bytes.is_none());
-        assert_eq!(collected[0].filename, "ghost.txt");
-    }
-
-    #[tokio::test]
-    async fn an_export_never_embeds_an_earlier_export() {
+    async fn an_export_never_embeds_an_earlier_export_but_keeps_the_deliverable() {
         let session_key = "agent:main:main";
         let tmp = TempDir::new().expect("tempdir");
         let store = ArtifactStore::new(tmp.path().to_path_buf());
@@ -538,6 +387,17 @@ mod tests {
             )
             .await
             .expect("put export");
+        let deliverable = store
+            .put(
+                session_key,
+                None,
+                ArtifactOrigin::Deliverable,
+                "q3-review.html",
+                "text/html",
+                b"<p>the work product</p>",
+            )
+            .await
+            .expect("put deliverable");
         let attachment = store
             .put(
                 session_key,
@@ -550,9 +410,13 @@ mod tests {
             .await
             .expect("put inbound");
 
-        let collected = collect_export_artifacts(&store, session_key, &[earlier, attachment]).await;
+        let kept = embeddable_records(&[earlier, deliverable, attachment]);
 
-        assert_eq!(collected.len(), 1, "prior exports are dropped, not listed");
-        assert_eq!(collected[0].filename, "notes.txt");
+        let names: Vec<&str> = kept.iter().map(|r| r.filename.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["q3-review.html", "notes.txt"],
+            "prior exports are dropped; the deliverable is part of the record"
+        );
     }
 }
