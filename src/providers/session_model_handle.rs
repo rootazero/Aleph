@@ -2,8 +2,9 @@
 //!
 //! The "A layer" of AI dynamic routing (R8): the `select_model` tool lets the
 //! main-loop LLM pick the model for the rest of a conversation. Model binding
-//! happens per-run at `pick_llm` time, so a mid-run pick can only take effect
-//! from the *next* turn — this handle is the cross-turn channel.
+//! happens per-run at `pick_llm` time — once, before the Think→Act loop starts
+//! — so a mid-run pick takes effect at the next *run* (the next user message),
+//! not at the next loop iteration. This handle is that cross-run channel.
 //!
 //! Mirrors [`route_handle`](super::route_handle): a single process-global,
 //! lock-guarded map read at run construction (`harness_bridge`) and written by
@@ -57,6 +58,35 @@ pub fn clear_session_model(session_key: &str) {
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .remove(session_key);
+}
+
+/// The provider keys a `select_model(provider=…)` pin can actually resolve to.
+static PINNABLE_PROVIDERS: OnceLock<std::collections::BTreeSet<String>> = OnceLock::new();
+
+/// Publish the provider keys the run builder will resolve a pin against.
+///
+/// Registered by the production boot path from the *same map* `harness_bridge`
+/// later looks the pin up in, so the tool's validation and the runtime's
+/// resolution cannot disagree. Without it, `select_model(provider="openai")` on
+/// an Anthropic-only deployment returned `ok: true`, then silently substituted
+/// the default chain at run time — the user got an answer from a different
+/// vendor than the one the tool confirmed, and the mis-attributed
+/// `(provider, model)` pair was written into the routing-experience store the
+/// model later reads back as "verified routing experience".
+///
+/// First call wins (one chain assembly per boot), matching
+/// [`route_observe`](super::route_observe)'s global.
+pub fn set_pinnable_providers(names: impl IntoIterator<Item = String>) {
+    let _ = PINNABLE_PROVIDERS.set(names.into_iter().collect());
+}
+
+/// Whether `provider` can be pinned, plus the valid set for the error message.
+///
+/// `None` means "no set was published" (tests, pre-boot) — callers must treat
+/// that as *unvalidated*, never as "nothing is pinnable".
+#[must_use]
+pub fn pinnable_providers() -> Option<&'static std::collections::BTreeSet<String>> {
+    PINNABLE_PROVIDERS.get()
 }
 
 #[cfg(test)]

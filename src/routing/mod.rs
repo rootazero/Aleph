@@ -9,6 +9,7 @@ pub mod config;
 pub mod experience_store;
 pub mod identity_links;
 pub mod observer;
+pub mod overlay;
 pub mod recall;
 pub mod resolve;
 pub mod session_key;
@@ -20,6 +21,7 @@ pub use recall::{
 };
 
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
+pub use overlay::{overlay_route, OverlaidRoute, OverlaySource, RuntimeOverlay};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
 pub use session_key::{
     normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY,

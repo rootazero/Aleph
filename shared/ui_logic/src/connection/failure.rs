@@ -4,7 +4,7 @@
 //! UI copy, retry policy, and the lite-shell handoff. Pure + host-testable —
 //! no wasm, no Leptos. Browsers report almost every WebSocket failure as
 //! close code 1006, so classification keys off *which stage* failed plus the
-//! `needs_token` verdict and known close reasons (e.g. `token_rotated`),
+//! `needs_token` verdict and known close reasons ([`AUTH_KICK_REASONS`]),
 //! never on the close code alone.
 
 /// Why a connection attempt or live connection ended.
@@ -14,8 +14,8 @@ pub enum ConnectionFailure {
     Unreachable { detail: String },
     /// WS opened but the server went silent / an RPC timed out.
     Timeout { detail: String },
-    /// `connect` RPC reported `needs_token`, or the server closed us with
-    /// `token_rotated` → re-enter the Gateway token (login wall).
+    /// `connect` RPC reported `needs_token`, or the server closed us with an
+    /// auth kick ([`AUTH_KICK_REASONS`]) → re-authorize at the login wall.
     AuthRequired,
     /// A previously-healthy connection dropped → transient, auto-reconnect.
     Dropped { detail: String },
@@ -36,6 +36,19 @@ pub enum FailureStage {
     RpcTimeout,
 }
 
+/// Close reasons the gateway sends when it kicks a socket for an *auth* reason
+/// rather than a transport one. Both mean the credential this Panel connected
+/// with is already dead server-side, so the reconnect loop must route straight
+/// to the login wall instead of spending its backoff budget re-presenting it.
+///
+/// Every new auth-kick close reason must be added here. Miss one and the kick
+/// degrades into an ordinary `Dropped`: the Panel spends a backoff delay and a
+/// doomed reconnect re-presenting the dead credential before the handshake
+/// walls it, and — because the short-circuit is also where the wall learns the
+/// credential was *rejected* rather than absent — the login wall greets the
+/// user with first-run copy instead of saying what happened.
+const AUTH_KICK_REASONS: [&str; 2] = ["token_rotated", "device_revoked"];
+
 /// Pure classification. `close_reason` is the WS close reason (or transport
 /// error string) when available; `needs_token` is the handshake verdict.
 #[must_use]
@@ -47,7 +60,7 @@ pub fn classify(
     if needs_token {
         return ConnectionFailure::AuthRequired;
     }
-    if matches!(close_reason, Some(r) if r.contains("token_rotated")) {
+    if matches!(close_reason, Some(r) if AUTH_KICK_REASONS.iter().any(|k| r.contains(k))) {
         return ConnectionFailure::AuthRequired;
     }
     let detail = close_reason.unwrap_or_default().to_string();
@@ -98,10 +111,28 @@ mod tests {
     }
 
     #[test]
-    fn token_rotated_close_is_auth_required() {
+    fn every_auth_kick_reason_is_auth_required() {
+        // Driven off the constant so a newly-added kick reason cannot ship
+        // unclassified. The failure mode is silent — the Panel still reaches
+        // the wall eventually, just slower and with the wrong copy — so
+        // nothing else would catch it.
+        for reason in AUTH_KICK_REASONS {
+            assert_eq!(
+                classify(FailureStage::AfterOpen, Some(reason), false),
+                ConnectionFailure::AuthRequired,
+                "{reason} must route straight to the login wall"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_drop_is_not_an_auth_kick() {
+        // Guards the `contains` match from widening into "any close reason".
         assert_eq!(
-            classify(FailureStage::AfterOpen, Some("token_rotated"), false),
-            ConnectionFailure::AuthRequired
+            classify(FailureStage::AfterOpen, Some("going away"), false),
+            ConnectionFailure::Dropped {
+                detail: "going away".to_string()
+            }
         );
     }
 

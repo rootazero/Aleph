@@ -65,6 +65,12 @@ pub struct ConnectionState {
     /// loopback in [`ConnectionState::new`] so the pre-handshake `connect` frame
     /// and any probe path behave safely.
     pub caller_role: String,
+    /// The paired Panel device this session authenticated as, latched at the
+    /// `connect` handshake. `None` for loopback, the legacy shared-token path,
+    /// and still-walled connections — none of which are bound to a device
+    /// record. Read by [`invalidate_device_sessions`] so a per-device revoke can
+    /// strip authority from exactly the right sockets.
+    pub device_id: Option<String>,
 }
 
 impl ConnectionState {
@@ -85,8 +91,39 @@ impl ConnectionState {
             } else {
                 "guest".to_string()
             },
+            device_id: None,
         }
     }
+}
+
+/// Strip operator authority from every live session bound to `device_id`.
+///
+/// The synchronous half of `gateway.devices.revoke`: the store write alone only
+/// stops the *next* handshake, and the `DeviceRevoked` kick only lands when the
+/// connection's event arm is next polled — until then a `tokio::select!` loop may
+/// still serve requests the revoked client already pipelined onto its socket.
+/// Downgrading `caller_role` here makes those requests hit the existing login
+/// wall instead, so revocation is effective the instant the RPC returns rather
+/// than "eventually". Mirrors openclaw's `invalidateClientsForDevice` running
+/// before `disconnectClientsForDevice`.
+///
+/// Returns how many connections were downgraded (0 when the device has no open
+/// session). Sessions with no `device_id` — loopback, legacy shared token, walled
+/// — are never touched.
+pub async fn invalidate_device_sessions(
+    connections: &Arc<RwLock<HashMap<String, ConnectionState>>>,
+    device_id: &str,
+) -> usize {
+    let mut conns = connections.write().await;
+    let mut hit = 0;
+    for state in conns.values_mut() {
+        if state.device_id.as_deref() == Some(device_id) {
+            state.caller_role = "guest".to_string();
+            state.permissions.clear();
+            hit += 1;
+        }
+    }
+    hit
 }
 
 /// Shared state for the unified axum server (WebSocket + `ControlPlane`)
@@ -993,5 +1030,57 @@ mod channel_kind_tests {
         let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap());
         cs.channel_kind = Some(SurfaceKind::Desktop);
         assert_eq!(cs.channel_kind, Some(SurfaceKind::Desktop));
+    }
+}
+
+#[cfg(test)]
+mod device_invalidation_tests {
+    use super::*;
+
+    fn authorized(conn: &str, device_id: Option<&str>) -> (String, ConnectionState) {
+        let mut cs = ConnectionState::new("10.0.0.9".parse().unwrap());
+        cs.caller_role = "operator".to_string();
+        cs.permissions = vec!["*".to_string()];
+        cs.device_id = device_id.map(String::from);
+        (conn.to_string(), cs)
+    }
+
+    #[tokio::test]
+    async fn downgrades_only_the_revoked_device() {
+        let conns: Arc<RwLock<HashMap<String, ConnectionState>>> = Arc::new(RwLock::new(
+            [
+                authorized("a", Some("device-7")),
+                authorized("b", Some("device-7")),
+                authorized("c", Some("device-8")),
+                // Loopback / legacy-shared-token session: not device-bound.
+                authorized("d", None),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+
+        assert_eq!(invalidate_device_sessions(&conns, "device-7").await, 2);
+
+        let map = conns.read().await;
+        for hit in ["a", "b"] {
+            let s = &map[hit];
+            assert_eq!(s.caller_role, "guest", "{hit} must fall behind the wall");
+            assert!(s.permissions.is_empty(), "{hit} must lose event scope");
+        }
+        for spared in ["c", "d"] {
+            assert_eq!(
+                map[spared].caller_role, "operator",
+                "{spared} must be untouched by a per-device revoke"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn revoking_a_device_with_no_open_session_is_a_no_op() {
+        let conns: Arc<RwLock<HashMap<String, ConnectionState>>> = Arc::new(RwLock::new(
+            [authorized("a", Some("device-7"))].into_iter().collect(),
+        ));
+        assert_eq!(invalidate_device_sessions(&conns, "device-99").await, 0);
+        assert_eq!(conns.read().await["a"].caller_role, "operator");
     }
 }

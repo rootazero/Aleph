@@ -674,7 +674,7 @@ pub async fn handle_presets_meta(request: JsonRpcRequest) -> JsonRpcResponse {
 mod tests {
     use super::*;
     use crate::gateway::protocol::JsonRpcRequest;
-    use serial_test::serial;
+    use crate::utils::paths::AlephHomeEnvGuard;
     use std::collections::HashMap;
 
     fn make_manager() -> Arc<AcpAdapterManager> {
@@ -731,8 +731,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_handle_create_custom() {
+        // `handle_create` persists via `save_incremental`, whose path resolves
+        // off ALEPH_HOME. Without this the adapter was written into the
+        // developer's real ~/.aleph/config.toml on every `cargo test --lib`.
+        // The crate-wide guard is the single source of ALEPH_HOME exclusion —
+        // the `#[serial]` group this replaces did not exclude the handler tests
+        // that take the mutex, so they could observe each other's override.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
         let manager = Arc::new(AcpAdapterManager::from_entries(HashMap::new()));
         let config = make_config();
         let event_bus = make_event_bus();
@@ -791,8 +799,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_handle_delete_custom() {
+        // Same as `test_handle_create_custom`: `handle_delete` persists via
+        // `save_incremental`, so the write needs a tempdir ALEPH_HOME.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
         let manager = Arc::new(AcpAdapterManager::from_entries(HashMap::new()));
         let config = make_config();
         let event_bus = make_event_bus();

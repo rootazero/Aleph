@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::Args;
-use crate::daemon::expand_path;
 
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
@@ -506,14 +505,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // remote Panel can exchange for a per-device token. Authorized-only.
     {
         let mgr = device_token_mgr.clone();
+        // Bind address + port + scheme decide which URLs the QR may honestly
+        // advertise. Snapshotted here (config is immutable for the process); the
+        // interface IPs behind them are re-discovered per call.
+        let bind_host = full_config.gateway.host.clone();
+        let bind_port = full_config.gateway.port;
+        let tls_enabled = full_config.gateway.tls.enabled;
         server
             .handlers_mut()
             .register("gateway.ticket.create", move |req| {
                 let mgr = mgr.clone();
+                let bind_host = bind_host.clone();
                 async move {
                     let ctx = Arc::new(
                         alephcore::gateway::handlers::gateway_ticket::TicketHandlerContext {
                             device_token_mgr: mgr,
+                            bind_host,
+                            port: bind_port,
+                            tls_enabled,
                         },
                     );
                     alephcore::gateway::handlers::gateway_ticket::handle_ticket_create(req, ctx)
@@ -527,12 +536,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // to `device_type = "panel"` so they never touch cluster nodes.
     {
         let list_mgr = device_token_mgr.clone();
+        let list_presence = server.presence.clone();
         server
             .handlers_mut()
             .register("gateway.devices.list", move |req| {
                 let ctx = Arc::new(
                     alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
                         device_token_mgr: list_mgr.clone(),
+                        presence: list_presence.clone(),
                     },
                 );
                 async move {
@@ -543,17 +554,63 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
     {
         let revoke_mgr = device_token_mgr.clone();
+        let revoke_bus = event_bus.clone();
+        let revoke_conns = server.connections.clone();
+        let revoke_presence = server.presence.clone();
         server
             .handlers_mut()
             .register("gateway.devices.revoke", move |req| {
                 let ctx = Arc::new(
                     alephcore::gateway::handlers::gateway_devices::DevicesHandlerContext {
                         device_token_mgr: revoke_mgr.clone(),
+                        presence: revoke_presence.clone(),
                     },
                 );
+                let bus = revoke_bus.clone();
+                let conns = revoke_conns.clone();
                 async move {
-                    alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(req, ctx)
-                        .await
+                    let resp =
+                        alephcore::gateway::handlers::gateway_devices::handle_devices_revoke(
+                            req, ctx,
+                        )
+                        .await;
+                    // Kick the device's live sessions, but only once the store
+                    // write actually revoked something (an unknown id, a cluster
+                    // node, or an already-revoked device must not close sockets).
+                    // Order mirrors openclaw's `device.pair.remove`: invalidate
+                    // first so anything already pipelined on that socket fails the
+                    // login wall, then publish the close. The response is written
+                    // by the same connection loop arm that dispatched this call,
+                    // so a device revoking *itself* still receives its reply before
+                    // the close frame is polled.
+                    let revoked_id = resp
+                        .result
+                        .as_ref()
+                        .filter(|r| {
+                            r.get("revoked").and_then(serde_json::Value::as_bool) == Some(true)
+                        })
+                        .and_then(|r| r.get("device_id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(String::from);
+                    if let Some(device_id) = revoked_id {
+                        let downgraded = alephcore::gateway::server::invalidate_device_sessions(
+                            &conns, &device_id,
+                        )
+                        .await;
+                        if downgraded > 0 {
+                            tracing::info!(
+                                device_id = %device_id,
+                                sessions = downgraded,
+                                "device revoked: live sessions downgraded to the login wall"
+                            );
+                        }
+                        let _ = bus.publish_frame(
+                            &alephcore::gateway::events::GatewayEventFrame::DeviceRevoked {
+                                device_id,
+                            },
+                        );
+                    }
+                    resp
                 }
             });
     }
@@ -818,7 +875,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let aleph_dir = alephcore::utils::paths::get_config_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
     let agent_manager = Arc::new(alephcore::AgentManager::new(
-        alephcore::Config::default_path(),
+        alephcore::Config::effective_path(),
         aleph_dir.join("workspaces"),
         aleph_dir.join("agents"),
         aleph_dir.join("trash"),
@@ -1372,7 +1429,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let config_patcher = {
-        let config_path = alephcore::Config::default_path();
+        let config_path = alephcore::Config::effective_path();
         let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir()?, 10);
         // Wire the vault so a `health_check` provider patch (self_config
         // verify / Panel config.patch) can probe live reachability with the
@@ -2688,11 +2745,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    let config_path = args
-        .config
-        .clone()
-        .map(|p| expand_path(&p.to_string_lossy()))
-        .or_else(|| alephcore::utils::paths::get_config_file_path().ok());
+    // Same file `Config::load` / `ConfigPatcher` / `AgentManager` use — the
+    // watcher must not reload from a different one than the rest of the
+    // process reads (`config.path` RPC reports the watcher's answer).
+    let config_path = Some(alephcore::Config::effective_path());
     let _config_watcher = setup_config_watcher(
         &mut server,
         config_path,

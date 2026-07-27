@@ -37,7 +37,7 @@ pub use crypto::{
     generate_keypair, generate_secret, hmac_sign, hmac_verify, sign_message, verify_signature,
     CryptoError, DeviceFingerprint,
 };
-pub use device_token_manager::{DeviceTokenError, DeviceTokenManager};
+pub use device_token_manager::{DeviceTokenError, DeviceTokenManager, PANEL_DEVICE_TYPE};
 pub use shared_token::{SharedTokenError, SharedTokenManager};
 pub use store::{DeviceUpsertData, SecurityStore};
 pub use token_readonly::read_current_token_readonly;

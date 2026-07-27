@@ -113,8 +113,11 @@ impl SqlitePairingStore {
 
     /// Override the pairing-code expiry window (seconds). `0` disables expiry.
     ///
-    /// Wire this from `RoutingConfig::pairing_code_expiry_secs` so an operator's
-    /// configured TTL reaches the enforcement point in [`Self::approve`].
+    /// Test-only knob today: production always uses
+    /// [`DEFAULT_PAIRING_EXPIRY_SECS`]. This used to point at a
+    /// `RoutingConfig::pairing_code_expiry_secs` setting that nothing read and
+    /// that has since been removed — if an operator-facing TTL is wanted, it
+    /// needs a real config field wired to this method, not a doc comment.
     #[must_use]
     pub fn with_expiry_secs(mut self, expiry_secs: u64) -> Self {
         self.expiry_secs = expiry_secs;
@@ -230,7 +233,8 @@ impl PairingStore for SqlitePairingStore {
         let created_at = DateTime::parse_from_rfc3339(&created_at)
             .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
         if self.expiry_secs > 0 {
-            let ttl = chrono::Duration::seconds(i64::try_from(self.expiry_secs).unwrap_or(i64::MAX));
+            let ttl =
+                chrono::Duration::seconds(i64::try_from(self.expiry_secs).unwrap_or(i64::MAX));
             if Utc::now().signed_duration_since(created_at) > ttl {
                 // Consume the stale row so a later retry can't approve it either.
                 conn.execute(

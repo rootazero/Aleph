@@ -1,8 +1,12 @@
-//! Login wall — full-screen token box shown when a remote Panel connected
-//! without a valid Gateway token (`DashboardState::needs_token`). Mirrors a
-//! browser hitting the core's LAN IP and being asked to authorize: paste the
-//! shared Gateway token (or open a `?token=` link / scan the QR) to unlock the
-//! full app with the same authority as the local App. Loopback never sees this.
+//! Login wall — full-screen credential box shown when a remote Panel connected
+//! without a valid credential (`DashboardState::needs_token`). Mirrors a browser
+//! hitting the core's LAN IP and being asked to authorize. Loopback never sees
+//! this.
+//!
+//! The box accepts any of the three credentials the server understands —
+//! `DashboardState::submit_token` routes by prefix. In particular a **pairing
+//! code** (`aleph-bt-…`) typed by hand is as good as the QR that encodes it,
+//! which is the only path available when a phone cannot scan.
 
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -41,7 +45,7 @@ pub fn TokenWall() -> impl IntoView {
                     <input
                         type="password"
                         class="w-full px-4 py-3 rounded-xl bg-surface-sunken border border-border text-text-primary font-mono text-sm mb-4 focus:outline-none focus:border-primary"
-                        placeholder="aleph-…"
+                        placeholder=move || t_string!(i18n, common.token_wall_placeholder).to_string()
                         prop:value=move || token.get()
                         on:input=move |ev| token.set(event_target_value(&ev))
                         on:keydown=move |ev| {

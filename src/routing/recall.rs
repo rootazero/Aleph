@@ -87,7 +87,6 @@ impl RoutingRecall {
         &self,
         user_query: &str,
         agent_id: &str,
-        _available_tokens: Option<u32>,
         attribution: &RoutingAttribution,
     ) -> Result<Option<String>, AlephError> {
         // Embed once; backfill attribution so the observer attributes with the
@@ -269,7 +268,7 @@ mod tests {
         let recall = RoutingRecall::new(store.clone(), avail);
         let attribution = RoutingAttribution::new("s".into());
         let _ = recall
-            .build_routing_experience_message("same text", "a", None, &attribution)
+            .build_routing_experience_message("same text", "a", &attribution)
             .await
             .unwrap();
         let recalled_key = attribution.task_emb.get().cloned().unwrap();
@@ -295,7 +294,7 @@ mod tests {
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
         let msg = recall
-            .build_routing_experience_message("do X", "a", None, &attribution)
+            .build_routing_experience_message("do X", "a", &attribution)
             .await
             .unwrap()
             .unwrap();
@@ -313,7 +312,7 @@ mod tests {
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
         let msg = recall
-            .build_routing_experience_message("do X", "a", None, &attribution)
+            .build_routing_experience_message("do X", "a", &attribution)
             .await
             .unwrap();
         assert!(msg.is_none());
@@ -345,7 +344,7 @@ mod tests {
         let recall = RoutingRecall::new(store, avail);
         let attribution = RoutingAttribution::new("s".into());
         let msg = recall
-            .build_routing_experience_message("do X", "a", None, &attribution)
+            .build_routing_experience_message("do X", "a", &attribution)
             .await
             .unwrap()
             .unwrap();
@@ -373,7 +372,7 @@ mod tests {
         let attribution = RoutingAttribution::new("s".into());
 
         let msg = recall
-            .build_routing_experience_message("do X", "a", None, &attribution)
+            .build_routing_experience_message("do X", "a", &attribution)
             .await
             .unwrap()
             .unwrap();

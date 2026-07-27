@@ -8,6 +8,32 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, error, info, warn};
 
+/// Refuse to let a unit test persist onto the developer's real config file.
+///
+/// Both save entry points resolve their target from process-ambient state
+/// ([`Config::effective_path`]), so a handler test that reaches a persist
+/// branch writes whatever `~/.aleph/config.toml` happens to be. Tests that
+/// need a persist target isolate first with
+/// [`crate::utils::paths::AlephHomeEnvGuard`]; this catches the ones that
+/// forget — otherwise the damage is silent and non-deterministic, since the
+/// two provider guards below only cover the `memory` and `providers` sections.
+///
+/// The comparison deliberately resolves the home directory *without*
+/// `ALEPH_HOME`: an isolated test legitimately writes `$ALEPH_HOME/config.toml`
+/// in its own tempdir, and only the real file is off limits.
+#[cfg(test)]
+fn reject_real_home_config(path: &Path, caller: &str) {
+    let Ok(home) = crate::utils::paths::get_home_dir() else {
+        return;
+    };
+    assert!(
+        path != home.join(".aleph").join("config.toml"),
+        "{caller} targeted the developer's real config file ({}). Isolate the test with \
+         crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(tempdir).",
+        path.display()
+    );
+}
+
 impl Config {
     /// Save configuration to a TOML file with atomic write
     ///
@@ -32,6 +58,8 @@ impl Config {
     /// ```
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
+        #[cfg(test)]
+        reject_real_home_config(path, "save_to_file");
 
         // Guard: detect embedding provider loss before writing.
         // If the file already exists with providers but we're about to write empty,
@@ -195,10 +223,13 @@ impl Config {
         Ok(())
     }
 
-    /// Save configuration to default path with atomic write
+    /// Save configuration to this process's effective path with atomic write
     ///
-    /// This is a convenience method that saves to ~/.aleph/config.toml
-    /// using atomic write operation.
+    /// This is a convenience method that saves to the `--config` file when one
+    /// was pinned, else ~/.aleph/config.toml, using atomic write operation.
+    /// It must resolve the same way [`Self::load`] does: writing the default
+    /// file while reading the pinned one is how settings end up in a file
+    /// nothing reads.
     ///
     /// # Example
     /// ```rust,ignore
@@ -207,7 +238,7 @@ impl Config {
     /// config.save()?;
     /// ```
     pub fn save(&self) -> Result<()> {
-        self.save_to_file(Self::default_path())
+        self.save_to_file(Self::effective_path())
     }
 
     /// Save only specific sections to the config file (incremental update)
@@ -225,7 +256,7 @@ impl Config {
     /// 3. Only copy specified sections from current to existing
     /// 4. Write back with atomic operation
     pub fn save_incremental(&self, sections: &[&str]) -> Result<()> {
-        self.save_incremental_to_file(Self::default_path(), sections)
+        self.save_incremental_to_file(Self::effective_path(), sections)
     }
 
     /// Save only specific sections to a specific config file path (incremental update)
@@ -238,6 +269,8 @@ impl Config {
         sections: &[&str],
     ) -> Result<()> {
         let path = path.as_ref();
+        #[cfg(test)]
+        reject_real_home_config(path, "save_incremental_to_file");
 
         // If file doesn't exist, do a full save
         if !path.exists() {
@@ -430,5 +463,30 @@ impl Config {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod real_home_guard_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn real_home_config() -> PathBuf {
+        crate::utils::paths::get_home_dir()
+            .expect("home dir")
+            .join(".aleph")
+            .join("config.toml")
+    }
+
+    #[test]
+    #[should_panic(expected = "real config file")]
+    fn rejects_the_developers_real_config() {
+        reject_real_home_config(&real_home_config(), "test");
+    }
+
+    #[test]
+    fn allows_a_test_that_isolated_itself_to_a_tempdir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        reject_real_home_config(&dir.path().join("config.toml"), "test");
     }
 }

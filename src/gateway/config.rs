@@ -455,11 +455,15 @@ impl GatewayConfig {
         Ok(config)
     }
 
-    /// Load from default location (~/.aleph/config.toml)
+    /// Load from this process's effective config file (~/.aleph/config.toml
+    /// unless `--config` pinned another one).
+    ///
+    /// Resolving by hand here used to make this the one loader that honoured
+    /// neither `ALEPH_HOME` (`dirs::home_dir()` ignores `$HOME` on macOS, the
+    /// same divergence the instance lock was bitten by) nor the `--config`
+    /// pin — so an isolated server could read the real user's config.
     pub fn load_default() -> Result<Self, ConfigError> {
-        let config_path = dirs::home_dir()
-            .ok_or_else(|| ConfigError::LoadFailed("No home directory".to_string()))?
-            .join(".aleph/config.toml");
+        let config_path = crate::config::Config::effective_path();
 
         if config_path.exists() {
             Self::load(&config_path)
