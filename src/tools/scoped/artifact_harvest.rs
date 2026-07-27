@@ -13,13 +13,31 @@
 //!
 //! [`ScopedToolService::apply_layer_two`]: super::ScopedToolService
 //!
+//! # Two lanes, one harvest
+//!
+//! `_media` has two destinations and they are independent:
+//!
+//! * the **artifact store**, which backs the workspace pane and outlives the run;
+//! * the run's **channel-delivery buffer** ([`PendingMedia`]), which this run's
+//!   `ReplyEmitter` drains and posts to Telegram / Slack / … as attachments.
+//!
+//! Only the first used to hang here. The second had exactly one writer — the
+//! slash fast path, which holds the buffer in hand — so `/image …` reached a
+//! channel while a model-initiated `media_send` in a normal turn did not: it
+//! settled into the pane and stopped there, even though `media_send`'s own doc
+//! comment promised channel delivery. Both lanes are now filled from this one
+//! function, so the parse, the per-run cap and the delivery decision cannot
+//! drift between the two entry points.
+//!
 //! # Contract
 //!
-//! * **Read-only on the tool value.** The items stay in `out.value`, so the
-//!   existing delivery path (`ReplyEmitter::drain_and_send_media`) is unchanged.
+//! * **Read-only on the tool value.** The items are cloned out; `out.value` is
+//!   untouched.
 //! * **Never fails the tool call.** Every failure — unresolvable URL, full disk,
 //!   missing data dir — is logged and the harvest moves on. The signature
 //!   returns `()`, so no error can escape into the model's result.
+//! * **Delivery is not gated on storage.** The queue is filled first: a run with
+//!   no `ArtifactStore` installed must still be able to send the user a picture.
 //! * **The live event is a content-free ping.** `session.artifact` carries only
 //!   the session key. The stream that carries it is deliberately lossy, so a
 //!   consumer must treat [`ArtifactStore::list`] as the settlement and the ping
@@ -32,7 +50,7 @@ use crate::artifacts::{ArtifactOrigin, ArtifactStore};
 // The ping's frame shape is owned by the gateway (one source, two producers —
 // see that module for why the bus resolution is allowed to differ).
 use crate::gateway::event_emitter::artifact_ping::publish_artifact_ping;
-use crate::gateway::media::{MediaItem, MAX_MEDIA_PER_RUN};
+use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
 use crate::media::cache::MediaCache;
 use crate::tools::turn_context::TurnContext;
 
@@ -57,28 +75,45 @@ pub(super) async fn harvest_outbound_media(tool: &str, value: &Value, turn: Opti
         }
         return;
     };
+    // The delivery buffer is published run-tree-wide at the run-loop boundary
+    // (`crate::gateway::media::with_pending_media`), so the chokepoint can reach
+    // it without it being threaded through `build_request_tool_service`.
+    let delivery = crate::gateway::media::current_pending_media();
     let run_id = (!turn.run_id.is_empty()).then_some(turn.run_id.as_str());
-    harvest_media_for_session(tool, value, &turn.session_key.to_key_string(), run_id).await;
+    harvest_media_for_session(
+        tool,
+        value,
+        &turn.session_key.to_key_string(),
+        run_id,
+        delivery.as_ref(),
+    )
+    .await;
 }
 
 /// Harvest for a caller that knows its session directly.
 ///
 /// The slash-command fast path (`execution_engine::slash_command`) invokes the
 /// registry itself and never passes through [`super::ScopedToolService`], so the
-/// chokepoint above never fires for it. Before this existed, `/image …` was the
-/// *only* invocation whose media reached a channel — and the only one whose
-/// media never reached the pane. Sharing the body rather than copying it is the
-/// point: two harvests would be two chances to drift on filenames, caps and the
-/// ping.
+/// chokepoint above never fires for it — it passes its own `RunRequest`'s buffer
+/// as `delivery` rather than reading the task-local, which its dispatch never
+/// enters. Sharing the body rather than copying it is the point: two harvests
+/// would be two chances to drift on filenames, caps, the ping and — the bug this
+/// argument exists to prevent recurring — on which lanes get filled at all.
 pub(crate) async fn harvest_media_for_session(
     tool: &str,
     value: &Value,
     session_key: &str,
     run_id: Option<&str>,
+    delivery: Option<&PendingMedia>,
 ) {
     let items = media_items(value);
     if items.is_empty() {
         return;
+    }
+    // Channel lane first: it must not depend on an `ArtifactStore` being
+    // installed, nor on the store call succeeding.
+    if let Some(buffer) = delivery {
+        queue_for_delivery(tool, buffer, &items).await;
     }
     let Some(store) = ArtifactStore::shared() else {
         return;
@@ -86,6 +121,30 @@ pub(crate) async fn harvest_media_for_session(
     if store_media_items(store, session_key, run_id, tool, items).await > 0 {
         publish_artifact_ping(session_key);
     }
+}
+
+/// Append the items to the run's channel-delivery buffer, honouring the
+/// per-run cap across every tool call in the run (the buffer is shared, so the
+/// cap is on what is still unsent, not on what one call declared).
+async fn queue_for_delivery(tool: &str, buffer: &PendingMedia, items: &[MediaItem]) {
+    let mut pending = buffer.lock().await;
+    let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
+    if remaining == 0 {
+        warn!(
+            tool,
+            declared = items.len(),
+            "the run's media delivery queue is full; these items are not sent to the channel"
+        );
+        return;
+    }
+    let taken = items.len().min(remaining);
+    pending.extend(items.iter().take(taken).cloned());
+    debug!(
+        tool,
+        queued = taken,
+        dropped = items.len() - taken,
+        "queued tool media for channel delivery"
+    );
 }
 
 /// Parse the `_media` field. Absent or malformed yields no items — a tool that
@@ -273,6 +332,95 @@ mod tests {
             Some(name) => json!({ "url": url, "media_type": "image", "filename": name }),
             None => json!({ "url": url, "media_type": "image" }),
         }
+    }
+
+    fn buffer() -> PendingMedia {
+        PendingMedia::default()
+    }
+
+    fn turn() -> TurnContext {
+        TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("main"),
+            run_id: "run-1".to_string(),
+            channel_id: "telegram".to_string(),
+            conversation_id: "chat-1".to_string(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+        }
+    }
+
+    // ── Channel-delivery lane ───────────────────────────────────────────
+    //
+    // The regression these guard: the harvest used to fill only the artifact
+    // store, so a model-initiated `media_send` reached the workspace pane and
+    // never the channel. Only `/image …` — which pushed the buffer itself —
+    // got through.
+
+    #[tokio::test]
+    async fn the_dispatch_chokepoint_queues_media_for_the_runs_channel() {
+        let queue = buffer();
+        let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
+
+        // Exactly how a normal turn runs: the run loop publishes the buffer,
+        // `apply_layer_two` calls the harvest many frames below.
+        crate::gateway::media::with_pending_media(Some(queue.clone()), async {
+            harvest_outbound_media("media_send", &value, Some(&turn())).await;
+        })
+        .await;
+
+        let queued = queue.lock().await;
+        assert_eq!(queued.len(), 1, "the model's media must reach the channel");
+        assert_eq!(queued[0].filename.as_deref(), Some("cat.png"));
+    }
+
+    #[tokio::test]
+    async fn a_run_with_no_channel_leg_still_harvests() {
+        // Panel / cron runs publish no buffer. The harvest must not panic on the
+        // absent task-local, and must still take the artifact-store lane.
+        let value = media_value(json!([item(HELLO_PNG, None)]));
+        assert!(crate::gateway::media::current_pending_media().is_none());
+        harvest_outbound_media("media_send", &value, Some(&turn())).await;
+    }
+
+    #[tokio::test]
+    async fn delivery_is_not_gated_on_the_artifact_store() {
+        // `ArtifactStore::shared()` is absent in unit tests — the exact shape of
+        // a deployment with no data dir. The user must still get the picture.
+        let queue = buffer();
+        let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
+
+        harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue)).await;
+
+        assert_eq!(queue.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_delivery_queue_cap_counts_the_whole_run_not_one_call() {
+        let queue = buffer();
+        // Two calls in one run, each declaring the full cap.
+        let value = media_value(Value::Array(
+            (0..MAX_MEDIA_PER_RUN)
+                .map(|_| item(HELLO_PNG, None))
+                .collect(),
+        ));
+
+        harvest_media_for_session("image_generate", &value, SESSION, None, Some(&queue)).await;
+        harvest_media_for_session("image_generate", &value, SESSION, None, Some(&queue)).await;
+
+        assert_eq!(
+            queue.lock().await.len(),
+            MAX_MEDIA_PER_RUN,
+            "the cap is on the shared buffer, not on one tool call"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_without_media_leaves_the_queue_alone() {
+        let queue = buffer();
+        let value = json!({ "_display": "ok", "stdout": "hello" });
+        harvest_media_for_session("bash", &value, SESSION, None, Some(&queue)).await;
+        assert!(queue.lock().await.is_empty());
     }
 
     #[tokio::test]

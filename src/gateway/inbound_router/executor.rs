@@ -550,9 +550,9 @@ impl InboundMessageRouter {
     async fn try_create_telegram_emitter(
         &self,
         ctx: &InboundContext,
-        _run_id: &str,
-        _reply_config: ReplyEmitterConfig,
-        _pending_media: crate::gateway::media::PendingMedia,
+        run_id: &str,
+        reply_config: ReplyEmitterConfig,
+        pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter> {
         use crate::gateway::interfaces::telegram::parse_telegram_channel_config;
         use crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter;
@@ -580,11 +580,24 @@ impl InboundMessageRouter {
         let bot = teloxide::Bot::new(&account.bot_token);
         let conversation_id = ctx.message.conversation_id.as_str().to_string();
 
+        // The orchestrated emitter takes over the wire for text but has no
+        // media leg of its own — hand it a `ReplyEmitter` bound to the same
+        // `pending_media` buffer the run fills, so `_media` still reaches the
+        // chat under this config. Text never routes through it.
+        let media = ReplyEmitter::with_config(
+            self.channel_registry.clone(),
+            ctx.reply_route.clone(),
+            run_id.to_string(),
+            reply_config,
+            pending_media,
+        );
+
         Some(TelegramEventEmitter::new(
             bot,
             streaming,
             conversation_id,
             ctx.reply_route.clone(),
+            media,
         ))
     }
 }

@@ -44,6 +44,41 @@ pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
 /// Maximum number of media items allowed per run.
 pub const MAX_MEDIA_PER_RUN: usize = 10;
 
+tokio::task_local! {
+    /// The channel-delivery buffer of the run currently executing — the same
+    /// `Arc` this run's `ReplyEmitter` drains in
+    /// [`drain_and_send_media`](crate::gateway::reply_emitter::ReplyEmitter).
+    ///
+    /// Scoped once at the run-loop boundary (`run_agent_loop`) next to
+    /// `FsScope` / agent-id / `TURN_ORIGINATOR`, because it is one value for
+    /// the whole run tree rather than something per tool call. The tool
+    /// chokepoint (`ScopedToolService::apply_layer_two`) is many frames below
+    /// that boundary but on the same task, so it can read this without the
+    /// buffer having to be threaded through the `ToolService` construction.
+    ///
+    /// `None` for runs whose surface has no channel to deliver to (Panel, cron,
+    /// heartbeat, A2A) and for a subagent whose runtime re-spawns the future —
+    /// media then still settles into the artifact store, it just has no channel
+    /// leg. Publishing `None` explicitly keeps a nested run from pushing media
+    /// into an outer run's message.
+    pub static RUN_PENDING_MEDIA: Option<PendingMedia>;
+}
+
+/// Run `fut` with `buffer` visible to [`current_pending_media`].
+pub async fn with_pending_media<F, T>(buffer: Option<PendingMedia>, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    RUN_PENDING_MEDIA.scope(buffer, fut).await
+}
+
+/// The current run's channel-delivery buffer, or `None` outside a scope / for
+/// a run with no channel leg.
+#[must_use]
+pub fn current_pending_media() -> Option<PendingMedia> {
+    RUN_PENDING_MEDIA.try_with(Clone::clone).ok().flatten()
+}
+
 /// Detect MIME type from URL extension, with a fallback default based on `media_type`.
 #[must_use]
 pub fn detect_mime(url: &str, media_type: &str) -> String {
@@ -139,6 +174,44 @@ mod tests {
         assert_eq!(item.media_type, "image");
         assert!(item.mime_type.is_none());
         assert!(item.filename.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_run_buffer_is_visible_below_the_scope_and_nowhere_else() {
+        assert!(
+            current_pending_media().is_none(),
+            "outside a run there is no channel to deliver to"
+        );
+
+        let buffer: PendingMedia = PendingMedia::default();
+        with_pending_media(Some(buffer.clone()), async {
+            // Many frames below the run loop — this is what the tool
+            // chokepoint's harvest sees.
+            let seen = current_pending_media().expect("scoped");
+            seen.lock().await.push(MediaItem {
+                url: "data:image/png;base64,SGVsbG8=".into(),
+                media_type: "image".into(),
+                mime_type: None,
+                filename: None,
+            });
+        })
+        .await;
+
+        assert_eq!(
+            buffer.lock().await.len(),
+            1,
+            "the scoped handle must be the same Arc the emitter drains"
+        );
+
+        // A nested run that publishes `None` must not push into the outer run's
+        // message.
+        with_pending_media(Some(buffer.clone()), async {
+            with_pending_media(None, async {
+                assert!(current_pending_media().is_none());
+            })
+            .await;
+        })
+        .await;
     }
 
     #[test]

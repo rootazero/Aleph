@@ -161,6 +161,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // approval bridge can stamp it onto a pending record. `None` for
         // non-channel runs — the gate then degrades to the prior behaviour.
         let originator = request.metadata.get("originator_user_id").cloned();
+        // This run's channel-delivery buffer, published run-tree-wide for the
+        // same reason as `originator`: the tool chokepoint that harvests a
+        // tool's `_media` sits many frames below here and must not have the
+        // buffer threaded through `build_request_tool_service` to reach it.
+        // Without this, only the slash fast path (which holds the buffer
+        // directly) could ever deliver media to a channel — a model-initiated
+        // `media_send` / `image_generate` reached the artifact pane and stopped
+        // there. Clone rather than move: `request` goes into the loop below.
+        let delivery_media = request.pending_media.clone();
         let mut result = crate::agents::with_agent_id(
             Some(agent.id().to_string()),
             crate::projects::with_project_root(
@@ -169,18 +178,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(fs_scope),
                     crate::tools::turn_context::with_originator(
                         originator,
-                        self.run_agent_loop_inner(
-                            run_id,
-                            request,
-                            agent.clone(),
-                            emitter,
-                            deadline,
-                            trace_task_id,
-                            cancel_token,
-                            extension_manager,
-                            hook_executor.clone(),
-                            hook_session_id.clone(),
-                            occupancy_out,
+                        crate::gateway::media::with_pending_media(
+                            Some(delivery_media),
+                            self.run_agent_loop_inner(
+                                run_id,
+                                request,
+                                agent.clone(),
+                                emitter,
+                                deadline,
+                                trace_task_id,
+                                cancel_token,
+                                extension_manager,
+                                hook_executor.clone(),
+                                hook_session_id.clone(),
+                                occupancy_out,
+                            ),
                         ),
                     ),
                 ),

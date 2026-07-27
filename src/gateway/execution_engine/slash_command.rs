@@ -275,39 +275,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         );
         match execution.await {
             Ok(result) => {
-                // Extract _media from tool output and push to pending_media buffer
-                if let Some(media_val) = result.get("_media") {
-                    if let Ok(items) = serde_json::from_value::<Vec<crate::gateway::media::MediaItem>>(
-                        media_val.clone(),
-                    ) {
-                        if !items.is_empty() {
-                            info!(
-                                run_id = %run_id,
-                                tool = %tool_id,
-                                count = items.len(),
-                                "Fast-path: extracted _media from tool output"
-                            );
-                            let mut pending = request.pending_media.lock().await;
-                            let remaining = crate::gateway::media::MAX_MEDIA_PER_RUN
-                                .saturating_sub(pending.len());
-                            pending.extend(items.into_iter().take(remaining));
-                        }
-                    }
-                }
-
-                // Settle the same items into the artifact store so they reach
-                // the workspace pane. The buffer above only feeds the channel
-                // delivery path (`ReplyEmitter::drain_and_send_media`), and this
-                // fast path never touches `ScopedToolService`, where the harvest
-                // normally hangs — so without this call `/image …` would remain
-                // the one invocation whose output a Panel user can never see.
-                // Best-effort by construction: the harvest swallows its own
-                // failures and cannot fail the command.
+                // Settle any `_media` the tool declared into BOTH lanes — the
+                // artifact store (workspace pane) and this run's channel
+                // delivery buffer. This fast path never touches
+                // `ScopedToolService`, where the harvest normally hangs, and it
+                // never enters the run-loop scope that publishes the buffer as
+                // a task-local, so it hands its own `RunRequest`'s buffer over
+                // explicitly. Best-effort by construction: the harvest swallows
+                // its own failures and cannot fail the command.
                 crate::tools::scoped::artifact_harvest::harvest_media_for_session(
                     tool_id,
                     &result,
                     &request.session_key.to_key_string(),
                     Some(run_id),
+                    Some(&request.pending_media),
                 )
                 .await;
 
