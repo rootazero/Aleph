@@ -28,23 +28,42 @@ reaching a LAN core behaves exactly like a browser opening the core's IP:
 
 - **Loopback** (the local desktop App / same machine): always authorized as
   **operator**, no token (single-machine zero-config).
-- **Remote** (LAN): must present the shared Gateway token (`aleph-<uuid>`,
-  provisioned at boot by `SharedTokenManager`) in the `connect` handshake.
-  A valid token grants the **same** operator authority as local — there is no
-  Chat/Config sub-tier. A missing / invalid token leaves the connection
-  unauthorized behind a **login wall**.
-- **Revocation**: rotate the token (`gateway.token.rotate`), which invalidates
-  every previously authorized remote. No per-device sessions.
+- **Remote** (LAN): must present a credential in the `connect` handshake.
+  `connect::resolve_connect_auth` accepts three, in priority order — a
+  **device token** (`aleph-dt-*`, long-lived, bound to one paired device), a
+  **bootstrap ticket** (`aleph-bt-*`, single-use, minutes-long, exchanged
+  in-handshake for a device token), or the legacy **shared Gateway token**
+  (`aleph-<uuid>`, provisioned at boot by `SharedTokenManager`). Any valid
+  credential grants the **same** operator authority as local — there is no
+  Chat/Config sub-tier. Nothing valid ⇒ the connection stays behind a
+  **login wall** (`connect` is the only method it may call).
+- **Revocation**, two granularities, both effective immediately:
+  - `gateway.token.rotate` — regenerates the shared token, revokes **every**
+    paired device, and closes every remote socket (`TokenRotated`).
+  - `gateway.devices.revoke {device_id}` — one device: its live sessions are
+    dropped to the login wall synchronously, then their sockets are closed
+    (`DeviceRevoked`, WS 4001). `gateway.devices.list` is the inventory, with a
+    live `connected` flag. Both are scoped to `device_type = 'panel'` and never
+    touch cluster nodes.
 
-Two ways to present the token, both equivalent to a browser login:
+Three ways to authorize a device, all equivalent to a browser login:
 
-- **Token box** — open the core IP, the Panel shows a token input; paste the
-  token → authorized.
-- **QR / link** — scan the QR (or open `http://<ip>:<port>/?token=<token>`)
-  shown in **Settings → Security → Gateway token**; the token rides the URL.
+- **QR / link** — `Settings → Security → Pair a new device` mints a ticket and
+  shows `http(s)://<ip>:<port>/?bt=<ticket>`. **The URL is resolved by the
+  server** (`gateway.ticket.create` → `urls`, from
+  `tls::discover_interface_ips`), not by the browser: a Panel building it from
+  its own `window.location` emits `http://127.0.0.1:<port>/…` whenever the
+  operator generates it from the local desktop App.
+- **Typed pairing code** — the same ticket, read off the QR and typed into the
+  Panel's authorize box. The only path when a phone cannot scan.
+- **Shared token** — recovery / manual entry. It never expires and doubles as
+  the secret vault's master key, so it must **never** ride a URL or QR; the
+  ticket flow exists precisely to keep long-lived credentials out of browser
+  history, `Referer` headers, and access logs.
 
-Operators read the token via that Settings section or the
-`aleph-server bootstrap-token` CLI.
+Headless cores mint a ticket with `aleph-server pair` (opens the 0600
+`security.db` directly, WAL — the daemon need not be running).
+`aleph-server bootstrap-token` prints the shared token for recovery.
 
 ### Enforcement
 
@@ -317,7 +336,13 @@ call sees the real command, not just the word `bash`) — it is a rendering aid,
 not an enforcement gate. The catastrophic floor that actually refuses commands
 is `sandbox::command_policy`, whose real hardline rules
 (`command_policy/rules.rs::hardline_rules`) cover the never-legitimate shapes:
-fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device.
+fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device,
+and on Windows a drive/hive-root recursive delete, `format`, and the
+destruction chain (shadow copies, backup catalog, boot recovery, raw disk).
+A `powershell -EncodedCommand` payload is decoded before matching, so encoding
+a script does not remove it from the floor's view — see
+[SANDBOX.md](SANDBOX.md) § "command-policy hard-filter" for the normalisation
+contract.
 
 ---
 
@@ -897,7 +922,10 @@ invalid one is walled (the WS dispatch refuses every method but `connect`, and
 a flood guard closes a connection that keeps probing). Revocation is token
 rotation (`gateway.token.rotate` — regenerates the shared token, revokes all
 paired Panel devices, and force-closes live remote sockets) or per-device
-revoke (`gateway.devices.revoke`). Rejected remote connects and flood-guard
+revoke (`gateway.devices.revoke` — drops that device's live sessions to the
+login wall, then closes their sockets; the roster `gateway.devices.list` marks
+which devices are connected right now). Both take effect immediately rather
+than at the next handshake. Rejected remote connects and flood-guard
 closes are recorded in the security audit log (`AuthFailure` / `RateLimited`).
 
 ### Network boundary = reachability
@@ -1166,6 +1194,8 @@ from the pre-revert build:
 | Verifier | none | none | `agent_identity(action="verify")` + `aleph-server identity verify` (offline, daemon-independent) | **ahead** — shipped with the chain, not after it |
 | Floor beneath the top tier | under `Never`, dangerous commands are Forbidden — **but only when the sandbox profile is Managed**; with it off, the top tier is unbounded | hermes: `HARDLINE_PATTERNS` + a user-editable `approvals.deny` floor that survives yolo | `[sandbox.command_policy]` holds under every tier including `Full` (unit-pinned); a `deny` override also beats the tier | **aligned** — better placed than codex's |
 | What the human SEES | full argv + cwd + the model's own justification | hermes: the whole command, redacted, with all findings merged into one prompt. pi: typed per-tool event | the redacted **action summary** (the command / `operation=delete path=…`), on every surface | **gap → closed** — this was the sharpest defect of round 1 |
+| Windows command parsing | `shell-command/src/command_safety/`: a **resident PowerShell AST subprocess** (`powershell_parser.ps1`, id-tagged request protocol) + shlex/operator splitting for cmd — feeding *approval escalation*, not a hard block | hermes / pi: no Windows-specific command surface at all | `RegexSet` hard-filter over a normalised copy; codex's AST **deliberately not ported** (see below), its three *semantics* were: same-segment gaps (`seg!()`), order-free verb/flag/target, full `Remove-Item` alias set | **aligned on semantics** — deliberately different on mechanism |
+| Encoded-payload visibility | AST parser sees the real script; codex owns the encoding side | none | `-EncodedCommand` (and `-e`/`-ec`/`-enc`) base64/UTF-16LE decoded in `normalize.rs` and appended to the scan text, bounded (64 KiB × 8 payloads × 2 nesting rounds) and text-gated; decoding precedes the tier split so `enforcement = "off"` cannot restore the blind spot | **gap → closed 2026-07-27** — the floor was one base64 away from being off on Windows |
 
 ### Deliberately not ported (do not add these)
 
@@ -1176,6 +1206,20 @@ from the pre-revert build:
   harness pick the recovery strategy for it = no.* Aleph compresses the denial
   into context and the model re-plans. A future round that "helpfully" adds a
   retry matrix is reverting an architectural decision, not fixing an omission.
+- **codex's resident PowerShell AST parser** (`command_safety/powershell_parser.ps1`
+  + a cached child process per executable, id-tagged request/response over
+  stdio). It is the right tool for codex's job — deciding whether an argv is
+  *safe enough to auto-approve* — and it buys real precision: it can tell
+  `echo del /f x` from `del /f x`, which a regex cannot. Aleph does not take it,
+  for three reasons that are unlikely to change: it puts a PowerShell round-trip
+  on **every** sandboxed exec (R3 core minimalism, R10 thin harness), it makes
+  the catastrophic floor **depend on PowerShell being installed and healthy** on
+  a path whose whole point is to fail closed, and Aleph's approval-side analogue
+  (`exec_approval/` + exec tier) is a different layer from this one. What *was*
+  ported is the semantics — same-segment matching, order-free verb/flag/target,
+  the complete `Remove-Item` alias set. The accepted cost is the
+  `echo del /s C:\` class of false positive; that is a **known trade**, recorded
+  in FEATURE_LOCATOR §3.8, not an omission to fix later.
 - **pi's approve-with-modification** (the gate mutates `event.input` in place).
   Tempting, but pi does **no re-validation after mutation**, and Aleph has no
   consumer for a third "allow-if-rewritten" state that a tier enum cannot express.

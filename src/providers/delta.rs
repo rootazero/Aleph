@@ -648,6 +648,22 @@ pub fn response_to_delta_stream(
     Box::pin(stream::iter(events))
 }
 
+/// Push a finished [`ProviderResponse`] to `sink` as the delta sequence a
+/// streaming provider would have produced.
+///
+/// The safety net behind [`AiProvider::execute_streaming_dyn`]'s default
+/// implementation: a provider or decorator that cannot stream still *delivers*,
+/// so a caller which suppressed its own once-per-turn emit is never left with
+/// nothing to show. Same event order as a live stream, just all at once.
+///
+/// [`AiProvider::execute_streaming_dyn`]: crate::providers::AiProvider::execute_streaming_dyn
+pub(crate) async fn replay_response_to_sink(response: &ProviderResponse, sink: &dyn DeltaSink) {
+    // rust-doctor-disable-next-line excessive-clone
+    for delta in collect_response_deltas(response.clone()) {
+        sink.on_delta(&delta).await;
+    }
+}
+
 /// Same as [`response_to_delta_stream`] but uses [`crate::error::Result`].
 ///
 /// Used by `ProtocolAdapter` default bridge implementations that operate in

@@ -87,6 +87,21 @@ const fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
     }
 }
 
+/// Every value [`lb_from_str`] accepts, for the rejection message.
+///
+/// Kept beside the parser and asserted against it, because the two drifted:
+/// `cost_aware` shipped, the parser took it, and the error text kept telling
+/// users it did not exist — including any Panel/CLI client that builds its
+/// option list from that string.
+const LOAD_BALANCE_VALUES: &[&str] = &[
+    "ordered",
+    "round_robin",
+    "least_busy",
+    "latency_aware",
+    "usage_based",
+    "cost_aware",
+];
+
 fn lb_from_str(raw: &str) -> Option<LoadBalanceStrategy> {
     match raw {
         "ordered" => Some(LoadBalanceStrategy::Ordered),
@@ -191,7 +206,8 @@ pub async fn handle_update(
                     request.id,
                     INVALID_PARAMS,
                     format!(
-                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware|usage_based, got '{raw}'"
+                        "load_balance must be one of {}, got '{raw}'",
+                        LOAD_BALANCE_VALUES.join("|")
                     ),
                 );
             }
@@ -246,6 +262,34 @@ pub async fn handle_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rejection message must list exactly what the parser takes. These two
+    /// drifted once — `cost_aware` was accepted but advertised as invalid — and
+    /// the only symptom was users (and option-list-building clients) believing a
+    /// shipped strategy did not exist.
+    #[test]
+    fn advertised_load_balance_values_match_the_parser() {
+        for value in LOAD_BALANCE_VALUES {
+            assert!(
+                lb_from_str(value).is_some(),
+                "advertised '{value}' is rejected by the parser"
+            );
+        }
+        // And nothing the parser takes is missing from the advertisement.
+        for value in [
+            "ordered",
+            "round_robin",
+            "least_busy",
+            "latency_aware",
+            "usage_based",
+            "cost_aware",
+        ] {
+            assert!(
+                LOAD_BALANCE_VALUES.contains(&value),
+                "parser accepts '{value}' but the error message never mentions it"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn get_returns_mode_and_classified_providers() {

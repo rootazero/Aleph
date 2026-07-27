@@ -6,7 +6,14 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
+
+/// The config file this process was told to use, if `--config` named one.
+/// Write-once so that no code path can move the file out from under a
+/// consumer that already cached it (`ConfigPatcher`, `AgentManager`, the
+/// config watcher all hold their own copy).
+static EFFECTIVE_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 impl Config {
     /// Get the default config path using unified directory
@@ -17,6 +24,41 @@ impl Config {
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map_or_else(|_| PathBuf::from("config.toml"), |d| d.join("config.toml"))
+    }
+
+    /// Pin the config file this process reads and writes.
+    ///
+    /// Call once, immediately after argv parsing, when `--config <path>` was
+    /// given. `--config` used to reach [`crate::gateway::GatewayConfig`]'s
+    /// loader and stop there, so the server ran on the operator's file while
+    /// `ConfigPatcher`, `AgentManager` and every [`Self::load`] caller kept
+    /// reading `~/.aleph/config.toml` — the Panel reported the default file's
+    /// `[gateway] host` as the live one, and wrote every setting back into a
+    /// file nothing read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the rejected path if a pin is already in place. A late second
+    /// pin must lose rather than win: by then the first path has been handed
+    /// to consumers that keep their own copy of it, so moving it would only
+    /// split the process across two files again.
+    pub fn set_effective_path(path: PathBuf) -> std::result::Result<(), PathBuf> {
+        EFFECTIVE_CONFIG_PATH.set(path)
+    }
+
+    /// The config file this process reads and writes: the `--config` override
+    /// once [`Self::set_effective_path`] has pinned one, else
+    /// [`Self::default_path`].
+    ///
+    /// Prefer this over [`Self::default_path`] anywhere the *live* config file
+    /// is meant — `default_path` is now only the fallback and the answer to
+    /// "where would config live if nobody said otherwise".
+    #[must_use]
+    pub fn effective_path() -> PathBuf {
+        EFFECTIVE_CONFIG_PATH
+            .get()
+            .cloned()
+            .unwrap_or_else(Self::default_path)
     }
 
     /// Load configuration from a TOML file
@@ -169,7 +211,8 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from default path (~/.aleph/config.toml)
+    /// Load configuration from this process's effective path — the `--config`
+    /// file when one was pinned, else ~/.aleph/config.toml
     /// Falls back to default config if file doesn't exist
     ///
     /// # Returns
@@ -183,9 +226,9 @@ impl Config {
     /// let config = Config::load().unwrap();
     /// ```
     pub fn load() -> Result<Self> {
-        let path = Self::default_path();
+        let path = Self::effective_path();
 
-        debug!(path = %path.display(), "Loading config from default path");
+        debug!(path = %path.display(), "Loading config from effective path");
 
         if path.exists() {
             info!(path = %path.display(), "Found config file, loading");

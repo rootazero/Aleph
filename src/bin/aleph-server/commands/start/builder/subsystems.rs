@@ -811,6 +811,15 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         if !cfg.bindings.is_empty() {
             let bindings = cfg.bindings.clone();
             drop(cfg);
+            // A binding that can never match has exactly one symptom at runtime
+            // — silence — and it is indistinguishable from a binding that
+            // simply did not apply. Say so at boot instead, naming the entry.
+            for problem in alephcore::routing::config::binding_problems(&bindings) {
+                tracing::error!("route binding config: {problem}");
+                if !daemon {
+                    eprintln!("  ⚠ route binding config: {problem}");
+                }
+            }
             inbound_router = inbound_router.with_route_bindings(
                 bindings,
                 session_cfg.clone(),

@@ -1407,3 +1407,483 @@ async fn no_load_stats_is_byte_identical_ordering() {
     // Configured order: fb_a first.
     assert_eq!(resp.text_content(), "fb_a");
 }
+
+// ===========================================================================
+// Slot semantics: an explicitly pinned model belongs to the slot the caller
+// chose, and to no other. Both directions of the old `tier == Unknown` proxy.
+// ===========================================================================
+
+#[tokio::test]
+async fn pinned_model_reaches_a_pinned_primary_with_a_real_tier() {
+    // `select_model(provider="anthropic", model="claude-opus-5")` resolves to
+    // the pinned override chain, whose primary carries the pin's REAL tier
+    // (`with_primary_tier`, never `Unknown`). The old proxy read that as "not
+    // the primary slot" and walked anthropic's configured catalog instead —
+    // the model the user explicitly chose was silently discarded.
+    let primary = ScriptProvider::ok("anthropic");
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("anthropic", vec!["claude-sonnet-5", "claude-haiku-5"])],
+        vec![],
+    )
+    .with_primary_tier(EndpointTier::Cloud);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let mut payload = RequestPayload::new(&msgs);
+    payload.model = Some("claude-opus-5".to_string());
+    // rust-doctor-disable-next-line unwrap-in-production
+    fp.process(payload).await.unwrap();
+    assert_eq!(
+        primary.models(),
+        vec![Some("claude-opus-5".to_string())],
+        "the pinned model must reach the wire, not the catalog head"
+    );
+}
+
+#[tokio::test]
+async fn a_fallback_is_never_dialed_with_the_primarys_pinned_model() {
+    // The mirror image: on an auto-derived chain every fallback used to be
+    // tagged `Unknown` and therefore treated as the primary slot, so it was
+    // dialed with the PRIMARY's model id — a guaranteed 404 that killed the
+    // whole chain exactly when a `select_model` pick was active.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let fb = ScriptProvider::ok("fb1");
+    let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![
+            ("primary", primary as Arc<dyn AiProvider>),
+            // rust-doctor-disable-next-line excessive-clone
+            ("fb1", fb.clone() as Arc<dyn AiProvider>),
+        ],
+    );
+    let fp = FailoverProvider::new(
+        pool,
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_live_fallback_derivation();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let mut payload = RequestPayload::new(&msgs);
+    payload.model = Some("kimi-k2.6".to_string());
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(payload).await.unwrap();
+    assert_eq!(resp.text_content(), "fb1");
+    assert_eq!(
+        fb.models(),
+        vec![None],
+        "a fallback with no catalog gets its own default, never the primary's model"
+    );
+}
+
+#[tokio::test]
+async fn live_derived_fallbacks_carry_their_real_tier() {
+    // `always_local` is a guardrail, and the default (auto-derived) chain is
+    // where it has to hold: every live-derived candidate used to be `Unknown`,
+    // which classifies to `Allow` under every mode, so a cloud fallback was
+    // dialed with neither a skip nor a borrow-cloud approval.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let cloud = ScriptProvider::ok("cloud-fb");
+    let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![
+            ("primary", primary as Arc<dyn AiProvider>),
+            // rust-doctor-disable-next-line excessive-clone
+            ("cloud-fb", cloud.clone() as Arc<dyn AiProvider>),
+        ],
+    );
+    let tiers: HashMap<String, EndpointTier> = [("cloud-fb".to_string(), EndpointTier::Cloud)]
+        .into_iter()
+        .collect();
+    let fp = FailoverProvider::new(
+        pool,
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_live_fallback_derivation()
+    .with_tier_catalog(tiers)
+    // AlwaysLocal + no escalation ⇒ a cloud candidate must be dropped.
+    .with_route(RouteMode::AlwaysLocal, false, None);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let err = fp.process(RequestPayload::new(&msgs)).await;
+    assert!(
+        err.is_err(),
+        "the cloud fallback must be skipped, not dialed"
+    );
+    assert_eq!(
+        cloud.call_count(),
+        0,
+        "always_local must not reach a cloud endpoint"
+    );
+}
+
+#[tokio::test]
+async fn an_unmapped_live_provider_is_treated_as_cloud() {
+    // A provider registered after boot has no tier-catalog entry. It must fall
+    // on the conservative side of the guardrail, not the permissive one.
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let unknown = ScriptProvider::ok("added-later");
+    let pool = LivePool::new(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![
+            ("primary", primary as Arc<dyn AiProvider>),
+            // rust-doctor-disable-next-line excessive-clone
+            ("added-later", unknown.clone() as Arc<dyn AiProvider>),
+        ],
+    );
+    let fp = FailoverProvider::new(
+        pool,
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_live_fallback_derivation()
+    .with_route(RouteMode::AlwaysLocal, false, None);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let _ = fp.process(RequestPayload::new(&msgs)).await;
+    assert_eq!(unknown.call_count(), 0);
+}
+
+// ===========================================================================
+// Chain membership is described once (`effective_fallback_names`).
+// ===========================================================================
+
+#[test]
+fn membership_matches_how_the_chain_was_assembled() {
+    let live = vec!["primary".to_string(), "a".to_string(), "b".to_string()];
+    let configured = vec!["b".to_string(), "gone".to_string()];
+
+    // No live registry → the configured order verbatim.
+    assert_eq!(
+        effective_fallback_names(&[], "primary", &configured, false),
+        vec!["b".to_string(), "gone".to_string()]
+    );
+    // Auto-derived → everything registered, minus the primary.
+    assert_eq!(
+        effective_fallback_names(&live, "primary", &configured, true),
+        vec!["a".to_string(), "b".to_string()]
+    );
+    // Explicit chain → operator order, minus entries no longer registered.
+    assert_eq!(
+        effective_fallback_names(&live, "primary", &configured, false),
+        vec!["b".to_string()]
+    );
+}
+
+// ===========================================================================
+// Rate-window accounting.
+// ===========================================================================
+
+#[test]
+fn rate_window_counts_cached_prompt_tokens() {
+    use crate::providers::adapter::TokenUsage;
+    // Disjoint counters: the prompt is only whole once the cache halves are
+    // added. Summing input+output alone under-counts a cached turn by ~67x,
+    // which silently disarms every rate-limit-driven decision downstream.
+    let usage = TokenUsage {
+        input_tokens: 120,
+        output_tokens: 600,
+        cache_read_tokens: Some(48_000),
+        cache_creation_tokens: Some(2_000),
+        ..Default::default()
+    };
+    assert_eq!(super::provider::billed_tokens(&usage), 50_720);
+
+    // A provider that reports no cache stats is unchanged.
+    let plain = TokenUsage {
+        input_tokens: 100,
+        output_tokens: 50,
+        ..Default::default()
+    };
+    assert_eq!(super::provider::billed_tokens(&plain), 150);
+}
+
+// ===========================================================================
+// Streaming seam: the chain is in the middle of every production stack, so if
+// it does not carry the sink, nothing downstream of it can stream.
+// ===========================================================================
+
+/// Provider that emits real deltas, then optionally fails.
+struct StreamingProvider {
+    name: String,
+    chunks: Vec<&'static str>,
+    fail_after_stream: Option<String>,
+}
+
+impl StreamingProvider {
+    fn ok(name: &str, chunks: Vec<&'static str>) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks,
+            fail_after_stream: None,
+        })
+    }
+
+    fn fails_mid_stream(name: &str, chunks: Vec<&'static str>) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks,
+            fail_after_stream: Some("HTTP 429 too many requests".to_string()),
+        })
+    }
+}
+
+impl AiProvider for StreamingProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // rust-doctor-disable-next-line excessive-clone
+        let name = self.name.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let fail = self.fail_after_stream.clone();
+        Box::pin(async move {
+            match fail {
+                Some(msg) => Err(AlephError::provider(msg)),
+                None => Ok(ProviderResponse::text_only(name)),
+            }
+        })
+    }
+
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+        sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            for c in &self.chunks {
+                sink.on_delta(&crate::providers::ProviderDelta::TextDelta(
+                    (*c).to_string(),
+                ))
+                .await;
+            }
+            match &self.fail_after_stream {
+                Some(msg) => Err(AlephError::provider(msg.clone())),
+                // rust-doctor-disable-next-line excessive-clone
+                None => Ok(ProviderResponse::text_only(self.name.clone())),
+            }
+        })
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn color(&self) -> &str {
+        "#000"
+    }
+}
+
+/// Collects every text delta it is handed.
+#[derive(Default)]
+struct RecordingSink(Mutex<Vec<String>>);
+
+impl RecordingSink {
+    fn text(&self) -> String {
+        // rust-doctor-disable-next-line unwrap-in-production
+        self.0.lock().unwrap().join("")
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::providers::DeltaSink for RecordingSink {
+    async fn on_delta(&self, delta: &crate::providers::ProviderDelta) {
+        if let crate::providers::ProviderDelta::TextDelta(t) = delta {
+            // rust-doctor-disable-next-line unwrap-in-production
+            self.0.lock().unwrap().push(t.clone());
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_chain_reports_the_streaming_capability_of_the_slot_it_dials() {
+    // The harness gates live streaming on this answer. `FailoverProvider`
+    // implemented neither this nor `execute_streaming_dyn`, so the gate — which
+    // used to ask `as_http_provider()` — was false on every production stack
+    // and `stream_llm_call` was unreachable code.
+    let streaming = build(
+        StreamingProvider::ok("p", vec!["a"]) as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    );
+    assert!(streaming.supports_streaming());
+
+    let plain = build(
+        ScriptProvider::ok("p") as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    );
+    assert!(!plain.supports_streaming());
+}
+
+#[tokio::test]
+async fn the_chain_forwards_live_deltas_from_the_serving_candidate() {
+    let primary = StreamingProvider::ok("p", vec!["hel", "lo"]);
+    let fp = build(primary as Arc<dyn AiProvider>, vec![], vec![]);
+    let sink = RecordingSink::default();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    fp.execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.text(), "hello");
+}
+
+#[tokio::test]
+async fn a_non_streaming_candidate_still_delivers_its_answer_to_the_sink() {
+    // The trait default replays rather than dropping the sink. Without that,
+    // a caller which suppressed its own once-per-turn emit (the harness does)
+    // would show the user nothing at all whenever the serving provider could
+    // not stream.
+    let fp = build(
+        ScriptProvider::ok("plain") as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    );
+    let sink = RecordingSink::default();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    fp.execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.text(), "plain");
+}
+
+#[tokio::test]
+async fn a_failure_after_partial_output_is_terminal_instead_of_restarting() {
+    // The user has already seen text. Advancing the chain would append a second
+    // answer to a half-written one, so the error surfaces instead — even though
+    // a 429 would normally fail over.
+    let primary = StreamingProvider::fails_mid_stream("p", vec!["partial "]);
+    let fb = ScriptProvider::ok("fb");
+    let fp = build(
+        primary as Arc<dyn AiProvider>,
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
+    );
+    let sink = RecordingSink::default();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let out = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await;
+    assert!(
+        out.is_err(),
+        "must not silently restart on another candidate"
+    );
+    assert_eq!(sink.text(), "partial ");
+    assert_eq!(fb.call_count(), 0, "the fallback must not double-answer");
+}
+
+#[tokio::test]
+async fn a_failure_before_any_output_still_fails_over_while_streaming() {
+    // The guard must not turn streaming into "no failover": nothing was
+    // emitted, so the ordinary chain walk applies.
+    let primary = StreamingProvider::fails_mid_stream("p", vec![]);
+    let fb = ScriptProvider::ok("fb");
+    let fp = build(
+        primary as Arc<dyn AiProvider>,
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
+    );
+    let sink = RecordingSink::default();
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        sink.text(),
+        "fb",
+        "the replayed answer still reaches the sink"
+    );
+}
+
+// ===========================================================================
+// Health as a routing signal, not just a mid-walk skip.
+// ===========================================================================
+
+#[tokio::test]
+async fn a_cooling_provider_is_skipped_while_a_healthy_sibling_remains() {
+    // Pacing exists so a single paid primary is not bounced to a fallback on
+    // every 429. But it used to *sleep* on the parked candidate even when a
+    // healthy one was next in the chain, blocking the turn for up to two
+    // minutes to insist on a provider that is throttled anyway. The rule now
+    // mirrors the circuit breaker's: skip while a later candidate remains.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("primary", std::time::Duration::from_secs(90))
+        .await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![node("fb", fb as Arc<dyn AiProvider>)],
+    )
+    .with_provider_cooldown(cooldown);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let started = Instant::now();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "the parked primary must not be dialed"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the turn must not block on the pacing window"
+    );
+}
+
+#[tokio::test]
+async fn a_cooling_last_resort_is_still_waited_out() {
+    // With nothing else to try, waiting is right: the window is short relative
+    // to the value of keeping the operator's only provider in use. Capped so a
+    // turn never blocks unboundedly.
+    let primary = ScriptProvider::ok("solo");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("solo", std::time::Duration::from_millis(150))
+        .await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    )
+    .with_provider_cooldown(cooldown);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "solo");
+    assert_eq!(primary.call_count(), 1);
+}

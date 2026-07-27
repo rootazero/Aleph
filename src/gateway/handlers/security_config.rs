@@ -329,7 +329,9 @@ pub async fn handle_update(
     let needs_restart =
         host_changed || ssrf_changed || shell_changed || secrets_changed || sandbox_changed;
 
-    let config_path = crate::config::Config::default_path();
+    // Must be the same file `handle_get` reads through `config_patcher`, or the
+    // Panel shows one file's settings and saves into another.
+    let config_path = crate::config::Config::effective_path();
 
     // Persist gateway.host directly to TOML (cannot use ConfigPatcher because
     // Config struct has no `gateway` field — the patcher would discard it).

@@ -4,11 +4,16 @@
 //! for the rest of the conversation in one inference, rather than a separate
 //! routing model deciding for it (which would violate R7/R9). The pick is
 //! recorded in [`session_model_handle`](crate::providers::session_model_handle)
-//! and applied at the next turn's run construction (`harness_bridge`), where it
+//! and applied at the next run's construction (`harness_bridge`), where it
 //! wraps the chosen provider in a `ModelOverrideProvider` to stamp the model.
 //!
-//! Model binding is per-run, so a pick takes effect from the *next* turn — the
-//! tool says so in its response.
+//! Model binding is per-run, not per-iteration: `llm` is bound ONCE at run
+//! construction and the whole Think→Act loop executes inside that binding. A
+//! pick therefore takes effect at the next **run** — the next user message —
+//! not at the next loop iteration. The tool says exactly that, because a model
+//! that reads "next turn" as "iteration 4 onward" will keep working under an
+//! assumption (a bigger context window, vision support) that will not hold for
+//! the remaining 37 iterations of the current run.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -63,9 +68,11 @@ impl AlephTool for SelectModelTool {
         Use when a task needs a different model than the current one — e.g. a larger context \
         window for a big document, a vision-capable model for images, a reasoning model for hard \
         problems, or a cheaper model for simple chat. Pass `model` (required) and optionally \
-        `provider` to pin a specific provider. The change applies from the next turn (the current \
-        turn finishes on the current model). Accepts \"moa:<preset>\" to switch the session onto a \
-        MoA advisory preset (advisors + aggregator).";
+        `provider` to pin a specific provider. The change applies to the next MESSAGE, not the \
+        next step of the current one: the whole current run — every remaining tool call and \
+        model reply — finishes on the current model, so do not switch mid-task and then act as \
+        if the new model's limits already apply. Accepts \"moa:<preset>\" to switch the session \
+        onto a MoA advisory preset (advisors + aggregator).";
 
     type Args = SelectModelArgs;
     type Output = SelectModelOutput;
@@ -121,7 +128,7 @@ impl AlephTool for SelectModelTool {
                 Ok(name) => {
                     let message = format!(
                         "MoA preset '{name}' activated for this session (sticky); model pick \
-                         cleared. Takes effect from the next turn."
+                         cleared. Takes effect from your next message — this run finishes as is."
                     );
                     notify_tool_result(Self::NAME, &message, true);
                     return Ok(SelectModelOutput {
@@ -158,6 +165,15 @@ impl AlephTool for SelectModelTool {
                 message: refusal,
             });
         }
+        if let Some(refusal) = refuse_unpinnable_provider(args.provider.as_deref()) {
+            notify_tool_result(Self::NAME, &refusal, false);
+            return Ok(SelectModelOutput {
+                ok: false,
+                model: args.model,
+                provider: args.provider,
+                message: refusal,
+            });
+        }
 
         // Normal pick: selector-slot exclusivity clears any MoA sticky.
         crate::providers::moa::activation::disarm(&key);
@@ -165,11 +181,13 @@ impl AlephTool for SelectModelTool {
 
         let mut message = match &args.provider {
             Some(p) => format!(
-                "Model switched to '{}' (provider '{}'); takes effect from the next turn.",
+                "Model switched to '{}' (provider '{}'); takes effect from your next message \
+                 — this run finishes on the current model.",
                 args.model, p
             ),
             None => format!(
-                "Model switched to '{}'; takes effect from the next turn.",
+                "Model switched to '{}'; takes effect from your next message — this run \
+                 finishes on the current model.",
                 args.model
             ),
         };
@@ -209,6 +227,38 @@ fn refuse_unusable_model(model: &str) -> Option<String> {
     msg.push_str("; model unchanged.");
     if let Some(successor) = life.successor {
         msg.push_str(&format!(" Use '{successor}' instead."));
+    }
+    Some(msg)
+}
+
+/// Refuse a `provider` pin that the run builder cannot resolve.
+///
+/// Unlike the model id — where the curated tables are always behind the vendors,
+/// so an unknown id is a caveat rather than a refusal — the provider key set is
+/// *closed*: it is exactly the `[providers]` table this daemon booted with, and
+/// [`pinnable_providers`](session_model_handle::pinnable_providers) publishes
+/// the very map the next run resolves against. An unknown key is therefore not
+/// "possibly new", it is certainly wrong, and accepting it means silently
+/// serving the answer from a different vendor than the one just confirmed.
+///
+/// Matching is exact, mirroring the runtime's `HashMap` lookup — a case
+/// mismatch (`"Anthropic"`) is refused with the real spelling in the list
+/// rather than accepted and then silently substituted.
+fn refuse_unpinnable_provider(provider: Option<&str>) -> Option<String> {
+    let provider = provider?;
+    // No published set (tests, pre-boot) = unvalidated, not "nothing valid".
+    let known = session_model_handle::pinnable_providers()?;
+    if known.contains(provider) {
+        return None;
+    }
+    let mut msg = format!("Provider '{provider}' is not configured; model unchanged.");
+    if known.is_empty() {
+        msg.push_str(" No providers are registered for pinning.");
+    } else {
+        msg.push_str(&format!(
+            " Configured providers: {}. Omit `provider` to keep the default routing.",
+            known.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
     Some(msg)
 }

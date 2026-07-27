@@ -25,6 +25,20 @@ pub(crate) fn build_provider_http_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// The response's `Retry-After` as a decimal seconds string, or `None` when the
+/// header is absent or unparseable.
+///
+/// Every protocol adapter reads this header the same way and interpolates it
+/// into a `"Rate limited. Retry after {v} seconds."` suggestion that the
+/// failover layer parses back into a real delay. Going through one normaliser
+/// ([`retry_after_header_secs`](crate::providers::llm_retry::retry_after_header_secs))
+/// is what makes that round-trip safe: an HTTP-date value would otherwise be
+/// spliced in verbatim and read back as its day-of-month.
+pub(crate) fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let raw = headers.get("retry-after")?.to_str().ok()?;
+    crate::providers::llm_retry::retry_after_header_secs(raw).map(|s| s.to_string())
+}
+
 /// Read a non-2xx response body with a hard cap.
 ///
 /// `build_provider_http_client` deliberately sets no overall request timeout

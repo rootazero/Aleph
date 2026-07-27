@@ -249,6 +249,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             .entry(primary_provider_key.to_string())
             .or_insert_with(|| default_provider.current());
     }
+    // Publish exactly this key set so `select_model(provider=…)` refuses a name
+    // the run builder would silently substitute the default chain for. Same map,
+    // same moment — the tool's answer and the runtime's lookup cannot diverge.
+    alephcore::providers::session_model_handle::set_pinnable_providers(
+        named_providers.keys().cloned(),
+    );
 
     let routing_store = match (embedder.clone(), memory_backend.clone()) {
         (Some(embedder), Some(backend)) => Some(std::sync::Arc::new(

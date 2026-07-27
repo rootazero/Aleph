@@ -1,13 +1,21 @@
-//! Gateway token + QR section (Settings → Security).
+//! Pairing + paired devices + shared token (Settings → Security).
 //!
-//! This section offers two authorization surfaces:
+//! Three surfaces, in the order an operator should reach for them:
 //!
-//! 1. **Pairing link / QR** (recommended): a short-lived, single-use bootstrap
-//!    ticket (`?bt=…`) that a remote Panel exchanges for a per-device token.
-//!    This keeps the long-lived shared Gateway token out of URLs and browser
-//!    history.
-//! 2. **Legacy shared token**: the original `aleph-…` token. Displayed for
-//!    recovery and advanced use only — do not share this in a QR or URL.
+//! 1. **Pairing code / QR** (the answer): a short-lived, single-use bootstrap
+//!    ticket (`?bt=…`) the remote Panel exchanges for its own device token. No
+//!    permanent credential ever appears in a URL, a QR, or browser history.
+//! 2. **Paired devices**: the resulting inventory, with a live `connected` flag
+//!    and per-device revoke. Revoking now ends that device's sessions
+//!    immediately, so this is an authority surface, not a log.
+//! 3. **Shared token**: recovery / manual entry only. It never expires and is
+//!    also the secret vault's master key.
+//!
+//! The pairing URL comes from the **server** (`gateway.ticket.create` → `urls`),
+//! not from `window.location`. Building it client-side produced
+//! `http://127.0.0.1:<port>/?bt=…` whenever the operator generated the QR from
+//! the local desktop App — a QR that cannot work in the most common case (pair
+//! my phone with the core running on this machine).
 //!
 //! Reachable only by an authorized (operator) connection — the login wall gates
 //! everything before this renders.
@@ -16,7 +24,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
 
-use crate::context::DashboardState;
+use crate::components::ui::ConfirmButton;
+use crate::context::{local_device_id, DashboardState};
 use crate::i18n::{t, t_string, use_i18n};
 
 /// One paired remote Panel device, as returned by `gateway.devices.list`.
@@ -25,24 +34,7 @@ struct PairedDevice {
     device_id: String,
     device_name: String,
     last_seen_at: Option<i64>,
-}
-
-/// Build a LAN URL carrying a bootstrap ticket from the current page origin.
-#[cfg(target_arch = "wasm32")]
-fn pairing_url(ticket: &str) -> String {
-    web_sys::window()
-        .map(|w| {
-            let loc = w.location();
-            let proto = loc.protocol().unwrap_or_else(|_| "http:".to_string());
-            let host = loc.host().unwrap_or_default();
-            format!("{proto}//{host}/?bt={ticket}")
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn pairing_url(_ticket: &str) -> String {
-    String::new()
+    connected: bool,
 }
 
 /// Render a URL into an inline SVG QR code, or `None` for an empty / unencodable
@@ -63,20 +55,85 @@ fn qr_svg(url: &str) -> Option<String> {
     )
 }
 
+/// This page's `scheme://host[:port]`, or `None` off-browser.
+#[cfg(target_arch = "wasm32")]
+fn page_origin() -> Option<String> {
+    web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .filter(|o| !o.is_empty())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn page_origin() -> Option<String> {
+    None
+}
+
+/// Which URLs to offer for this pairing ticket.
+///
+/// Server-resolved addresses win — only the core knows what it is bound to. The
+/// fallback is the Panel's own origin, which is right in exactly one case the
+/// server cannot see: a reverse-proxy deployment where the gateway binds
+/// loopback and TLS terminates outside, so `gateway.ticket.create` honestly
+/// reports "no LAN address" while this browser reached it through a public
+/// name. A **loopback** origin is never used — that is the broken
+/// `http://127.0.0.1:<port>/?bt=…` QR this whole path exists to stop producing.
+fn choose_pairing_urls(
+    server_urls: Vec<String>,
+    origin: Option<&str>,
+    ticket: &str,
+) -> Vec<String> {
+    if !server_urls.is_empty() {
+        return server_urls;
+    }
+    origin
+        .filter(|o| !is_loopback_origin(o))
+        .map(|o| vec![format!("{}/?bt={ticket}", o.trim_end_matches('/'))])
+        .unwrap_or_default()
+}
+
+/// Whether a `scheme://host[:port]` origin points at this machine.
+fn is_loopback_origin(origin: &str) -> bool {
+    let authority = origin
+        .split_once("://")
+        .map_or(origin, |(_, rest)| rest)
+        .trim_end_matches('/');
+    let host = match authority.strip_prefix('[') {
+        // IPv6 literal: `[::1]:3033`
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None => authority.split(':').next().unwrap_or(authority),
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Format an epoch-millisecond stamp in local time, or `None` when out of range.
+fn format_stamp(ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(ms).map(|dt| {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+    })
+}
+
 #[component]
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn GatewayTokenSection() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
 
-    // Legacy shared token state.
+    // Shared token state.
     let token = RwSignal::new(String::new());
     let revealed = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
     let reload = RwSignal::new(0u32);
+    let confirming_rotate = RwSignal::new(false);
 
     // Bootstrap pairing ticket state.
     let pairing_ticket = RwSignal::new(String::new());
+    let pairing_urls = RwSignal::new(Vec::<String>::new());
     let pairing_expires_at = RwSignal::new(Option::<i64>::None);
     let pairing_error = RwSignal::new(Option::<String>::None);
 
@@ -84,6 +141,26 @@ pub fn GatewayTokenSection() -> impl IntoView {
     let devices = RwSignal::new(Vec::<PairedDevice>::new());
     let devices_error = RwSignal::new(Option::<String>::None);
     let devices_reload = RwSignal::new(0u32);
+    // Which row (if any) is armed for confirmation. Only ever set for the
+    // device the operator is sitting at — revoking that one signs them out.
+    let confirming_self_revoke = RwSignal::new(false);
+    let this_device = StoredValue::new(local_device_id());
+
+    // Revoke a device by id, surfacing failures. Swallowing the RPC error made a
+    // refused revoke look exactly like a successful one: the row simply came
+    // back on the refresh with no explanation.
+    let revoke_now = move |id: String| {
+        spawn_local(async move {
+            match state
+                .rpc_call("gateway.devices.revoke", json!({ "device_id": id }))
+                .await
+            {
+                Ok(_) => devices_error.set(None),
+                Err(e) => devices_error.set(Some(e)),
+            }
+            devices_reload.update(|n| *n += 1);
+        });
+    };
 
     Effect::new(move |_| {
         // Re-run on connect, after a rotate (via `reload`), and after a revoke.
@@ -111,6 +188,10 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                     .unwrap_or("Unknown")
                                     .to_string(),
                                 last_seen_at: d.get("last_seen_at").and_then(|x| x.as_i64()),
+                                connected: d
+                                    .get("connected")
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(false),
                             })
                         })
                         .collect::<Vec<_>>();
@@ -144,7 +225,7 @@ pub fn GatewayTokenSection() -> impl IntoView {
         });
     });
 
-    let rotate = move |_| {
+    let rotate_now = move || {
         spawn_local(async move {
             match state.rpc_call("gateway.token.rotate", json!({})).await {
                 Ok(v) => {
@@ -155,10 +236,12 @@ pub fn GatewayTokenSection() -> impl IntoView {
                             .to_string(),
                     );
                     error.set(None);
-                    // A rotation invalidates previously issued device tokens, so
-                    // clear any displayed pairing link.
+                    // Rotation revokes every paired device, so both the displayed
+                    // pairing code and the roster are stale.
                     pairing_ticket.set(String::new());
+                    pairing_urls.set(Vec::new());
                     pairing_expires_at.set(None);
+                    devices_reload.update(|n| *n += 1);
                 }
                 Err(e) => error.set(Some(e)),
             }
@@ -169,14 +252,31 @@ pub fn GatewayTokenSection() -> impl IntoView {
         spawn_local(async move {
             match state.rpc_call("gateway.ticket.create", json!({})).await {
                 Ok(v) => {
-                    let ticket = v
-                        .get("ticket")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let expires_at = v.get("expires_at").and_then(|t| t.as_i64());
-                    pairing_ticket.set(ticket);
-                    pairing_expires_at.set(expires_at);
+                    pairing_ticket.set(
+                        v.get("ticket")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    pairing_expires_at.set(v.get("expires_at").and_then(|t| t.as_i64()));
+                    // Server-resolved reachable URLs, else this browser's own
+                    // (non-loopback) origin. Empty means there is genuinely
+                    // nothing to hand out — say so rather than invent a link.
+                    let server_urls: Vec<String> = v
+                        .get("urls")
+                        .and_then(|u| u.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|u| u.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let ticket = pairing_ticket.get_untracked();
+                    pairing_urls.set(choose_pairing_urls(
+                        server_urls,
+                        page_origin().as_deref(),
+                        &ticket,
+                    ));
                     pairing_error.set(None);
                 }
                 Err(e) => pairing_error.set(Some(e)),
@@ -200,11 +300,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                 {t!(i18n, common.gateway_token_desc)}
             </p>
 
-            // --- Pairing link / QR ---
+            // --- Pairing code / QR ---
             <div class="mb-6">
-                <h3 class="text-sm font-semibold mb-2">{"Pair new device"}</h3>
+                <h3 class="text-sm font-semibold mb-2">{t!(i18n, common.gateway_pair_title)}</h3>
                 <p class="text-xs text-text-secondary mb-3">
-                    {"Generate a short-lived, single-use link or QR code. The remote device exchanges it for its own long-lived token — the shared token never appears in a URL."}
+                    {t!(i18n, common.gateway_pair_desc)}
                 </p>
                 {move || pairing_error.get().map(|e| view! {
                     <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
@@ -213,21 +313,48 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     class="text-xs px-3 py-2 rounded border border-border hover:bg-surface mb-3"
                     on:click=generate_pairing_link
                 >
-                    {"Generate pairing link / QR"}
+                    {t!(i18n, common.gateway_pair_generate)}
                 </button>
                 {move || {
-                    let url = pairing_url(&pairing_ticket.get());
-                    if url.is_empty() {
+                    let ticket = pairing_ticket.get();
+                    if ticket.is_empty() {
                         return None;
                     }
+                    let urls = pairing_urls.get();
+                    let primary = urls.first().cloned();
+                    let extra: Vec<String> = urls.into_iter().skip(1).collect();
                     let expires = pairing_expires_at.get()
-                        .map(|ts| format!("Expires at {}", chrono::DateTime::from_timestamp_millis(ts).map(|d| d.to_rfc3339()).unwrap_or_else(|| ts.to_string())))
+                        .and_then(format_stamp)
+                        .map(|t| format!("{} {t}", t_string!(i18n, common.gateway_pair_expires)))
                         .unwrap_or_default();
+                    let hint = if primary.is_some() {
+                        t_string!(i18n, common.gateway_pair_scan).to_string()
+                    } else {
+                        t_string!(i18n, common.gateway_pair_local_only).to_string()
+                    };
                     Some(view! {
                         <div class="flex flex-col items-center gap-2">
-                            <div class="bg-white p-3 rounded-lg" inner_html=qr_svg(&url).unwrap_or_default()></div>
-                            <code class="text-xs text-text-tertiary break-all">{url}</code>
+                            {primary.as_deref().and_then(qr_svg).map(|svg| view! {
+                                <div class="bg-white p-3 rounded-lg" inner_html=svg></div>
+                            })}
+                            <p class="text-xs text-text-secondary text-center">{hint}</p>
+                            {primary.map(|u| view! {
+                                <code class="text-xs text-text-tertiary break-all">{u}</code>
+                            })}
+                            <code class="text-sm font-mono break-all select-all">{ticket}</code>
                             <p class="text-xs text-text-secondary">{expires}</p>
+                            {(!extra.is_empty()).then(|| view! {
+                                <details class="w-full text-xs text-text-tertiary">
+                                    <summary class="cursor-pointer">
+                                        {t!(i18n, common.gateway_pair_other_addresses)}
+                                    </summary>
+                                    <div class="mt-1 flex flex-col gap-1">
+                                        {extra.into_iter().map(|u| view! {
+                                            <code class="break-all">{u}</code>
+                                        }).collect_view()}
+                                    </div>
+                                </details>
+                            })}
                         </div>
                     })
                 }}
@@ -237,9 +364,9 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
             // --- Paired devices ---
             <div class="mb-6">
-                <h3 class="text-sm font-semibold mb-2">{"Paired devices"}</h3>
+                <h3 class="text-sm font-semibold mb-2">{t!(i18n, common.gateway_devices_title)}</h3>
                 <p class="text-xs text-text-secondary mb-3">
-                    {"Remote devices that paired via a pairing link. Revoke one to lock it out on its next reconnect. Rotating the shared token below revokes them all at once."}
+                    {t!(i18n, common.gateway_devices_desc)}
                 </p>
                 {move || devices_error.get().map(|e| view! {
                     <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
@@ -248,38 +375,80 @@ pub fn GatewayTokenSection() -> impl IntoView {
                     let list = devices.get();
                     if list.is_empty() {
                         return view! {
-                            <p class="text-xs text-text-tertiary">{"No paired devices."}</p>
+                            <p class="text-xs text-text-tertiary">
+                                {t!(i18n, common.gateway_devices_empty)}
+                            </p>
                         }.into_any();
                     }
+                    let mine = this_device.get_value();
                     view! {
                         <div>
                             {list.into_iter().map(|d| {
+                                let is_self = mine.as_deref() == Some(d.device_id.as_str());
                                 let id = d.device_id.clone();
-                                let revoke = move |_| {
-                                    let id = id.clone();
-                                    spawn_local(async move {
-                                        let _ = state
-                                            .rpc_call("gateway.devices.revoke", json!({ "device_id": id }))
-                                            .await;
-                                        devices_reload.update(|n| *n += 1);
-                                    });
+                                let confirm_id = d.device_id.clone();
+                                let status = if d.connected {
+                                    t_string!(i18n, common.gateway_devices_online).to_string()
+                                } else {
+                                    d.last_seen_at
+                                        .and_then(format_stamp)
+                                        .map(|t| format!("{} {t}", t_string!(i18n, common.gateway_devices_last_seen)))
+                                        .unwrap_or_else(|| t_string!(i18n, common.gateway_devices_never_seen).to_string())
                                 };
-                                let last_seen = d.last_seen_at
-                                    .and_then(chrono::DateTime::from_timestamp_millis)
-                                    .map(|dt| format!("Last seen {}", dt.to_rfc3339()))
-                                    .unwrap_or_else(|| "Never connected".to_string());
                                 view! {
-                                    <div class="flex items-center gap-2 mb-2 p-2 rounded bg-surface-sunken border border-border">
-                                        <div class="flex-1 min-w-0">
-                                            <div class="text-sm font-medium truncate">{d.device_name}</div>
-                                            <div class="text-xs text-text-tertiary">{last_seen}</div>
+                                    <div class="mb-2 p-2 rounded bg-surface-sunken border border-border">
+                                        <div class="flex items-center gap-2">
+                                            <div class="flex-1 min-w-0">
+                                                <div class="text-sm font-medium truncate flex items-center gap-2">
+                                                    {d.device_name}
+                                                    {is_self.then(|| view! {
+                                                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary shrink-0">
+                                                            {t!(i18n, common.gateway_devices_this_device)}
+                                                        </span>
+                                                    })}
+                                                </div>
+                                                <div class="text-xs text-text-tertiary flex items-center gap-1.5">
+                                                    {d.connected.then(|| view! {
+                                                        <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
+                                                    })}
+                                                    {status}
+                                                </div>
+                                            </div>
+                                            {move || if is_self && confirming_self_revoke.get() {
+                                                let confirm_id = confirm_id.clone();
+                                                view! {
+                                                    <ConfirmButton
+                                                        confirming=confirming_self_revoke
+                                                        on_confirm=move || revoke_now(confirm_id.clone())
+                                                        label=Signal::derive(move || t_string!(i18n, common.gateway_devices_revoke_confirm).to_string())
+                                                        size_class="px-3 py-1.5 text-xs"
+                                                    />
+                                                }.into_any()
+                                            } else {
+                                                let id = id.clone();
+                                                view! {
+                                                    <button
+                                                        class="text-xs px-3 py-1.5 rounded border border-border text-danger hover:bg-danger-subtle shrink-0"
+                                                        on:click=move |_| {
+                                                            // Revoking the device you are sitting at
+                                                            // now ends this session immediately.
+                                                            if is_self {
+                                                                confirming_self_revoke.set(true);
+                                                            } else {
+                                                                revoke_now(id.clone());
+                                                            }
+                                                        }
+                                                    >
+                                                        {t!(i18n, common.gateway_devices_revoke)}
+                                                    </button>
+                                                }.into_any()
+                                            }}
                                         </div>
-                                        <button
-                                            class="text-xs px-3 py-1.5 rounded border border-border text-danger hover:bg-danger-subtle"
-                                            on:click=revoke
-                                        >
-                                            {"Revoke"}
-                                        </button>
+                                        {move || (is_self && confirming_self_revoke.get()).then(|| view! {
+                                            <p class="mt-2 text-xs text-danger">
+                                                {t!(i18n, common.gateway_devices_revoke_self_confirm)}
+                                            </p>
+                                        })}
                                     </div>
                                 }
                             }).collect_view()}
@@ -290,16 +459,18 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
             <hr class="border-border mb-4" />
 
-            // --- Legacy shared token (advanced) ---
+            // --- Shared token (recovery) ---
             <div>
-                <h3 class="text-sm font-semibold mb-2">{"Legacy shared token"}</h3>
+                <h3 class="text-sm font-semibold mb-2">
+                    {t!(i18n, common.gateway_token_legacy_title)}
+                </h3>
                 <p class="text-xs text-text-secondary mb-3">
-                    {"For recovery or manual entry only. Do not share this in a URL or QR code — use the pairing link above instead."}
+                    {t!(i18n, common.gateway_token_legacy_desc)}
                 </p>
                 {move || error.get().map(|e| view! {
                     <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
                 })}
-                <div class="flex items-center gap-2 mb-4">
+                <div class="flex items-center gap-2 mb-2">
                     <code class="flex-1 px-3 py-2 rounded bg-surface-sunken border border-border text-sm font-mono truncate">
                         {masked}
                     </code>
@@ -313,14 +484,100 @@ pub fn GatewayTokenSection() -> impl IntoView {
                             t_string!(i18n, common.gateway_token_reveal).to_string()
                         }}
                     </button>
-                    <button
-                        class="text-xs px-3 py-2 rounded border border-border text-danger hover:bg-danger-subtle"
-                        on:click=rotate
-                    >
-                        {t!(i18n, common.gateway_token_rotate)}
-                    </button>
+                    {move || if confirming_rotate.get() {
+                        view! {
+                            <ConfirmButton
+                                confirming=confirming_rotate
+                                on_confirm=rotate_now
+                                label=Signal::derive(move || t_string!(i18n, common.gateway_token_rotate_confirm_action).to_string())
+                                size_class="px-3 py-2 text-xs"
+                            />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button
+                                class="text-xs px-3 py-2 rounded border border-border text-danger hover:bg-danger-subtle shrink-0"
+                                on:click=move |_| confirming_rotate.set(true)
+                            >
+                                {t!(i18n, common.gateway_token_rotate)}
+                            </button>
+                        }.into_any()
+                    }}
                 </div>
+                {move || confirming_rotate.get().then(|| view! {
+                    <p class="mb-4 text-xs text-danger">
+                        {t!(i18n, common.gateway_token_rotate_confirm)}
+                    </p>
+                })}
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{choose_pairing_urls, is_loopback_origin};
+
+    #[test]
+    fn server_urls_win_over_the_page_origin() {
+        // Only the core knows what it is bound to; the browser's view is a
+        // fallback, never an override.
+        assert_eq!(
+            choose_pairing_urls(
+                vec!["http://192.168.1.20:3033/?bt=t".into()],
+                Some("https://core.example.com"),
+                "t"
+            ),
+            vec!["http://192.168.1.20:3033/?bt=t"]
+        );
+    }
+
+    #[test]
+    fn reverse_proxy_deployment_falls_back_to_the_page_origin() {
+        // Gateway bound to loopback behind a proxy: the server honestly reports
+        // no LAN address, but this browser reached it by public name.
+        assert_eq!(
+            choose_pairing_urls(vec![], Some("https://core.example.com"), "t"),
+            vec!["https://core.example.com/?bt=t"]
+        );
+        // Trailing slash must not double up.
+        assert_eq!(
+            choose_pairing_urls(vec![], Some("https://core.example.com/"), "t"),
+            vec!["https://core.example.com/?bt=t"]
+        );
+    }
+
+    #[test]
+    fn a_loopback_origin_is_never_offered() {
+        // The original bug: generating the QR from the local desktop App handed
+        // out a link only that machine could open.
+        for origin in [
+            "http://127.0.0.1:3033",
+            "http://localhost:3033",
+            "http://[::1]:3033",
+            "http://127.0.0.1",
+        ] {
+            assert!(is_loopback_origin(origin), "{origin} must read as loopback");
+            assert!(
+                choose_pairing_urls(vec![], Some(origin), "t").is_empty(),
+                "{origin} must yield no pairing URL"
+            );
+        }
+    }
+
+    #[test]
+    fn public_origins_are_not_loopback() {
+        for origin in [
+            "https://core.example.com",
+            "http://192.168.1.20:3033",
+            "http://[fd00::1]:3033",
+        ] {
+            assert!(!is_loopback_origin(origin), "{origin} must be offerable");
+        }
+    }
+
+    #[test]
+    fn nothing_reachable_yields_nothing() {
+        assert!(choose_pairing_urls(vec![], None, "t").is_empty());
     }
 }

@@ -113,58 +113,57 @@ impl InboundMessageRouter {
                 &input,
             );
 
-            // An explicit per-channel binding (set by `agent_switch` / Panel) is a
-            // deliberate runtime override. It must win when NO *specific* route
-            // binding governs this conversation — otherwise the namesake
-            // `agent_switch` action is a silent no-op whenever any route_bindings
-            // exist, because Tier 1 returns before the Tier 2 workspace binding is
-            // ever consulted. Specific bindings (Peer/Guild/Team/Account/Channel)
-            // still win, preserving carefully-scoped routing config.
-            if resolved.matched_by == crate::routing::resolve::MatchedBy::Default {
-                let channel = msg.channel_id.as_str();
-                if let Some(agent_id) = self.validated_channel_override(channel).await {
-                    if agent_id != resolved.agent_id {
+            // The two runtime facts that can override a config answer — an
+            // explicit `agent_switch` binding, and whether a specifically-bound
+            // agent still exists — are composed by `routing::overlay_route`, the
+            // same function the `gateway_route` tool calls. Keeping the
+            // precedence in one place is what stops the tool from confidently
+            // reporting an agent the gateway would never dispatch to.
+            let channel = msg.channel_id.as_str();
+            let channel_override = self.validated_channel_override(channel).await;
+            let overlaid = crate::routing::overlay_route(
+                &resolved.agent_id,
+                resolved.matched_by,
+                &crate::routing::RuntimeOverlay {
+                    channel_override: channel_override.as_deref(),
+                    bound_agent_exists: self.bound_agent_exists(&resolved.agent_id).await,
+                },
+            );
+            match overlaid.source {
+                crate::routing::OverlaySource::Binding(_) => {
+                    debug!(
+                        "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
+                        channel, resolved.agent_id, resolved.matched_by,
+                    );
+                    return Some((resolved.agent_id.clone(), Some(resolved)));
+                }
+                crate::routing::OverlaySource::ChannelOverride => {
+                    // `None` for the route so the context builder rebuilds the
+                    // session key for the override agent (the route's key was
+                    // computed for the config-resolved agent).
+                    if let Some(agent_id) = overlaid.agent_id {
                         debug!(
-                            "Channel '{}' override → agent '{}' (explicit switch beats default route)",
-                            channel, agent_id
+                            "Channel '{channel}' override → agent '{agent_id}' \
+                             (explicit switch beats default route)"
                         );
-                        // Return None for the route so the context builder
-                        // rebuilds the session key for the override agent
-                        // (the route's key was computed for the default agent).
                         return Some((agent_id, None));
                     }
                 }
-            }
-
-            // Existence gate for SPECIFIC route-binding matches (Peer / Guild /
-            // Team / Account / Channel): `[[bindings]]` is config-TOML
-            // snapshotted at boot — `agents.delete` cannot touch it (the
-            // router must not rewrite routing config), so a binding naming a
-            // deleted agent would brick every conversation it governs: each
-            // message resolves to the ghost → AgentNotFound → error notice,
-            // forever, with no restart cure. Fall through to the already-gated
-            // Tier 2 / Tier 3 instead. Deliberately does NOT touch the
-            // *workspace* store — a different (possibly valid) binding lives
-            // there. Recreating an agent with the same id instantly restores
-            // the route (the gate is per-message).
-            if resolved.matched_by != crate::routing::resolve::MatchedBy::Default
-                && !self.bound_agent_exists(&resolved.agent_id).await
-            {
-                tracing::warn!(
-                    channel = %msg.channel_id.as_str(),
-                    agent_id = %resolved.agent_id,
-                    matched_by = ?resolved.matched_by,
-                    "route binding targets an agent that no longer exists — falling back to workspace binding / default agent; fix [[bindings]] in config"
-                );
-                // fall through to Tier 2
-            } else {
-                debug!(
-                    "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
-                    msg.channel_id.as_str(),
-                    resolved.agent_id,
-                    resolved.matched_by,
-                );
-                return Some((resolved.agent_id.clone(), Some(resolved)));
+                crate::routing::OverlaySource::BindingAgentMissing => {
+                    // `[[bindings]]` is config-TOML snapshotted at boot and
+                    // `agents.delete` cannot touch it, so a binding can outlive
+                    // its agent. Routing to the ghost would brick every
+                    // conversation it governs — every message `AgentNotFound`,
+                    // forever, with no restart cure. Fall through to Tier 2/3
+                    // instead; recreating the agent restores the route on the
+                    // next message.
+                    tracing::warn!(
+                        channel = %channel,
+                        agent_id = %resolved.agent_id,
+                        matched_by = ?resolved.matched_by,
+                        "route binding targets an agent that no longer exists — falling back to workspace binding / default agent; fix [[bindings]] in config"
+                    );
+                }
             }
         }
 

@@ -92,7 +92,6 @@ pub mod moa;
 pub mod oauth;
 pub mod pairing;
 pub mod plugins;
-pub mod profiles;
 pub mod projects;
 pub mod providers;
 pub mod pty;

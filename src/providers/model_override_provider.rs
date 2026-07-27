@@ -48,6 +48,28 @@ impl AiProvider for ModelOverrideProvider {
         self.inner.process(payload)
     }
 
+    /// Same stamp as `process`, then delegate — without this override the trait
+    /// default collapses to `process` and replays the response in one batch, so
+    /// live streaming would silently switch off for exactly the sessions that
+    /// have a `select_model` pick or an agent `model_hint`.
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        mut payload: RequestPayload<'a>,
+        sink: &'a dyn crate::providers::DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // rust-doctor-disable-next-line excessive-clone
+        payload.model = Some(self.model.clone());
+        self.inner.execute_streaming_dyn(payload, sink)
+    }
+
+    fn supports_streaming(&self) -> bool {
+        self.inner.supports_streaming()
+    }
+
+    fn as_http_provider(&self) -> Option<&crate::providers::http_provider::HttpProvider> {
+        self.inner.as_http_provider()
+    }
+
     fn name(&self) -> &str {
         self.inner.name()
     }
