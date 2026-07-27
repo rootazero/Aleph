@@ -69,6 +69,17 @@ use cli::{Args, Command, PluginAction, PluginsAction};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
 
+    // `--config <path>` has to pin the config file for the WHOLE process, not
+    // just for the gateway loader that is handed the flag. Do it here, before
+    // anything else can resolve a config path: `ConfigPatcher`, `AgentManager`
+    // and every `Config::load()` caller read the pin, and they are built deep
+    // inside `handle_start`. Pinning late would leave the process split across
+    // two files — which is exactly the bug this fixes.
+    if let Some(path) = args.config.as_ref() {
+        alephcore::Config::set_effective_path(daemon::expand_path(&path.to_string_lossy()))
+            .expect("--config pinned twice; this is meant to be the only pin site");
+    }
+
     // Spec C Tasks 5 + 19: acquire the cross-process singleton lock as
     // the FIRST meaningful action on the `start` path. Other subcommands
     // run their own policy dispatch (see `src/cli/policy.rs` and the

@@ -70,10 +70,11 @@ pub struct ConfigWatcherConfig {
 impl Default for ConfigWatcherConfig {
     fn default() -> Self {
         Self {
-            config_path: dirs::home_dir().map_or_else(
-                || PathBuf::from("config.toml"),
-                |h| h.join(".aleph/config.toml"),
-            ),
+            // The file this process actually runs on. Resolving by hand here
+            // used to ignore both `ALEPH_HOME` and the `--config` pin, so a
+            // watcher built from these defaults would reload from a different
+            // file than everything else reads.
+            config_path: crate::config::Config::effective_path(),
             debounce_duration: Duration::from_millis(500),
             channel_capacity: 16,
         }
