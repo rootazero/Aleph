@@ -48,17 +48,19 @@ async fn seed_db(n: usize) -> (TempDir, Arc<StateDatabase>) {
         ))
         .await
         .unwrap();
-        let trace = TaskTrace {
-            id: 0,
-            task_id: tid,
-            step_index: 0,
-            event: AgentTraceEvent::TextEmitted {
+        // `new` + `with_timestamp` rather than a struct literal: `TaskTrace` is
+        // `#[non_exhaustive]`, and `new` already owns the `id: 0` "the database
+        // assigns this" convention so the fixture does not restate it.
+        let trace = TaskTrace::new(
+            tid,
+            0,
+            AgentTraceEvent::TextEmitted {
                 iteration: 0,
                 stream: AgentTraceTextKind::Final,
                 text: format!("payload-{i}"),
             },
-            timestamp: base_ts + i,
-        };
+        )
+        .with_timestamp(base_ts + i);
         db.insert_trace(&trace).await.unwrap();
     }
     (tmp, db)

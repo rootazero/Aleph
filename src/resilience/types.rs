@@ -338,6 +338,19 @@ impl TaskTrace {
         }
     }
 
+    /// Replace the wall-clock stamp [`new`](Self::new) applied.
+    ///
+    /// `new` stamps `Utc::now()`, which is what live recording wants but leaves
+    /// no way to place a trace at a chosen instant. Trace listing paginates on a
+    /// `timestamp` cursor with strict less-than semantics, so seeding an ordered
+    /// fixture needs to say *when* — and outside this crate `#[non_exhaustive]`
+    /// rules out reaching for the struct literal.
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: i64) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
     /// Stable event kind string for storage/indexing.
     #[must_use]
     pub const fn event_kind(&self) -> &'static str {
@@ -574,5 +587,27 @@ mod tests {
         );
 
         assert!(!event.is_structural);
+    }
+
+    #[test]
+    fn with_timestamp_replaces_the_wall_clock_stamp() {
+        // The trace-listing cursor paginates on `timestamp` with strict
+        // less-than semantics, so an ordered fixture needs traces at chosen
+        // instants — `new` alone stamps `Utc::now()` for every one of them.
+        let event = aleph_protocol::AgentTraceEvent::TextEmitted {
+            iteration: 0,
+            stream: aleph_protocol::AgentTraceTextKind::Final,
+            text: "payload".into(),
+        };
+        // rust-doctor-disable-next-line excessive-clone
+        let now_stamped = TaskTrace::new("task-1", 0, event.clone());
+        let pinned = TaskTrace::new("task-1", 0, event).with_timestamp(1_700_000_000);
+
+        assert_eq!(pinned.timestamp, 1_700_000_000);
+        assert_ne!(pinned.timestamp, now_stamped.timestamp);
+        // Everything `new` established survives the override.
+        assert_eq!(pinned.id, 0, "the database still assigns the id");
+        assert_eq!(pinned.task_id, "task-1");
+        assert_eq!(pinned.event_kind(), now_stamped.event_kind());
     }
 }
