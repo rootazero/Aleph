@@ -29,7 +29,29 @@ pub const METHOD_DRAG: &str = "input.drag";
 pub const METHOD_HOVER: &str = "input.hover";
 pub const METHOD_CURSOR_POSITION: &str = "input.cursor_position";
 pub const METHOD_MOUSE_BUTTON: &str = "input.mouse_button";
-pub const SUGGESTED_TIMEOUT_MS: u64 = 2_000;
+
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for a synthesized input event.
+///
+/// Posting an event into a process's queue is fire-and-forget: the helper builds
+/// the `CGEvent` and hands it over without waiting for the app to consume it, so
+/// these calls are bounded by the helper's own work, not by the target app's
+/// responsiveness.
+pub const DEFAULT_TIMEOUT_MS: u64 = 2_000;
+
+/// Deadline for the two click methods.
+///
+/// They are the exception to the rule above: before falling back to a
+/// coordinate event they walk the target's accessibility subtree looking for a
+/// control that can be pressed directly, and every node in that walk is a round
+/// trip into the app.
+pub const TIMEOUT_MS_CLICK: u64 = 5_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
+    (METHOD_CLICK, TIMEOUT_MS_CLICK),
+    (METHOD_DOUBLE_CLICK, TIMEOUT_MS_CLICK),
+];
 
 /// `delivery` value: posted into the target process's own event queue; the
 /// user's cursor never moved and the app did not need to be frontmost.

@@ -4,8 +4,31 @@ use serde::{Deserialize, Serialize};
 pub const METHOD_CAPTURE: &str = "screen.capture";
 pub const METHOD_OCR: &str = "screen.ocr";
 pub const METHOD_LIST_DISPLAYS: &str = "screen.list_displays";
-pub const SUGGESTED_TIMEOUT_MS_CAPTURE: u64 = 2_000;
-pub const SUGGESTED_TIMEOUT_MS_OCR: u64 = 10_000;
+
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for a screen capture.
+///
+/// Deliberately not the two seconds this constant used to name. `ScreenCaptureKit`
+/// pays a real warm-up on the first capture after helper start (`SCShareableContent`
+/// enumeration), and encoding a 6K display to PNG is not free either — a two-second
+/// cap would turn a slow-but-working capture into a failure. What it is for is the
+/// wedged case, and there the payoff is large: the macOS limb falls back to `xcap`
+/// on error, so this number is how long a stuck helper delays a capture that would
+/// otherwise have succeeded instantly on the other transport.
+pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+
+/// Deadline for [`METHOD_OCR`]. Vision's accurate recognizer over a full-display
+/// screenshot is seconds of real work, and there is no fallback transport.
+pub const TIMEOUT_MS_OCR: u64 = 20_000;
+
+/// Deadline for [`METHOD_LIST_DISPLAYS`] — an enumeration, not a capture.
+pub const TIMEOUT_MS_LIST_DISPLAYS: u64 = 5_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
+    (METHOD_OCR, TIMEOUT_MS_OCR),
+    (METHOD_LIST_DISPLAYS, TIMEOUT_MS_LIST_DISPLAYS),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CaptureParams {

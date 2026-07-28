@@ -260,45 +260,28 @@ pub(super) async fn resolve_rail(
 
 /// Pre-flight `type_text`'s focus, in the rail's own terms.
 ///
-/// The global rail's keystrokes land on whatever the *system* focuses — exactly
-/// what [`super::focus_gate`] evaluates. The targeted rail's land inside one
-/// process, so the system-focused element is only the destination when it
-/// belongs to that process. When it does not, this gate is looking at the wrong
-/// app: refusing on it would block the background typing this rail exists for,
-/// and allowing on it would be a safety claim about an app we are not touching.
-/// So it stays silent — the module's own fail-open discipline — and the secure
-/// hard block still fires whenever the target app is the one holding focus.
+/// The global rail's keystrokes land on whatever the *system* focuses; the
+/// targeted rail's land inside one named process, which is usually not the app
+/// in front of the user. Both cases are the same question asked of a different
+/// subject, so both go through [`super::focus_gate::check`] — the rail just
+/// decides who is asked.
+///
+/// This used to read the system-focused element for the targeted rail too and
+/// then bail out whenever it belonged to another process. That was fail-open in
+/// the wrong place: the targeted rail is the *default* on macOS, so the branch
+/// that ran almost every time was the one that skipped the gate — including its
+/// hard refusal to type into a password field. The gate is only as good as the
+/// window it is pointed at.
 async fn focus_preflight(
     platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
     rail: Rail,
     force: bool,
 ) -> Option<DesktopOutput> {
-    let Rail::Targeted(pid) = rail else {
-        return super::focus_gate::check(platform, force).await;
+    let pid = match rail {
+        Rail::Targeted(pid) => Some(pid),
+        Rail::Global => None,
     };
-
-    let ax = platform.ax()?;
-    let focused = match ax.query_focused().await {
-        Ok(el) => el?,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "type_text focus pre-flight: AX query failed, allowing the keystrokes"
-            );
-            return None;
-        }
-    };
-    if focused.pid != pid {
-        return None;
-    }
-    match super::focus_gate::evaluate(Some(&focused), force) {
-        super::focus_gate::Gate::Allow => None,
-        super::focus_gate::Gate::Refuse(message) => Some(DesktopOutput {
-            success: false,
-            data: None,
-            message: Some(super::recovery::with_hint(message)),
-        }),
-    }
+    super::focus_gate::check(platform, pid, force).await
 }
 
 /// What a served screenshot's pixels are *of* — decides which coordinate guide
@@ -1378,7 +1361,12 @@ impl super::DesktopTool {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some("launch_app requires 'bundle_id'".to_string()),
+                            message: Some(
+                                "launch_app requires 'bundle_id' — the app's name \
+                                 (\"Safari\") or its bundle id (\"com.apple.Safari\"). \
+                                 `system` with list_installed_apps enumerates both."
+                                    .to_string(),
+                            ),
                         }));
                     }
                 };
@@ -1612,7 +1600,12 @@ impl super::DesktopTool {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some("quit_app requires 'bundle_id'".to_string()),
+                            message: Some(
+                                "quit_app requires 'bundle_id' — the app's name \
+                                 (\"Safari\") or its bundle id (\"com.apple.Safari\"). \
+                                 `system` with list_installed_apps enumerates both."
+                                    .to_string(),
+                            ),
                         }))
                     }
                 };
@@ -1638,7 +1631,12 @@ impl super::DesktopTool {
                         return Ok(Some(DesktopOutput {
                             success: false,
                             data: None,
-                            message: Some("restart_app requires 'bundle_id'".to_string()),
+                            message: Some(
+                                "restart_app requires 'bundle_id' — the app's name \
+                                 (\"Safari\") or its bundle id (\"com.apple.Safari\"). \
+                                 `system` with list_installed_apps enumerates both."
+                                    .to_string(),
+                            ),
                         }))
                     }
                 };

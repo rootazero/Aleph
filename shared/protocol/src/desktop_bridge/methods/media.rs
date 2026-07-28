@@ -21,31 +21,39 @@ pub const METHOD_AUDIO_MIC_METER: &str = "media.audio.mic_meter";
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
 
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for the media calls whose length this table can predict.
+///
+/// The three that it cannot — `media.camera.clip`, `media.audio.record` and
+/// `media.speech.transcribe_file` — run for as long as the *caller* asked them
+/// to, so their limbs pass an explicitly computed deadline (requested duration
+/// plus warm-up headroom) rather than reading anything from here. This default
+/// only ever applies to them if that computation is ever dropped, and one minute
+/// is the same catch-all they would have fallen back to before.
+pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
+
 /// Snap is essentially synchronous (<1s on a warm camera) but the `AVCapture`
 /// pipeline takes time to initialise on first use.
-pub const SUGGESTED_TIMEOUT_MS_SNAP: u64 = 10_000;
-
-/// Clip timeout is duration + warm-up headroom. Callers should compute
-/// `duration_secs * 1000 + CLIP_OVERHEAD_MS` rather than relying on a fixed
-/// constant, so we expose the overhead directly.
-pub const CLIP_OVERHEAD_MS: u64 = 5_000;
+pub const TIMEOUT_MS_SNAP: u64 = 10_000;
 
 /// Device enumeration is fast but `CoreAudio` can stall.
-pub const SUGGESTED_TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
-
-/// Recording timeout is duration + overhead. Callers should compute
-/// `duration_secs * 1000 + RECORD_OVERHEAD_MS` rather than relying on a fixed
-/// constant, so we expose the overhead directly.
-pub const RECORD_OVERHEAD_MS: u64 = 5_000;
-
-/// Speech recognition has a hard 60-second limit (Apple's on-device budget)
-/// plus model warm-up on first call. Callers should budget accordingly.
-pub const SUGGESTED_TIMEOUT_MS_TRANSCRIBE: u64 = 65_000;
+pub const TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
 
 /// Mic-meter poll is a single atomic read of the running session's EMA — fast,
 /// but on first call the helper has to install an `AVAudioEngine` tap which
 /// takes a few hundred ms.
-pub const SUGGESTED_TIMEOUT_MS_MIC_METER: u64 = 2_000;
+pub const TIMEOUT_MS_MIC_METER: u64 = 2_000;
+
+/// Stopping an open-ended recording finalises the encoder before replying.
+pub const TIMEOUT_MS_RECORD_STOP: u64 = 15_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[
+    (METHOD_CAMERA_SNAP, TIMEOUT_MS_SNAP),
+    (METHOD_AUDIO_LIST_DEVICES, TIMEOUT_MS_LIST_DEVICES),
+    (METHOD_AUDIO_MIC_METER, TIMEOUT_MS_MIC_METER),
+    (METHOD_AUDIO_RECORD_STOP, TIMEOUT_MS_RECORD_STOP),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapParams {

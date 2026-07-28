@@ -28,7 +28,12 @@ use super::roles::{
 };
 
 /// Hard cap on how many nodes one walk will materialize.
-pub const MAX_NODES: usize = 1_500;
+///
+/// The contract's [`DEFAULT_MAX_NODES`](aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES)
+/// is the source of truth; this mirrors it so internal scans that carry no
+/// caller-supplied budget stay aligned with the protocol.
+pub const MAX_NODES: usize =
+    aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES as usize;
 
 /// Longest value string carried back for one element.
 const MAX_VALUE_CHARS: usize = 500;
@@ -75,6 +80,18 @@ impl<'a> Walk<'a> {
     pub async fn prefetch(mut self, root: &AccessibleProxy<'static>) -> Self {
         self.cache = AppCache::fetch(self.bus, root).await;
         self
+    }
+
+    /// Nodes materialised so far (delegates to the protocol's `QueryResult.node_count`).
+    pub const fn spent(&self) -> u32 {
+        (MAX_NODES - self.remaining) as u32
+    }
+
+    /// Whether the walk stopped because a budget — node count or wall clock —
+    /// ran out. The returned tree is partial in that case, which the caller
+    /// surfaces via `QueryResult::truncated`.
+    pub const fn exhausted(&self) -> bool {
+        self.remaining == 0 || self.budget.spent()
     }
 
     /// Build the tree rooted at `proxy`, by whichever route this application

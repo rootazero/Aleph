@@ -85,10 +85,11 @@ pub struct MacOSScreen {
 }
 
 impl MacOSScreen {
-    /// Not `const`: `NativeScreen::new` latches this process's DPI awareness
-    /// (`win_dpi::ensure_process_dpi_aware`) and so cannot run at compile time.
-    /// The two landed from different worktrees and only collided once both were
-    /// on main.
+    /// Not `const`, and cannot be: [`NativeScreen::new`] settles the process's
+    /// DPI awareness on the way through, which is a runtime side effect. It was
+    /// declared `const` here until that latch was added — after which this crate
+    /// simply stopped compiling, and stayed that way, because nothing in the
+    /// usual loop builds the macOS limb on its own.
     pub fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self {
             inner: NativeScreen::new(),

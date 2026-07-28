@@ -45,23 +45,53 @@ struct AxElement: Codable {
 }
 
 // Params decoded from the JSON-RPC request
+struct QueryFocusedParams: Codable {
+    /// Ask this process for its own focused element instead of asking the
+    /// system which element is focused overall. Absent = system-wide.
+    var pid: Int32?
+}
+
 struct QueryTreeParams: Codable {
     var pid: Int32?
     var max_depth: Int?     // snake_case matches Rust JSON field name
+    var max_nodes: Int?
 }
 
 struct QueryByRoleParams: Codable {
     var role: String
     var pid: Int32?
+    var max_nodes: Int?
+}
+
+/// What a budgeted walk spent, and whether it ran out.
+struct WalkBudget {
+    var nodeCount: Int = 0
+    var truncated: Bool = false
 }
 
 // Response envelopes
 struct QueryResult: Codable {
     let element: AxElement?
+    let node_count: Int
+    let truncated: Bool
+
+    init(element: AxElement?, budget: WalkBudget = WalkBudget()) {
+        self.element = element
+        self.node_count = budget.nodeCount
+        self.truncated = budget.truncated
+    }
 }
 
 struct QueryListResult: Codable {
     let elements: [AxElement]
+    let node_count: Int
+    let truncated: Bool
+
+    init(elements: [AxElement], budget: WalkBudget = WalkBudget()) {
+        self.elements = elements
+        self.node_count = budget.nodeCount
+        self.truncated = budget.truncated
+    }
 }
 
 /// Stateless element locator for `ax.set_value` / `ax.perform_action`.
@@ -173,7 +203,28 @@ private struct AxAffordances {
 /// by claiming the pid before it settles, so a reentrant call cannot double-write.
 actor AxQuerier {
 
-    private let MAX_TREE_NODES = 10_000
+    /// Fallback node budget, used only when the caller sent none.
+    ///
+    /// The real budget is the protocol's (`ax::DEFAULT_MAX_NODES`) and arrives in
+    /// `max_nodes`. This constant exists for an older client that does not send
+    /// the field, and matches the protocol's value on purpose — two numbers that
+    /// mean the same thing must not be allowed to differ.
+    private static let defaultMaxNodes = 1_500
+
+    /// How long any single AX call may wait on the target application.
+    ///
+    /// Accessibility calls are synchronous IPC into another process, and the
+    /// system default lets them wait a long time. That matters here more than it
+    /// looks: this type is an `actor`, so every AX operation in the helper is
+    /// serialised behind whichever one is currently blocked — one beachballing
+    /// app therefore stalls `ax.query_focused` for *every* app, and that call
+    /// runs before every keystroke the agent types. Bounding it turns "the
+    /// accessibility layer has stopped working" into "that one app did not
+    /// answer", which is both true and recoverable.
+    ///
+    /// Comfortably inside the client-side deadline for the AX namespace, so a
+    /// stuck element surfaces as a partial tree rather than as a dead call.
+    private static let axMessagingTimeout: Float = 2.0
 
     /// The private attribute Chromium honours to switch its accessibility tree
     /// on. Undocumented, hence no `kAX…` constant exists for it.
@@ -198,27 +249,52 @@ actor AxQuerier {
 
     // MARK: Public interface
 
-    func queryFocused() -> AxElement? {
-        let sys = AXUIElementCreateSystemWide()
-        var focused: AnyObject?
-        let err = AXUIElementCopyAttributeValue(
-            sys, kAXFocusedUIElementAttribute as CFString, &focused
-        )
-        guard err == .success, let el = focused else { return nil }
-        var count = 0
+    /// The focused element — of one application, or of the system.
+    ///
+    /// With a `pid` this asks *that application* for its `AXFocusedUIElement`,
+    /// which is a different question from the system-wide one and the only one
+    /// worth asking on the targeted input rail: that rail delivers keystrokes
+    /// into a named process without bringing it forward, so the system-focused
+    /// element usually belongs to some other app entirely. Reading it there meant
+    /// the `type_text` focus gate — including its hard refusal to type into a
+    /// password field — was inspecting a window the keystrokes were never going
+    /// to reach.
+    ///
+    /// Without a `pid` the system-wide element is still the right answer: that is
+    /// exactly where the global rail's keystrokes go.
+    func queryFocused(pid: pid_t?) async -> AxElement? {
+        let root: AXUIElement
+        if let pid {
+            // Route through `appElement` so a Chromium app gets its one-time
+            // accessibility unlock here too: without it such an app reports no
+            // focused element at all, and "no focus" is the fail-open answer.
+            guard let app = await appElement(pid: pid) else { return nil }
+            root = app
+        } else {
+            root = withTimeout(AXUIElementCreateSystemWide())
+        }
+        guard let el = axAttr(root, kAXFocusedUIElementAttribute) else { return nil }
+        var budget = WalkBudget()
         // swiftlint:disable:next force_cast
-        return buildElement(from: el as! AXUIElement, depth: 0, maxDepth: 2, nodeCount: &count)
+        return buildElement(
+            from: withTimeout(el as! AXUIElement),
+            depth: 0, maxDepth: 2, maxNodes: Self.defaultMaxNodes, budget: &budget
+        )
     }
 
-    func queryTree(pid: pid_t?, maxDepth: Int) async -> AxElement? {
-        guard let target = await appElement(pid: pid) else { return nil }
-        var count = 0
-        return buildElement(from: target, depth: 0, maxDepth: maxDepth, nodeCount: &count)
+    func queryTree(pid: pid_t?, maxDepth: Int, maxNodes: Int) async -> (AxElement?, WalkBudget) {
+        var budget = WalkBudget()
+        guard let target = await appElement(pid: pid) else { return (nil, budget) }
+        let el = buildElement(
+            from: target, depth: 0, maxDepth: maxDepth, maxNodes: maxNodes, budget: &budget
+        )
+        return (el, budget)
     }
 
-    func queryByRole(role: String, pid: pid_t?) async -> [AxElement] {
-        guard let root = await queryTree(pid: pid, maxDepth: 8) else { return [] }
-        return collectByRole(root, role: role)
+    func queryByRole(role: String, pid: pid_t?, maxNodes: Int) async -> ([AxElement], WalkBudget) {
+        let (root, budget) = await queryTree(pid: pid, maxDepth: 8, maxNodes: maxNodes)
+        guard let root else { return ([], budget) }
+        return (collectByRole(root, role: role), budget)
     }
 
     func setValue(_ params: SetValueParams) async throws -> AxActionResult {
@@ -294,7 +370,7 @@ actor AxQuerier {
             guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
             target = app.processIdentifier
         }
-        let ax = AXUIElementCreateApplication(target)
+        let ax = withTimeout(AXUIElementCreateApplication(target))
         // `inserted` is false on every later call for this pid, so the writes below
         // run exactly once per app — including for the concurrent caller that
         // arrives while the first one is still settling.
@@ -341,7 +417,7 @@ actor AxQuerier {
         var best: (score: Double, handle: AXUIElement, meta: AxElement)?
         var count = 0
         func walk(_ ax: AXUIElement, depth: Int) {
-            guard count < MAX_TREE_NODES else { return }
+            guard count < Self.defaultMaxNodes else { return }
             count += 1
             let role = (axAttr(ax, kAXRoleAttribute) as? String) ?? "AXUnknown"
             let title = axAttr(ax, kAXTitleAttribute) as? String
@@ -372,7 +448,7 @@ actor AxQuerier {
             }
             if depth < maxDepth {
                 for child in (axAttr(ax, kAXChildrenAttribute) as? [AXUIElement] ?? []) {
-                    walk(child, depth: depth + 1)
+                    walk(withTimeout(child), depth: depth + 1)
                 }
             }
         }
@@ -389,9 +465,19 @@ actor AxQuerier {
         return out
     }
 
-    private func buildElement(from ax: AXUIElement, depth: Int, maxDepth: Int, nodeCount: inout Int) -> AxElement? {
-        guard nodeCount < MAX_TREE_NODES else { return nil }
-        nodeCount += 1
+    /// Materialise one node and, budget permitting, its subtree.
+    ///
+    /// Returning `nil` on an exhausted budget is what prunes the walk, and
+    /// `budget.truncated` is what makes that visible: a caller handed a silently
+    /// clipped tree concludes the control it is hunting for does not exist.
+    private func buildElement(
+        from ax: AXUIElement, depth: Int, maxDepth: Int, maxNodes: Int, budget: inout WalkBudget
+    ) -> AxElement? {
+        guard budget.nodeCount < maxNodes else {
+            budget.truncated = true
+            return nil
+        }
+        budget.nodeCount += 1
 
         let role = (axAttr(ax, kAXRoleAttribute) as? String) ?? "AXUnknown"
         let title = axAttr(ax, kAXTitleAttribute) as? String
@@ -412,7 +498,10 @@ actor AxQuerier {
         if depth < maxDepth {
             let rawChildren = axAttr(ax, kAXChildrenAttribute) as? [AXUIElement] ?? []
             children = rawChildren.compactMap {
-                buildElement(from: $0, depth: depth + 1, maxDepth: maxDepth, nodeCount: &nodeCount)
+                buildElement(
+                    from: withTimeout($0), depth: depth + 1, maxDepth: maxDepth,
+                    maxNodes: maxNodes, budget: &budget
+                )
             }
         }
         return AxElement(
@@ -473,6 +562,23 @@ actor AxQuerier {
         guard let raw = axAttr(ax, kAXURLAttribute) else { return nil }
         if let u = raw as? URL { return u.absoluteString }
         return raw as? String
+    }
+
+    /// Bound how long calls on `element` may block on its owning application.
+    ///
+    /// `AXUIElementSetMessagingTimeout` is per-element and is **not** inherited
+    /// by elements copied out of it, which is why this is applied at every point
+    /// a new handle enters the walk (the app element, the system-wide element,
+    /// and each child) rather than once at the root. Missing one of those puts
+    /// that branch back on the system default.
+    ///
+    /// Returns its argument so it can be wrapped inline at the point of use —
+    /// the shape that makes "did we bound this handle?" answerable by reading
+    /// one line instead of tracing where it came from.
+    @discardableResult
+    private func withTimeout(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, Self.axMessagingTimeout)
+        return element
     }
 
     private func axAttr(_ ax: AXUIElement, _ name: String) -> AnyObject? {

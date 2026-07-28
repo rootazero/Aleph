@@ -3,6 +3,19 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for a PIM call.
+///
+/// The most generous namespace, and deliberately so: several of these drive
+/// Notes and Mail through Apple Events, which launch the target app on first use
+/// and then walk a library that can be large. A minute is what these calls have
+/// always had (the client's old catch-all), and there is no evidence any of them
+/// needs less — naming it here makes it a decision rather than a leftover.
+pub const DEFAULT_TIMEOUT_MS: u64 = 60_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[];
+
 pub const METHOD_NOTES_LIST: &str = "pim.notes.list";
 pub const METHOD_NOTES_GET: &str = "pim.notes.get";
 pub const METHOD_NOTES_CREATE: &str = "pim.notes.create";

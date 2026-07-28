@@ -49,8 +49,9 @@ use atspi::State;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, AxLocator, AxVerification, PerformActionParams, QueryByRoleParams,
-    QueryTreeParams, SetValueParams,
+    clamp_max_nodes, AxActionResult, AxElement, AxLocator, AxVerification, PerformActionParams,
+    QueryByRoleParams, QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams,
+    SetValueParams,
 };
 
 pub use bus::{bus_looks_reachable, frontmost_pid};
@@ -350,10 +351,13 @@ fn flatten(node: &AxElement, out: &mut Vec<AxElement>) {
 
 #[async_trait]
 impl AccessibilityCapability for LinuxAccessibility {
-    async fn query_focused(&self) -> Result<Option<AxElement>> {
+    /// AT-SPI has no "focused element of process P" query, so a `pid` narrows
+    /// which application tree is scanned — the same answer, reached directly.
+    /// Without one the frontmost application is scanned, as before.
+    async fn query_focused(&self, params: QueryFocusedParams) -> Result<Option<AxElement>> {
         let budget = Budget::start();
         let bus = Bus::open().await?;
-        let app = app_or_err(&bus, None).await?;
+        let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
         let cache = AppCache::fetch(&bus, &app.root).await;
         match find_focused(&bus, app.root, budget, cache.as_ref()).await {
@@ -370,27 +374,44 @@ impl AccessibilityCapability for LinuxAccessibility {
         }
     }
 
-    async fn query_tree(&self, params: QueryTreeParams) -> Result<Option<AxElement>> {
+    async fn query_tree(&self, params: QueryTreeParams) -> Result<QueryResult> {
         let budget = Budget::start();
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
+        // Caller-supplied `max_nodes` is clamped to the protocol range so the
+        // helper can log a malformed request; the walk itself hardens against
+        // [`walk::MAX_NODES`] inside, so this is a no-op on healthy input.
+        let _ = clamp_max_nodes(params.max_nodes);
         let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
-        Ok(walk.tree(&app.root, params.max_depth).await)
+        let element = walk.tree(&app.root, params.max_depth).await;
+        Ok(QueryResult {
+            element,
+            node_count: walk.spent(),
+            truncated: walk.exhausted(),
+        })
     }
 
-    async fn query_by_role(&self, params: QueryByRoleParams) -> Result<Vec<AxElement>> {
+    async fn query_by_role(&self, params: QueryByRoleParams) -> Result<QueryListResult> {
         let budget = Budget::start();
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
         let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
         let Some(tree) = walk.tree(&app.root, SCAN_DEPTH).await else {
-            return Ok(Vec::new());
+            return Ok(QueryListResult {
+                elements: Vec::new(),
+                node_count: walk.spent(),
+                truncated: walk.exhausted(),
+            });
         };
         let mut all = Vec::new();
         flatten(&tree, &mut all);
-        Ok(all.into_iter().filter(|e| e.role == params.role).collect())
+        Ok(QueryListResult {
+            elements: all.into_iter().filter(|e| e.role == params.role).collect(),
+            node_count: walk.spent(),
+            truncated: walk.exhausted(),
+        })
     }
 
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {

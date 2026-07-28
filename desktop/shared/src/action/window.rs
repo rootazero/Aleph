@@ -238,14 +238,31 @@ const FOREGROUND_WAIT: std::time::Duration = std::time::Duration::from_millis(50
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
-/// Apple Event ceiling for the `System Events` window-geometry script.
+/// Apple Event ceiling embedded in the `System Events` window-geometry script's
+/// `with timeout of … seconds` block.
 ///
-/// Not a Rust timeout: this is the number embedded in the AppleScript's
-/// `with timeout of … seconds` block, which is the only cap available to a
-/// synchronous per-OS arm. Generous enough for a slow-but-live app, far short of
-/// the harness's per-turn budget.
+/// Bounds the *event*, which is the usual way this call hangs: every line inside
+/// the `tell` block is a synchronous round trip into System Events, which is
+/// itself waiting on the target app.
 #[cfg(target_os = "macos")]
 const AX_SCRIPT_TIMEOUT_SECS: u32 = 15;
+
+/// Wall-clock ceiling on the `osascript` **process**.
+///
+/// The Apple Event timeout above is not the same guarantee, and the difference
+/// is the whole reason this exists: it only applies once the event is in flight.
+/// `osascript` still has to start, connect to System Events, and — if System
+/// Events is itself wedged or being launched — may never get that far. Without a
+/// process-level cap that is an unbounded `Command::output()` on a blocking
+/// thread, which is exactly the failure this repository has already paid for on
+/// three other shell-out paths (`xclip`, `notify-send`, `ffmpeg`).
+///
+/// Sized above the Apple Event ceiling so the script's own error — which is
+/// specific and actionable — wins whenever it is available, and this only fires
+/// when the process never got to run the script at all.
+#[cfg(target_os = "macos")]
+const AX_SCRIPT_PROCESS_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(AX_SCRIPT_TIMEOUT_SECS as u64 + 5);
 
 /// Raise a window and report whether it actually reached the foreground.
 ///
@@ -719,13 +736,11 @@ fn macos_set_window_bounds(
         }
     }
 
-    // `with timeout of N seconds` bounds the Apple Event, which is the thing that
-    // actually hangs here: every line inside the `tell` block is a synchronous
-    // round trip into System Events, which is itself waiting on the target app.
-    // Against a beachballing app the default Apple Event timeout is long enough
-    // to eat the whole turn, on a *blocking* thread, for a window nudge. There is
-    // no in-process cap to fall back on — this call runs from the synchronous
-    // per-OS arm, not from `script_exec::output_capped`.
+    // Two caps, and both are needed. `with timeout of N seconds` bounds the Apple
+    // Event — the thing that usually hangs, because every line inside the `tell`
+    // block is a synchronous round trip into System Events, which is itself
+    // waiting on the target app. `AX_SCRIPT_PROCESS_TIMEOUT` bounds the process,
+    // for the case where the script never starts running at all.
     let script = format!(
         r#"on run argv
 set pid to (item 1 of argv) as integer
@@ -754,15 +769,19 @@ end timeout
 end run"#
     );
 
-    let output = std::process::Command::new("osascript")
-        .arg("-e")
+    let mut cmd = crate::script_exec::hidden_std_command("osascript");
+    cmd.arg("-e")
         .arg(&script)
         .arg(pid.to_string())
         .arg(title)
         .arg(a.to_string())
-        .arg(b.to_string())
-        .output()
-        .map_err(|e| DesktopError::WindowFailed(format!("Failed to run osascript: {e}")))?;
+        .arg(b.to_string());
+    let output = crate::script_exec::output_capped_blocking(
+        cmd,
+        AX_SCRIPT_PROCESS_TIMEOUT,
+        "osascript (window geometry)",
+    )
+    .map_err(|e| DesktopError::WindowFailed(format!("Failed to run osascript: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
