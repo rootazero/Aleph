@@ -123,6 +123,75 @@ mod role_map {
     }
 }
 
+/// AX roles (as mapped by [`control_type_to_ax_role`]) that take typed text and
+/// are therefore the only ones the label heuristic in [`is_password_like`] is
+/// allowed to judge.
+///
+/// Restricting it matters: `secure` is a **hard block** on `type_text` that
+/// `force` cannot override, so a heuristic that fired on any element whose label
+/// merely contains "password" would refuse legitimate typing next to a
+/// "Show password" checkbox or inside a window titled "Password Manager".
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const TEXT_ENTRY_ROLES: &[&str] = &["AXTextField", "AXComboBox"];
+
+/// Substrings that mark a text entry as carrying a credential.
+///
+/// Mirrors the term list orca's Windows runtime uses, because the failure being
+/// prevented is identical: some frameworks (Electron, Qt, custom-drawn editors)
+/// never set the UIA `IsPassword` property on a field that is nonetheless
+/// masked, and typing a credential into the wrong place is not recoverable.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const CREDENTIAL_TERMS: &[&str] = &[
+    "password",
+    "passcode",
+    "passphrase",
+    "secret",
+    "one-time code",
+    "verification code",
+];
+
+/// Whether a text entry's labels mark it as a credential field.
+///
+/// The second signal behind UIA's own `IsPassword` — pure, so the judgement is
+/// unit-testable without a live desktop. `role` is the **mapped** AX role;
+/// `labels` are the element's Name / `AutomationId` / `ClassName`, whichever the
+/// provider filled in.
+///
+/// Deliberately mechanical: it matches fixed substrings on fixed fields and
+/// reads nothing else about the element (R7/P8).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub fn is_password_like(role: &str, labels: &[&str]) -> bool {
+    if !TEXT_ENTRY_ROLES.contains(&role) {
+        return false;
+    }
+    let haystack = labels.join(" ").to_lowercase();
+    if CREDENTIAL_TERMS.iter().any(|t| haystack.contains(t)) {
+        return true;
+    }
+    // "pin" only as a whole word — "spinner", "pinned" and "shipping" are not
+    // credential fields.
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == "pin")
+}
+
+/// The AX action names a UIA element's available patterns can honour.
+///
+/// Every name returned here must be one [`ax_action_to_patterns`] accepts —
+/// advertising an action the write path then rejects would be worse than
+/// advertising none, because the model plans on it.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub fn actions_for(has_press_pattern: bool, has_expand_collapse: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if has_press_pattern {
+        out.push("AXPress".to_string());
+    }
+    if has_expand_collapse {
+        out.push("AXShowMenu".to_string());
+    }
+    out
+}
+
 /// A flattened UIA element summary used purely for locator ranking. Holds only
 /// the Send-safe scalar fields `rank_candidates` needs, so the ranking decision
 /// is a pure function testable without COM.
@@ -304,7 +373,7 @@ mod imp {
     use aleph_protocol::desktop_bridge::methods::screen::Region;
     use windows::core::BSTR;
 
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,
@@ -317,9 +386,7 @@ mod imp {
         UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
         UIA_ValuePatternId,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     /// RAII COM apartment guard. `CoInitializeEx` may return `S_FALSE` if the
     /// thread was already initialized — harmless; we still balance with
@@ -357,16 +424,23 @@ mod imp {
     /// `NotAvailable` rather than silently falling back to the foreground
     /// window — that would let a caller asking for accessibility reads on
     /// PID A be quietly served an unrelated, foreground application B.
+    ///
+    /// Window discovery goes through the shared enumeration in
+    /// `aleph_desktop::win_window`, so a query rooted at a pid cannot land on a
+    /// cloaked window (a suspended UWP app, or one parked on another virtual
+    /// desktop) that this module used to accept because `IsWindowVisible` says
+    /// `true` for those.
     fn resolve_root_hwnd(pid: Option<i32>) -> Result<HWND> {
         if let Some(pid) = pid {
-            match top_window_for_pid(pid as u32) {
-                Some(hwnd) => return Ok(hwnd),
-                None => {
-                    return Err(DesktopError::NotAvailable(format!(
+            let raw = u32::try_from(pid)
+                .ok()
+                .and_then(aleph_desktop::win_window::top_window_for_pid)
+                .ok_or_else(|| {
+                    DesktopError::NotAvailable(format!(
                         "no visible top-level window for pid {pid} to root the accessibility query"
-                    )));
-                }
-            }
+                    ))
+                })?;
+            return Ok(HWND(raw as usize as *mut core::ffi::c_void));
         }
         // SAFETY: documented Win32 call; the returned handle is validated below.
         let fg = unsafe { GetForegroundWindow() };
@@ -376,39 +450,6 @@ mod imp {
             ));
         }
         Ok(fg)
-    }
-
-    /// Find the first visible top-level window owned by `pid`.
-    fn top_window_for_pid(pid: u32) -> Option<HWND> {
-        struct Find {
-            pid: u32,
-            hit: Option<HWND>,
-        }
-
-        extern "system" fn proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-            // SAFETY: `lparam` carries the `&mut Find` we pass to `EnumWindows`,
-            // which outlives this synchronous enumeration.
-            unsafe {
-                if IsWindowVisible(hwnd).as_bool() {
-                    let mut wpid: u32 = 0;
-                    GetWindowThreadProcessId(hwnd, Some(std::ptr::addr_of_mut!(wpid)));
-                    let find = &mut *(lparam.0 as *mut Find);
-                    if wpid == find.pid {
-                        find.hit = Some(hwnd);
-                        return BOOL(0); // stop — first match wins
-                    }
-                }
-            }
-            BOOL(1)
-        }
-
-        let mut find = Find { pid, hit: None };
-        // SAFETY: `proc` matches `WNDENUMPROC`; `find` lives until `EnumWindows`
-        // returns.
-        unsafe {
-            let _ = EnumWindows(Some(proc), LPARAM(std::ptr::addr_of_mut!(find) as isize));
-        }
-        find.hit
     }
 
     /// Convert a UIA bounding rectangle (physical screen pixels, top-left
@@ -425,8 +466,22 @@ mod imp {
     }
 
     /// Read one element's scalar fields into a childless [`AxElement`].
+    ///
+    /// # What is (and is not) read per node
+    ///
+    /// `secure` and `enabled` are filled here, for every node of every walk:
+    /// both are plain property getters in the same cost class as the name and
+    /// control type already being read, and both are consumed by the
+    /// model-facing projections (`affordance_fields` renders a greyed-out
+    /// control and marks a password box, and `safe_value` withholds a secure
+    /// element's text).
+    ///
+    /// `settable` and `actions` are **not** — determining them means probing up
+    /// to five control patterns, i.e. five cross-process COM round trips per
+    /// node against a `MAX_NODES` budget of 4 000. They are filled by
+    /// [`enrich_resolved`] for the one element a call actually resolved, which
+    /// is where every consumer reads them.
     fn node_of(el: &IUIAutomationElement) -> AxElement {
-        // SAFETY: all four are documented read-only UIA property getters.
         // SAFETY: read-only UIA control-type property getter.
         let role = unsafe {
             el.CurrentControlType()
@@ -444,30 +499,127 @@ mod imp {
             .map(rect_to_region);
         // SAFETY: read-only UIA process-id property getter.
         let pid = unsafe { el.CurrentProcessId() }.unwrap_or(0);
+        // SAFETY: read-only UIA enabled-state property getter. A provider that
+        // does not answer leaves this `None` — "not told", never `false`.
+        let enabled = unsafe { el.CurrentIsEnabled() }.ok().map(|b| b.as_bool());
 
         AxElement {
+            secure: Some(is_secure_element(el, &role)),
+            enabled,
             role,
             title,
-            value: None, // VARIANT value extraction deferred; Name covers labels.
+            // Values are read on demand, never for every node of a walk.
+            value: None,
             bounds,
             pid,
-            // The affordances (secure/enabled/settable/actions/url) stay `None`:
-            // UIA exposes equivalents (IsPasswordAttribute, IsEnabled, patterns),
-            // but this limb does not read them yet, and `None` is the wire's
-            // "not told" — reporting `Some(false)` would be an outright lie.
+            // `settable` / `actions` / `url` stay `None` here — see the doc
+            // comment. `None` is the wire's "not told"; reporting `Some(false)`
+            // would be an outright lie.
             ..Default::default()
+        }
+    }
+
+    /// Whether this element masks its content.
+    ///
+    /// UIA's own `IsPassword` is the primary signal; the label heuristic is the
+    /// second, for the frameworks that never set it (see [`is_password_like`]).
+    /// A provider that errors on the property is treated as **not** secure, and
+    /// the heuristic still gets its say — failing the other way would mark every
+    /// element on an uncooperative provider as a password box and take typing
+    /// away entirely.
+    fn is_secure_element(el: &IUIAutomationElement, role: &str) -> bool {
+        // SAFETY: read-only UIA password-attribute property getter.
+        if unsafe { el.CurrentIsPassword() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        // SAFETY: read-only UIA label property getters.
+        let (name, automation_id, class_name) = unsafe {
+            (
+                el.CurrentName().map(|b| b.to_string()).unwrap_or_default(),
+                el.CurrentAutomationId()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default(),
+                el.CurrentClassName()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default(),
+            )
+        };
+        super::is_password_like(
+            role,
+            &[name.as_str(), automation_id.as_str(), class_name.as_str()],
+        )
+    }
+
+    /// Fill the affordances that cost a pattern probe, for the single element a
+    /// call resolved: `settable`, `actions`, and the element's text `value`.
+    ///
+    /// The value is read **only when the element is not secure**. That check is
+    /// the Windows counterpart of the macOS helper scrubbing a secure field's
+    /// value inside the Swift handler: a password must not cross the limb
+    /// boundary at all, rather than crossing it and being redacted later by
+    /// whichever projection happens to remember to.
+    fn enrich_resolved(el: &IUIAutomationElement, node: &mut AxElement) {
+        // SAFETY: pattern getter; an element without the pattern surfaces as Err.
+        let value_pattern =
+            unsafe { el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }.ok();
+
+        node.settable = Some(value_pattern.as_ref().is_some_and(|vp| {
+            // SAFETY: read-only property getter. A provider that will not answer
+            // is treated as writable — `set_value` verifies by read-back anyway,
+            // so a wrong "yes" costs one honest failure, a wrong "no" costs the
+            // model the whole write path.
+            !unsafe { vp.CurrentIsReadOnly() }
+                .map(|b| b.as_bool())
+                .unwrap_or(false)
+        }));
+
+        // SAFETY: pattern getters; unsupported patterns surface as Err.
+        let (has_press, has_expand) = unsafe {
+            (
+                el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    .is_ok()
+                    || el
+                        .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                        .is_ok()
+                    || el
+                        .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                            UIA_SelectionItemPatternId,
+                        )
+                        .is_ok()
+                    || el
+                        .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                            UIA_LegacyIAccessiblePatternId,
+                        )
+                        .is_ok(),
+                el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
+                    UIA_ExpandCollapsePatternId,
+                )
+                .is_ok(),
+            )
+        };
+        let actions = super::actions_for(has_press, has_expand);
+        node.actions = (!actions.is_empty()).then_some(actions);
+
+        if node.secure != Some(true) {
+            node.value = value_of(el, value_pattern.as_ref());
         }
     }
 
     /// Read an element's textual value: `ValuePattern.CurrentValue`, falling back
     /// to `LegacyIAccessible.CurrentValue`. Empty strings normalize to `None`.
-    /// Called on-demand for the located/focused element only — never for every
-    /// node of a full tree walk (one COM call per node would slow snapshots).
-    pub(super) fn value_of(el: &IUIAutomationElement) -> Option<String> {
+    ///
+    /// Callers must have established that the element is not secure — see
+    /// [`enrich_resolved`], the only caller.
+    fn value_of(
+        el: &IUIAutomationElement,
+        value_pattern: Option<&IUIAutomationValuePattern>,
+    ) -> Option<String> {
         // SAFETY: read-only UIA pattern getters; missing pattern surfaces as Err.
         unsafe {
-            if let Ok(vp) = el.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-            {
+            if let Some(vp) = value_pattern {
                 if let Ok(v) = vp.CurrentValue() {
                     let s = v.to_string();
                     if !s.is_empty() {
@@ -552,19 +704,12 @@ mod imp {
         let Some(idx) = rank_candidates(&summaries, loc) else {
             return Ok(None);
         };
-        let (cand, el) = &cands[idx];
-        let summary = AxElement {
-            role: cand.role.clone(),
-            title: cand.title.clone(),
-            value: value_of(el),
-            // SAFETY: read-only UIA bounding-rectangle property getter.
-            bounds: unsafe { el.CurrentBoundingRectangle() }
-                .ok()
-                .map(rect_to_region),
-            // SAFETY: read-only UIA process-id property getter.
-            pid: unsafe { el.CurrentProcessId() }.unwrap_or(0),
-            ..Default::default()
-        };
+        let (_, el) = &cands[idx];
+        // Re-read the element rather than reusing the ranking candidate: the
+        // walk kept only the fields ranking needed, and the resolved element is
+        // exactly the one worth paying the pattern probes for.
+        let mut summary = node_of(el);
+        enrich_resolved(el, &mut summary);
         Ok(Some((el.clone(), summary)))
     }
 
@@ -602,6 +747,10 @@ mod imp {
         let readback = unsafe { vp.CurrentValue() }
             .map(|b| b.to_string())
             .unwrap_or_default();
+        // A verification read of a masked field is still the credential. The
+        // *comparison* is safe to report; the bytes are not, so neither the
+        // mismatch preview nor the element summary carries them.
+        let secure = summary.secure == Some(true);
         let verification = if readback == value {
             AxVerification {
                 state: "verified".into(),
@@ -612,10 +761,10 @@ mod imp {
             AxVerification {
                 state: "unverified".into(),
                 reason: Some("value_mismatch".into()),
-                actual_preview: Some(readback.chars().take(200).collect()),
+                actual_preview: (!secure).then(|| readback.chars().take(200).collect()),
             }
         };
-        summary.value = Some(readback.chars().take(200).collect());
+        summary.value = (!secure).then(|| readback.chars().take(200).collect());
         Ok(AxActionResult {
             performed: true,
             path: "accessibility".into(),
@@ -744,7 +893,12 @@ mod imp {
         // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
         unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| {
             let mut node = node_of(&el);
-            node.value = value_of(&el);
+            // The focused element is the one the type_text pre-flight gate reads
+            // (`secure` / `settable` / `role`), so it is worth the pattern
+            // probes — and it is the single most important place for `secure` to
+            // be right, because that gate is what stops a synthetic keystroke
+            // from landing in a password box.
+            enrich_resolved(&el, &mut node);
             Ok(Some(node))
         })
     }
@@ -1026,5 +1180,87 @@ mod tests {
             err,
             aleph_desktop::DesktopError::NotImplemented(_)
         ));
+    }
+
+    // ── Credential-field heuristic ───────────────────────────────────────────
+
+    #[test]
+    fn labelled_credential_fields_are_secure() {
+        for label in [
+            "Password",
+            "password",
+            "Enter your passphrase",
+            "One-time code",
+            "Verification code",
+            "Client Secret",
+            "PIN",
+        ] {
+            assert!(
+                is_password_like("AXTextField", &[label, "", ""]),
+                "{label:?} should read as a credential field"
+            );
+        }
+    }
+
+    #[test]
+    fn the_heuristic_reads_automation_id_and_class_name_too() {
+        // Electron and Qt often leave Name empty and put the meaning elsewhere.
+        assert!(is_password_like("AXTextField", &["", "login-password", ""]));
+        assert!(is_password_like("AXTextField", &["", "", "PasswordBox"]));
+    }
+
+    #[test]
+    fn only_text_entry_roles_are_judged_by_label() {
+        // The blast radius matters: `secure` is a hard block that `force` cannot
+        // lift, so a checkbox labelled "Show password" or a group inside a
+        // password manager must not silently disable typing everywhere.
+        for role in ["AXCheckBox", "AXButton", "AXGroup", "AXStaticText"] {
+            assert!(
+                !is_password_like(role, &["Show password", "", ""]),
+                "{role} must not be judged by its label"
+            );
+        }
+    }
+
+    #[test]
+    fn pin_matches_only_as_a_whole_word() {
+        assert!(is_password_like("AXTextField", &["Enter PIN", "", ""]));
+        for benign in ["Spinner value", "Pinned tabs", "Shipping address"] {
+            assert!(
+                !is_password_like("AXTextField", &[benign, "", ""]),
+                "{benign:?} is not a credential field"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_field_is_not_secure() {
+        assert!(!is_password_like("AXTextField", &["Email address", "", ""]));
+        assert!(!is_password_like("AXTextField", &["", "", ""]));
+    }
+
+    // ── Advertised actions ───────────────────────────────────────────────────
+
+    #[test]
+    fn advertised_actions_are_all_accepted_by_the_write_path() {
+        // Advertising an action `perform_action` then rejects is worse than
+        // advertising none: the model plans on it.
+        for actions in [
+            actions_for(true, true),
+            actions_for(true, false),
+            actions_for(false, true),
+        ] {
+            for action in &actions {
+                assert!(
+                    ax_action_to_patterns(action).is_ok(),
+                    "{action} is advertised but not accepted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_element_with_no_patterns_advertises_nothing() {
+        assert!(actions_for(false, false).is_empty());
     }
 }

@@ -34,16 +34,20 @@ windows = { version = "0.58", features = [
     "Win32_System_Power",
     "Win32_System_SystemInformation",
     "Win32_System_LibraryLoader",
-    "Win32_Globalization",
     "Win32_UI_Input_KeyboardAndMouse",
     # UI Automation (IUIAutomation) — the accessibility-tree backend that
     # lights up `desktop_som` / `desktop_ax_*` on Windows (parity with the
     # macOS Swift-bridge AX layer). COM is needed to instantiate CUIAutomation.
     "Win32_UI_Accessibility",
     "Win32_System_Com",
-    "Foundation",
-    "UI_Notifications",
 ] }
+# Removed 2026-07-28: `Win32_Globalization`, `Foundation` and `UI_Notifications`
+# had no consumer in this crate. The toast path drives WinRT *through
+# PowerShell*, never through these bindings; the WinRT OCR code that does use
+# `Globalization`/`Foundation` lives in `desktop/shared`, which declares them
+# itself. (Cargo unions features across the workspace, so this does not shrink a
+# workspace build — it stops the manifest from claiming a dependency the code
+# does not have, which is what a reader goes on.)
 
 # Clipboard operations
 clipboard-win = "5"

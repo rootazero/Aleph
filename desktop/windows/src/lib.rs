@@ -40,8 +40,19 @@ pub struct WindowsPlatform {
 
 impl WindowsPlatform {
     /// Create a new `WindowsPlatform` instance.
+    ///
+    /// This is the single per-OS construction point (`builtin_registry`'s
+    /// constructor picks it by target), which makes it the one place that can
+    /// settle the process's DPI awareness before any window, DC or UI Automation
+    /// object exists. Without that opt-in, Win32 hands this process *virtualized*
+    /// window and accessibility geometry while screen captures stay at full
+    /// resolution — a 1.5× mismatch on the 150 %-scaled panel that is the Windows
+    /// default, and one nothing downstream can repair. See
+    /// [`aleph_desktop::win_dpi`].
     #[must_use]
     pub fn new() -> Self {
+        aleph_desktop::ensure_process_dpi_aware();
+
         Self {
             screen: NativeScreen::new(),
             power: WindowsPower::new(),

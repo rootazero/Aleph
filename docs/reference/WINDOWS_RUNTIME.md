@@ -96,6 +96,51 @@ Any LAN device then gets full control of the agent (incl. PTY/shell). The only
 protocol guardrail is WS Origin validation. See
 [SECURITY.md#auth-ux](SECURITY.md#auth-ux).
 
+## Desktop control on Windows (坐标空间与四肢)
+
+桌面工具（`desktop` / `desktop_som` / `desktop_ax_*` / `system` / `permission` /
+`media` / `pim`）在 Windows 上的实现分布见
+[FEATURE_LOCATOR §7](FEATURE_LOCATOR.md#7-desktop桌面端)。这里只记运维层面必须知道的三件事。
+
+### 1. 进程 DPI 感知 = 坐标一致性的前提
+
+`aleph-server.exe` 在 `WindowsPlatform::new()`（`desktop/shared/src/win_dpi.rs`）
+一次性 opt-in **Per-Monitor-Aware V2**。这不是优化而是正确性前提：DPI-unaware 进程
+拿到的 `GetWindowRect` / `GetCursorPos` / `SendInput` 绝对坐标 / UIA
+`CurrentBoundingRectangle` **全部被系统虚拟化**（除以显示器缩放比），而屏幕截图走
+显示驱动、**不被虚拟化**。在 Windows 默认的 150% 缩放笔记本屏上，这意味着"模型在截图里
+看到按钮的位置"和"点击真正落点"差 1.5 倍，且事后无法补救——两个数字一样合理。
+
+Rust 二进制默认不带 application manifest，所以不显式 opt-in 就是 unaware。日志里会
+出现一行：
+
+```
+desktop: process is per-monitor DPI aware; screen geometry is physical pixels
+```
+
+如果看到的是 `WARN … process is DPI-unaware and the opt-in did not take`，说明有别的
+东西（manifest / 宿主进程）已经把等级钉死了；此时 `DisplayInfo.scale_factor` 会如实
+回报显示器 DPI 比而不是 1.0，坐标偏差**仍然存在**且是已知限制。
+
+### 2. 子进程一律无控制台窗口
+
+daemon 模式（`--daemon` / 由桌面壳拉起）下 `aleph-server.exe` 自己没有控制台，因此任何
+控制台子进程都会**自己分配一个**——用户屏幕上闪一个黑框。桌面层所有 `Command` 必须经
+`aleph_desktop::script_exec::hidden_command` / `hidden_std_command`（core 侧对应
+`src/utils/no_window.rs`）。新增 shell-out 忘了走它 = 用户每次调用看到闪窗。
+
+### 3. 权限与能力边界
+
+- **无 TCC**：截屏、合成输入、发通知在 Windows 桌面进程上**不需要任何授权**，
+  `permission` 工具对这三类恒回 `Granted`。真正有 consent 门的只有摄像头 / 麦克风 /
+  定位三项，读自 `HKCU\…\CapabilityAccessManager\ConsentStore`（直读注册表，不再 shell-out）。
+  桌面 App 无法用 API 触发授权弹窗，`request` 只能打开对应 `ms-settings:` 页面。
+- **前台锁**：`SetForegroundWindow` 会被 Windows 的前台锁拒绝（用户正在别处打字时），
+  `focus_window` 因此**轮询校验 500ms** 后如实报失败，而不是假装成功。够不着前台时
+  改用 `set_value` / `ax_action`（UIA，不需要前台、不动光标）。
+- **`ffmpeg`**：`media` 的相机 / 录音走 DirectShow，设备被别的程序（视频会议）占用时
+  ffmpeg 会**无限阻塞**，故所有调用都带 `duration + 45s` 上限并 `kill_on_drop`。
+
 ## Refreshing the daemon binary (App installs)
 
 Windows cannot overwrite a running `.exe`, so **stop first**:

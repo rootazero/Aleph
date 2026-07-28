@@ -16,11 +16,16 @@ mod ocr_linux;
 mod ocr_windows;
 mod screen_record;
 mod screenshot;
+#[cfg(windows)]
+mod window_capture;
 
 pub use screenshot::{
     capture_screen_png, is_degenerate, list_displays, process_screenshot, take_screenshot,
     take_screenshot_display, DEFAULT_SCREENSHOT_MAX_BYTES,
 };
+
+#[cfg(windows)]
+pub use window_capture::capture_window;
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use screen_record::screen_record;

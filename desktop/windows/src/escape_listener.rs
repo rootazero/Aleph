@@ -288,13 +288,26 @@ impl Drop for WindowsEscapeListener {
     }
 }
 
+/// Observe Escape without consuming it.
+///
+/// The listener is an *emergency stop*, and it is started on the first desktop
+/// action and never stopped for the life of the process. Returning `LRESULT(1)`
+/// — as this used to — tells Windows the key was handled, so from the moment
+/// Aleph performed one desktop action the user's Escape key stopped working
+/// everywhere on the machine: no dismissing a dialog, no leaving vim's insert
+/// mode, no closing a menu. That is precisely the "do not disturb the user at
+/// their own computer" line the targeted-input rail exists to hold (R5), broken
+/// by the safety feature.
+///
+/// macOS never had the problem — its monitor block returns the event unchanged
+/// with the comment "Pass the event through unchanged" — so this also removes a
+/// silent per-platform behavior difference in a shared contract.
 #[cfg(windows)]
 extern "system" fn keyboard_hook_proc(
     code: i32,
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
     use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN};
 
@@ -310,11 +323,12 @@ extern "system" fn keyboard_hook_proc(
                 // clears `LISTENER_PTR` before the heap allocation is freed.
                 let state = unsafe { &*(addr as *const ListenerState) };
                 state.aborted.store(true, Ordering::SeqCst);
-                return LRESULT(1);
             }
         }
     }
 
+    // Always chain: the abort flag is raised above, and the keystroke still
+    // belongs to whatever the user is doing.
     // SAFETY: documented Win32 hook-chaining call.
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }

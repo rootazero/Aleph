@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use crate::traits::ScreenCapability;
 use crate::{
     action, perception, DesktopError, DisplayInfo, MouseButton, OcrResult, PressAction, Result,
-    ScreenRegion, Screenshot, WindowInfo,
+    ScreenRegion, Screenshot, WindowInfo, WindowShot,
 };
 
 /// Cross-platform `ScreenCapability` implementation.
@@ -212,6 +212,28 @@ impl ScreenCapability for NativeScreen {
         tokio::task::spawn_blocking(perception::list_displays)
             .await
             .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
+    }
+
+    /// Capture one window, cropped to its visible frame.
+    ///
+    /// Windows renders the window itself (`PrintWindow`), so an occluded or
+    /// background window comes back intact and the user's foreground app is
+    /// never raised or disturbed. Platforms without an implementation keep the
+    /// trait's `NotImplemented` default rather than silently degrading to a
+    /// full-screen capture — a caller that asked for one window and received the
+    /// whole desktop would map its coordinates through the wrong origin.
+    async fn screenshot_window(&self, window_id: u64, show_cursor: bool) -> Result<WindowShot> {
+        #[cfg(windows)]
+        {
+            tokio::task::spawn_blocking(move || perception::capture_window(window_id, show_cursor))
+                .await
+                .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (window_id, show_cursor);
+            Err(DesktopError::NotImplemented("screenshot_window".into()))
+        }
     }
 }
 

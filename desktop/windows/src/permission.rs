@@ -13,12 +13,12 @@
 //! idioms so the already-wired `permission` and `desktop_check_permissions`
 //! tools return real answers on Windows instead of "not supported".
 //!
-//! The `ConsentStore` is read by shelling out to `powershell.exe` (consistent
-//! with the rest of this crate, which already drives toasts and shortcuts the
-//! same way) — the capability name is always one of a fixed allowlist, never
-//! user input, so the query string is injection-free. All pure mapping logic is
-//! platform-independent and unit-tested; only the registry read itself is
-//! `#[cfg(windows)]`.
+//! The `ConsentStore` is read straight from the registry via
+//! [`aleph_desktop::win_registry`]. It used to shell out to `powershell.exe`
+//! once per capability, which made `check_all` six process launches deep and —
+//! from a windowless daemon — flashed six console windows across the user's
+//! screen to read six strings. All pure mapping logic is platform-independent
+//! and unit-tested; only the registry read itself is `#[cfg(windows)]`.
 
 use async_trait::async_trait;
 
@@ -168,31 +168,32 @@ const fn build_info(permission: PermissionKind, status: PermissionStatus) -> Per
 // ConsentStore read (Windows-only) + cross-platform fallback
 // ---------------------------------------------------------------------------
 
+/// Registry path prefix of the per-capability consent entries.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CONSENT_STORE_PREFIX: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
+
 /// Read a single `ConsentStore` capability value and map it to a status.
-async fn query_consent(capability: &str) -> PermissionStatus {
+///
+/// Reads the registry directly. This used to spawn `powershell.exe` per
+/// capability — so `check_all` cost six process launches (~1 s) and, from a
+/// windowless daemon, six console windows flashing on the user's screen — to
+/// read six string values.
+///
+/// `capability` is always a fixed allowlist literal (webcam / microphone /
+/// location) from [`consent_capability`]; it is a subkey name, not user input.
+fn query_consent(capability: &str) -> PermissionStatus {
     #[cfg(windows)]
     {
-        use tokio::process::Command;
+        use aleph_desktop::win_registry::{read_string, Hive};
 
-        // `capability` is always a fixed allowlist literal (webcam/microphone/
-        // location) from `consent_capability`, so the path is injection-free.
-        let script = format!(
-            "$v=(Get-ItemProperty -Path \
-             'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\{capability}' \
-             -Name Value -ErrorAction SilentlyContinue).Value; if($v){{$v}}else{{''}}"
-        );
-
-        match Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .await
-        {
-            Ok(out) if out.status.success() => {
-                let raw = String::from_utf8_lossy(&out.stdout);
-                parse_consent_value(&raw)
-            }
-            // Spawn failed or non-zero exit: we cannot determine the state.
-            _ => PermissionStatus::Unknown,
+        let subkey = format!("{CONSENT_STORE_PREFIX}\\{capability}");
+        match read_string(Hive::CurrentUser, &subkey, "Value") {
+            Some(raw) => parse_consent_value(&raw),
+            // Absent entry: the user has never been asked. That is exactly what
+            // `parse_consent_value` maps an empty value to, so route it through
+            // the same rule rather than inventing a second one.
+            None => parse_consent_value(""),
         }
     }
     #[cfg(not(windows))]
@@ -204,9 +205,9 @@ async fn query_consent(capability: &str) -> PermissionStatus {
 
 /// Resolve the status for any kind: consent-gated kinds hit the registry,
 /// everything else uses the static [`ungated_status`] mapping.
-async fn status_for(kind: PermissionKind) -> PermissionStatus {
+fn status_for(kind: PermissionKind) -> PermissionStatus {
     match consent_capability(kind) {
-        Some(cap) => query_consent(cap).await,
+        Some(cap) => query_consent(cap),
         None => ungated_status(kind),
     }
 }
@@ -216,9 +217,8 @@ async fn status_for(kind: PermissionKind) -> PermissionStatus {
 async fn open_settings_uri(kind: PermissionKind) -> bool {
     #[cfg(windows)]
     {
-        use tokio::process::Command;
         let uri = settings_uri(kind);
-        Command::new("cmd.exe")
+        aleph_desktop::script_exec::hidden_command("cmd.exe")
             .args(["/C", "start", "", uri])
             .status()
             .await
@@ -238,13 +238,13 @@ async fn open_settings_uri(kind: PermissionKind) -> bool {
 #[async_trait]
 impl PermissionCapability for WindowsPermission {
     async fn check(&self, permission: PermissionKind) -> Result<PermissionInfo> {
-        Ok(build_info(permission, status_for(permission).await))
+        Ok(build_info(permission, status_for(permission)))
     }
 
     async fn check_all(&self) -> Result<Vec<PermissionInfo>> {
         let mut infos = Vec::with_capacity(TCC_MANAGED.len());
         for &kind in TCC_MANAGED {
-            infos.push(build_info(kind, status_for(kind).await));
+            infos.push(build_info(kind, status_for(kind)));
         }
         Ok(infos)
     }
@@ -257,11 +257,11 @@ impl PermissionCapability for WindowsPermission {
         if consent_capability(permission).is_some() {
             let _ = open_settings_uri(permission).await;
         }
-        Ok(build_info(permission, status_for(permission).await))
+        Ok(build_info(permission, status_for(permission)))
     }
 
     async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus> {
-        let status = status_for(kind).await;
+        let status = status_for(kind);
         Ok(ProtocolPermissionStatus {
             kind,
             granted: matches!(status, PermissionStatus::Granted),

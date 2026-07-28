@@ -28,7 +28,10 @@ impl WindowsPim {
     }
 
     async fn run_powershell(&self, script: &str) -> Result<std::process::Output> {
-        let output = tokio::process::Command::new("powershell.exe")
+        // `hidden_command`: without CREATE_NO_WINDOW a console child spawned by
+        // the windowless daemon pops a black window on the user's screen for
+        // every mail query.
+        let output = aleph_desktop::script_exec::hidden_command("powershell.exe")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
