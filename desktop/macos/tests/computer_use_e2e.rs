@@ -51,8 +51,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aleph_desktop::bridge::client::SwiftBridge;
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams, QueryListResult,
-    QueryResult, QueryTreeParams, SetValueParams, DEFAULT_MAX_NODES,
+    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams,
+    QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
+    DEFAULT_MAX_NODES,
 };
 use aleph_protocol::desktop_bridge::methods::input::{
     ClickParams, CursorPositionResult, DragParams, MouseButton, ScrollParams, TypeTextParams,
@@ -521,6 +522,120 @@ async fn tier_a_secure_field_value_never_appears_in_a_snapshot() {
         Some(true),
         "the secure field is not flagged `secure`"
     );
+}
+
+/// A walk that runs out of budget says so, and a walk that does not says that
+/// too.
+///
+/// The budget itself is easy to get right and easy to get away with getting
+/// wrong: a helper that stops early and reports nothing looks, from the calling
+/// side, exactly like an application with a small UI. This is asserted against a
+/// fixture whose tree is *known* to be bigger than three nodes, so "truncated"
+/// and "that is genuinely all of it" are distinguishable here in a way they are
+/// not against an arbitrary app.
+#[tokio::test]
+#[ignore]
+async fn tier_a_a_budget_exhausted_walk_reports_that_it_was_cut() {
+    let fixture = Fixture::launch(Mode::Headless);
+    let bridge = bridge();
+    let state = fixture.state();
+
+    let cut: QueryResult = bridge
+        .call(
+            "ax.query_tree",
+            QueryTreeParams {
+                pid: Some(state.pid),
+                max_depth: 10,
+                max_nodes: 3,
+            },
+        )
+        .await
+        .expect("ax.query_tree failed");
+
+    assert!(
+        cut.truncated,
+        "a 3-node budget over the fixture's tree must report truncation"
+    );
+    assert_eq!(
+        cut.node_count, 3,
+        "the walk must spend exactly its budget, not approximately"
+    );
+
+    let whole: QueryResult = bridge
+        .call(
+            "ax.query_tree",
+            QueryTreeParams {
+                pid: Some(state.pid),
+                max_depth: 10,
+                max_nodes: DEFAULT_MAX_NODES,
+            },
+        )
+        .await
+        .expect("ax.query_tree failed");
+
+    assert!(
+        !whole.truncated,
+        "the fixture's whole tree fits in the default budget; reporting truncation \
+         here would make the flag useless"
+    );
+    assert!(
+        whole.node_count > cut.node_count,
+        "the unbudgeted walk must have read more than the capped one \
+         ({} vs {})",
+        whole.node_count,
+        cut.node_count
+    );
+}
+
+/// `ax.query_focused` answers for the process it is asked about, not for the
+/// desktop.
+///
+/// This is the property the `type_text` focus gate depends on and did not have.
+/// The fixture is an `.accessory` app parked off every display: it is emphatically
+/// **not** frontmost, which is precisely the situation the targeted input rail
+/// runs in. The system-wide answer therefore belongs to whatever the user has in
+/// front of them — and a gate reading it is inspecting a window the keystrokes
+/// will never reach.
+#[tokio::test]
+#[ignore]
+async fn tier_a_focused_element_is_answered_per_process_not_per_desktop() {
+    let fixture = Fixture::launch(Mode::Headless);
+    let bridge = bridge();
+    let state = fixture.state();
+
+    let mine: QueryResult = bridge
+        .call(
+            "ax.query_focused",
+            QueryFocusedParams {
+                pid: Some(state.pid),
+            },
+        )
+        .await
+        .expect("ax.query_focused(pid) failed");
+
+    let element = mine
+        .element
+        .expect("the fixture focuses a control at launch, so it must report one");
+    assert_eq!(
+        element.pid, state.pid,
+        "asked about pid {} and got an element owned by pid {} — the contract is \
+         that the answer belongs to the process asked about, or there is no answer",
+        state.pid, element.pid
+    );
+
+    // And the system-wide question is a different one: whatever it returns, it is
+    // not the off-screen accessory app nobody is driving.
+    let system: QueryResult = bridge
+        .call("ax.query_focused", QueryFocusedParams::default())
+        .await
+        .expect("ax.query_focused() failed");
+    if let Some(el) = system.element {
+        assert_ne!(
+            el.pid, state.pid,
+            "an off-screen .accessory app must not be holding the SYSTEM focus; if it \
+             is, this test can no longer tell the two questions apart"
+        );
+    }
 }
 
 /// The fixture's own geometry and the bridge's AX bounds agree.
