@@ -5,7 +5,9 @@
 //! `lifecycle::apply_move`, confirming first for destructive drops.
 
 use super::components::board::{DropRequest, KanbanBoard};
-use super::components::board_columns::{column_label, column_matches, count_for_column, BOARD_COLUMNS};
+use super::components::board_columns::{
+    column_label, column_matches, count_for_column, BOARD_COLUMNS,
+};
 use super::components::create_form::KanbanCreateForm;
 use super::components::lifecycle::apply_move;
 use super::components::task_drawer::TaskDetailDrawer;
@@ -114,8 +116,7 @@ pub fn KanbanView() -> impl IntoView {
                 let status_ok = sf.is_none_or(|s| column_matches(&t.status, s));
                 let query_ok = query.is_empty()
                     || t.subject.to_lowercase().contains(&query)
-                    || t
-                        .owner
+                    || t.owner
                         .as_deref()
                         .is_some_and(|o| o.to_lowercase().contains(&query));
                 status_ok && query_ok

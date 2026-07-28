@@ -95,7 +95,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/undo", "Remove the last user+assistant turn from history"),
     ("/retry", "Undo + re-send the previous user message"),
     ("/tools", "Tool progress mode: off|new|all|verbose"),
-    ("/tier", "Set exec tier (tool-approval prompts): ask|auto|full"),
+    (
+        "/tier",
+        "Set exec tier (tool-approval prompts): ask|auto|full",
+    ),
     ("/sessions", "Browse & switch session (alias: /resume)"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),

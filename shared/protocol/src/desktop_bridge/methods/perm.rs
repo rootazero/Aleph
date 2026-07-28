@@ -14,6 +14,17 @@ pub const METHOD_GUIDE: &str = "perm.guide";
 pub const METHOD_OPEN_SETTINGS: &str = "perm.open_settings";
 pub const NOTIFY_STATUS_CHANGED: &str = "perm.status_changed";
 
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for a permission call.
+///
+/// `perm.check` and `perm.guide` read local TCC state. `perm.open_settings`
+/// hands a URL to `NSWorkspace` and returns once the open is *dispatched* — it
+/// does not wait for the user, so it belongs in the same bracket.
+pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] = &[];
+
 /// Every macOS TCC permission kind that Aleph manages or depends on.
 ///
 /// This is the single source of truth for permission identity across both the

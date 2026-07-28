@@ -201,11 +201,7 @@ pub fn resolve_move(from_status: &str, to_col: &str) -> Option<TaskMove> {
 /// Execute a [`TaskMove`] against the backend. The one shared dispatch point
 /// for the drawer, the card quick-actions, and drag-drop; every caller routes
 /// here so a new verb is wired in exactly one place.
-pub async fn apply_move(
-    dash: &DashboardState,
-    task_id: &str,
-    mv: TaskMove,
-) -> Result<(), String> {
+pub async fn apply_move(dash: &DashboardState, task_id: &str, mv: TaskMove) -> Result<(), String> {
     match mv {
         TaskMove::SetStatus(status) => TeamsApi::update_task(
             dash,
@@ -232,8 +228,13 @@ mod tests {
 
     #[test]
     fn gating_matches_lifecycle_rules() {
-        use TaskAction::{Approve, Cancel, Complete, Fail, Pause, Reject, Resume, Retry, Skip, Start};
-        assert_eq!(actions_for_status("pending"), vec![Start, Pause, Skip, Cancel]);
+        use TaskAction::{
+            Approve, Cancel, Complete, Fail, Pause, Reject, Resume, Retry, Skip, Start,
+        };
+        assert_eq!(
+            actions_for_status("pending"),
+            vec![Start, Pause, Skip, Cancel]
+        );
         assert_eq!(actions_for_status("blocked"), vec![Pause, Skip, Cancel]);
         // "unsatisfiable" (derived blocked) mirrors blocked exactly.
         assert_eq!(
@@ -251,7 +252,10 @@ mod tests {
         assert_eq!(actions_for_status("paused"), vec![Resume, Cancel]);
         assert_eq!(actions_for_status("failed"), vec![Retry]);
         for s in ["completed", "skipped", "cancelled", "garbage"] {
-            assert!(actions_for_status(s).is_empty(), "{s} must be terminal/inert");
+            assert!(
+                actions_for_status(s).is_empty(),
+                "{s} must be terminal/inert"
+            );
         }
     }
 
@@ -259,7 +263,14 @@ mod tests {
     fn each_status_targets_distinct_columns() {
         // The resolve_move `.find()` is only unambiguous if, per status, no two
         // offered actions land in the same column.
-        for status in ["pending", "blocked", "in_progress", "waiting_review", "paused", "failed"] {
+        for status in [
+            "pending",
+            "blocked",
+            "in_progress",
+            "waiting_review",
+            "paused",
+            "failed",
+        ] {
             let cols: Vec<&str> = actions_for_status(status)
                 .iter()
                 .map(|a| a.target_column())
@@ -267,25 +278,47 @@ mod tests {
             let mut dedup = cols.clone();
             dedup.sort_unstable();
             dedup.dedup();
-            assert_eq!(cols.len(), dedup.len(), "{status} has colliding target columns");
+            assert_eq!(
+                cols.len(),
+                dedup.len(),
+                "{status} has colliding target columns"
+            );
         }
     }
 
     #[test]
     fn resolve_move_routes_drags_to_verbs() {
         // Direct status writes.
-        assert_eq!(resolve_move("pending", "in_progress"), Some(TaskMove::SetStatus("in_progress")));
-        assert_eq!(resolve_move("in_progress", "completed"), Some(TaskMove::SetStatus("completed")));
-        assert_eq!(resolve_move("in_progress", "failed"), Some(TaskMove::SetStatus("failed")));
-        assert_eq!(resolve_move("pending", "cancelled"), Some(TaskMove::SetStatus("cancelled")));
+        assert_eq!(
+            resolve_move("pending", "in_progress"),
+            Some(TaskMove::SetStatus("in_progress"))
+        );
+        assert_eq!(
+            resolve_move("in_progress", "completed"),
+            Some(TaskMove::SetStatus("completed"))
+        );
+        assert_eq!(
+            resolve_move("in_progress", "failed"),
+            Some(TaskMove::SetStatus("failed"))
+        );
+        assert_eq!(
+            resolve_move("pending", "cancelled"),
+            Some(TaskMove::SetStatus("cancelled"))
+        );
         // Dedicated verbs.
         assert_eq!(resolve_move("pending", "paused"), Some(TaskMove::Pause));
         assert_eq!(resolve_move("paused", "pending"), Some(TaskMove::Resume));
         assert_eq!(resolve_move("failed", "pending"), Some(TaskMove::Retry));
         assert_eq!(resolve_move("pending", "skipped"), Some(TaskMove::Skip));
         // Review gate: approve → completed, reject → failed.
-        assert_eq!(resolve_move("waiting_review", "completed"), Some(TaskMove::Approve));
-        assert_eq!(resolve_move("waiting_review", "failed"), Some(TaskMove::Reject));
+        assert_eq!(
+            resolve_move("waiting_review", "completed"),
+            Some(TaskMove::Approve)
+        );
+        assert_eq!(
+            resolve_move("waiting_review", "failed"),
+            Some(TaskMove::Reject)
+        );
     }
 
     #[test]
@@ -306,10 +339,22 @@ mod tests {
 
     #[test]
     fn destructive_moves_flagged_for_confirm() {
-        for a in [TaskAction::Complete, TaskAction::Fail, TaskAction::Cancel, TaskAction::Skip, TaskAction::Reject] {
+        for a in [
+            TaskAction::Complete,
+            TaskAction::Fail,
+            TaskAction::Cancel,
+            TaskAction::Skip,
+            TaskAction::Reject,
+        ] {
             assert!(a.is_destructive(), "{a:?} should require confirm");
         }
-        for a in [TaskAction::Start, TaskAction::Pause, TaskAction::Resume, TaskAction::Retry, TaskAction::Approve] {
+        for a in [
+            TaskAction::Start,
+            TaskAction::Pause,
+            TaskAction::Resume,
+            TaskAction::Retry,
+            TaskAction::Approve,
+        ] {
             assert!(!a.is_destructive(), "{a:?} should apply without confirm");
         }
     }
@@ -341,17 +386,35 @@ mod tests {
     #[test]
     fn primary_actions_are_a_subset_of_available() {
         use super::primary_actions;
-        for s in ["pending", "in_progress", "waiting_review", "paused", "failed", "blocked", "completed"] {
+        for s in [
+            "pending",
+            "in_progress",
+            "waiting_review",
+            "paused",
+            "failed",
+            "blocked",
+            "completed",
+        ] {
             let full = actions_for_status(s);
             for a in primary_actions(s) {
-                assert!(full.contains(&a), "primary action {a:?} for {s} not in actions_for_status");
+                assert!(
+                    full.contains(&a),
+                    "primary action {a:?} for {s} not in actions_for_status"
+                );
             }
         }
     }
 
     #[test]
     fn draggability_tracks_available_actions() {
-        for s in ["pending", "blocked", "in_progress", "waiting_review", "paused", "failed"] {
+        for s in [
+            "pending",
+            "blocked",
+            "in_progress",
+            "waiting_review",
+            "paused",
+            "failed",
+        ] {
             assert!(is_draggable(s), "{s} should be draggable");
         }
         for s in ["completed", "skipped", "cancelled"] {

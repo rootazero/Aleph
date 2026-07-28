@@ -14,9 +14,13 @@ import Foundation
 func registerAxHandlers(_ router: Router) async {
     let querier = AxQuerier()
 
-    await router.register("ax.query_focused") { _ in
+    await router.register("ax.query_focused") { params in
         try requireAxTrusted()
-        let el = await querier.queryFocused()
+        // An older client sends no params at all for this method, which decodes
+        // to "no pid" — the system-wide question it used to be the only way to
+        // ask.
+        let args = (try? decodeCodable(params, as: QueryFocusedParams.self)) ?? QueryFocusedParams()
+        let el = await querier.queryFocused(pid: args.pid.map { pid_t($0) })
         return try encodeCodable(QueryResult(element: el))
     }
 
@@ -26,21 +30,23 @@ func registerAxHandlers(_ router: Router) async {
         // Cap depth to prevent unbounded AX tree traversal (information disclosure / OOM).
         let MAX_QUERY_DEPTH = 20
         let depth = min(args.max_depth ?? 6, MAX_QUERY_DEPTH)
-        let el = await querier.queryTree(
+        let (el, budget) = await querier.queryTree(
             pid: args.pid.map { pid_t($0) },
-            maxDepth: depth
+            maxDepth: depth,
+            maxNodes: clampMaxNodes(args.max_nodes)
         )
-        return try encodeCodable(QueryResult(element: el))
+        return try encodeCodable(QueryResult(element: el, budget: budget))
     }
 
     await router.register("ax.query_by_role") { params in
         try requireAxTrusted()
         let args = try decodeCodable(params, as: QueryByRoleParams.self)
-        let list = await querier.queryByRole(
+        let (list, budget) = await querier.queryByRole(
             role: args.role,
-            pid: args.pid.map { pid_t($0) }
+            pid: args.pid.map { pid_t($0) },
+            maxNodes: clampMaxNodes(args.max_nodes)
         )
-        return try encodeCodable(QueryListResult(elements: list))
+        return try encodeCodable(QueryListResult(elements: list, budget: budget))
     }
 
     await router.register("ax.set_value") { params in
@@ -56,6 +62,20 @@ func registerAxHandlers(_ router: Router) async {
         let result = try await querier.performAction(args)
         return try encodeCodable(result)
     }
+}
+
+// MARK: - Node budget
+
+/// Mirror of `aleph_protocol::desktop_bridge::methods::ax::clamp_max_nodes`.
+///
+/// The Rust side clamps before sending; this repeats it because the helper must
+/// not be able to be talked into an unbounded walk by a malformed request, and
+/// because the field is optional on the wire for older clients.
+func clampMaxNodes(_ requested: Int?) -> Int {
+    let defaultMaxNodes = 1_500
+    let maxMaxNodes = 10_000
+    guard let requested, requested > 0 else { return defaultMaxNodes }
+    return min(requested, maxMaxNodes)
 }
 
 // MARK: - Permission guard

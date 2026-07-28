@@ -473,12 +473,14 @@ fn handle_approval_key(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        KeyCode::Enter => state
-            .approval
-            .as_ref()
-            .map_or(Action::None, |approval| Action::ResolveApproval {
-                index: approval.selected,
-            }),
+        KeyCode::Enter => {
+            state
+                .approval
+                .as_ref()
+                .map_or(Action::None, |approval| Action::ResolveApproval {
+                    index: approval.selected,
+                })
+        }
         _ => Action::None,
     }
 }

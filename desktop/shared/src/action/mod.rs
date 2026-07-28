@@ -125,6 +125,70 @@ pub(crate) fn move_pointer(enigo: &mut Enigo, x: i32, y: i32, context: &str) -> 
     }
 }
 
+/// Fewest intermediate positions a drag passes through, and the wall clock they
+/// are spread over.
+///
+/// A drag with no requested duration used to be press-at-A, one absolute move,
+/// release-at-B — on **both** rails (enigo/XTEST and ydotool). That is not a
+/// drag to a toolkit: GTK, Qt and Chromium all arm drag-and-drop on *motion
+/// while the button is down*, and require the pointer to travel past a small
+/// threshold before they begin. A single teleport reads as a click at A followed
+/// by a stray release at B, so the gesture silently does nothing while every
+/// layer reports success. orca's Linux runtime interpolates unconditionally for
+/// exactly this reason; so does UI-TARS' operator.
+///
+/// The floor is deliberately small: 12 steps over 120ms is imperceptible next to
+/// the round trip that requested the drag, and an explicit `duration_ms` still
+/// wins whenever it asks for more.
+const MIN_DRAG_STEPS: u64 = 12;
+const MIN_DRAG_MS: u64 = 120;
+
+/// Longest a drag may hold a worker thread, however long the caller asked for.
+const MAX_DRAG_MS: u64 = 10_000;
+
+/// Most intermediate positions a drag will emit — 10 seconds at 60fps.
+const MAX_DRAG_STEPS: u64 = 600;
+
+/// The intermediate positions a drag travels through, and how long to wait
+/// between them.
+///
+/// The path is eased (cubic ease-out) so it looks like a hand rather than a
+/// metronome — some drag targets sample velocity — and always **ends exactly on
+/// the endpoint**, because the eased curve only reaches it to within the integer
+/// cast.
+///
+/// Pure, so the floors and caps are pinned by tests rather than by watching a
+/// pointer move.
+#[must_use]
+pub(crate) fn drag_path(
+    sx: i32,
+    sy: i32,
+    ex: i32,
+    ey: i32,
+    duration_ms: Option<u64>,
+) -> (Vec<(i32, i32)>, std::time::Duration) {
+    let ms = duration_ms
+        .unwrap_or(0)
+        .clamp(MIN_DRAG_MS, MAX_DRAG_MS.max(MIN_DRAG_MS));
+    let steps = (((ms as f64 / 1000.0) * 60.0).ceil() as u64).clamp(MIN_DRAG_STEPS, MAX_DRAG_STEPS);
+
+    let mut path = Vec::with_capacity(steps as usize);
+    for i in 1..=steps {
+        let t = i as f64 / steps as f64;
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let cx = (f64::from(ex) - f64::from(sx)).mul_add(eased, f64::from(sx));
+        let cy = (f64::from(ey) - f64::from(sy)).mul_add(eased, f64::from(sy));
+        path.push((cx as i32, cy as i32));
+    }
+    // Land on the requested endpoint exactly; the release must happen where the
+    // caller asked, not one pixel short of it.
+    if path.last() != Some(&(ex, ey)) {
+        path.push((ex, ey));
+    }
+
+    (path, std::time::Duration::from_millis(ms / steps.max(1)))
+}
+
 /// Convert Aleph's `MouseButton` to enigo's Button.
 pub(crate) const fn to_enigo_button(button: MouseButton) -> Button {
     match button {
@@ -139,6 +203,64 @@ pub(crate) const fn to_enigo_button(button: MouseButton) -> Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── drag_path: a drag has to actually move ──────────────────────────────
+
+    #[test]
+    fn a_drag_with_no_duration_still_travels_through_intermediate_points() {
+        // The regression this pins: press at A, one absolute move, release at B
+        // is a click and a stray release to GTK/Qt/Chromium, and every layer
+        // reported it as a successful drag.
+        let (path, _) = drag_path(0, 0, 300, 200, None);
+        assert!(
+            path.len() >= MIN_DRAG_STEPS as usize,
+            "a drag must move: {} points",
+            path.len()
+        );
+        assert_ne!(path[0], (300, 200), "the first move is not the endpoint");
+    }
+
+    #[test]
+    fn a_drag_always_lands_exactly_on_the_endpoint() {
+        // The eased curve reaches t == 1, but only to within the integer cast —
+        // and the button comes up wherever the last move left it.
+        for (ex, ey) in [(300, 200), (-40, 17), (1, 1), (0, 0)] {
+            let (path, _) = drag_path(0, 0, ex, ey, None);
+            assert_eq!(*path.last().unwrap(), (ex, ey), "end ({ex},{ey})");
+        }
+    }
+
+    #[test]
+    fn an_explicit_duration_wins_when_it_asks_for_more() {
+        let (short, _) = drag_path(0, 0, 100, 100, None);
+        let (long, _) = drag_path(0, 0, 100, 100, Some(1_000));
+        assert!(
+            long.len() > short.len(),
+            "1s should interpolate more finely than the floor: {} vs {}",
+            long.len(),
+            short.len()
+        );
+    }
+
+    #[test]
+    fn a_drag_cannot_pin_a_worker_thread_indefinitely() {
+        // Both bounds matter and neither implies the other: the step cap bounds
+        // iterations, the duration cap bounds wall clock.
+        let (path, delay) = drag_path(0, 0, 100, 100, Some(u64::MAX));
+        assert!(path.len() <= MAX_DRAG_STEPS as usize + 1);
+        let total = delay.as_millis() as u64 * path.len() as u64;
+        assert!(total <= MAX_DRAG_MS * 2, "total {total}ms");
+    }
+
+    #[test]
+    fn a_zero_length_drag_is_still_a_bounded_path() {
+        // Same start and end: nothing to interpolate, but the loop must not
+        // spin and the release must still happen at the point asked for.
+        let (path, _) = drag_path(50, 50, 50, 50, None);
+        assert!(!path.is_empty());
+        assert!(path.iter().all(|p| *p == (50, 50)));
+    }
+
     use enigo::Button;
 
     // ── coordinate validation ────────────────────────────────────

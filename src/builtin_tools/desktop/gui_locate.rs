@@ -25,7 +25,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams, DEFAULT_MAX_NODES};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -130,16 +130,20 @@ impl AlephTool for DesktopGuiLocate {
                 let params = QueryTreeParams {
                     pid: args.pid,
                     max_depth: SEARCH_MAX_DEPTH,
+                    max_nodes: DEFAULT_MAX_NODES,
                 };
                 match ax.query_tree(params).await {
-                    Ok(Some(root)) => {
-                        if let Some(out) =
-                            ax_locate_output(&root, needle, args.prefer_role.as_deref())
-                        {
+                    // A truncated walk needs no special handling here: this
+                    // stage already falls through to OCR when it does not find
+                    // the target, and "did not find it" is the same outcome
+                    // whether the element was absent or simply never reached.
+                    Ok(result) => {
+                        if let Some(out) = result.element.as_ref().and_then(|root| {
+                            ax_locate_output(root, needle, args.prefer_role.as_deref())
+                        }) {
                             return Ok(out);
                         }
                     }
-                    Ok(None) => { /* fall through to OCR */ }
                     Err(e) => {
                         // AX failed (perm denied, bridge offline). Don't give
                         // up — try OCR before erroring.

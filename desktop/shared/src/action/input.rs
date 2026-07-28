@@ -293,8 +293,6 @@ pub fn drag(
     end_y: f64,
     duration_ms: Option<u64>,
 ) -> Result<()> {
-    use std::time::Duration;
-
     let sx = validate_coordinate(start_x, "start_x")?;
     let sy = validate_coordinate(start_y, "start_y")?;
     let ex = validate_coordinate(end_x, "end_x")?;
@@ -302,8 +300,7 @@ pub fn drag(
 
     #[cfg(target_os = "linux")]
     if super::wayland_input::should_use_ydotool()? {
-        let _ = duration_ms; // ydotool mousemove is instantaneous; drag is atomic.
-        return super::wayland_input::drag(sx, sy, ex, ey);
+        return super::wayland_input::drag(sx, sy, ex, ey, duration_ms);
     }
 
     let mut enigo = new_enigo()?;
@@ -313,30 +310,12 @@ pub fn drag(
         .button(enigo::Button::Left, Direction::Press)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to press for drag: {e}")))?;
 
-    match duration_ms {
-        Some(ms) if ms > 0 => {
-            // Cap raw duration at 10s so an untrusted caller cannot pin a
-            // worker thread for arbitrary time despite the step cap. The
-            // 600-step cap already bounds iterations; this bounds wall
-            // clock. Above the ceiling, fall back to an instantaneous drag
-            // (the Some(ms) arm becoming effectively `_ =>`).
-            let ms = ms.min(10_000);
-            // Cap at 600 steps (10 seconds at 60fps) to prevent excessive iteration
-            // from malicious or erroneous duration values.
-            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().clamp(1.0, 600.0) as u64;
-            let step_delay = Duration::from_millis(ms / steps.max(1));
-            for i in 1..=steps {
-                let t = i as f64 / steps as f64;
-                let eased = 1.0 - (1.0 - t).powi(3);
-                let cx = (f64::from(ex) - f64::from(sx)).mul_add(eased, f64::from(sx));
-                let cy = (f64::from(ey) - f64::from(sy)).mul_add(eased, f64::from(sy));
-                move_pointer(&mut enigo, cx as i32, cy as i32, "during drag")?;
-                std::thread::sleep(step_delay);
-            }
-        }
-        _ => {
-            move_pointer(&mut enigo, ex, ey, "to end")?;
-        }
+    // Always interpolated, even when no duration was asked for — see
+    // `super::drag_path` for why a teleporting drag is a no-op to every toolkit.
+    let (path, step_delay) = super::drag_path(sx, sy, ex, ey, duration_ms);
+    for (cx, cy) in path {
+        move_pointer(&mut enigo, cx, cy, "during drag")?;
+        std::thread::sleep(step_delay);
     }
 
     enigo
@@ -430,16 +409,7 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
 pub fn clipboard_read() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-
-        let pb = NSPasteboard::generalPasteboard();
-        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
-        // always initialized and thread-safe.
-        let pasteboard_type = unsafe { NSPasteboardTypeString };
-        match pb.stringForType(pasteboard_type) {
-            Some(s) => Ok(s.to_string()),
-            None => Ok(String::new()),
-        }
+        crate::macos::clipboard::read_text()
     }
 
     #[cfg(target_os = "linux")]
@@ -470,18 +440,9 @@ pub fn clipboard_read() -> Result<String> {
 pub fn clipboard_write(text: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-        use objc2_foundation::NSString;
-
-        let pb = NSPasteboard::generalPasteboard();
-        pb.clearContents();
-        let ns_string = NSString::from_str(text);
-        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
-        // always initialized and thread-safe.
-        let pasteboard_type = unsafe { NSPasteboardTypeString };
-        pb.setString_forType(&ns_string, pasteboard_type);
-        info!("Clipboard write performed");
-        Ok(())
+        // This arm used to drop `setString:forType:`'s answer on the floor and
+        // return `Ok(())` regardless — a refused write reported as a copy.
+        crate::macos::clipboard::write_text(text)
     }
 
     #[cfg(target_os = "linux")]

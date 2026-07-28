@@ -71,15 +71,42 @@ pub struct BoardColumn {
 /// The canonical column order rendered by the board and summarised by the
 /// chip bar. `unsatisfiable` is not its own column — it folds into `blocked`.
 pub const BOARD_COLUMNS: &[BoardColumn] = &[
-    BoardColumn { status: "pending", tone: Tone::Neutral },
-    BoardColumn { status: "blocked", tone: Tone::Warning },
-    BoardColumn { status: "in_progress", tone: Tone::Info },
-    BoardColumn { status: "waiting_review", tone: Tone::Primary },
-    BoardColumn { status: "paused", tone: Tone::Muted },
-    BoardColumn { status: "completed", tone: Tone::Success },
-    BoardColumn { status: "skipped", tone: Tone::Muted },
-    BoardColumn { status: "failed", tone: Tone::Danger },
-    BoardColumn { status: "cancelled", tone: Tone::Muted },
+    BoardColumn {
+        status: "pending",
+        tone: Tone::Neutral,
+    },
+    BoardColumn {
+        status: "blocked",
+        tone: Tone::Warning,
+    },
+    BoardColumn {
+        status: "in_progress",
+        tone: Tone::Info,
+    },
+    BoardColumn {
+        status: "waiting_review",
+        tone: Tone::Primary,
+    },
+    BoardColumn {
+        status: "paused",
+        tone: Tone::Muted,
+    },
+    BoardColumn {
+        status: "completed",
+        tone: Tone::Success,
+    },
+    BoardColumn {
+        status: "skipped",
+        tone: Tone::Muted,
+    },
+    BoardColumn {
+        status: "failed",
+        tone: Tone::Danger,
+    },
+    BoardColumn {
+        status: "cancelled",
+        tone: Tone::Muted,
+    },
 ];
 
 /// Whether a task with `task_status` belongs in the column for `col_status`.
@@ -177,7 +204,10 @@ mod tests {
                 .iter()
                 .filter(|c| column_matches(s, c.status))
                 .count();
-            assert_eq!(hits, 1, "status {s} must map to exactly one column, got {hits}");
+            assert_eq!(
+                hits, 1,
+                "status {s} must map to exactly one column, got {hits}"
+            );
         }
     }
 }

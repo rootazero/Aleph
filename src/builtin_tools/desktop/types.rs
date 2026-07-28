@@ -67,7 +67,11 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<Vec<String>>,
 
-    /// App bundle ID to launch or quit. Example: "com.apple.safari"
+    /// The application to launch, quit or restart — its name as shown in the
+    /// file manager, or its bundle id. Example: "Safari" or "com.apple.Safari".
+    ///
+    /// Both spellings work. If you do not know either, `system` with
+    /// `list_installed_apps` enumerates what is on the machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
@@ -308,7 +312,11 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<Vec<String>>,
 
-    /// App bundle ID to launch or quit. Example: "com.apple.safari"
+    /// The application to launch, quit or restart — its name as shown in the
+    /// file manager, or its bundle id. Example: "Safari" or "com.apple.Safari".
+    ///
+    /// Both spellings work. If you do not know either, `system` with
+    /// `list_installed_apps` enumerates what is on the machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 

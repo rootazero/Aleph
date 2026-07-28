@@ -52,11 +52,9 @@ impl AlephConnector for WasmConnector {
                         let _ = msg_tx.unbounded_send(Ok(val));
                     }
                     Err(e) => {
-                        let _ = msg_tx.unbounded_send(Err(
-                            ConnectionError::ReceiveFailed(format!(
-                                "malformed frame: {e}"
-                            )),
-                        ));
+                        let _ = msg_tx.unbounded_send(Err(ConnectionError::ReceiveFailed(
+                            format!("malformed frame: {e}"),
+                        )));
                     }
                 }
             }

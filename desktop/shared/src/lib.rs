@@ -23,6 +23,7 @@
 pub mod action;
 pub mod automation_types;
 pub mod ax_rank;
+pub mod ax_secure;
 pub mod bridge;
 pub mod coord;
 pub mod error;
@@ -31,6 +32,12 @@ pub mod error;
 // its consumers are all Linux-gated.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod linux;
+// macOS app lifecycle + clipboard, shared by this crate's `action` arms and by
+// the `aleph-desktop-macos` capability impls. Unlike `linux`, there is no pure
+// half to keep host-compilable — it is `NSWorkspace` and `NSPasteboard` all the
+// way down.
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod media_types;
 pub mod native_screen;
 pub mod perception;
@@ -51,6 +58,7 @@ pub mod win_registry;
 pub mod win_window;
 
 pub use ax_rank::{rank_candidates, RankCandidate};
+pub use ax_secure::is_password_like;
 pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;

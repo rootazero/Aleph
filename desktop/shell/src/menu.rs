@@ -59,10 +59,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 /// Aleph submenu: about, show / browser / connect, the shared update item, and
 /// the app-owned quit variants. `update_item` is already registered with the
 /// updater so its label stays in sync with the tray.
-fn build_app_menu(
-    app: &AppHandle,
-    update_item: &MenuItem<Wry>,
-) -> tauri::Result<Submenu<Wry>> {
+fn build_app_menu(app: &AppHandle, update_item: &MenuItem<Wry>) -> tauri::Result<Submenu<Wry>> {
     Submenu::with_items(
         app,
         "Aleph",

@@ -11,7 +11,8 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, reload, util::SubscriberInit
 /// Guard to keep the non-blocking writer alive, plus initialization result
 static GUARD: OnceLock<Result<tracing_appender::non_blocking::WorkerGuard, String>> =
     OnceLock::new();
-static FILTER_RELOAD: OnceLock<reload::Handle<EnvFilter, tracing_subscriber::Registry>> = OnceLock::new();
+static FILTER_RELOAD: OnceLock<reload::Handle<EnvFilter, tracing_subscriber::Registry>> =
+    OnceLock::new();
 
 /// Initialize file + console logging for a named component.
 ///

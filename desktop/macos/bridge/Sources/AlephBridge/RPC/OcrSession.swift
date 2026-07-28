@@ -21,7 +21,13 @@ actor OcrSession {
             )
         }
 
-        return try await withCheckedThrowingContinuation { cont in
+        return try await withCheckedThrowingContinuation { rawCont in
+            // Vision hands the error to the request's completion handler AND
+            // rethrows it out of `perform`, so both arms below fire for the same
+            // failure. Resuming twice is a process-killing fatal error, not an
+            // exception — see `ResumeOnce`.
+            let cont = ResumeOnce<(fullText: String, blocks: [[String: JSONValue]])>(rawCont)
+
             let req = VNRecognizeTextRequest { request, error in
                 if let error = error {
                     cont.resume(throwing: RpcError(

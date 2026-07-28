@@ -43,7 +43,9 @@ pub enum Compositor {
     Sway,
     /// Hyprland (`hyprctl`).
     Hyprland,
-    /// KDE Plasma (`kdotool` under Wayland, EWMH under X11).
+    /// KDE Plasma. EWMH under X11; under Wayland it exposes no window
+    /// management this limb can carry (KWin's scripting handles are opaque
+    /// strings, not the `u64` the cross-platform `WindowInfo` contract uses).
     Kde,
     /// GNOME / Mutter. Under Wayland it exposes no window-management IPC to
     /// unprivileged clients without a shell extension.
@@ -186,15 +188,17 @@ pub fn session() -> LinuxSession {
 ///
 /// Kept as one list so the `PATH` walk happens once instead of once per query,
 /// and so "what does Aleph need installed on Linux" has a single answer.
+/// This list is a *contract*, not a wish list: every name here has a caller.
+/// `wmctrl`, `xdotool` and `kdotool` were removed once nothing looked them up —
+/// window management went native (`x11rb`/EWMH) and the two Wayland backends
+/// speak their compositor's own IPC, so those three answered a question nobody
+/// asked while still claiming to be part of "what Aleph needs installed".
 pub const KNOWN_TOOLS: &[&str] = &[
     // input
-    "xdotool",
     "ydotool",
     // window management
-    "wmctrl",
     "swaymsg",
     "hyprctl",
-    "kdotool",
     // clipboard
     "wl-copy",
     "wl-paste",
@@ -437,13 +441,27 @@ mod tests {
         assert_eq!(tb.first_of(&["xsel", "xclip"]), Some("xsel"));
         assert_eq!(tb.first_of(&["wl-copy"]), None);
         assert!(tb.has("xclip"));
-        assert!(!tb.has("wmctrl"));
+        assert!(!tb.has("ydotool"));
     }
 
     #[test]
     fn empty_toolbox_finds_nothing() {
         let tb = ToolBox::from_names(&[]);
         assert_eq!(tb.first_of(&["xclip", "xsel"]), None);
+    }
+
+    #[test]
+    fn every_known_tool_has_a_caller() {
+        // The list is what "install this to get that capability" is derived
+        // from, so a name nothing looks up is a promise with nothing behind it.
+        // `wmctrl`/`xdotool`/`kdotool` sat here after window management went
+        // native; these are the ones that remain, each with a live consumer.
+        for tool in KNOWN_TOOLS {
+            assert!(
+                !matches!(*tool, "wmctrl" | "xdotool" | "kdotool"),
+                "{tool} has no caller — remove it or wire it up"
+            );
+        }
     }
 
     #[test]
@@ -473,10 +491,10 @@ mod tests {
 
     #[test]
     fn missing_tool_error_names_every_candidate() {
-        let err = missing_tool_error("Window listing", &["xdotool", "wmctrl"]);
+        let err = missing_tool_error("Reading the clipboard", &["xclip", "xsel"]);
         let msg = err.to_string();
-        assert!(msg.contains("xdotool"), "{msg}");
-        assert!(msg.contains("wmctrl"), "{msg}");
-        assert!(msg.contains("Window listing"), "{msg}");
+        assert!(msg.contains("xclip"), "{msg}");
+        assert!(msg.contains("xsel"), "{msg}");
+        assert!(msg.contains("Reading the clipboard"), "{msg}");
     }
 }

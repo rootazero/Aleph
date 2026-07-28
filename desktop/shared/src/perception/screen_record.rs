@@ -746,8 +746,8 @@ pub fn screen_record(
             // `display.is_some()` is what got us this backend.
             let display = display.unwrap_or_default();
             let args = build_x11grab_args(&display, &config, &output_str);
-            let deadline = std::time::Duration::from_secs_f64(config.duration_secs)
-                + FFMPEG_RECORD_OVERHEAD;
+            let deadline =
+                std::time::Duration::from_secs_f64(config.duration_secs) + FFMPEG_RECORD_OVERHEAD;
 
             let mut cmd = crate::script_exec::hidden_std_command("ffmpeg");
             cmd.args(&args);
@@ -1082,7 +1082,10 @@ mod tests {
 
     // ── Backend selection ────────────────────────────────────────────────
 
-    fn session(kind: crate::linux::SessionKind, c: crate::linux::Compositor) -> crate::linux::LinuxSession {
+    fn session(
+        kind: crate::linux::SessionKind,
+        c: crate::linux::Compositor,
+    ) -> crate::linux::LinuxSession {
         crate::linux::LinuxSession {
             kind,
             compositor: c,
@@ -1122,7 +1125,10 @@ mod tests {
         for compositor in [Compositor::Sway, Compositor::Hyprland] {
             let err = pick_record_backend(session(SessionKind::Wayland, compositor), &tb, false)
                 .unwrap_err();
-            assert!(err.to_string().contains("wf-recorder"), "{compositor:?}: {err}");
+            assert!(
+                err.to_string().contains("wf-recorder"),
+                "{compositor:?}: {err}"
+            );
         }
     }
 

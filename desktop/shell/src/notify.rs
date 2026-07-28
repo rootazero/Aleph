@@ -178,9 +178,10 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
                 "notification bridge: remote target scheme {scheme:?} is unencrypted; \
                  skipping Gateway credential presentation and connecting as guest"
             );
-        } else if let (Some(credential), Some(obj)) =
-            (crate::connection::load_gateway_token(), params.as_object_mut())
-        {
+        } else if let (Some(credential), Some(obj)) = (
+            crate::connection::load_gateway_token(),
+            params.as_object_mut(),
+        ) {
             let key = if credential.starts_with("aleph-bt-") {
                 "bootstrap_ticket"
             } else if credential.starts_with("aleph-dt-") {

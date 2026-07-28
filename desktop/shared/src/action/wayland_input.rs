@@ -347,8 +347,8 @@ fn run_ydotool(args: &[String]) -> Result<()> {
 
     let mut cmd = std::process::Command::new("ydotool");
     cmd.args(args);
-    let output = output_capped_blocking(cmd, YDOTOOL_TIMEOUT, "ydotool input injection")
-        .map_err(|e| {
+    let output =
+        output_capped_blocking(cmd, YDOTOOL_TIMEOUT, "ydotool input injection").map_err(|e| {
             if is_spawn_failure(&e) {
                 DesktopError::InputFailed(format!("Failed to spawn ydotool: {e}"))
             } else {
@@ -407,10 +407,23 @@ pub(crate) fn mouse_button(x: i32, y: i32, button: MouseButton, action: PressAct
 /// the end (ydotool `mousemove` is instantaneous); animated stepping would spawn
 /// one subprocess per frame, so the fallback keeps it atomic.
 #[cfg(target_os = "linux")]
-pub(crate) fn drag(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<()> {
+pub(crate) fn drag(
+    start_x: i32,
+    start_y: i32,
+    end_x: i32,
+    end_y: i32,
+    duration_ms: Option<u64>,
+) -> Result<()> {
     run_ydotool(&mousemove_args(start_x, start_y))?;
     run_ydotool(&click_args(MouseButton::Left, PressAction::Press))?;
-    run_ydotool(&mousemove_args(end_x, end_y))?;
+    // Interpolated, not a single jump: a compositor delivers whatever motion it
+    // is given, and the toolkit on the other side needs motion-while-held to arm
+    // drag-and-drop at all. This rail used to teleport and say so in a comment
+    // ("drag is atomic"), which described the implementation rather than what
+    // the applications do with it. See `super::drag_path`.
+    for (x, y) in super::drag_path(start_x, start_y, end_x, end_y, duration_ms).0 {
+        run_ydotool(&mousemove_args(x, y))?;
+    }
     run_ydotool(&click_args(MouseButton::Left, PressAction::Release))?;
     tracing::info!(
         start_x,
@@ -477,9 +490,15 @@ mod tests {
         let err = pick_rail(true, false).expect_err("must not claim a rail it does not have");
         let msg = err.to_string();
         assert!(msg.contains("ydotool"), "must name the fix: {msg}");
-        assert!(msg.contains("ydotoold"), "the daemon is half the install: {msg}");
+        assert!(
+            msg.contains("ydotoold"),
+            "the daemon is half the install: {msg}"
+        );
         // And it must leave the model a route that still works today.
-        assert!(msg.contains("ax_action"), "must name a working alternative: {msg}");
+        assert!(
+            msg.contains("ax_action"),
+            "must name a working alternative: {msg}"
+        );
     }
 
     #[test]

@@ -346,11 +346,7 @@ fn EditMcpServerDialog(
                                     configured: is_secret,
                                     redacted: is_secret,
                                     key: RwSignal::new(k),
-                                    value: RwSignal::new(if is_secret {
-                                        String::new()
-                                    } else {
-                                        v
-                                    }),
+                                    value: RwSignal::new(if is_secret { String::new() } else { v }),
                                 };
                                 id += 1;
                                 row

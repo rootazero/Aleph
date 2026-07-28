@@ -33,6 +33,7 @@ use aleph_protocol::desktop_bridge::errors::{
     ERR_PLATFORM, ERR_TIMEOUT,
 };
 use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
+use aleph_protocol::desktop_bridge::methods::suggested_timeout_ms;
 
 use super::codec::{decode_line, encode};
 use super::inflight::InflightTable;
@@ -73,18 +74,28 @@ fn map_bridge_error(e: RpcError) -> DesktopError {
     }
 }
 
-/// Default per-call RPC deadline.
+/// Fallback per-call RPC deadline, for a method the protocol has no opinion on.
 ///
-/// Generous enough for the slowest *interactive* helper operations — OCR,
-/// AX tree walks, PIM queries, a single camera snap — yet bounded so a helper
-/// that accepts a request and then hangs (without closing stdout, so crash
-/// recovery never fires) cannot wedge an agent turn forever.
+/// Bounded so a helper that accepts a request and then hangs (without closing
+/// stdout, so crash recovery never fires) cannot wedge an agent turn forever.
+///
+/// Almost nothing should reach this any more: [`SwiftBridge::call`] asks
+/// [`suggested_timeout_ms`] first, and that answers for every namespace the
+/// protocol defines. This is what is left for a method outside all of them.
 ///
 /// Long-running capture operations (`camera.clip`, `audio.record`,
-/// `speech.transcribe_file`) outlast this default; they must use
-/// [`SwiftBridge::call_with_timeout`] with a deadline derived from the
-/// requested duration instead.
+/// `speech.transcribe_file`) run for as long as the caller asked and so pass an
+/// explicitly computed deadline to [`SwiftBridge::call_with_timeout`].
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_mins(1);
+
+/// The deadline [`SwiftBridge::call`] will use for `method`.
+///
+/// Exposed so a caller can reason about (or assert on) the budget a call will
+/// get without having to reproduce the lookup.
+#[must_use]
+pub fn rpc_timeout_for(method: &str) -> Duration {
+    suggested_timeout_ms(method).map_or(DEFAULT_RPC_TIMEOUT, Duration::from_millis)
+}
 
 /// JSON-RPC envelope version Aleph speaks to the Swift helper. Sent in the
 /// `bridge.handshake` request and required to match the helper's reply.
@@ -328,17 +339,18 @@ impl SwiftBridge {
     }
 
     /// Send a JSON-RPC request and await the typed response, bounded by the
-    /// [`DEFAULT_RPC_TIMEOUT`].
+    /// deadline the protocol declares for `method` (see [`rpc_timeout_for`]).
     ///
-    /// Most callers want this. Operations that can legitimately run longer
-    /// than the default (camera/audio capture) must use
-    /// [`SwiftBridge::call_with_timeout`] instead.
+    /// Most callers want this — the per-method budget is the protocol's to
+    /// state, not each limb's to remember. Only an operation whose length is a
+    /// function of its *arguments* (camera/audio capture, whose duration the
+    /// caller chose) needs [`SwiftBridge::call_with_timeout`].
     pub async fn call<P, R>(&self, method: &str, params: P) -> Result<R>
     where
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
-        self.call_with_timeout(method, params, DEFAULT_RPC_TIMEOUT)
+        self.call_with_timeout(method, params, rpc_timeout_for(method))
             .await
     }
 
@@ -699,10 +711,36 @@ done
         assert_eq!(bridge.inflight.len().await, 0);
     }
 
+    /// The protocol's per-method budget is what `call` actually spends.
+    ///
+    /// Guards the wiring itself: these numbers sat in the protocol with no
+    /// consumer for long enough that a one-minute catch-all was being applied to
+    /// a three-second call on the keystroke hot path.
+    #[test]
+    fn call_spends_the_deadline_the_protocol_declares() {
+        use aleph_protocol::desktop_bridge::methods::{ax, pim, screen};
+
+        assert_eq!(
+            rpc_timeout_for(ax::METHOD_QUERY_FOCUSED),
+            Duration::from_millis(ax::TIMEOUT_MS_QUERY_FOCUSED)
+        );
+        assert_eq!(
+            rpc_timeout_for(screen::METHOD_OCR),
+            Duration::from_millis(screen::TIMEOUT_MS_OCR)
+        );
+        // No override: the namespace default applies.
+        assert_eq!(
+            rpc_timeout_for(pim::METHOD_MAIL_SEARCH),
+            Duration::from_millis(pim::DEFAULT_TIMEOUT_MS)
+        );
+        // Outside every namespace the client's own fallback is what is left.
+        assert_eq!(rpc_timeout_for("window.move"), DEFAULT_RPC_TIMEOUT);
+    }
+
     #[tokio::test]
     async fn default_call_succeeds_against_fast_helper() {
-        // call() now delegates to call_with_timeout(DEFAULT_RPC_TIMEOUT);
-        // a fast helper must still resolve well within the default window.
+        // call() delegates to call_with_timeout(rpc_timeout_for(method));
+        // a fast helper must still resolve well within that window.
         let dir = tempfile::tempdir().unwrap();
         let path = install_fake(&dir, fake_helper_script());
 

@@ -71,6 +71,17 @@ mod tests {
 
     #[test]
     fn test_scope_install_dir_user() {
+        // This asserts on the *ambient* `ALEPH_HOME` (unset → `~/.aleph`), and
+        // `ALEPH_HOME` is process-global: ~27 sibling tests point it at a
+        // tempdir for their duration via `IsolatedAlephHome`. The guard only
+        // excludes the tests that hold it, so a reader that skips it observes
+        // whichever tempdir happened to be installed and fails on `.aleph`.
+        // Join the regime rather than take an isolated home — an isolated one
+        // would have no `.aleph` component and defeat the assertion.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         // User scope should resolve to ~/.aleph/plugins/installed
         let result = scope_install_dir(PluginScope::User, None);
         assert!(

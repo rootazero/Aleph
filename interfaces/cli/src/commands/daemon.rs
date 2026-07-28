@@ -444,9 +444,12 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
                 let target = lvl.to_uppercase();
                 // Match the level as a whole word to avoid false positives
                 // (e.g. "warn" matching "warning" or "forewarned").
-                upper.contains(&format!(" {target} ")) || upper.contains(&format!("\t{target}\t"))
-                    || upper.starts_with(&format!("{target} ")) || upper.starts_with(&format!("{target}\t"))
-                    || upper.ends_with(&format!(" {target}")) || upper.ends_with(&format!("\t{target}"))
+                upper.contains(&format!(" {target} "))
+                    || upper.contains(&format!("\t{target}\t"))
+                    || upper.starts_with(&format!("{target} "))
+                    || upper.starts_with(&format!("{target}\t"))
+                    || upper.ends_with(&format!(" {target}"))
+                    || upper.ends_with(&format!("\t{target}"))
                     || upper == target
             } else {
                 true

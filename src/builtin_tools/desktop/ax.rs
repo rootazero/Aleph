@@ -15,7 +15,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryByRoleParams, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{
+    clamp_max_nodes, AxElement, QueryByRoleParams, QueryFocusedParams, QueryTreeParams,
+    DEFAULT_MAX_NODES,
+};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -29,7 +32,15 @@ use super::types::DesktopOutput;
 // ── Argument types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DesktopAxQueryFocusedArgs {}
+pub struct DesktopAxQueryFocusedArgs {
+    /// Ask this process which of *its own* elements has focus, instead of
+    /// asking the system which element has focus overall.
+    ///
+    /// Use it whenever the app you care about is not the one in front of the
+    /// user — which, on the targeted input rail, is the normal case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopAxQueryTreeArgs {
@@ -39,6 +50,13 @@ pub struct DesktopAxQueryTreeArgs {
     /// Maximum subtree depth (default 6).  Larger values produce more JSON.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<u32>,
+    /// Maximum number of nodes to return (default 1500, ceiling 10000).
+    ///
+    /// Depth does not bound a wide tree. If the response comes back with
+    /// `truncated: true`, narrow the query (a `pid`, a smaller `max_depth`, or
+    /// `ax_query_by_role`) rather than simply asking for more nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_nodes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -48,6 +66,10 @@ pub struct DesktopAxQueryByRoleArgs {
     /// Target process ID. Omit to query the frontmost application.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+    /// Node budget for the search (default 1500, ceiling 10000). Bounds how much
+    /// of the tree is searched, not how many matches are returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_nodes: Option<u32>,
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -117,7 +139,7 @@ impl AlephTool for DesktopAxQueryFocused {
     type Args = DesktopAxQueryFocusedArgs;
     type Output = DesktopOutput;
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let platform = match self.platform.as_ref() {
             Some(p) => p,
             None => return Ok(no_platform_output()),
@@ -126,7 +148,7 @@ impl AlephTool for DesktopAxQueryFocused {
             Some(a) => a,
             None => return Ok(no_ax_capability_output()),
         };
-        match ax.query_focused().await {
+        match ax.query_focused(QueryFocusedParams { pid: args.pid }).await {
             // The wire type is the response here — there is no projection to
             // redact in, so the tree is scrubbed before it is serialized.
             Ok(element) => Ok(DesktopOutput {
@@ -188,12 +210,24 @@ impl AlephTool for DesktopAxQueryTree {
         let params = QueryTreeParams {
             pid: args.pid,
             max_depth: args.max_depth.unwrap_or(6),
+            max_nodes: clamp_max_nodes(args.max_nodes.unwrap_or(DEFAULT_MAX_NODES)),
         };
         match ax.query_tree(params).await {
-            Ok(element) => Ok(DesktopOutput {
+            Ok(result) => Ok(DesktopOutput {
                 success: true,
-                data: Some(json!({ "element": element.map(redact_secure_values) })),
-                message: None,
+                // `truncated` travels with the tree, never silently: a model
+                // handed a clipped subtree with no marker concludes the control
+                // it is looking for is absent.
+                data: Some(json!({
+                    "element": result.element.map(redact_secure_values),
+                    "node_count": result.node_count,
+                    "truncated": result.truncated,
+                })),
+                message: result.truncated.then(|| {
+                    "Tree truncated at the node budget — this is not the whole app. Narrow it \
+                     with `pid` / a smaller `max_depth`, or use ax_query_by_role."
+                        .to_string()
+                }),
             }),
             Err(e) => Ok(bridge_err_output(e)),
         }
@@ -249,17 +283,25 @@ impl AlephTool for DesktopAxQueryByRole {
         let params = QueryByRoleParams {
             role: args.role,
             pid: args.pid,
+            max_nodes: clamp_max_nodes(args.max_nodes.unwrap_or(DEFAULT_MAX_NODES)),
         };
         match ax.query_by_role(params).await {
-            Ok(elements) => Ok(DesktopOutput {
+            Ok(result) => Ok(DesktopOutput {
                 success: true,
                 data: Some(json!({
-                    "elements": elements
+                    "elements": result
+                        .elements
                         .into_iter()
                         .map(redact_secure_values)
                         .collect::<Vec<_>>(),
+                    "node_count": result.node_count,
+                    "truncated": result.truncated,
                 })),
-                message: None,
+                message: result.truncated.then(|| {
+                    "Search stopped at the node budget — there may be further matches beyond \
+                     these. Narrow it with `pid`."
+                        .to_string()
+                }),
             }),
             Err(e) => Ok(bridge_err_output(e)),
         }
@@ -285,6 +327,11 @@ pub struct DesktopAxSnapshotArgs {
     /// Maximum number of elements to return (default 200, capped at 500).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_elements: Option<usize>,
+    /// Node budget for the underlying accessibility walk (default 1500, ceiling
+    /// 10000). Distinct from `max_elements`: this bounds how much of the app is
+    /// *examined*, that one bounds how much is *returned*.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_nodes: Option<u32>,
 }
 
 /// Round to one decimal place — click targets do not need sub-pixel precision
@@ -410,11 +457,24 @@ impl AlephTool for DesktopAxSnapshot {
         let params = QueryTreeParams {
             pid: args.pid,
             max_depth,
+            max_nodes: clamp_max_nodes(args.max_nodes.unwrap_or(DEFAULT_MAX_NODES)),
         };
-        match ax.query_tree(params).await {
-            Ok(Some(root)) => {
+        let result = match ax.query_tree(params).await {
+            Ok(r) => r,
+            Err(e) => return Ok(bridge_err_output(e)),
+        };
+        match result.element {
+            Some(root) => {
                 let (elements, truncated, total) = flatten_interactable(&root, max_elements);
-                let focused = match ax.query_focused().await {
+                // Ask the *snapshotted* app which of its elements has focus, not
+                // the system. They differ whenever the target is not frontmost,
+                // which is the ordinary case for a background app.
+                let focused = match ax
+                    .query_focused(QueryFocusedParams {
+                        pid: Some(root.pid),
+                    })
+                    .await
+                {
                     Ok(Some(el)) => Some(json!({
                         "role": el.role,
                         "title": el.title,
@@ -426,20 +486,30 @@ impl AlephTool for DesktopAxSnapshot {
                     data: Some(json!({
                         "app_pid": root.pid,
                         "count": elements.len(),
+                        // Two different cuts, kept apart on purpose: `truncated`
+                        // is "the element LIST was capped at max_elements";
+                        // `tree_truncated` is "the WALK ran out of node budget,
+                        // so elements beyond it were never seen at all".
                         "truncated": truncated,
+                        "tree_truncated": result.truncated,
+                        "nodes_walked": result.node_count,
                         "total_interactable": total,
                         "focused": focused,
                         "elements": elements,
                     })),
-                    message: None,
+                    message: result.truncated.then(|| {
+                        "The accessibility walk hit its node budget, so this app has interactable \
+                         elements that were never reached. Narrow the snapshot with `pid` or a \
+                         smaller `max_depth`."
+                            .to_string()
+                    }),
                 })
             }
-            Ok(None) => Ok(DesktopOutput {
+            None => Ok(DesktopOutput {
                 success: true,
                 data: Some(json!({ "count": 0, "truncated": false, "elements": [] })),
                 message: Some("No accessible UI tree for the target application.".to_string()),
             }),
-            Err(e) => Ok(bridge_err_output(e)),
         }
     }
 }
@@ -473,7 +543,10 @@ mod tests {
     #[tokio::test]
     async fn query_focused_without_platform_returns_message() {
         let tool = DesktopAxQueryFocused::new();
-        let out = tool.call(DesktopAxQueryFocusedArgs {}).await.unwrap();
+        let out = tool
+            .call(DesktopAxQueryFocusedArgs { pid: None })
+            .await
+            .unwrap();
         assert!(!out.success);
         assert!(out.message.is_some());
     }
@@ -485,6 +558,7 @@ mod tests {
             .call(DesktopAxQueryTreeArgs {
                 pid: None,
                 max_depth: None,
+                max_nodes: None,
             })
             .await
             .unwrap();
@@ -499,6 +573,7 @@ mod tests {
             .call(DesktopAxQueryByRoleArgs {
                 role: "AXButton".to_string(),
                 pid: None,
+                max_nodes: None,
             })
             .await
             .unwrap();
@@ -514,6 +589,7 @@ mod tests {
                 pid: None,
                 max_depth: None,
                 max_elements: None,
+                max_nodes: None,
             })
             .await
             .unwrap();

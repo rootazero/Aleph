@@ -14,17 +14,26 @@
 use std::pin::Pin;
 
 use atspi::proxy::accessible::AccessibleProxy;
-use atspi::proxy::proxy_ext::ProxyExt;
 use atspi::{CoordType, Role, State, StateSet};
 
 use aleph_protocol::desktop_bridge::methods::ax::AxElement;
 use aleph_protocol::desktop_bridge::methods::screen::Region;
 
+use super::budget::Budget;
 use super::bus::Bus;
-use super::roles::{atspi_role_to_ax_role, has_readable_value, is_interactable, is_secure};
+use super::cache::{AppCache, Interfaces, NodeFacts};
+use super::roles::{
+    atspi_role_to_ax_role, has_numeric_value, has_readable_value, is_interactable, is_secure_role,
+    is_text_entry,
+};
 
 /// Hard cap on how many nodes one walk will materialize.
-pub const MAX_NODES: usize = 1_500;
+///
+/// The contract's [`DEFAULT_MAX_NODES`](aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES)
+/// is the source of truth; this mirrors it so internal scans that carry no
+/// caller-supplied budget stay aligned with the protocol.
+pub const MAX_NODES: usize =
+    aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES as usize;
 
 /// Longest value string carried back for one element.
 const MAX_VALUE_CHARS: usize = 500;
@@ -39,16 +48,148 @@ pub struct Walk<'a> {
     bus: &'a Bus,
     pid: i32,
     remaining: usize,
+    budget: Budget,
+    /// The application's tree, fetched once. `None` when it serves no cache, in
+    /// which case every attribute is read live — slower, never wrong.
+    cache: Option<AppCache>,
 }
 
 impl<'a> Walk<'a> {
-    /// Start a walk over `pid`'s tree, materializing at most [`MAX_NODES`].
-    pub const fn new(bus: &'a Bus, pid: i32) -> Self {
+    /// Start a walk over `pid`'s tree, materializing at most [`MAX_NODES`]
+    /// within `budget`.
+    ///
+    /// Both bounds are needed and neither implies the other: the node count caps
+    /// how much JSON a healthy application can produce, the budget caps how long
+    /// an unhealthy one can stall. See [`super::budget`].
+    pub const fn new(bus: &'a Bus, pid: i32, budget: Budget) -> Self {
         Self {
             bus,
             pid,
             remaining: MAX_NODES,
+            budget,
+            cache: None,
         }
+    }
+
+    /// Prefetch `root`'s application tree in one call.
+    ///
+    /// Call this before walking a whole application. It is deliberately not
+    /// automatic in [`Self::new`]: resolving a single already-matched element
+    /// (what `set_value` and `perform_action` do) reads one node, and paying for
+    /// a whole-tree fetch to serve it would be the wrong trade.
+    pub async fn prefetch(mut self, root: &AccessibleProxy<'static>) -> Self {
+        self.cache = AppCache::fetch(self.bus, root).await;
+        self
+    }
+
+    /// Nodes materialised so far (delegates to the protocol's `QueryResult.node_count`).
+    pub const fn spent(&self) -> u32 {
+        (MAX_NODES - self.remaining) as u32
+    }
+
+    /// Whether the walk stopped because a budget — node count or wall clock —
+    /// ran out. The returned tree is partial in that case, which the caller
+    /// surfaces via `QueryResult::truncated`.
+    pub const fn exhausted(&self) -> bool {
+        self.remaining == 0 || self.budget.spent()
+    }
+
+    /// Build the tree rooted at `proxy`, by whichever route this application
+    /// supports.
+    ///
+    /// With a cache the structure is already known, so the remaining live reads
+    /// — geometry, values, action names — are **independent of each other** and
+    /// go out concurrently ([`Self::cached_tree`]). Without one, each attribute
+    /// has to be asked for in turn ([`Self::element`]).
+    pub async fn tree(
+        &mut self,
+        proxy: &AccessibleProxy<'static>,
+        depth: u32,
+    ) -> Option<AxElement> {
+        if self.cache.is_some() {
+            if let Some(tree) = self.cached_tree(proxy, depth).await {
+                return Some(tree);
+            }
+        }
+        self.element(proxy, depth).await
+    }
+
+    /// Build the tree from the cache, enriching every node concurrently.
+    ///
+    /// # Why this is a separate pass rather than the recursive walk
+    ///
+    /// The recursive walk is inherently serial: it cannot know a node exists
+    /// until its parent's child list comes back, so every round trip waits for
+    /// the previous one. The cache removes that dependency — the whole structure
+    /// arrives in one call — which turns the remaining reads into a flat, order-
+    /// independent set. Issuing them concurrently is then the difference between
+    /// *n × latency* and *n/concurrency × latency*, on a workload that is
+    /// entirely latency.
+    ///
+    /// Returns `None` when the cache does not contain the root, in which case
+    /// [`Self::tree`] falls back to the serial walk rather than reporting an
+    /// application as empty.
+    async fn cached_tree(
+        &mut self,
+        root: &AccessibleProxy<'static>,
+        depth: u32,
+    ) -> Option<AxElement> {
+        let root_path = root.inner().path().as_str().to_owned();
+        let skeleton = self.skeleton(&root_path, depth)?;
+
+        // Bounded so a large application cannot open thousands of concurrent
+        // D-Bus calls at once: past a point that queues inside the target's
+        // single-threaded main loop anyway, and the queue is invisible from here.
+        use futures::StreamExt as _;
+        // Materialized before the stream: futures are lazy, so nothing has gone
+        // out yet, and building them here rather than in a closure keeps the
+        // borrow of `skeleton` a plain one instead of a higher-ranked bound the
+        // compiler cannot prove for `buffered`.
+        let pending: Vec<_> = skeleton
+            .iter()
+            .map(|node| enrich(self.bus, root, node, self.pid, self.budget))
+            .collect();
+        let enriched: Vec<AxElement> = futures::stream::iter(pending)
+            .buffered(ENRICH_CONCURRENCY)
+            .collect()
+            .await;
+
+        Some(assemble(enriched, &skeleton))
+    }
+
+    /// Select the nodes to materialize, breadth-first, from the cache alone.
+    ///
+    /// No I/O: every field here came back in the bulk fetch. The traversal is
+    /// breadth-first so that a tree hitting [`MAX_NODES`] keeps its shallow
+    /// structure — windows, toolbars, dialogs — rather than one deep spine.
+    fn skeleton(&self, root_path: &str, depth: u32) -> Option<Vec<SkeletonNode>> {
+        let cache = self.cache.as_ref()?;
+        let root = cache.get(root_path)?;
+
+        let mut out = vec![SkeletonNode::new(root_path.to_owned(), root, 0)];
+        let mut cursor = 0;
+        while cursor < out.len() {
+            if out.len() >= MAX_NODES {
+                break;
+            }
+            let (path, level) = (out[cursor].path.clone(), out[cursor].level);
+            cursor += 1;
+            if level >= depth {
+                continue;
+            }
+            for child_path in cache.children_of(&path) {
+                if out.len() >= MAX_NODES {
+                    break;
+                }
+                let Some(item) = cache.get(child_path) else {
+                    continue;
+                };
+                let index = out.len();
+                out[cursor - 1].children.push(index);
+                out.push(SkeletonNode::new(child_path.clone(), item, level + 1));
+            }
+        }
+        Some(out)
     }
 
     /// Build the element rooted at `proxy`, descending `depth` more levels.
@@ -62,26 +203,49 @@ impl<'a> Walk<'a> {
         depth: u32,
     ) -> BoxFut<'s, Option<AxElement>> {
         Box::pin(async move {
-            if self.remaining == 0 {
+            if self.remaining == 0 || self.budget.spent() {
                 return None;
             }
             self.remaining -= 1;
 
-            // The role is the one attribute nothing works without: it decides
-            // the AX vocabulary, the actionable set, and the secure refusal.
-            let role = proxy.get_role().await.ok()?;
-            let states = proxy.get_state().await.unwrap_or_default();
-            let title = proxy.name().await.ok().filter(|n| !n.is_empty());
+            // Role, name, states and the interface set come from the bulk cache
+            // when the application serves one — one call for the whole tree
+            // instead of four per node. See `super::cache`.
+            let path = proxy.inner().path().as_str().to_owned();
+            let facts = match self.cache.as_ref().and_then(|c| c.get(&path)) {
+                Some(item) => NodeFacts::from_cache(item),
+                None => NodeFacts::query(proxy).await?,
+            };
+            let NodeFacts {
+                role,
+                states,
+                title,
+                description,
+                ifaces: cached_ifaces,
+            } = facts;
+
+            // Decided **before** the value is read, not after: a field the
+            // heuristic marks secure must never have its contents fetched, the
+            // same rule `has_readable_value` already enforces for the native
+            // password role. Redacting downstream would mean the secret had
+            // already crossed the bus.
+            let secure = self
+                .secure_of(proxy, role, title.as_deref(), description.as_deref())
+                .await;
 
             let showing = states.contains(State::Showing);
-            // Asking for the interface set costs a round trip, and it only buys
-            // something for a node we will then query further: bounds (needs
-            // showing), a value (needs a text-ish role), or actions (needs an
-            // interactable role — hidden menu items included, since triggering
-            // one without opening its menu is exactly what the Action interface
-            // is for). A hidden container buys nothing.
-            let ifaces = if showing || is_interactable(role) {
-                proxy.proxies().await.ok()
+            // The interface set only buys something for a node we will then
+            // query further: bounds (needs showing), a value (needs a text-ish
+            // or numeric role), or actions (needs an interactable role — hidden
+            // menu items included, since triggering one without opening its menu
+            // is exactly what the Action interface is for). A hidden container
+            // buys nothing, and without a cache asking for it costs a call.
+            let wants_value = !secure && (has_readable_value(role) || has_numeric_value(role));
+            let ifaces = if showing || is_interactable(role) || wants_value {
+                match cached_ifaces {
+                    Some(set) => Some(Interfaces::from_set(set, proxy)),
+                    None => Interfaces::query(proxy).await,
+                }
             } else {
                 None
             };
@@ -89,7 +253,8 @@ impl<'a> Walk<'a> {
                 Some(p) => extents_of(p, showing).await,
                 None => None,
             };
-            let value = match (&ifaces, has_readable_value(role)) {
+            let value = match (&ifaces, wants_value) {
+                (Some(p), true) if has_numeric_value(role) => numeric_of(p).await,
                 (Some(p), true) => text_of(p).await,
                 _ => None,
             };
@@ -100,17 +265,12 @@ impl<'a> Walk<'a> {
 
             let mut children = Vec::new();
             if depth > 0 && self.remaining > 0 {
-                if let Ok(refs) = proxy.get_children().await {
-                    for child_ref in refs {
-                        if self.remaining == 0 {
-                            break;
-                        }
-                        let Ok(child) = self.bus.proxy_for(&child_ref).await else {
-                            continue;
-                        };
-                        if let Some(node) = self.element(&child, depth - 1).await {
-                            children.push(node);
-                        }
+                for child in self.children_of(proxy, &path).await {
+                    if self.remaining == 0 || self.budget.spent() {
+                        break;
+                    }
+                    if let Some(node) = self.element(&child, depth - 1).await {
+                        children.push(node);
                     }
                 }
             }
@@ -121,7 +281,7 @@ impl<'a> Walk<'a> {
                 value,
                 bounds,
                 pid: self.pid,
-                secure: Some(is_secure(role)),
+                secure: Some(secure),
                 enabled: Some(enabled_of(states)),
                 settable: settable_of(role, states),
                 actions,
@@ -130,6 +290,215 @@ impl<'a> Walk<'a> {
             })
         })
     }
+
+    /// Whether this element masks its content.
+    ///
+    /// AT-SPI's own [`Role::PasswordText`] is the primary signal. The shared
+    /// label heuristic is the second, for the frameworks that never set it —
+    /// Electron, Qt custom editors and some web engines expose a masked field as
+    /// an ordinary entry, and typing a credential into the wrong place is not
+    /// recoverable. The two extra property reads it needs are paid **only on
+    /// text-entry roles** ([`is_text_entry`]), which are a small minority of any
+    /// tree; on Windows the equivalent restraint is `enrich_resolved`.
+    async fn secure_of(
+        &self,
+        proxy: &AccessibleProxy<'static>,
+        role: Role,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> bool {
+        secure_of(proxy, role, title, description, self.budget).await
+    }
+
+    /// The proxies for a node's children — from the cache's parent/index
+    /// relation when there is one, otherwise from a live `GetChildren`.
+    async fn children_of(
+        &self,
+        proxy: &AccessibleProxy<'static>,
+        path: &str,
+    ) -> Vec<AccessibleProxy<'static>> {
+        if let Some(cache) = &self.cache {
+            let paths = cache.children_of(path);
+            if !paths.is_empty() {
+                let mut out = Vec::with_capacity(paths.len());
+                for child_path in paths {
+                    if let Ok(child) = self.bus.sibling_proxy(proxy, child_path).await {
+                        out.push(child);
+                    }
+                }
+                return out;
+            }
+        }
+        let Ok(refs) = proxy.get_children().await else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(refs.len());
+        for child_ref in refs {
+            if let Ok(child) = self.bus.proxy_for(&child_ref).await {
+                out.push(child);
+            }
+        }
+        out
+    }
+}
+
+/// How many live reads may be in flight at once during the enrichment pass.
+///
+/// The target application dispatches D-Bus on one main loop, so beyond a certain
+/// width the calls queue *inside it* — invisible from here, and a queue that deep
+/// only makes an unresponsive application look worse. 32 keeps a healthy toolkit
+/// saturated without that.
+const ENRICH_CONCURRENCY: usize = 32;
+
+/// One node chosen for materialization, with everything the cache already knew.
+struct SkeletonNode {
+    path: String,
+    role: Role,
+    states: StateSet,
+    title: Option<String>,
+    description: Option<String>,
+    ifaces: atspi::InterfaceSet,
+    /// Depth below the root, for the `max_depth` bound.
+    level: u32,
+    /// Indices of this node's children in the same flat vector. Always greater
+    /// than the parent's own index, because the selection is breadth-first —
+    /// which is what lets [`assemble`] build the tree in one reverse pass.
+    children: Vec<usize>,
+}
+
+impl SkeletonNode {
+    fn new(path: String, item: &atspi::CacheItem, level: u32) -> Self {
+        let facts = NodeFacts::from_cache(item);
+        Self {
+            path,
+            role: facts.role,
+            states: facts.states,
+            title: facts.title,
+            description: facts.description,
+            ifaces: item.ifaces,
+            level,
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Read the attributes the cache does not carry, for one node.
+///
+/// Geometry, textual and numeric values, action names and the credential-label
+/// signal all still cost round trips. They are asked for here so the caller can
+/// issue many at once; nothing in this function depends on any other node.
+async fn enrich(
+    bus: &Bus,
+    sibling: &AccessibleProxy<'static>,
+    node: &SkeletonNode,
+    pid: i32,
+    budget: Budget,
+) -> AxElement {
+    let bare = |secure: bool, value, bounds, actions| AxElement {
+        role: atspi_role_to_ax_role(node.role).to_string(),
+        title: node.title.clone(),
+        value,
+        bounds,
+        pid,
+        secure: Some(secure),
+        enabled: Some(enabled_of(node.states)),
+        settable: settable_of(node.role, node.states),
+        actions,
+        url: None,
+        children: Vec::new(),
+    };
+
+    // Out of budget, or unaddressable: report what the cache knew rather than
+    // dropping the node. Role and title are the fields a locator matches on, so
+    // a node without geometry is still reachable — one without a role is not
+    // there at all.
+    if budget.spent() {
+        return bare(is_secure_role(node.role), None, None, None);
+    }
+    let Ok(proxy) = bus.sibling_proxy(sibling, &node.path).await else {
+        return bare(is_secure_role(node.role), None, None, None);
+    };
+
+    let secure = secure_of(
+        &proxy,
+        node.role,
+        node.title.as_deref(),
+        node.description.as_deref(),
+        budget,
+    )
+    .await;
+    let showing = node.states.contains(State::Showing);
+    let wants_value = !secure && (has_readable_value(node.role) || has_numeric_value(node.role));
+    let interactable = is_interactable(node.role);
+
+    if !showing && !interactable && !wants_value {
+        return bare(secure, None, None, None);
+    }
+
+    let ifaces = Interfaces::from_set(node.ifaces, &proxy);
+    let bounds = extents_of(&ifaces, showing).await;
+    let value = if !wants_value {
+        None
+    } else if has_numeric_value(node.role) {
+        numeric_of(&ifaces).await
+    } else {
+        text_of(&ifaces).await
+    };
+    let actions = if interactable {
+        actions_of(&ifaces).await
+    } else {
+        None
+    };
+
+    bare(secure, value, bounds, actions)
+}
+
+/// Fold the flat, enriched node list back into a tree.
+///
+/// Walked in reverse so every child is already complete when its parent claims
+/// it — guaranteed because the breadth-first selection only ever gives a child a
+/// higher index than its parent.
+fn assemble(mut nodes: Vec<AxElement>, skeleton: &[SkeletonNode]) -> AxElement {
+    for index in (0..nodes.len()).rev() {
+        let children: Vec<AxElement> = skeleton[index]
+            .children
+            .iter()
+            .map(|&child| std::mem::take(&mut nodes[child]))
+            .collect();
+        nodes[index].children = children;
+    }
+    nodes.swap_remove(0)
+}
+
+/// Whether an element masks its content — see [`Walk::secure_of`].
+///
+/// Free rather than a method because the concurrent enrichment pass needs it
+/// without holding the walk, and there must be exactly one answer to "is this a
+/// password box" whichever pass asked.
+async fn secure_of(
+    proxy: &AccessibleProxy<'static>,
+    role: Role,
+    title: Option<&str>,
+    description: Option<&str>,
+    budget: Budget,
+) -> bool {
+    if is_secure_role(role) {
+        return true;
+    }
+    if !is_text_entry(role) || budget.spent() {
+        return false;
+    }
+    // The description arrives free with a cache item; only the accessible id
+    // ever costs a round trip, and only on a text entry.
+    let described = match description {
+        Some(d) => d.to_string(),
+        None => proxy.description().await.unwrap_or_default(),
+    };
+    let accessible_id = proxy.accessible_id().await.unwrap_or_default();
+    aleph_desktop::is_password_like(
+        atspi_role_to_ax_role(role),
+        &[title.unwrap_or_default(), &described, &accessible_id],
+    )
 }
 
 /// Whether the element is interactive right now, as opposed to greyed out.
@@ -170,14 +539,11 @@ fn settable_of(role: Role, states: StateSet) -> Option<bool> {
 /// times and marks the unmapped ones not-showing, and asking such a widget for
 /// its extents yields `(i32::MIN, i32::MIN, 292, 26)` — a *real size* at an
 /// impossible origin. See [`usable_region`] for why that is the dangerous shape.
-pub(super) async fn extents_of(
-    p: &atspi::proxy::proxy_ext::Proxies<'_>,
-    showing: bool,
-) -> Option<Region> {
+pub(super) async fn extents_of(p: &Interfaces<'_>, showing: bool) -> Option<Region> {
     if !showing {
         return None;
     }
-    let component = p.component().await.ok()?;
+    let component = p.component().await?;
     let (x, y, w, h) = component.get_extents(CoordType::Screen).await.ok()?;
     usable_region(x, y, w, h)
 }
@@ -209,8 +575,8 @@ pub(super) fn usable_region(x: i32, y: i32, w: i32, h: i32) -> Option<Region> {
 }
 
 /// Textual content via the `Text` interface, truncated.
-async fn text_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<String> {
-    let text = p.text().await.ok()?;
+async fn text_of(p: &Interfaces<'_>) -> Option<String> {
+    let text = p.text().await?;
     // Ask for a bounded range rather than the whole buffer: a terminal or a log
     // view can hold megabytes, and all of it would cross the bus.
     let raw = text
@@ -223,6 +589,26 @@ async fn text_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<String> {
     Some(truncate_chars(&raw, MAX_VALUE_CHARS))
 }
 
+/// Numeric content via the `Value` interface, rendered as the string the rest of
+/// the contract carries.
+///
+/// A slider exposes no text at all, so before this existed every slider, dial
+/// and spin button in a snapshot reported no value — while `is_interactable`
+/// advertised them as things to act on. The range comes along because a bare
+/// "0.4" tells the model nothing about what to write back: `ax.set_value`
+/// accepts a number in these very units.
+async fn numeric_of(p: &Interfaces<'_>) -> Option<String> {
+    let value = p.value().await?;
+    let current = value.current_value().await.ok()?;
+    match (value.minimum_value().await, value.maximum_value().await) {
+        // A degenerate range (min == max) is what a provider that does not
+        // really implement one hands back; reporting it would invite a write
+        // that can only fail.
+        (Ok(min), Ok(max)) if max > min => Some(format!("{current} (range {min}–{max})")),
+        _ => Some(current.to_string()),
+    }
+}
+
 /// Canonical action names via the `Action` interface.
 ///
 /// **Not** `GetActions`. That bulk call returns the *localized* label — on a
@@ -231,8 +617,8 @@ async fn text_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<String> {
 /// string no alias table could ever recognise, and the same prompt would behave
 /// differently per locale. `GetName(index)` is the untranslated name;
 /// `GetLocalizedName` is the one meant for display, which is not what this is.
-async fn actions_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<Vec<String>> {
-    let action = p.action().await.ok()?;
+async fn actions_of(p: &Interfaces<'_>) -> Option<Vec<String>> {
+    let action = p.action().await?;
     let names = canonical_action_names(&action).await;
     (!names.is_empty()).then_some(names)
 }

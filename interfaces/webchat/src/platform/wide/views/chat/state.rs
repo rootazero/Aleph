@@ -1819,7 +1819,10 @@ mod step_tests {
         );
     }
 
-    fn plan_of(items: &[(&str, super::super::plan::PlanItemStatusView)], complete: bool) -> PlanView {
+    fn plan_of(
+        items: &[(&str, super::super::plan::PlanItemStatusView)],
+        complete: bool,
+    ) -> PlanView {
         PlanView {
             objective: Some("Ship".into()),
             items: items
@@ -1869,7 +1872,10 @@ mod step_tests {
             false,
         )));
 
-        let authoritative = plan_of(&[("a", Completed), ("b", Completed), ("c", Completed)], true);
+        let authoritative = plan_of(
+            &[("a", Completed), ("b", Completed), ("c", Completed)],
+            true,
+        );
         chat.settle_plan(Some(&authoritative));
 
         // Complete → sunk into the transcript, strip cleared.
@@ -1883,7 +1889,11 @@ mod step_tests {
                 .last()
                 .expect("an archive capsule")
         });
-        assert_eq!(archived.done_count(), 3, "the sunk capsule shows 3/3, not 1/3");
+        assert_eq!(
+            archived.done_count(),
+            3,
+            "the sunk capsule shows 3/3, not 1/3"
+        );
     }
 
     #[test]

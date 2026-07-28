@@ -207,6 +207,7 @@ dependencies = [
  "atspi",
  "base64 0.22.1",
  "chrono",
+ "futures",
  "image",
  "serde_json",
  "tokio",

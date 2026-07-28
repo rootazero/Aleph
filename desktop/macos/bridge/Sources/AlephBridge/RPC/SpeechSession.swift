@@ -48,31 +48,24 @@ actor SpeechSession {
 
         // Bridge callback → continuation. 60-second hard timeout (Apple's
         // on-device recognition cap).
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let lock = NSLock()
-            var resumed = false
-            func resumeOnce(_ body: () -> Void) {
-                lock.lock()
-                defer { lock.unlock() }
-                if resumed { return }
-                resumed = true
-                body()
-            }
+        return try await withCheckedThrowingContinuation { (rawCont: CheckedContinuation<String, Error>) in
+            // The recognition callback and the safety timeout below race for the
+            // same continuation; `ResumeOnce` is the shared version of the
+            // lock-and-flag this used to spell inline (see its doc comment for
+            // what the third site that skipped it cost).
+            let cont = ResumeOnce(rawCont)
 
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error = error {
-                    resumeOnce {
-                        cont.resume(throwing: RpcError(
-                            code: -32003,
-                            message: "media.speech.transcribe_file: \(error.localizedDescription)",
-                            data: nil
-                        ))
-                    }
+                    cont.resume(throwing: RpcError(
+                        code: -32003,
+                        message: "media.speech.transcribe_file: \(error.localizedDescription)",
+                        data: nil
+                    ))
                     return
                 }
                 guard let result = result, result.isFinal else { return }
-                let text = result.bestTranscription.formattedString
-                resumeOnce { cont.resume(returning: text) }
+                cont.resume(returning: result.bestTranscription.formattedString)
             }
 
             // Safety timeout so the continuation never leaks if
@@ -80,13 +73,11 @@ actor SpeechSession {
             Task {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 task.cancel()
-                resumeOnce {
-                    cont.resume(throwing: RpcError(
-                        code: -32003,
-                        message: "media.speech.transcribe_file: timed out after 60s",
-                        data: nil
-                    ))
-                }
+                cont.resume(throwing: RpcError(
+                    code: -32003,
+                    message: "media.speech.transcribe_file: timed out after 60s",
+                    data: nil
+                ))
             }
         }
     }

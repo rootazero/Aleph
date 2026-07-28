@@ -100,11 +100,13 @@ fn safe_homepage_link(href: &str, label: impl IntoView) -> AnyView {
             >
                 {label}
             </a>
-        }.into_any()
+        }
+        .into_any()
     } else {
         view! {
             <span class="text-xs text-text-secondary">{href}</span>
-        }.into_any()
+        }
+        .into_any()
     }
 }
 

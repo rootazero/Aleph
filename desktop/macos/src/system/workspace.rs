@@ -1,64 +1,18 @@
 //! App lifecycle via `NSWorkspace` + `NSRunningApplication`.
+//!
+//! Launch and quit are **not implemented here**. They live in
+//! `aleph_desktop::macos::app`, which both this capability and the `desktop`
+//! tool's own arm (`aleph_desktop::action::app_launch`) call — see that module
+//! for what having two of them cost. What is left here is the one thing that is
+//! genuinely this crate's: turning `NSWorkspace`'s process list into the
+//! [`AppInfo`] shape the tool layer resolves names against.
 
 use aleph_desktop::system_types::AppInfo;
-use aleph_desktop::{DesktopError, Result};
+use aleph_desktop::Result;
 use objc2_app_kit::{NSRunningApplication, NSWorkspace};
-use objc2_foundation::{NSArray, NSString, NSURL};
+use objc2_foundation::NSArray;
 
-/// Launch an application by name or bundle identifier.
-pub fn launch_app(app_name: &str) -> Result<()> {
-    let ws = NSWorkspace::sharedWorkspace();
-    let ns_name = NSString::from_str(app_name);
-
-    // Try bundle ID (contains dots) or app name
-    #[allow(deprecated)] // fullPathForApplication is the only name-based lookup
-    let url: Option<objc2::rc::Retained<NSURL>> = if app_name.contains('.') {
-        ws.URLForApplicationWithBundleIdentifier(&ns_name)
-    } else {
-        ws.fullPathForApplication(&ns_name)
-            .map(|path| NSURL::fileURLWithPath(&path))
-    };
-
-    let url = url.ok_or_else(|| {
-        DesktopError::InputFailed(format!("launch_app: application '{app_name}' not found"))
-    })?;
-
-    if !ws.openURL(&url) {
-        return Err(DesktopError::InputFailed(format!(
-            "launch_app: failed to launch '{app_name}'"
-        )));
-    }
-    Ok(())
-}
-
-/// Quit a running application by name or bundle identifier.
-pub fn quit_app(app_name: &str) -> Result<()> {
-    let ws = NSWorkspace::sharedWorkspace();
-    let apps = ws.runningApplications();
-    let lower_name = app_name.to_lowercase();
-
-    for app in &apps {
-        let matches = app
-            .bundleIdentifier()
-            .is_some_and(|b| b.to_string().to_lowercase() == lower_name)
-            || app
-                .localizedName()
-                .is_some_and(|n| n.to_string().to_lowercase() == lower_name);
-
-        if matches {
-            if app.terminate() {
-                return Ok(());
-            }
-            return Err(DesktopError::InputFailed(format!(
-                "quit_app: '{app_name}' refused to terminate"
-            )));
-        }
-    }
-
-    Err(DesktopError::InputFailed(format!(
-        "quit_app: no running application matching '{app_name}'"
-    )))
-}
+pub use aleph_desktop::macos::app::{launch as launch_app, quit as quit_app};
 
 /// List the running applications a user (or the model) could actually address.
 ///
@@ -154,5 +108,18 @@ mod tests {
             listed.len() <= raw.len(),
             "the filter may only remove entries"
         );
+    }
+
+    /// Every entry the list offers must be addressable by the name it reports —
+    /// the `system` and `desktop` tools now share one matcher, and this is the
+    /// property that makes its answers usable.
+    #[test]
+    fn listed_apps_carry_a_handle_that_can_be_quit_by() {
+        for app in list_running_apps().unwrap() {
+            assert!(
+                !app.name.is_empty() || !app.bundle_id.is_empty(),
+                "an app with neither name nor bundle id cannot be addressed at all"
+            );
+        }
     }
 }
