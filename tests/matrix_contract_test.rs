@@ -24,7 +24,8 @@ fn test_matrix_properties() {
     assert!(channel.capabilities().rich_text);
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);
-    // The adapter implements no read-receipt method, so the bit stays false.
+    // Matrix has `m.read` receipts, but no `mark_read` override sends one.
+    // Flip this back only together with the impl.
     assert!(!channel.capabilities().read_receipts);
     assert_eq!(channel.capabilities().max_message_length, 65535);
     assert_eq!(

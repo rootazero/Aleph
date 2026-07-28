@@ -19,7 +19,8 @@ fn test_xmpp_properties() {
 
     assert_eq!(channel.channel_type(), "xmpp");
     assert!(channel.capabilities().typing_indicator);
-    // The adapter implements no read-receipt method, so the bit stays false.
+    // XEP-0184 receipts are not wired: no `mark_read` override exists.
+    // Flip this back only together with the impl.
     assert!(!channel.capabilities().read_receipts);
     assert!(!channel.capabilities().attachments);
     assert_eq!(channel.capabilities().max_message_length, 65535);

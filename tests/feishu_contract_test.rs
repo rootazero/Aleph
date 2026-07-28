@@ -23,8 +23,8 @@ fn test_feishu_properties() {
     // Feishu has no typing endpoint, so `Channel::send_typing` is genuinely
     // unavailable and the bit must stay false — a capability bit is a promise to
     // implement the method, and declaring it only bought a fake success from the
-    // trait default. The emulated indicator runs off `[channels.feishu]
-    // typing_indicator`, a different knob.
+    // trait default. The emulated indicator (reacting to the inbound message)
+    // runs off `[channels.feishu] typing_indicator`, a different knob.
     assert!(!channel.capabilities().typing_indicator);
     assert_eq!(channel.capabilities().max_message_length, 4096);
 }
