@@ -20,7 +20,10 @@ fn test_feishu_properties() {
     assert_eq!(channel.channel_type(), "feishu");
     assert!(channel.capabilities().images);
     assert!(channel.capabilities().reactions);
-    assert!(channel.capabilities().typing_indicator);
+    // Feishu has no typing endpoint, so `Channel::send_typing` is genuinely
+    // unavailable. The emulated indicator (reacting to the inbound message) runs
+    // off the `[channels.feishu] typing_indicator` config knob, not this bit.
+    assert!(!channel.capabilities().typing_indicator);
     assert_eq!(channel.capabilities().max_message_length, 4096);
 }
 
