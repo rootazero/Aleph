@@ -97,8 +97,33 @@ impl SystemCapability for WindowsSystem {
             let app_name = app_name.to_string();
             tokio::task::spawn_blocking(move || {
                 use windows::core::PCWSTR;
+                use windows::Win32::System::Com::{
+                    CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+                };
                 use windows::Win32::UI::Shell::ShellExecuteW;
                 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+                // `ShellExecuteW` delegates to Shell extension handlers, and the
+                // documentation is explicit that COM must be initialized first —
+                // single-threaded apartment, because some handlers require it.
+                // A bare `spawn_blocking` thread has no apartment, so launching
+                // anything whose association goes through such a handler failed
+                // with an opaque code. `CoUninitialize` balances it on the way
+                // out; the thread is returned to the pool clean.
+                //
+                // SAFETY: paired init/uninit on this thread only, around the one
+                // call that needs the apartment.
+                let com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
+                struct ComExit(bool);
+                impl Drop for ComExit {
+                    fn drop(&mut self) {
+                        if self.0 {
+                            // SAFETY: balances the `CoInitializeEx` above.
+                            unsafe { CoUninitialize() };
+                        }
+                    }
+                }
+                let _com = ComExit(com_ok);
 
                 let operation: Vec<u16> = "open\0".encode_utf16().collect();
                 let file: Vec<u16> = app_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -199,19 +224,42 @@ impl SystemCapability for WindowsSystem {
     /// an R5 summary is full of — free to break the string literal and fail the
     /// whole notification. (The same class of bug was fixed on the macOS
     /// AppleScript path in 2026-07; the Windows path was not.)
+    ///
+    /// # Why the script now fails loudly
+    ///
+    /// It had no `$ErrorActionPreference` and no `try`/`catch`, so every step
+    /// could fail as a *non-terminating* error and PowerShell still exited `0`.
+    /// A machine where the WinRT projection will not load (Server Core, an N
+    /// edition, a locked-down policy) therefore posted no notification and
+    /// reported delivery — the worst possible answer for the one capability
+    /// whose entire purpose is to tell the user something happened. R5 says
+    /// Aleph comes to the user; silently not arriving is not an option it gets.
     async fn send_notification(&self, title: &str, body: &str) -> Result<()> {
         #[cfg(windows)]
         {
-            /// Constant script: reads both values from the environment, so
-            /// nothing the caller controls is parsed as PowerShell.
+            /// Constant script: reads every caller value from the environment,
+            /// so nothing the caller controls is parsed as PowerShell.
+            ///
+            /// The app id decides which name and icon the toast carries. The
+            /// desktop shell registers `ai.aleph.desktop` (its Tauri bundle
+            /// identifier) and the Panel-only build registers `ai.aleph.panel`;
+            /// when one of those is installed the toast looks like it came from
+            /// Aleph. The bare `Aleph` fallback still posts — Windows 10 1607
+            /// and later accept an unregistered app id and create the settings
+            /// entry on the fly — it just shows without the app's identity.
             const TOAST_SCRIPT: &str = r"
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
+$appId = 'Aleph'
+foreach ($candidate in @('ai.aleph.desktop', 'ai.aleph.panel')) {
+    if (Test-Path -LiteralPath ('HKCU:\Software\Classes\AppUserModelId\' + $candidate)) { $appId = $candidate; break }
+}
 $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $nodes = $template.GetElementsByTagName('text')
 $null = $nodes.Item(0).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_TITLE))
 $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BODY))
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Aleph').Show([Windows.UI.Notifications.ToastNotification]::new($template))
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show([Windows.UI.Notifications.ToastNotification]::new($template))
 ";
 
             let title = title.to_string();
@@ -252,18 +300,49 @@ $null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BOD
         }
     }
 
+    /// Read the clipboard, distinguishing "nothing there" from "the read broke".
+    ///
+    /// Both used to be an `InputFailed`: `get_clipboard::<String>` errors when
+    /// no `CF_UNICODETEXT` is on the board, which is the ordinary state of an
+    /// empty clipboard, of one holding a picture, and of one holding a copied
+    /// file. So the tool answered "clipboard read failed" for three situations
+    /// where nothing had failed at all, and the model had no way to tell that
+    /// from a genuine error.
+    ///
+    /// `has_image` was also hard-coded `false` while the wire field exists and
+    /// macOS fills it, so a screenshot on the clipboard was invisible to the
+    /// model. The bitmap itself is still not transported — that needs a DIB→PNG
+    /// conversion this capability has no consumer for — but *knowing it is
+    /// there* is what lets the model paste it instead of asking again.
     async fn clipboard_read(&self) -> Result<ClipboardContent> {
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
-                use clipboard_win::{formats, get_clipboard};
+                use clipboard_win::{formats, get_clipboard, is_format_avail};
+
+                // `CF_DIB` is what a screenshot or a copied image lands as;
+                // `CF_BITMAP` covers the older producers.
+                let has_image = is_format_avail(formats::CF_DIB)
+                    || is_format_avail(formats::CF_DIBV5)
+                    || is_format_avail(formats::CF_BITMAP);
+
+                if !is_format_avail(formats::CF_UNICODETEXT) {
+                    return Ok(ClipboardContent {
+                        text: None,
+                        has_image,
+                        image_base64: None,
+                    });
+                }
 
                 match get_clipboard::<String, _>(formats::Unicode) {
                     Ok(text) => Ok(ClipboardContent {
                         text: Some(text),
-                        has_image: false,
+                        has_image,
                         image_base64: None,
                     }),
+                    // The format is on the board but the read failed — another
+                    // process holds the clipboard open, or a delayed-render
+                    // owner died. That *is* a failure.
                     Err(e) => Err(DesktopError::InputFailed(format!(
                         "clipboard read failed: {e}"
                     ))),

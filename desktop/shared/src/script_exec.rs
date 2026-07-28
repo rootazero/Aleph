@@ -109,6 +109,97 @@ pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output
     }
 }
 
+/// How often [`output_capped_blocking`] asks whether the child has exited.
+const BLOCKING_POLL: Duration = Duration::from_millis(100);
+
+/// The blocking twin of [`output_capped`], for capture paths that already run
+/// inside `spawn_blocking` and hold a `std::process::Command`.
+///
+/// The reason it is not simply `Command::output()` is the same one
+/// [`output_capped`] exists for, and it bites hardest on the capture paths: an
+/// `ffmpeg` `dshow` input **blocks forever** in the device-open call when
+/// another application already holds the microphone or camera. `-t 30` never
+/// gets a chance to end the run, so the tool hangs until the harness's per-turn
+/// ceiling and leaves the child holding the device.
+///
+/// stdout and stderr are drained by their own threads rather than read after the
+/// wait: a long `ffmpeg` run fills the 64 KiB pipe buffer with encoder progress
+/// and would otherwise deadlock against a poll loop that never reads.
+///
+/// # Errors
+///
+/// [`DesktopError::InputFailed`] when the binary cannot be launched, prefixed so
+/// [`is_spawn_failure`] classifies it, or when the deadline elapses.
+pub fn output_capped_blocking(mut cmd: std::process::Command, timeout: Duration) -> Result<Output> {
+    use std::io::Read as _;
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| DesktopError::InputFailed(format!("{SPAWN_FAILURE_PREFIX}: {e}")))?;
+
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out_reader = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let err_reader = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(e) => {
+                return Err(DesktopError::InputFailed(format!(
+                    "failed to wait for process: {e}"
+                )))
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(BLOCKING_POLL);
+    };
+
+    // Both pipes close when the child dies, so the readers always finish.
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+
+    match status {
+        Some(status) => Ok(Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        None => Err(DesktopError::InputFailed(format!(
+            "the capture did not finish within {}s and was terminated. A capture device held by \
+             another application (a video call, or a previous capture that has not released it) \
+             blocks the device-open call indefinitely — close it and retry.",
+            timeout.as_secs()
+        ))),
+    }
+}
+
 /// Spawn `cmd` as a detached background process: stdin is `/dev/null`, stdout
 /// and stderr are redirected to `log_path` (truncated/created), and the call
 /// returns the child PID without waiting for it to exit.

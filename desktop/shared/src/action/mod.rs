@@ -94,6 +94,37 @@ pub(crate) fn new_enigo_holding() -> Result<Enigo> {
     .map_err(|e| DesktopError::InputFailed(format!("Failed to create Enigo instance: {e}")))
 }
 
+/// Move the pointer to a global screen pixel coordinate.
+///
+/// Every mouse verb funnels through here so exactly one piece of code decides
+/// what an absolute coordinate means on each platform.
+///
+/// On Windows that is **not** enigo: its backend normalizes an absolute move
+/// against the primary monitor and omits `MOUSEEVENTF_VIRTUALDESK`, so a point
+/// on any other display was clamped onto the primary one. See
+/// [`crate::win_input`]. Everywhere else enigo's absolute move is already the
+/// whole-desktop space and is used unchanged.
+///
+/// `context` names the movement for the error message ("mouse", "to start",
+/// "during drag", "to end").
+pub(crate) fn move_pointer(enigo: &mut Enigo, x: i32, y: i32, context: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        // Buttons still go through `enigo`; they act at the current pointer
+        // position and carry no coordinate of their own.
+        let _ = enigo;
+        crate::win_input::move_cursor_absolute(x, y)
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to move {context}: {e}")))
+    }
+    #[cfg(not(windows))]
+    {
+        use enigo::Mouse as _;
+        enigo
+            .move_mouse(x, y, enigo::Coordinate::Abs)
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to move {context}: {e}")))
+    }
+}
+
 /// Convert Aleph's `MouseButton` to enigo's Button.
 pub(crate) const fn to_enigo_button(button: MouseButton) -> Button {
     match button {

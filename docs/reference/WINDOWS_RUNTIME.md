@@ -100,16 +100,23 @@ protocol guardrail is WS Origin validation. See
 
 桌面工具（`desktop` / `desktop_som` / `desktop_ax_*` / `system` / `permission` /
 `media` / `pim`）在 Windows 上的实现分布见
-[FEATURE_LOCATOR §7](FEATURE_LOCATOR.md#7-desktop桌面端)。这里只记运维层面必须知道的三件事。
+[FEATURE_LOCATOR §7](FEATURE_LOCATOR.md#7-desktop桌面端)。这里只记运维层面必须知道的四件事。
 
 ### 1. 进程 DPI 感知 = 坐标一致性的前提
 
-`aleph-server.exe` 在 `WindowsPlatform::new()`（`desktop/shared/src/win_dpi.rs`）
+`aleph-server.exe` 在 `NativeScreen::new()` 与 `WindowsPlatform::new()`
+（两者都调 `desktop/shared/src/win_dpi.rs::ensure_process_dpi_aware`，`OnceLock` latch）
 一次性 opt-in **Per-Monitor-Aware V2**。这不是优化而是正确性前提：DPI-unaware 进程
 拿到的 `GetWindowRect` / `GetCursorPos` / `SendInput` 绝对坐标 / UIA
 `CurrentBoundingRectangle` **全部被系统虚拟化**（除以显示器缩放比），而屏幕截图走
 显示驱动、**不被虚拟化**。在 Windows 默认的 150% 缩放笔记本屏上，这意味着"模型在截图里
 看到按钮的位置"和"点击真正落点"差 1.5 倍，且事后无法补救——两个数字一样合理。
+
+> **为什么是两个调用点**：`WindowsPlatform::new()` 是桌面工具路径上最早的一点，但不是
+> 唯一的门 —— `src/vision/providers/platform_ocr.rs` 直接构造 `NativeScreen`，视觉请求
+> 先到时进程还是 unaware，于是同一块屏在一次运行里给 OCR 路径和桌面工具路径**报出两个
+> 不同的 `scale_factor`**（`coordinate_scale` 读的是**实时**等级）。两处调同一个 latch，
+> 谁先谁算，另一个免费。
 
 Rust 二进制默认不带 application manifest，所以不显式 opt-in 就是 unaware。日志里会
 出现一行：
@@ -122,6 +129,33 @@ desktop: process is per-monitor DPI aware; screen geometry is physical pixels
 东西（manifest / 宿主进程）已经把等级钉死了；此时 `DisplayInfo.scale_factor` 会如实
 回报显示器 DPI 比而不是 1.0，坐标偏差**仍然存在**且是已知限制。
 
+### 1b. 写坐标的两条轨道：指针与窗口
+
+DPI 只解决了"数字的单位"。还有两处**读写不同源**，各自会把正确的数字送到错的地方：
+
+- **指针**：绝对定位不走 enigo，走 `desktop/shared/src/win_input.rs`
+  （`SendInput` + `MOUSEEVENTF_VIRTUALDESK`，按 `SM_XVIRTUALSCREEN`/`SM_CXVIRTUALSCREEN`
+  归一化）。enigo 0.3 按 `SM_CXSCREEN`（**主屏**）归一化且不带 VIRTUALDESK（其源码里
+  就写着 `// TODO`），所以副屏上的点要么归一化超过 65535 被钉在主屏右缘、要么（左/上侧
+  显示器的负全局坐标）被钉在左上角 —— **多显示器上瞄准副屏的每一次点击都落在主屏**，
+  而 `cursor_position`（`GetCursorPos`）读回来的是真正的虚拟桌面坐标，读写互相矛盾。
+- **窗口**：`window_list` 报的 `bounds` 是 DWM **扩展帧**（去掉不可见抓边），而
+  `SetWindowPos` 吃的是**原始窗口矩形**。把前者直接喂给后者，窗口每次右下偏一个边框宽；
+  `resize` 则每次视觉上缩窄两个边框宽。现由 `win_window::FramePadding` 差值补偿；
+  最大化窗口先经 `SetWindowPlacement(SW_SHOWNOACTIVATE)` 退出最大化（**不是**
+  `ShowWindow(SW_RESTORE)`——那个会抢焦点，违 R5）。
+
+本机实测（3024×1898 物理 / 200% 缩放单屏）：五个探测点（含两个角）指针往返**逐像素相等**；
+两个普通窗口的不可见边框各为 10–11 px/边。两个 live 探针都在仓库里，默认 `#[ignore]`：
+
+```powershell
+cargo test -p aleph-desktop --test win_pointer_live -- --ignored --nocapture
+cargo test -p aleph-desktop-windows --test uia_live -- --ignored --nocapture
+```
+
+> **未端到端验证的部分（诚实标注）**：多显示器分支只有单测覆盖（归一化算术 + 原点平移），
+> 本机是单屏，无法端到端验证。单屏路径与 enigo 旧公式**逐字节等价**，有回归测试钉住。
+
 ### 2. 子进程一律无控制台窗口
 
 daemon 模式（`--daemon` / 由桌面壳拉起）下 `aleph-server.exe` 自己没有控制台，因此任何
@@ -131,15 +165,42 @@ daemon 模式（`--daemon` / 由桌面壳拉起）下 `aleph-server.exe` 自己�
 
 ### 3. 权限与能力边界
 
-- **无 TCC**：截屏、合成输入、发通知在 Windows 桌面进程上**不需要任何授权**，
-  `permission` 工具对这三类恒回 `Granted`。真正有 consent 门的只有摄像头 / 麦克风 /
-  定位三项，读自 `HKCU\…\CapabilityAccessManager\ConsentStore`（直读注册表，不再 shell-out）。
+- **无 TCC**：截屏与合成输入在 Windows 桌面进程上**不需要任何授权**，`permission` 工具
+  对这两类恒回 `Granted`。有 consent 门的是摄像头 / 麦克风 / 定位三项，读自
+  `HKCU\…\CapabilityAccessManager\ConsentStore`（直读注册表，不再 shell-out）。
   桌面 App 无法用 API 触发授权弹窗，`request` 只能打开对应 `ms-settings:` 页面。
+- **通知不是"无门"**：`Notifications` 曾也硬编码 `Granted`——Windows 确实没有**逐 app**
+  的 consent 弹窗，但有一个**全机总开关**（`HKCU\…\PushNotifications\ToastEnabled`）。
+  关着的时候 `send_notification` 照样成功、用户什么也看不见，而权限探针还说一切正常。
+  现在这一项读那个开关（值缺失 = 从没关过 = `Granted`），`request` / `guide` 指向
+  `ms-settings:notifications`（隐私页上根本没有通知开关）。
 - **前台锁**：`SetForegroundWindow` 会被 Windows 的前台锁拒绝（用户正在别处打字时），
   `focus_window` 因此**轮询校验 500ms** 后如实报失败，而不是假装成功。够不着前台时
   改用 `set_value` / `ax_action`（UIA，不需要前台、不动光标）。
-- **`ffmpeg`**：`media` 的相机 / 录音走 DirectShow，设备被别的程序（视频会议）占用时
-  ffmpeg 会**无限阻塞**，故所有调用都带 `duration + 45s` 上限并 `kill_on_drop`。
+- **`ffmpeg`**：`media` 的相机 / 录音 / **录屏**走 DirectShow / gdigrab，设备被别的程序
+  （视频会议）占用时 ffmpeg 会**无限阻塞**（`-t` 根本轮不到开始计时），故所有调用都带
+  `duration + 45s` 上限并杀子进程。录屏此前是唯一漏网的一条（裸 `.output()`），现走
+  `script_exec::output_capped_blocking`。相机单帧会**先丢 5 帧预热**——dshow 的第一帧
+  通常是自动曝光未收敛的黑帧，而模型无法把"设备问题"和"房间很暗"分开。
+
+### 4. Outlook（`pim`）与开始菜单（`automation`）
+
+- **Outlook COM 有超时了**：`New-Object -ComObject Outlook.Application` 在 Outlook 弹
+  配置文件选择框 / 密码框 / 首次运行向导时**不会失败，会一直等**。这条此前是全仓最后
+  一条裸 `.output()` 的捕获路径，一次 `mail_search` 能把整个 turn 挂到 harness 上限并
+  留下孤儿 `powershell.exe`。现走 `output_capped`（120s，与 `run_script` 同一常量）。
+- **文件夹 id 契约**：`mail_folders` 返回的 `id` 是**全路径**（`Store\Sub\Leaf`），而
+  `mail_search` 此前只按**叶子名**匹配 —— 把前一个工具的 id 喂给后一个会**静默落回默认
+  收件箱**（有结果、来自错的文件夹、没有任何信号）。现在两种写法都匹配。
+- **搜索交给存储层**：`mail_search` 现用 `Items.Restrict`（DASL）让消息存储用自己的索引
+  过滤；被拒绝（部分 PST / IMAP 存储没有全文索引）时回落到**有上限的**线性扫描
+  （5000 条）。回落路径保留同一个 `-like` 判断，所以两条路的结果集相同。
+- **开始菜单有两个根**：`list_shortcuts` / `run_shortcut` 此前只扫 `$env:APPDATA`
+  （**per-user** 开始菜单）。绝大多数程序是 all-users 安装，快捷方式在
+  `$env:ProgramData` —— 于是一台装了几百个程序的机器只列出十几条，而"开始菜单上明明
+  就有"的程序报 "no Start-menu shortcut named X was found"。现在两个根都扫。
+  运行改为 `Start-Process` **那个 `.lnk`**（保留发布者设定的工作目录 / 窗口样式，且不再
+  等控制台目标退出——此前最长能占满 120s 的脚本上限）。
 
 ## Refreshing the daemon binary (App installs)
 

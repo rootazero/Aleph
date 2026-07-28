@@ -10,11 +10,31 @@ use aleph_desktop::script_exec::{
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
 
-/// Where Windows keeps a user's Start-menu shortcuts.
+/// Where Windows keeps Start-menu shortcuts, under both of the roots that hold
+/// them.
 ///
-/// Resolved inside PowerShell (`$env:APPDATA`) rather than interpolated, so the
-/// script text below stays a constant.
+/// Resolved inside PowerShell (`$env:APPDATA` / `$env:ProgramData`) rather than
+/// interpolated, so the script text below stays a constant.
 const START_MENU_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs";
+
+/// The two Start-menu roots, as a PowerShell array expression.
+///
+/// Only `$env:APPDATA` — the **per-user** Start menu — used to be scanned. That
+/// is the smaller half by far: an installer run for all users (which is the
+/// default for Office, the browsers, the JetBrains and Visual Studio families,
+/// and anything shipped by an MSI) writes into `$env:ProgramData` instead. So
+/// `list_shortcuts` reported a handful of entries on a machine with hundreds,
+/// and `run_shortcut` answered "no Start-menu shortcut named X was found" for
+/// applications sitting in plain sight on the Start menu.
+///
+/// Roots that do not exist are dropped here so `Get-ChildItem` is never handed a
+/// missing path (which, under `$ErrorActionPreference = 'Stop'`, would abort the
+/// whole script rather than skip one root).
+const START_MENU_ROOTS: &str = r"$roots = @(
+    (Join-Path $env:APPDATA '{{SUBPATH}}'),
+    (Join-Path $env:ProgramData '{{SUBPATH}}')
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+if (-not $roots) { exit 1 }";
 
 /// Environment variables carrying the caller's values into the shortcut script.
 ///
@@ -27,55 +47,54 @@ const START_MENU_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs";
 const ENV_SHORTCUT_NAME: &str = "ALEPH_SHORTCUT_NAME";
 const ENV_SHORTCUT_INPUT: &str = "ALEPH_SHORTCUT_INPUT";
 
-/// Resolve a Start-menu shortcut by exact base name and run its target.
+/// Resolve a Start-menu shortcut by exact base name and launch it.
 ///
 /// Entirely constant script text: both the name and the input arrive through the
 /// environment, and the name is compared with `-eq` rather than fed to `-Filter`
 /// so shortcut names containing `[`, `]`, `*` or `?` need no escaping either.
+///
+/// The `.lnk` is handed to `Start-Process` rather than opened with
+/// `WScript.Shell` and its `TargetPath` invoked by hand. A shortcut is more than
+/// a path: it also carries the working directory, the window style and the
+/// arguments the publisher baked in, and re-implementing the launch dropped all
+/// of them (an application whose shortcut sets `Start in` failed to find its own
+/// data files). `Start-Process` also returns as soon as the process starts,
+/// where `& $target` waited for a console application to exit — up to the full
+/// 120 s script ceiling for something whose whole purpose was to be launched.
 const RUN_SHORTCUT_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
-$root = Join-Path $env:APPDATA '{{SUBPATH}}'
-$lnk = Get-ChildItem -LiteralPath $root -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
+{{ROOTS}}
+$lnk = Get-ChildItem -LiteralPath $roots -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
     Where-Object { $_.BaseName -eq $env:ALEPH_SHORTCUT_NAME } | Select-Object -First 1
 if (-not $lnk) { exit 1 }
-$shell = New-Object -ComObject WScript.Shell
-$sc = $shell.CreateShortcut($lnk.FullName)
-$argList = @()
-if ($sc.Arguments) { $argList += $sc.Arguments }
-if ($env:ALEPH_SHORTCUT_INPUT) { $argList += $env:ALEPH_SHORTCUT_INPUT }
-if ($argList.Count -gt 0) { & $sc.TargetPath @argList } else { & $sc.TargetPath }
+if ($env:ALEPH_SHORTCUT_INPUT) {
+    Start-Process -FilePath $lnk.FullName -ArgumentList $env:ALEPH_SHORTCUT_INPUT
+} else {
+    Start-Process -FilePath $lnk.FullName
+}
+Write-Output "launched $($lnk.FullName)"
 "#;
 
 /// List every Start-menu shortcut's base name, one per line.
+///
+/// `Sort-Object -Unique` because an application installed for all users *and*
+/// pinned per user appears under both roots, and the same name twice reads as
+/// two applications.
 const LIST_SHORTCUTS_SCRIPT: &str = r#"
-$root = Join-Path $env:APPDATA '{{SUBPATH}}'
-Get-ChildItem -LiteralPath $root -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty BaseName
+{{ROOTS}}
+Get-ChildItem -LiteralPath $roots -Recurse -Filter *.lnk -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty BaseName | Sort-Object -Unique
 "#;
 
-/// Substitute the one fixed path fragment into a constant script.
+/// Substitute the two fixed path fragments into a constant script.
 ///
-/// `START_MENU_SUBPATH` is a compile-time constant, so this is a spelling
-/// convenience, not an interpolation point — no caller value passes through it.
+/// `START_MENU_ROOTS` and `START_MENU_SUBPATH` are compile-time constants, so
+/// this is a spelling convenience, not an interpolation point — no caller value
+/// passes through it.
 fn shortcut_script(template: &str) -> String {
-    template.replace("{{SUBPATH}}", START_MENU_SUBPATH)
-}
-
-/// Escape a value for safe interpolation into a PowerShell single-quoted
-/// string. Doubles embedded single quotes per PowerShell escaping rules,
-/// and escapes wildcard characters used by `-Filter`.
-///
-/// Its only caller is inside a `#[cfg(windows)]` block, so on a non-Windows
-/// build of this workspace member it looks dead. Gating the lint (rather than
-/// leaving a warning in every Linux `cargo check`) matches how the sibling
-/// `ax.rs` handles the same `cfg` artifact.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn ps_escape_sq(s: &str) -> String {
-    s.replace('\'', "''")
-        .replace('[', "`[")
-        .replace(']', "`]")
-        .replace('*', "`*")
-        .replace('?', "`?")
+    template
+        .replace("{{ROOTS}}", START_MENU_ROOTS)
+        .replace("{{SUBPATH}}", START_MENU_SUBPATH)
 }
 
 /// Build the `powershell.exe`/`cmd.exe` command for a script, without running
@@ -273,6 +292,39 @@ mod tests {
         }
         assert!(RUN_SHORTCUT_SCRIPT.contains(ENV_SHORTCUT_NAME));
         assert!(RUN_SHORTCUT_SCRIPT.contains(ENV_SHORTCUT_INPUT));
+    }
+
+    #[test]
+    fn both_start_menu_roots_are_scanned() {
+        // Scanning only `$env:APPDATA` hid every all-users install — which is
+        // most of them — from both listing and launching.
+        for template in [RUN_SHORTCUT_SCRIPT, LIST_SHORTCUTS_SCRIPT] {
+            let script = shortcut_script(template);
+            assert!(
+                script.contains("$env:APPDATA"),
+                "per-user Start menu must be scanned"
+            );
+            assert!(
+                script.contains("$env:ProgramData"),
+                "all-users Start menu must be scanned"
+            );
+            assert!(
+                script.contains("-LiteralPath $roots"),
+                "both roots must be handed to the same enumeration"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shortcut_is_launched_through_the_lnk_not_its_target() {
+        // Re-implementing the launch from `TargetPath` dropped the working
+        // directory and window style the shortcut carries, and blocked until a
+        // console target exited.
+        assert!(RUN_SHORTCUT_SCRIPT.contains("Start-Process -FilePath $lnk.FullName"));
+        assert!(
+            !RUN_SHORTCUT_SCRIPT.contains("WScript.Shell"),
+            "the shortcut should not be re-opened via COM"
+        );
     }
 
     #[test]

@@ -19,6 +19,41 @@ fn escape_powershell_wildcards(s: &str) -> String {
     s.replace('[', "`[").replace('*', "`*").replace('?', "`?")
 }
 
+/// Escape a value for a DASL string literal (`'…'`), where the only special
+/// character is the quote itself, doubled.
+fn escape_dasl(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Build the `Items.Restrict` query that makes Outlook do the searching.
+///
+/// The previous implementation walked **every item** in the folder and read
+/// `.Body` off each one — a separate MAPI round trip per message, against
+/// mailboxes that routinely hold tens of thousands. It did not merely take a
+/// long time; on any real Inbox it could not finish at all.
+///
+/// `Restrict` pushes the same three predicates into the message store, which
+/// answers them from its own indexes. The `-like` comparison in the loop is kept
+/// afterwards so the result set is *identical* whether the restriction was
+/// applied or the fallback scan ran — a provider that rejects the query (some
+/// PST/IMAP stores refuse `textdescription`) then costs correctness nothing.
+fn restrict_query(query: &str) -> String {
+    let q = escape_dasl(query);
+    format!(
+        "@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{q}%' \
+         OR \"urn:schemas:httpmail:fromname\" LIKE '%{q}%' \
+         OR \"urn:schemas:httpmail:textdescription\" LIKE '%{q}%'"
+    )
+}
+
+/// Hard ceiling on how many items the fallback scan touches.
+///
+/// Reached only when `Restrict` was refused. Without it the loop is unbounded in
+/// the one situation where each iteration is most expensive, and the tool's only
+/// protection is the process timeout — which returns nothing at all, rather than
+/// the newest matches it had already found.
+const MAX_SCAN_ITEMS: u32 = 5_000;
+
 pub struct WindowsPim;
 
 impl WindowsPim {
@@ -27,26 +62,36 @@ impl WindowsPim {
         Self
     }
 
+    /// Run an Outlook COM script under the shared script deadline.
+    ///
+    /// It used to be a bare `.output()`, which made this the **last capture path
+    /// in the workspace without a timeout** — and the one most likely to need
+    /// it. `New-Object -ComObject Outlook.Application` does not fail fast when
+    /// Outlook is unhappy: a first-run profile wizard, a "choose profile"
+    /// dialog, a password prompt or a stuck send/receive all leave the COM call
+    /// waiting for a window nobody is looking at, forever. The turn then hung
+    /// until the harness's own ceiling with an orphaned `powershell.exe` behind
+    /// it.
     async fn run_powershell(&self, script: &str) -> Result<std::process::Output> {
+        use aleph_desktop::script_exec::{hidden_command, output_capped, RUN_SCRIPT_TIMEOUT};
+
         // `hidden_command`: without CREATE_NO_WINDOW a console child spawned by
         // the windowless daemon pops a black window on the user's screen for
         // every mail query.
-        let output = aleph_desktop::script_exec::hidden_command("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ])
-            .output()
-            .await
-            .map_err(|e| {
-                DesktopError::PlatformError(format!(
-                    "Failed to run PowerShell (Outlook integration requires PowerShell): {e}"
-                ))
-            })?;
-        Ok(output)
+        let mut cmd = hidden_command("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ]);
+        output_capped(cmd, RUN_SCRIPT_TIMEOUT).await.map_err(|e| {
+            DesktopError::PlatformError(format!(
+                "Outlook integration via PowerShell failed: {e}. Outlook must be installed and \
+                 able to open without a prompt (no profile chooser, no password dialog)."
+            ))
+        })
     }
 }
 
@@ -130,34 +175,53 @@ impl PimCapability for WindowsPim {
     ) -> Result<Vec<MailMessage>> {
         let folder_path = ps_escape_dq(folder.unwrap_or("Inbox"));
         let escaped_query = escape_powershell_wildcards(&ps_escape_dq(query));
+        let restrict = ps_escape_dq(&restrict_query(query));
+        let max_scan = MAX_SCAN_ITEMS;
         let script = format!(
             r#"
             try {{
                 $outlook = New-Object -ComObject Outlook.Application
                 $ns = $outlook.GetNamespace("MAPI")
                 $targetFolder = $null
+                # Match either the leaf name or the full "Store\Path\Leaf" id.
+                # `mail_folders` returns the full path as each folder's `id`, so
+                # matching only on `Name` meant handing this tool the id its own
+                # sibling produced silently fell through to the default Inbox —
+                # the caller got results, from the wrong folder, with no signal.
                 foreach ($store in $ns.Folders) {{
                     $stack = New-Object System.Collections.Generic.Stack[object]
-                    $stack.Push($store)
+                    $stack.Push([PSCustomObject]@{{ F = $store; P = $store.Name }})
                     while ($stack.Count -gt 0) {{
-                        $f = $stack.Pop()
-                        if ($f.Name -eq "{folder_path}") {{
-                            $targetFolder = $f
+                        $node = $stack.Pop()
+                        if ($node.F.Name -eq "{folder_path}" -or $node.P -eq "{folder_path}") {{
+                            $targetFolder = $node.F
                             break
                         }}
-                        foreach ($sub in $f.Folders) {{ $stack.Push($sub) }}
+                        foreach ($sub in $node.F.Folders) {{
+                            $stack.Push([PSCustomObject]@{{ F = $sub; P = "$($node.P)\$($sub.Name)" }})
+                        }}
                     }}
                     if ($targetFolder) {{ break }}
                 }}
                 if (-not $targetFolder) {{
                     $targetFolder = $ns.GetDefaultFolder(6)
                 }}
+                # Let the store do the searching. A provider that refuses the
+                # query (some PST / IMAP stores have no full-text index) falls
+                # back to the bounded scan below; the -like test after it makes
+                # both paths return the same set.
                 $items = $targetFolder.Items
-                $items.Sort("[ReceivedTime]", $true)
+                $candidates = $null
+                try {{ $candidates = $items.Restrict("{restrict}") }} catch {{ $candidates = $null }}
+                if ($null -eq $candidates) {{ $candidates = $items }}
+                try {{ $candidates.Sort("[ReceivedTime]", $true) }} catch {{ }}
                 $messages = @()
                 $count = 0
-                foreach ($item in $items) {{
+                $scanned = 0
+                foreach ($item in $candidates) {{
                     if ($count -ge {limit}) {{ break }}
+                    $scanned++
+                    if ($scanned -gt {max_scan}) {{ break }}
                     # Coalesce nulls: some item types (meeting requests, receipts)
                     # have a null Body, and calling .Substring on it below would
                     # throw into the outer catch and abort the ENTIRE search on the
@@ -387,5 +451,32 @@ mod tests {
     #[test]
     fn create_default() {
         let _ = WindowsPim::default();
+    }
+
+    #[test]
+    fn dasl_literals_escape_only_the_quote() {
+        assert_eq!(escape_dasl("O'Brien"), "O''Brien");
+        // A DASL string literal has no other metacharacter; leaving the rest
+        // alone keeps the query matching what the caller typed.
+        assert_eq!(escape_dasl(r#"a"b`c$d"#), r#"a"b`c$d"#);
+    }
+
+    #[test]
+    fn the_restrict_query_covers_the_same_three_fields_the_loop_tests() {
+        // If these ever drift, the restricted path and the fallback scan return
+        // different result sets for the same call — the worst kind of
+        // difference, because which one ran depends on the message store.
+        let q = restrict_query("invoice");
+        assert!(q.starts_with("@SQL="));
+        assert!(q.contains("urn:schemas:httpmail:subject"));
+        assert!(q.contains("urn:schemas:httpmail:fromname"));
+        assert!(q.contains("urn:schemas:httpmail:textdescription"));
+        assert_eq!(q.matches("LIKE '%invoice%'").count(), 3);
+    }
+
+    #[test]
+    fn a_quoted_query_cannot_break_out_of_the_dasl_literal() {
+        let q = restrict_query("it's");
+        assert!(q.contains("LIKE '%it''s%'"), "got {q}");
     }
 }

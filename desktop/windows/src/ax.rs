@@ -192,11 +192,10 @@ pub fn actions_for(has_press_pattern: bool, has_expand_collapse: bool) -> Vec<St
     out
 }
 
-// The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract the
-// macOS Swift helper and the Linux AT-SPI limb also implement, and three
-// hand-copied versions of one ranking rule is how platforms start disagreeing
-// about which element a locator meant.
-pub use aleph_desktop::{rank_candidates, RankCandidate};
+// The locator ranker lives in `aleph_desktop::ax_rank` — see the import inside
+// `imp`, its only consumer. (A second, module-level re-export of it lived here
+// and was never named by anything.)
+
 /// UIA control patterns the AX write path can invoke, in fallback order.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,6 +239,19 @@ const RESOLVE_DEPTH: u32 = 12;
 /// design) — the same spirit as the macOS helper's depth limit.
 #[cfg_attr(not(windows), allow(dead_code))]
 const MAX_NODES: usize = 4_000;
+
+/// Wall-clock ceiling on one accessibility walk.
+///
+/// `MAX_NODES` bounds how *much* a walk reads; it does not bound how *long* a
+/// single read takes. Every UI Automation property getter is a cross-process
+/// call into the target application's UI thread, and an application that is not
+/// pumping messages — mid-freeze, showing a modal on another thread, or being
+/// debugged — answers each one only when its per-call COM timeout expires. A
+/// tree of 4 000 nodes against such a provider blocks the worker thread far past
+/// anything the caller can use, so the walk stops at the budget and returns the
+/// subtree it did get. A partial tree the model can act on beats a stalled turn.
+#[cfg_attr(not(windows), allow(dead_code))]
+const WALK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 // ── Capability ───────────────────────────────────────────────────────────────
 
@@ -299,12 +311,43 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(f).await {
+    match tokio::task::spawn_blocking(move || {
+        let _serial = uia_gate();
+        f()
+    })
+    .await
+    {
         Ok(res) => res,
         Err(e) => Err(DesktopError::PlatformError(format!(
             "UI Automation worker thread failed: {e}"
         ))),
     }
+}
+
+/// Process-wide serialization of UI Automation client work.
+///
+/// Each call builds its own `IUIAutomation` on its own `spawn_blocking` thread —
+/// the design the module docs describe, and the one that keeps the capability
+/// `Send + Sync` without caching COM pointers. What that design does *not*
+/// survive is two of those happening at once: with two threads instantiating and
+/// tearing down the UI Automation client concurrently, one of them gets a bare
+/// `E_FAIL` out of the next call on the object it was just handed.
+///
+/// Found by running two live probes in parallel — `CreateCacheRequest failed:
+/// 0x80004005` on one of the two, every time, while each passed alone. The same
+/// shape is reachable in production the moment two desktop tools run
+/// concurrently (`desktop_som` while an `ax_query_tree` is in flight), where it
+/// would look like a flaky accessibility layer rather than a lock that was
+/// missing.
+///
+/// Serializing costs nothing real: these are interactive, human-paced queries
+/// against a single desktop, and the [`WALK_BUDGET`] bounds how long any one of
+/// them can hold the gate.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn uia_gate() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GATE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 // ── Windows COM implementation ───────────────────────────────────────────────
@@ -313,8 +356,9 @@ where
 mod imp {
     use super::{
         ax_action_to_patterns, control_type_to_ax_role, AxPattern, MAX_NODES, RESOLVE_DEPTH,
-        ROLE_SCAN_DEPTH,
+        ROLE_SCAN_DEPTH, WALK_BUDGET,
     };
+    use std::time::Instant;
     // The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract
     // the macOS Swift helper and the Linux AT-SPI limb also implement, and three
     // hand-copied versions of one ranking rule is how platforms start
@@ -332,14 +376,47 @@ mod imp {
         COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
+        CUIAutomation, ExpandCollapseState_Expanded, ExpandCollapseState_LeafNode, IUIAutomation,
+        IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationExpandCollapsePattern,
         IUIAutomationInvokePattern, IUIAutomationLegacyIAccessiblePattern,
         IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationTreeWalker,
-        IUIAutomationValuePattern, UIA_ExpandCollapsePatternId, UIA_InvokePatternId,
-        UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+        IUIAutomationValuePattern, UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
+        UIA_ClassNamePropertyId, UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId,
+        UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId,
+        UIA_IsPasswordPropertyId, UIA_LegacyIAccessiblePatternId, UIA_NamePropertyId,
+        UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
         UIA_ValuePatternId,
     };
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    /// Pin the process's multi-threaded apartment for the process lifetime.
+    ///
+    /// Every accessibility call runs on a `spawn_blocking` thread that joins the
+    /// MTA and leaves it again; when the leaving thread is the last member,
+    /// Windows tears the apartment down and the next call builds it back up.
+    /// Microsoft documents creating and destroying the MTA repeatedly as
+    /// something not to do, and `CoIncrementMTAUsage` is the supported way to
+    /// hold the apartment open without joining it. The cookie is deliberately
+    /// never released — the whole point is that the MTA outlives each call.
+    ///
+    /// **What this does not buy:** it is not what makes concurrent accessibility
+    /// calls safe. That was measured — with the apartment pinned and no other
+    /// change, two live probes running in parallel still failed with
+    /// `CreateCacheRequest failed: 0x80004005`, every time. The gate in
+    /// [`super::uia_gate`] is what fixed it. This stays because the apartment
+    /// churn is real and avoidable, not because it repairs anything.
+    fn pin_mta() {
+        use std::sync::OnceLock;
+        use windows::Win32::System::Com::CoIncrementMTAUsage;
+
+        static PINNED: OnceLock<bool> = OnceLock::new();
+        PINNED.get_or_init(|| {
+            // SAFETY: documented, idempotent-by-cookie apartment reference. The
+            // cookie is intentionally leaked so the MTA lives as long as the
+            // process.
+            unsafe { CoIncrementMTAUsage() }.is_ok()
+        });
+    }
 
     /// RAII COM apartment guard. `CoInitializeEx` may return `S_FALSE` if the
     /// thread was already initialized — harmless; we still balance with
@@ -348,6 +425,7 @@ mod imp {
 
     impl ComGuard {
         fn new() -> Self {
+            pin_mta();
             // SAFETY: documented COM init; ignoring the HRESULT is correct here
             // (S_OK and S_FALSE are both success states for our purposes).
             unsafe {
@@ -359,7 +437,8 @@ mod imp {
 
     impl Drop for ComGuard {
         fn drop(&mut self) {
-            // SAFETY: balances the `CoInitializeEx` in `new`.
+            // SAFETY: balances the `CoInitializeEx` in `new`. The apartment
+            // itself survives this thanks to `pin_mta`.
             unsafe { CoUninitialize() };
         }
     }
@@ -418,43 +497,93 @@ mod imp {
         }
     }
 
+    /// The property set every node read needs, requested once so the provider
+    /// answers them all in a single cross-process round trip.
+    ///
+    /// Without it, [`node_of`] costs eight separate calls into the target
+    /// application's UI thread — times a `MAX_NODES` budget of 4 000, that is
+    /// over thirty thousand round trips for one `desktop_som`. UI Automation's
+    /// answer to exactly this is the cache request: `*BuildCache` navigation
+    /// returns each element with its properties already attached, so the reads
+    /// afterwards are in-process.
+    ///
+    /// The request deliberately leaves `AutomationElementMode` at its default
+    /// (`Full`), which keeps the live provider reference on every returned
+    /// element. That is what lets [`node_of`] fall back to a `Current*` getter
+    /// when a provider declines to populate the cache, and what lets the pattern
+    /// probes in [`enrich_resolved`] work on a cached element at all.
+    fn cache_request(uia: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
+        // SAFETY: documented factory call on the automation root.
+        let req = unsafe { uia.CreateCacheRequest() }
+            .map_err(|e| DesktopError::PlatformError(format!("CreateCacheRequest failed: {e}")))?;
+        for id in [
+            UIA_ControlTypePropertyId,
+            UIA_NamePropertyId,
+            UIA_BoundingRectanglePropertyId,
+            UIA_ProcessIdPropertyId,
+            UIA_IsEnabledPropertyId,
+            UIA_IsPasswordPropertyId,
+            UIA_IsOffscreenPropertyId,
+            UIA_AutomationIdPropertyId,
+            UIA_ClassNamePropertyId,
+        ] {
+            // SAFETY: documented cache-request builder; a property the platform
+            // does not know is refused here rather than mid-walk, and the
+            // `Current*` fallback covers it.
+            let _ = unsafe { req.AddProperty(id) };
+        }
+        Ok(req)
+    }
+
     /// Read one element's scalar fields into a childless [`AxElement`].
     ///
     /// # What is (and is not) read per node
     ///
-    /// `secure` and `enabled` are filled here, for every node of every walk:
-    /// both are plain property getters in the same cost class as the name and
-    /// control type already being read, and both are consumed by the
-    /// model-facing projections (`affordance_fields` renders a greyed-out
+    /// `secure`, `enabled` and the offscreen flag are filled here, for every
+    /// node of every walk: they arrive with the cached property set (see
+    /// [`cache_request`]) at no extra round trip, and all three are consumed by
+    /// the model-facing projections (`affordance_fields` renders a greyed-out
     /// control and marks a password box, and `safe_value` withholds a secure
     /// element's text).
     ///
     /// `settable` and `actions` are **not** — determining them means probing up
-    /// to five control patterns, i.e. five cross-process COM round trips per
-    /// node against a `MAX_NODES` budget of 4 000. They are filled by
-    /// [`enrich_resolved`] for the one element a call actually resolved, which
-    /// is where every consumer reads them.
+    /// to five control patterns, which the cache cannot carry and which are five
+    /// genuine round trips per node. They are filled by [`enrich_resolved`] for
+    /// the one element a call actually resolved, which is where every consumer
+    /// reads them.
+    ///
+    /// # Offscreen elements report no bounds
+    ///
+    /// UI Automation keeps scrolled-out list items, collapsed menu entries and
+    /// every element of a minimized window in the tree, with `IsOffscreen` set
+    /// and a rectangle that is stale (or the (-32000, -32000) parking sentinel).
+    /// Passing that rectangle on would put a Set-of-Marks label at a spot the
+    /// element is not at — and whatever *is* there gets clicked instead. So an
+    /// offscreen element keeps its role and title (a locator can still address
+    /// it; `set_value` through UI Automation does not need visibility) and loses
+    /// its bounds, which `usable_bounds` then filters out of the marks.
     fn node_of(el: &IUIAutomationElement) -> AxElement {
-        // SAFETY: read-only UIA control-type property getter.
-        let role = unsafe {
-            el.CurrentControlType()
-                .map_or("AXUnknown", |ct| control_type_to_ax_role(ct.0))
-        }
-        .to_string();
-        // SAFETY: read-only UIA name property getter.
-        let title = unsafe { el.CurrentName() }
-            .map(|b| b.to_string())
+        let role = control_type_to_ax_role(control_type_of(el)).to_string();
+        let title = Some(name_of(el)).filter(|s| !s.is_empty());
+        let bounds = if is_offscreen(el) {
+            None
+        } else {
+            // SAFETY: cached read with a live-getter fallback; both are
+            // read-only UIA bounding-rectangle getters.
+            unsafe {
+                el.CachedBoundingRectangle()
+                    .or_else(|_| el.CurrentBoundingRectangle())
+            }
             .ok()
-            .filter(|s| !s.is_empty());
-        // SAFETY: read-only UIA bounding-rectangle property getter.
-        let bounds = unsafe { el.CurrentBoundingRectangle() }
+            .map(rect_to_region)
+        };
+        // SAFETY: cached read with a live-getter fallback.
+        let pid = unsafe { el.CachedProcessId().or_else(|_| el.CurrentProcessId()) }.unwrap_or(0);
+        // SAFETY: cached read with a live-getter fallback. A provider that does
+        // not answer either leaves this `None` — "not told", never `false`.
+        let enabled = unsafe { el.CachedIsEnabled().or_else(|_| el.CurrentIsEnabled()) }
             .ok()
-            .map(rect_to_region);
-        // SAFETY: read-only UIA process-id property getter.
-        let pid = unsafe { el.CurrentProcessId() }.unwrap_or(0);
-        // SAFETY: read-only UIA enabled-state property getter. A provider that
-        // does not answer leaves this `None` — "not told", never `false`.
-        let enabled = unsafe { el.CurrentIsEnabled() }.ok().map(|b| b.as_bool());
+            .map(|b| b.as_bool());
 
         AxElement {
             secure: Some(is_secure_element(el, &role)),
@@ -472,6 +601,32 @@ mod imp {
         }
     }
 
+    /// The element's UIA `ControlType` id, cached read first.
+    fn control_type_of(el: &IUIAutomationElement) -> i32 {
+        // SAFETY: cached read with a live-getter fallback.
+        unsafe { el.CachedControlType().or_else(|_| el.CurrentControlType()) }.map_or(0, |ct| ct.0)
+    }
+
+    /// The element's `Name`, empty when unknown.
+    fn name_of(el: &IUIAutomationElement) -> String {
+        // SAFETY: cached read with a live-getter fallback.
+        unsafe { el.CachedName().or_else(|_| el.CurrentName()) }
+            .map(|b| b.to_string())
+            .unwrap_or_default()
+    }
+
+    /// Whether UI Automation says this element is not currently on screen.
+    ///
+    /// A provider that will not answer is treated as **on** screen: an element
+    /// wrongly hidden from the marks is a capability silently lost, whereas a
+    /// stale rectangle is at worst one misplaced mark the model can see is wrong.
+    fn is_offscreen(el: &IUIAutomationElement) -> bool {
+        // SAFETY: cached read with a live-getter fallback.
+        unsafe { el.CachedIsOffscreen().or_else(|_| el.CurrentIsOffscreen()) }
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+    }
+
     /// Whether this element masks its content.
     ///
     /// UIA's own `IsPassword` is the primary signal; the label heuristic is the
@@ -481,25 +636,27 @@ mod imp {
     /// element on an uncooperative provider as a password box and take typing
     /// away entirely.
     fn is_secure_element(el: &IUIAutomationElement, role: &str) -> bool {
-        // SAFETY: read-only UIA password-attribute property getter.
-        if unsafe { el.CurrentIsPassword() }
+        // SAFETY: cached read with a live-getter fallback.
+        if unsafe { el.CachedIsPassword().or_else(|_| el.CurrentIsPassword()) }
             .map(|b| b.as_bool())
             .unwrap_or(false)
         {
             return true;
         }
-        // SAFETY: read-only UIA label property getters.
-        let (name, automation_id, class_name) = unsafe {
+        // SAFETY: cached reads with live-getter fallbacks; all read-only.
+        let (automation_id, class_name) = unsafe {
             (
-                el.CurrentName().map(|b| b.to_string()).unwrap_or_default(),
-                el.CurrentAutomationId()
+                el.CachedAutomationId()
+                    .or_else(|_| el.CurrentAutomationId())
                     .map(|b| b.to_string())
                     .unwrap_or_default(),
-                el.CurrentClassName()
+                el.CachedClassName()
+                    .or_else(|_| el.CurrentClassName())
                     .map(|b| b.to_string())
                     .unwrap_or_default(),
             )
         };
+        let name = name_of(el);
         super::is_password_like(
             role,
             &[name.as_str(), automation_id.as_str(), class_name.as_str()],
@@ -594,15 +751,46 @@ mod imp {
         None
     }
 
+    /// The two things that stop a walk: how many nodes are left, and how much
+    /// wall clock is left.
+    ///
+    /// Both were previously spelled out at four call sites as a `&mut usize`
+    /// compared against `MAX_NODES`; folding them into one value is what makes
+    /// adding the deadline a change in one place rather than four, and keeps
+    /// "have we run out?" a single question every walker asks the same way.
+    struct Budget {
+        remaining: std::cell::Cell<usize>,
+        deadline: Instant,
+    }
+
+    impl Budget {
+        fn new() -> Self {
+            Self {
+                remaining: std::cell::Cell::new(MAX_NODES),
+                deadline: Instant::now() + WALK_BUDGET,
+            }
+        }
+
+        /// Charge one node and report whether the walk must stop now.
+        fn spend(&self) -> bool {
+            self.remaining.set(self.remaining.get().saturating_sub(1));
+            self.exhausted()
+        }
+
+        fn exhausted(&self) -> bool {
+            self.remaining.get() == 0 || Instant::now() >= self.deadline
+        }
+    }
+
     /// Flatten the control-view subtree into `(RankCandidate, element)` pairs,
-    /// bounded by `depth_remaining` and the global `MAX_NODES` budget. Each
-    /// element handle is cloned (refcount bump) so it outlives the walk and can
-    /// be acted on once ranking picks it.
+    /// bounded by [`Budget`]. Each element handle is cloned (refcount bump) so
+    /// it outlives the walk and can be acted on once ranking picks it.
     fn collect_candidates(
         walker: &IUIAutomationTreeWalker,
+        cache: &IUIAutomationCacheRequest,
         el: &IUIAutomationElement,
         depth_remaining: u32,
-        count: &mut usize,
+        budget: &Budget,
         out: &mut Vec<(RankCandidate, IUIAutomationElement)>,
     ) {
         let node = node_of(el);
@@ -618,20 +806,19 @@ mod imp {
             },
             el.clone(),
         ));
-        *count += 1;
-        if depth_remaining == 0 || *count >= MAX_NODES {
+        if budget.spend() || depth_remaining == 0 {
             return;
         }
         // SAFETY: walker child/sibling traversal; windows-rs surfaces "no
         // element" as Err, terminating each loop naturally.
-        let mut next = unsafe { walker.GetFirstChildElement(el) };
+        let mut next = unsafe { walker.GetFirstChildElementBuildCache(el, cache) };
         while let Ok(child) = next {
-            collect_candidates(walker, &child, depth_remaining - 1, count, out);
-            if *count >= MAX_NODES {
+            collect_candidates(walker, cache, &child, depth_remaining - 1, budget, out);
+            if budget.exhausted() {
                 break;
             }
             // SAFETY: walker sibling traversal; terminates at end of child list.
-            next = unsafe { walker.GetNextSiblingElement(&child) };
+            next = unsafe { walker.GetNextSiblingElementBuildCache(&child, cache) };
         }
     }
 
@@ -643,15 +830,17 @@ mod imp {
         loc: &AxLocator,
     ) -> Result<Option<(IUIAutomationElement, AxElement)>> {
         let hwnd = resolve_root_hwnd(loc.pid)?;
+        let cache = cache_request(uia)?;
         // SAFETY: `hwnd` is a validated visible/foreground window handle.
-        let root = unsafe { uia.ElementFromHandle(hwnd) }
-            .map_err(|e| DesktopError::PlatformError(format!("ElementFromHandle failed: {e}")))?;
+        let root = unsafe { uia.ElementFromHandleBuildCache(hwnd, &cache) }.map_err(|e| {
+            DesktopError::PlatformError(format!("ElementFromHandleBuildCache failed: {e}"))
+        })?;
         // SAFETY: standard "what a user sees" control-view walker.
         let walker = unsafe { uia.ControlViewWalker() }
             .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
         let mut cands: Vec<(RankCandidate, IUIAutomationElement)> = Vec::new();
-        let mut count = 0usize;
-        collect_candidates(&walker, &root, RESOLVE_DEPTH, &mut count, &mut cands);
+        let budget = Budget::new();
+        collect_candidates(&walker, &cache, &root, RESOLVE_DEPTH, &budget, &mut cands);
 
         let summaries: Vec<RankCandidate> = cands.iter().map(|(c, _)| c.clone()).collect();
         let Some(idx) = rank_candidates(&summaries, loc) else {
@@ -765,6 +954,19 @@ mod imp {
                     if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
                         UIA_ExpandCollapsePatternId,
                     ) {
+                        match p.CurrentExpandCollapseState() {
+                            // Already showing. `Expand()` on an expanded element
+                            // is an error on several providers, which turned
+                            // "the menu you asked for is open" into a hard
+                            // failure the model had to recover from.
+                            Ok(state) if state == ExpandCollapseState_Expanded => return Ok(true),
+                            // A leaf has nothing to show; say so by falling
+                            // through to the next pattern (there is none for
+                            // `AXShowMenu`, so the caller reports it honestly)
+                            // rather than claiming a menu appeared.
+                            Ok(state) if state == ExpandCollapseState_LeafNode => return Ok(false),
+                            _ => {}
+                        }
                         p.Expand()
                             .map_err(|e| DesktopError::PlatformError(format!("Expand: {e}")))?;
                         return Ok(true);
@@ -811,31 +1013,30 @@ mod imp {
     }
 
     /// Depth-first walk rooted at `el`, bounded by `depth_remaining` and the
-    /// global `MAX_NODES` budget. `count` is the running node tally shared
-    /// across the whole walk.
+    /// shared [`Budget`] (node count *and* wall clock).
     fn walk(
         walker: &IUIAutomationTreeWalker,
+        cache: &IUIAutomationCacheRequest,
         el: &IUIAutomationElement,
         depth_remaining: u32,
-        count: &mut usize,
+        budget: &Budget,
     ) -> AxElement {
         let mut node = node_of(el);
-        *count += 1;
-        if depth_remaining == 0 || *count >= MAX_NODES {
+        if budget.spend() || depth_remaining == 0 {
             return node;
         }
         // SAFETY: walker child/sibling traversal. windows-rs surfaces the UIA
         // "no element" (S_OK + null) result as `Err`, so the `while let Ok`
         // loop terminates naturally at the end of each child list.
-        let mut next = unsafe { walker.GetFirstChildElement(el) };
+        let mut next = unsafe { walker.GetFirstChildElementBuildCache(el, cache) };
         while let Ok(child) = next {
             node.children
-                .push(walk(walker, &child, depth_remaining - 1, count));
-            if *count >= MAX_NODES {
+                .push(walk(walker, cache, &child, depth_remaining - 1, budget));
+            if budget.exhausted() {
                 break;
             }
             // SAFETY: walker sibling traversal; terminates at end of child list.
-            next = unsafe { walker.GetNextSiblingElement(&child) };
+            next = unsafe { walker.GetNextSiblingElementBuildCache(&child, cache) };
         }
         node
     }
@@ -843,8 +1044,9 @@ mod imp {
     pub(super) fn query_focused() -> Result<Option<AxElement>> {
         let _com = ComGuard::new();
         let uia = automation()?;
+        let cache = cache_request(&uia)?;
         // SAFETY: documented UIA call; a missing focus surfaces as `Err`.
-        unsafe { uia.GetFocusedElement() }.map_or(Ok(None), |el| {
+        unsafe { uia.GetFocusedElementBuildCache(&cache) }.map_or(Ok(None), |el| {
             let mut node = node_of(&el);
             // The focused element is the one the type_text pre-flight gate reads
             // (`secure` / `settable` / `role`), so it is worth the pattern
@@ -860,15 +1062,17 @@ mod imp {
         let _com = ComGuard::new();
         let uia = automation()?;
         let hwnd = resolve_root_hwnd(pid)?;
+        let cache = cache_request(&uia)?;
         // SAFETY: `hwnd` is a validated visible/foreground window handle.
-        let root = unsafe { uia.ElementFromHandle(hwnd) }
-            .map_err(|e| DesktopError::PlatformError(format!("ElementFromHandle failed: {e}")))?;
+        let root = unsafe { uia.ElementFromHandleBuildCache(hwnd, &cache) }.map_err(|e| {
+            DesktopError::PlatformError(format!("ElementFromHandleBuildCache failed: {e}"))
+        })?;
         // SAFETY: the control-view walker is the standard "what a user sees"
         // traversal, matching the macOS AX tree's actionable framing.
         let walker = unsafe { uia.ControlViewWalker() }
             .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
-        let mut count = 0usize;
-        Ok(Some(walk(&walker, &root, max_depth, &mut count)))
+        let budget = Budget::new();
+        Ok(Some(walk(&walker, &cache, &root, max_depth, &budget)))
     }
 
     pub(super) fn query_by_role(role: &str, pid: Option<i32>) -> Result<Vec<AxElement>> {

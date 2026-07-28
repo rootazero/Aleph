@@ -93,6 +93,46 @@ fn quality_to_qv(quality: f32) -> u32 {
     (1.0 - q).mul_add(29.0, 2.0).round() as u32
 }
 
+/// How many frames to let a webcam throw away before the one that is kept.
+///
+/// A DirectShow camera streams from the instant it opens, but its auto-exposure,
+/// auto-white-balance and (on most laptop panels) the physical shutter need a
+/// few frames to settle. `-frames:v 1` took the very first one, so
+/// `camera_snap` habitually returned a black or washed-out image — a picture
+/// technically taken and practically useless, and one a model has no way to
+/// recognize as a device artefact rather than a dark room.
+///
+/// Five frames is well under a fifth of a second on any 30 fps device, so the
+/// call is not measurably slower; the cost is entirely in the device-open that
+/// was already being paid.
+const CAMERA_WARMUP_FRAMES: u32 = 5;
+
+/// Build the argument vector for a single-frame camera capture.
+///
+/// Pure (no I/O) so the frame-selection filter can be pinned by a unit test
+/// without a webcam.
+fn camera_snap_args(device: &str, qv: u32, output: &str) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-f".into(),
+        "dshow".into(),
+        "-i".into(),
+        format!("video={device}"),
+        // Keep frame N, discard everything before it. `-ss` cannot do this: a
+        // live capture device has no seekable timeline.
+        "-vf".into(),
+        format!("select=gte(n\\,{CAMERA_WARMUP_FRAMES})"),
+        "-frames:v".into(),
+        "1".into(),
+        "-q:v".into(),
+        qv.to_string(),
+        "-y".into(),
+        output.to_string(),
+    ]
+}
+
 /// Headroom over a capture's own duration before it is considered wedged.
 ///
 /// `ffmpeg -f dshow -i video=…` blocks in the device-open call when another
@@ -321,21 +361,7 @@ impl MediaCapability for WindowsMedia {
         let out_str = out.to_string_lossy().to_string();
         let qv = quality_to_qv(config.quality);
 
-        let args: Vec<String> = vec![
-            "-hide_banner".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-f".into(),
-            "dshow".into(),
-            "-i".into(),
-            format!("video={device}"),
-            "-frames:v".into(),
-            "1".into(),
-            "-q:v".into(),
-            qv.to_string(),
-            "-y".into(),
-            out_str.clone(),
-        ];
+        let args: Vec<String> = camera_snap_args(&device, qv, &out_str);
 
         // A single frame: the whole cost is opening the device.
         run_ffmpeg(&args, std::time::Duration::ZERO)
@@ -552,6 +578,22 @@ mod tests {
             "first audio device is best-effort default"
         );
         assert!(!audio[1].is_default);
+    }
+
+    #[test]
+    fn camera_snap_discards_the_warmup_frames() {
+        let args = camera_snap_args("Integrated Camera", 4, r"C:\tmp\shot.jpg");
+        let joined = args.join(" ");
+        assert!(
+            joined.contains(&format!("select=gte(n\\,{CAMERA_WARMUP_FRAMES})")),
+            "the frame-selection filter must survive assembly: {joined}"
+        );
+        // Still exactly one frame out, at the requested quality, to the given
+        // path — the warm-up must not change what the caller asked for.
+        assert!(joined.contains("-frames:v 1"));
+        assert!(joined.contains("-q:v 4"));
+        assert_eq!(args.last().unwrap(), r"C:\tmp\shot.jpg");
+        assert!(joined.contains("video=Integrated Camera"));
     }
 
     #[test]
