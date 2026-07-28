@@ -72,10 +72,13 @@ impl Rail {
 /// A static name table, not a judgement about the message: it says which verbs
 /// put an event on a wire, nothing about intent (R7/P8).
 ///
-/// `key_button` is deliberately absent: holding a key down has no targeted
-/// counterpart in the limb contract, so it stays on the global rail exactly as
-/// before. Gating it would leave the model with no way to press-and-hold at all,
-/// which is a worse answer than the honest legacy one.
+/// `key_button` used to be absent here, on the grounds that a held key had no
+/// targeted counterpart. That left a hole rather than an honest gap: with
+/// `allow_global_pointer = false`, `key_combo` was refused while
+/// `key_button {press_action: "click"}` delivered the *same* keystroke to the
+/// user's frontmost window, unrefused and without even reporting which rail it
+/// rode. The limb contract now has [`ScreenCapability::key_button_targeted`], so
+/// the verb is gated like every other event-synthesizing one.
 fn is_input_action(action: &str) -> bool {
     matches!(
         action,
@@ -85,6 +88,7 @@ fn is_input_action(action: &str) -> bool {
             | "hover"
             | "scroll"
             | "mouse_button"
+            | "key_button"
             | "type_text"
             | "key_combo"
             | "paste"
@@ -1100,14 +1104,25 @@ impl super::DesktopTool {
                     }
                 };
                 let session_id = super::held_inputs::current_session_id();
-                match screen.key_button(keys, action).await {
+                let result = match rail {
+                    Rail::Targeted(pid) => screen.key_button_targeted(pid, keys, action).await,
+                    Rail::Global => screen.key_button(keys, action).await,
+                };
+                match result {
                     Ok(()) => {
                         // Ledger only what the OS actually took: a failed press
                         // holds nothing, and `Click` releases what it pressed in
                         // the same call. The abort path releases the rest.
                         match action {
                             aleph_desktop::PressAction::Press => {
-                                super::held_inputs::record_key_press(&session_id, keys);
+                                // Record the rail so the release rides the same
+                                // one — a targeted press is only matched by a
+                                // targeted release.
+                                let held_pid = match rail {
+                                    Rail::Targeted(pid) => Some(pid),
+                                    Rail::Global => None,
+                                };
+                                super::held_inputs::record_key_press(&session_id, keys, held_pid);
                             }
                             aleph_desktop::PressAction::Release => {
                                 super::held_inputs::clear_key_release(&session_id, keys);
@@ -1116,9 +1131,11 @@ impl super::DesktopTool {
                         }
                         Ok(Some(DesktopOutput {
                             success: true,
-                            data: Some(
-                                serde_json::json!({"keys": keys, "action": args.press_action}),
-                            ),
+                            data: Some(serde_json::json!({
+                                "keys": keys,
+                                "action": args.press_action,
+                                "delivery": rail.delivery(),
+                            })),
                             message: None,
                         }))
                     }
@@ -2298,6 +2315,11 @@ mod tests {
             "type_text",
             "key_combo",
             "paste",
+            // A held key is a synthesized keystroke like any other. While it was
+            // exempt, `key_button {press_action:"click"}` delivered the same
+            // keystroke `key_combo` had just been refused for — a hole in the
+            // fail-closed gate rather than an honest gap in the rail.
+            "key_button",
         ] {
             assert!(is_input_action(a), "{a} puts an event on a rail");
         }
@@ -2309,9 +2331,6 @@ mod tests {
             "clipboard_read",
             "set_value",
             "ax_action",
-            // No targeted counterpart exists for a held key, so it stays on the
-            // legacy path rather than being refused into uselessness.
-            "key_button",
         ] {
             assert!(
                 !is_input_action(a),
@@ -2474,6 +2493,27 @@ mod tests {
                     .push((pid, "click".into()));
                 Ok(())
             }
+            async fn key_button(
+                &self,
+                _keys: &[String],
+                _action: aleph_desktop::PressAction,
+            ) -> DResult<()> {
+                self.calls.lock().unwrap().global.push("key_button".into());
+                Ok(())
+            }
+            async fn key_button_targeted(
+                &self,
+                pid: i32,
+                _keys: &[String],
+                _action: aleph_desktop::PressAction,
+            ) -> DResult<()> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .targeted
+                    .push((pid, "key_button".into()));
+                Ok(())
+            }
         }
 
         struct RailPlatform {
@@ -2629,6 +2669,70 @@ mod tests {
                 .expect("click is handled");
             assert!(out.success);
             assert_eq!(calls.lock().unwrap().global, vec!["click".to_string()]);
+        }
+
+        fn key_button(extra: serde_json::Value) -> DesktopArgs {
+            let mut v = serde_json::json!({
+                "action": "key_button", "keys": ["cmd"], "press_action": "click"
+            });
+            if let (Some(base), Some(extra)) = (v.as_object_mut(), extra.as_object()) {
+                for (k, val) in extra {
+                    base.insert(k.clone(), val.clone());
+                }
+            }
+            serde_json::from_value(v).expect("valid DesktopArgs")
+        }
+
+        /// The hole this wave closed: `key_button` was exempt from the rail
+        /// policy, so with the fail-closed default a model refused a `key_combo`
+        /// could send the identical keystroke through `key_button` — straight at
+        /// the user's frontmost window, and without the result even saying so.
+        #[tokio::test]
+        async fn an_untargeted_key_button_is_refused_like_every_other_keystroke() {
+            let (tool, platform, calls) = fixture(true, false);
+            let out = tool
+                .call_via_platform(&platform, &key_button(serde_json::json!({})))
+                .await
+                .unwrap()
+                .expect("key_button is handled");
+            assert!(!out.success, "{:?}", out.message);
+            let calls = calls.lock().unwrap();
+            assert!(
+                calls.global.is_empty() && calls.targeted.is_empty(),
+                "a refused keystroke must not reach the keyboard"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_targeted_key_button_rides_the_background_rail_and_says_so() {
+            let (tool, platform, calls) = fixture(true, false);
+            let out = tool
+                .call_via_platform(&platform, &key_button(serde_json::json!({"pid": 4242})))
+                .await
+                .unwrap()
+                .expect("key_button is handled");
+            assert!(out.success, "{:?}", out.message);
+            assert_eq!(out.data.unwrap()["delivery"], "targeted");
+            assert_eq!(
+                calls.lock().unwrap().targeted,
+                vec![(4242, "key_button".to_string())]
+            );
+        }
+
+        /// Windows / Linux have no background rail, so `key_button` there must
+        /// behave exactly as it always did: global, unrefused, `delivery` told
+        /// honestly rather than omitted.
+        #[tokio::test]
+        async fn key_button_on_a_platform_without_a_background_rail_is_unchanged() {
+            let (tool, platform, calls) = fixture(false, false);
+            let out = tool
+                .call_via_platform(&platform, &key_button(serde_json::json!({})))
+                .await
+                .unwrap()
+                .expect("key_button is handled");
+            assert!(out.success, "{:?}", out.message);
+            assert_eq!(out.data.unwrap()["delivery"], "global");
+            assert_eq!(calls.lock().unwrap().global, vec!["key_button".to_string()]);
         }
     }
 }

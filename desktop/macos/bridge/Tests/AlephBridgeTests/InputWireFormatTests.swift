@@ -101,6 +101,7 @@ final class InputWireFormatTests: XCTestCase {
         try assertResultMatchesContract("DragResult", DragResult(ok: true, delivery: DELIVERY_TARGETED))
         try assertResultMatchesContract("HoverResult", HoverResult(ok: true, delivery: DELIVERY_TARGETED))
         try assertResultMatchesContract("MouseButtonResult", MouseButtonResult(ok: true, delivery: DELIVERY_TARGETED))
+        try assertResultMatchesContract("KeyButtonResult", KeyButtonResult(ok: true, delivery: DELIVERY_TARGETED))
         try assertResultMatchesContract("CursorPositionResult", CursorPositionResult(x: 1, y: 2))
     }
 
@@ -134,6 +135,7 @@ final class InputWireFormatTests: XCTestCase {
         XCTAssertTrue(try jsonKeys(DragResult(ok: true, delivery: DELIVERY_TARGETED)).contains("delivery"))
         XCTAssertTrue(try jsonKeys(HoverResult(ok: true, delivery: DELIVERY_TARGETED)).contains("delivery"))
         XCTAssertTrue(try jsonKeys(MouseButtonResult(ok: true, delivery: DELIVERY_TARGETED)).contains("delivery"))
+        XCTAssertTrue(try jsonKeys(KeyButtonResult(ok: true, delivery: DELIVERY_TARGETED)).contains("delivery"))
         // The string itself is the contract (`input::DELIVERY_TARGETED`).
         XCTAssertEqual(DELIVERY_TARGETED, "targeted")
     }
@@ -226,6 +228,28 @@ final class InputWireFormatTests: XCTestCase {
         )
         XCTAssertEqual(combo.modifiers, ["cmd", "shift"])
         XCTAssertEqual(combo.key, "s")
+    }
+
+    /// `key_button` mixes modifiers and ordinary keys in ONE array — unlike
+    /// `key_combo`, which splits them. That shape is the contract, because the
+    /// whole chord goes down (or up) together.
+    func testKeyButtonParamsDecodeAChordAndEveryPressAction() throws {
+        for (wire, expected) in [("press", PressAction.press), ("release", .release), ("click", .click)] {
+            let p = try JSONDecoder().decode(
+                KeyButtonParams.self,
+                from: Data(#"{"keys":["cmd","shift","a"],"action":"\#(wire)","pid":21}"#.utf8)
+            )
+            XCTAssertEqual(p.keys, ["cmd", "shift", "a"])
+            XCTAssertEqual(p.action, expected)
+            XCTAssertEqual(p.pid, 21)
+        }
+
+        // Rust omits a `None` pid; the helper must still decode, and then refuse
+        // in `requirePid` rather than silently taking the global tap.
+        let unaimed = try JSONDecoder().decode(
+            KeyButtonParams.self, from: Data(#"{"keys":["escape"],"action":"click"}"#.utf8)
+        )
+        XCTAssertNil(unaimed.pid)
     }
 
     // MARK: - Pure helpers

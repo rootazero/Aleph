@@ -50,6 +50,12 @@ func registerInputHandlers(_ router: Router) async {
         return try encodeCodable(try await session.keyCombo(args))
     }
 
+    await router.register("input.key_button") { params in
+        try requireInputTrusted()
+        let args = try decodeCodable(params, as: KeyButtonParams.self)
+        return try encodeCodable(try await session.keyButton(args))
+    }
+
     await router.register("input.scroll") { params in
         try requireInputTrusted()
         let args = try decodeCodable(params, as: ScrollParams.self)

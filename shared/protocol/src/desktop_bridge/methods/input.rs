@@ -23,13 +23,12 @@ pub const METHOD_CLICK: &str = "input.click";
 pub const METHOD_DOUBLE_CLICK: &str = "input.double_click";
 pub const METHOD_TYPE_TEXT: &str = "input.type_text";
 pub const METHOD_KEY_COMBO: &str = "input.key_combo";
+pub const METHOD_KEY_BUTTON: &str = "input.key_button";
 pub const METHOD_SCROLL: &str = "input.scroll";
 pub const METHOD_DRAG: &str = "input.drag";
 pub const METHOD_HOVER: &str = "input.hover";
 pub const METHOD_CURSOR_POSITION: &str = "input.cursor_position";
 pub const METHOD_MOUSE_BUTTON: &str = "input.mouse_button";
-pub const METHOD_CLIPBOARD_READ: &str = "input.clipboard_read";
-pub const METHOD_CLIPBOARD_WRITE: &str = "input.clipboard_write";
 pub const SUGGESTED_TIMEOUT_MS: u64 = 2_000;
 
 /// `delivery` value: posted into the target process's own event queue; the
@@ -121,6 +120,32 @@ pub struct KeyComboResult {
     pub delivery: String,
 }
 
+/// Hold a key/chord down, or let it back up, without the atomic
+/// press-and-release [`KeyComboParams`] performs.
+///
+/// This exists because a held key is the one input that outlives the call that
+/// made it: `key_combo` is over when it returns, `key_button` leaves a physical
+/// key down until something releases it. Its own method — rather than a flag on
+/// `key_combo` — keeps that difference visible at the wire, and lets the held
+/// key ride the same targeted rail its release will have to ride.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KeyButtonParams {
+    /// The chord, e.g. `["cmd", "shift"]` or `["a"]`. Modifiers and ordinary
+    /// keys are not separated here — the whole chord goes down or up together.
+    pub keys: Vec<String>,
+    pub action: PressAction,
+    /// Target process for the targeted rail; absent ⇒ global HID tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KeyButtonResult {
+    pub ok: bool,
+    #[serde(default = "default_delivery")]
+    pub delivery: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollParams {
     pub direction: String,
@@ -205,21 +230,6 @@ pub struct MouseButtonResult {
     pub ok: bool,
     #[serde(default = "default_delivery")]
     pub delivery: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ClipboardReadResult {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ClipboardWriteParams {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ClipboardWriteResult {
-    pub ok: bool,
 }
 
 #[cfg(test)]

@@ -5,7 +5,17 @@
 //! osascript which works universally. `UNUserNotificationCenter` support will be
 //! added when Aleph ships as a bundled .app (Direction 2).
 
+use std::time::Duration;
+
+use aleph_desktop::script_exec::output_capped;
 use aleph_desktop::{DesktopError, Result};
+
+/// Hard ceiling for the `osascript` call.
+///
+/// A notification is a fire-and-forget nicety on the R5 push path; when
+/// Notification Center is wedged the *caller* must not be. This was the last
+/// unbounded `.output()` on the macOS limb.
+const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Send a system notification via osascript.
 pub async fn send_notification(title: &str, body: &str) -> Result<()> {
@@ -13,14 +23,9 @@ pub async fn send_notification(title: &str, body: &str) -> Result<()> {
     let escaped_body = escape_applescript(body);
     let script = format!("display notification \"{escaped_body}\" with title \"{escaped_title}\"");
 
-    let output = tokio::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .await
-        .map_err(|e| {
-            DesktopError::InputFailed(format!("notification: failed to run osascript: {e}"))
-        })?;
+    let mut cmd = tokio::process::Command::new("osascript");
+    cmd.arg("-e").arg(&script);
+    let output = output_capped(cmd, NOTIFICATION_TIMEOUT).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

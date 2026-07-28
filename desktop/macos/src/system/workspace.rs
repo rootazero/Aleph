@@ -60,13 +60,37 @@ pub fn quit_app(app_name: &str) -> Result<()> {
     )))
 }
 
-/// List all currently running applications.
+/// List the running applications a user (or the model) could actually address.
+///
+/// `NSWorkspace.runningApplications` is not a list of apps — it is a list of
+/// every process with a LaunchServices connection. Measured on a normal desktop:
+/// **121 entries, of which 10 were real apps** (10 `.regular`, 59 `.accessory`,
+/// 52 `.prohibited`). The 52 are `LSBackgroundOnly` helpers: XPC services, per-tab
+/// renderers, update daemons. They have no UI, cannot be activated, cannot be
+/// frontmost, and cannot usefully receive targeted input.
+///
+/// They are not merely noise — they break app resolution. `native::match_running_app`
+/// resolves `app: "chrome"` by unique substring, and on the same machine that
+/// query matched **two** entries (Google Chrome, plus a `.prohibited` helper whose
+/// name embeds "Google Chrome"), so the tool refused the request as ambiguous.
+/// The Windows limb reached the same conclusion from the other side and dedupes
+/// by pid; here the discriminator the OS already provides is the activation
+/// policy, so that is what is used.
+///
+/// `.accessory` (menu-bar-only apps) is deliberately **kept**: those do have UI,
+/// can become frontmost, and include password managers — which
+/// `safety::blocked_app_reason` has to be able to see in the frontmost slot.
 pub fn list_running_apps() -> Result<Vec<AppInfo>> {
+    use objc2_app_kit::NSApplicationActivationPolicy;
+
     let ws = NSWorkspace::sharedWorkspace();
     let apps: objc2::rc::Retained<NSArray<NSRunningApplication>> = ws.runningApplications();
 
     let mut result = Vec::new();
     for app in &apps {
+        if app.activationPolicy() == NSApplicationActivationPolicy::Prohibited {
+            continue;
+        }
         let name = app
             .localizedName()
             .map(|s| s.to_string())
@@ -99,5 +123,36 @@ mod tests {
         assert!(!apps.is_empty(), "running apps should not be empty");
         let has_finder = apps.iter().any(|a| a.bundle_id == "com.apple.finder");
         assert!(has_finder, "Finder should be in running apps");
+    }
+
+    /// The UI-less half of `runningApplications` is dropped, so the list stays
+    /// something `match_running_app` can resolve a name against.
+    ///
+    /// Asserted against the OS rather than a fixed number: the filter's contract
+    /// is "no `.prohibited` process survives", and the count on any given machine
+    /// is whatever it is.
+    #[test]
+    fn background_only_processes_are_not_offered_as_apps() {
+        use objc2_app_kit::NSApplicationActivationPolicy;
+
+        let ws = NSWorkspace::sharedWorkspace();
+        let raw = ws.runningApplications();
+        let prohibited: Vec<u64> = raw
+            .iter()
+            .filter(|a| a.activationPolicy() == NSApplicationActivationPolicy::Prohibited)
+            .filter_map(|a| u64::try_from(a.processIdentifier()).ok())
+            .collect();
+
+        let listed = list_running_apps().unwrap();
+        for pid in &prohibited {
+            assert!(
+                !listed.iter().any(|a| a.pid == Some(*pid)),
+                "pid {pid} is LSBackgroundOnly and must not be offered as an app"
+            );
+        }
+        assert!(
+            listed.len() <= raw.len(),
+            "the filter may only remove entries"
+        );
     }
 }

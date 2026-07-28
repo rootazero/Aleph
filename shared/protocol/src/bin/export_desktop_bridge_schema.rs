@@ -111,6 +111,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_value(schema_for!(methods::input::KeyComboResult))?,
     );
     out.insert(
+        "KeyButtonParams",
+        serde_json::to_value(schema_for!(methods::input::KeyButtonParams))?,
+    );
+    out.insert(
+        "KeyButtonResult",
+        serde_json::to_value(schema_for!(methods::input::KeyButtonResult))?,
+    );
+    out.insert(
         "ScrollParams",
         serde_json::to_value(schema_for!(methods::input::ScrollParams))?,
     );
@@ -145,18 +153,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     out.insert(
         "CursorPositionResult",
         serde_json::to_value(schema_for!(methods::input::CursorPositionResult))?,
-    );
-    out.insert(
-        "ClipboardReadResult",
-        serde_json::to_value(schema_for!(methods::input::ClipboardReadResult))?,
-    );
-    out.insert(
-        "ClipboardWriteParams",
-        serde_json::to_value(schema_for!(methods::input::ClipboardWriteParams))?,
-    );
-    out.insert(
-        "ClipboardWriteResult",
-        serde_json::to_value(schema_for!(methods::input::ClipboardWriteResult))?,
     );
 
     // media.camera.*
