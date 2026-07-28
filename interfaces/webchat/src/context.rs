@@ -802,9 +802,8 @@ impl DashboardState {
             // `derive_gateway_url()` refused to build a plaintext socket URL
             // for a remote (non-loopback) http origin and returned this
             // sentinel instead — never hand WasmConnector an empty address.
-            let detail =
-                "Insecure transport: open this Panel over https to reach a remote gateway"
-                    .to_string();
+            let detail = "Insecure transport: open this Panel over https to reach a remote gateway"
+                .to_string();
             self.is_connected.set(false);
             self.set_failure(ConnectionFailure::Unreachable {
                 detail: detail.clone(),

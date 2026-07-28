@@ -83,10 +83,7 @@ impl ToolPermissionsApi {
         mode_id: &str,
     ) -> Result<ToolPermissionsResponse, String> {
         let result = state
-            .rpc_call(
-                "config.update_tool_permissions",
-                json!({ "mode": mode_id }),
-            )
+            .rpc_call("config.update_tool_permissions", json!({ "mode": mode_id }))
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }

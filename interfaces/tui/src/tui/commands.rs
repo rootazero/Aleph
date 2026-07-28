@@ -424,7 +424,10 @@ async fn execute_tier(state: &mut AppState, client: &AlephClient, level: Option<
         "session_key": state.session_key,
         "metadata": { "exec_tier": tier_value },
     });
-    match client.call::<_, Value>("sessions.patch", Some(params)).await {
+    match client
+        .call::<_, Value>("sessions.patch", Some(params))
+        .await
+    {
         Ok(_) => {
             let shown = if level == "default" {
                 "default (follow global policy)".to_string()
@@ -584,7 +587,9 @@ fn build_help_text(state: &AppState) -> String {
 /// Fetch available commands from the Gateway for command palette display.
 /// Gracefully degrades to empty list if the Gateway doesn't support commands.list.
 /// Parses tree-structured command responses with namespace support.
-pub(super) async fn fetch_gateway_commands(client: &AlephClient) -> Vec<command_tree::CommandEntry> {
+pub(super) async fn fetch_gateway_commands(
+    client: &AlephClient,
+) -> Vec<command_tree::CommandEntry> {
     client
         .call::<_, Value>("commands.list", Some(json!({"interface": "tui"})))
         .await

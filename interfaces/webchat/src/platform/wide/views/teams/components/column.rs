@@ -79,7 +79,8 @@ pub fn KanbanColumn(
     // Base + drop-highlight classes. A droppable-but-not-hovered column shows a
     // dashed hint ring while a drag is in flight; the hovered one lifts.
     let container_class = move || {
-        let base = "flex flex-col w-full min-w-0 border rounded-lg overflow-hidden transition-colors";
+        let base =
+            "flex flex-col w-full min-w-0 border rounded-lg overflow-hidden transition-colors";
         if is_over() {
             format!("{base} bg-primary/5 border-primary")
         } else if can_drop() {
