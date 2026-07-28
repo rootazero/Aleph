@@ -85,7 +85,11 @@ pub struct MacOSScreen {
 }
 
 impl MacOSScreen {
-    pub const fn new(bridge: Arc<SwiftBridge>) -> Self {
+    /// Not `const`: `NativeScreen::new` latches this process's DPI awareness
+    /// (`win_dpi::ensure_process_dpi_aware`) and so cannot run at compile time.
+    /// The two landed from different worktrees and only collided once both were
+    /// on main.
+    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self {
             inner: NativeScreen::new(),
             bridge,

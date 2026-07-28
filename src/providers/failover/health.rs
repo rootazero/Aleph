@@ -221,6 +221,23 @@ impl ProviderCooldown {
         *slot = (*slot).max(until);
     }
 
+    /// Drop `provider`'s pacing window, returning whether one was parked.
+    ///
+    /// Called when a request to `provider` **succeeds**. The window is recorded
+    /// from a 429, and a *model-scoped* 429 records it too — so a provider whose
+    /// model A is throttled gets parked whole, and the sibling-model migration
+    /// that then answers on model B leaves the park in place. The next turn
+    /// would defer that provider to a later candidate (or, as the last one, sit
+    /// out the window) although it just served a request.
+    ///
+    /// A completed call is stronger evidence than the connectivity probe that
+    /// [`FailoverHealth::reset`] deliberately refuses to clear this for: the
+    /// probe only proves the endpoint answers, whereas this consumed the very
+    /// rate budget the window was protecting.
+    pub(crate) async fn clear(&self, provider: &str) -> bool {
+        self.0.write().await.remove(provider).is_some()
+    }
+
     /// Remaining cooldown for `provider`, or `None` if it is not currently
     /// cooling (no entry, or the window already elapsed).
     pub(crate) async fn remaining(&self, provider: &str) -> Option<Duration> {

@@ -442,6 +442,123 @@ where
     }
 }
 
+/// A `[route]` setting that is present but cannot do anything, with the reason.
+///
+/// Every entry here is a knob the operator (or the model, via `update_config`)
+/// deliberately set and which the engine then silently ignores — the failure
+/// mode being "my routing configuration did nothing", with no error anywhere to
+/// explain it. `is_pinned` matches by name only, so a typo'd or removed
+/// provider simply never matches; a ceiling keyed to a provider that is not
+/// configured is never assessed; a local pin naming a cloud endpoint promotes a
+/// candidate the tier gate has already moved to the back.
+///
+/// Reported at boot (WARN, one line per problem) and in the `route_status`
+/// snapshot, so the same answer reaches the operator and the model. Purely
+/// descriptive — nothing here changes a routing decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteProblem {
+    /// `[route]` field the problem is about (`local_provider`, `rate_limits.x`…).
+    pub field: String,
+    /// What is wrong, in one sentence.
+    pub detail: String,
+}
+
+/// Find every inert `[route]` setting, given the configured provider names and
+/// each one's endpoint tier.
+///
+/// Pure over already-gathered facts (same contract as
+/// [`crate::routing::overlay_route`]): the caller supplies the provider picture
+/// it can see, and the rules live in one place.
+#[must_use]
+pub fn route_problems(
+    cfg: &ModelRouteConfig,
+    tiers: &std::collections::HashMap<String, EndpointTier>,
+) -> Vec<RouteProblem> {
+    let mut out = Vec::new();
+    let known = |name: &str| tiers.contains_key(name);
+    let names = || {
+        let mut n: Vec<&str> = tiers.keys().map(String::as_str).collect();
+        n.sort_unstable();
+        n.join(", ")
+    };
+
+    for (field, pin, want) in [
+        (
+            "local_provider",
+            cfg.local_provider.as_deref(),
+            EndpointTier::Local,
+        ),
+        (
+            "cloud_provider",
+            cfg.cloud_provider.as_deref(),
+            EndpointTier::Cloud,
+        ),
+    ] {
+        let Some(pin) = pin else { continue };
+        if !known(pin) {
+            out.push(RouteProblem {
+                field: field.to_string(),
+                detail: format!(
+                    "pins '{pin}', which is not defined under [providers] — the pin never \
+                     matches a candidate and is ignored. Configured providers: {}",
+                    names()
+                ),
+            });
+        } else if tiers.get(pin) != Some(&want) {
+            out.push(RouteProblem {
+                field: field.to_string(),
+                detail: format!(
+                    "pins '{pin}', whose endpoint is not {}. A pin only leads within its own \
+                     tier, so under a tier-shaping mode this promotes a candidate the tier \
+                     gate has already deferred.",
+                    if want == EndpointTier::Local {
+                        "local"
+                    } else {
+                        "cloud"
+                    }
+                ),
+            });
+        }
+    }
+
+    for (name, limit) in &cfg.rate_limits {
+        if !known(name) {
+            out.push(RouteProblem {
+                field: format!("rate_limits.{name}"),
+                detail: format!(
+                    "sets a ceiling for '{name}', which is not defined under [providers] — no \
+                     request is ever counted against it. Configured providers: {}",
+                    names()
+                ),
+            });
+        } else if limit.rpm.is_none() && limit.tpm.is_none() {
+            out.push(RouteProblem {
+                field: format!("rate_limits.{name}"),
+                detail: "has neither rpm nor tpm set, so both dimensions are unbounded — the \
+                         entry has no effect."
+                    .to_string(),
+            });
+        }
+    }
+
+    if cfg.allow_cloud_escalation && cfg.mode != RouteMode::AlwaysLocal {
+        out.push(RouteProblem {
+            field: "allow_cloud_escalation".to_string(),
+            detail: format!(
+                "is only consulted in mode 'always_local'; the current mode is '{}', where \
+                 cloud candidates need no escalation.",
+                match cfg.mode {
+                    RouteMode::Auto => "auto",
+                    RouteMode::AlwaysCloud => "always_cloud",
+                    RouteMode::AlwaysLocal => "always_local",
+                }
+            ),
+        });
+    }
+
+    out
+}
+
 /// Stable-sort a candidate group by an integer key derived from each
 /// candidate's [`LoadMetric`]. The key is computed once per candidate (not per
 /// comparison) so `metric_of` is called exactly `len` times.
@@ -999,6 +1116,118 @@ mod tests {
         // All equal price → stable sort preserves a, b, c.
         let names = cost_names(&[("a", 10_000), ("b", 10_000), ("c", 10_000)]);
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    // --- inert-config diagnostics ------------------------------------------
+
+    fn tiers(entries: &[(&str, EndpointTier)]) -> std::collections::HashMap<String, EndpointTier> {
+        entries
+            .iter()
+            .map(|(n, t)| ((*n).to_string(), *t))
+            .collect()
+    }
+
+    #[test]
+    fn a_clean_route_config_reports_no_problems() {
+        let cfg = ModelRouteConfig {
+            mode: RouteMode::AlwaysLocal,
+            allow_cloud_escalation: true,
+            local_provider: Some("ollama".to_string()),
+            cloud_provider: Some("anthropic".to_string()),
+            ..Default::default()
+        };
+        let map = tiers(&[
+            ("ollama", EndpointTier::Local),
+            ("anthropic", EndpointTier::Cloud),
+        ]);
+        assert!(route_problems(&cfg, &map).is_empty());
+    }
+
+    #[test]
+    fn a_pin_naming_an_unconfigured_provider_is_reported_with_the_valid_names() {
+        // The silent failure this exists for: `is_pinned` matches by name, so a
+        // typo'd or since-deleted provider simply never matches and the only
+        // symptom is "my routing configuration did nothing".
+        let cfg = ModelRouteConfig {
+            local_provider: Some("olama".to_string()),
+            ..Default::default()
+        };
+        let map = tiers(&[("ollama", EndpointTier::Local)]);
+        let problems = route_problems(&cfg, &map);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].field, "local_provider");
+        assert!(problems[0].detail.contains("olama"));
+        assert!(problems[0].detail.contains("ollama"), "lists what is valid");
+    }
+
+    #[test]
+    fn a_pin_on_the_wrong_tier_is_reported() {
+        // A pin only leads within its own tier, so pinning a cloud endpoint as
+        // the *local* preference promotes a candidate the tier gate has
+        // already deferred.
+        let cfg = ModelRouteConfig {
+            local_provider: Some("anthropic".to_string()),
+            ..Default::default()
+        };
+        let map = tiers(&[("anthropic", EndpointTier::Cloud)]);
+        let problems = route_problems(&cfg, &map);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].field, "local_provider");
+        assert!(problems[0].detail.contains("not local"));
+    }
+
+    #[test]
+    fn inert_rate_limit_entries_are_reported() {
+        let cfg = ModelRouteConfig {
+            rate_limits: [
+                (
+                    "ghost".to_string(),
+                    crate::config::types::ProviderRateLimit {
+                        rpm: Some(60),
+                        tpm: None,
+                    },
+                ),
+                (
+                    "ollama".to_string(),
+                    crate::config::types::ProviderRateLimit {
+                        rpm: None,
+                        tpm: None,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let map = tiers(&[("ollama", EndpointTier::Local)]);
+        let problems = route_problems(&cfg, &map);
+        let fields: Vec<&str> = problems.iter().map(|p| p.field.as_str()).collect();
+        assert_eq!(fields, vec!["rate_limits.ghost", "rate_limits.ollama"]);
+        // A ceiling on an unconfigured provider counts nothing; an entry with
+        // neither dimension set bounds nothing.
+        assert!(problems[0].detail.contains("not defined under [providers]"));
+        assert!(problems[1].detail.contains("neither rpm nor tpm"));
+    }
+
+    #[test]
+    fn escalation_outside_always_local_is_reported_as_ignored() {
+        let cfg = ModelRouteConfig {
+            mode: RouteMode::Auto,
+            allow_cloud_escalation: true,
+            ..Default::default()
+        };
+        let problems = route_problems(&cfg, &tiers(&[]));
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].field, "allow_cloud_escalation");
+        assert!(problems[0].detail.contains("always_local"));
+
+        // …and is silent in the mode that actually consults it.
+        let cfg = ModelRouteConfig {
+            mode: RouteMode::AlwaysLocal,
+            allow_cloud_escalation: true,
+            ..Default::default()
+        };
+        assert!(route_problems(&cfg, &tiers(&[])).is_empty());
     }
 
     #[test]
