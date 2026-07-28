@@ -3,9 +3,7 @@
 //! Uses standard POSIX / freedesktop CLI tools with graceful fallbacks.
 //! Tested on Debian/Ubuntu; should work on most distributions.
 
-use aleph_desktop::script_exec::{
-    is_spawn_failure, output_capped_blocking, DESKTOP_QUERY_TIMEOUT,
-};
+use aleph_desktop::script_exec::{is_spawn_failure, output_capped_blocking, DESKTOP_QUERY_TIMEOUT};
 use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
@@ -94,16 +92,17 @@ impl SystemCapability for LinuxSystem {
             // Capped: notify-send blocks on the notification daemon's D-Bus
             // reply, and a wedged (or absent-but-activatable) daemon leaves it
             // waiting with no timeout of its own.
-            let output = output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Sending a notification")
-                .map_err(|e| {
-                    if is_spawn_failure(&e) {
-                        DesktopError::PlatformError(format!(
-                            "Failed to send notification (install libnotify-bin): {e}"
-                        ))
-                    } else {
-                        DesktopError::PlatformError(e.to_string())
-                    }
-                })?;
+            let output =
+                output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Sending a notification")
+                    .map_err(|e| {
+                        if is_spawn_failure(&e) {
+                            DesktopError::PlatformError(format!(
+                                "Failed to send notification (install libnotify-bin): {e}"
+                            ))
+                        } else {
+                            DesktopError::PlatformError(e.to_string())
+                        }
+                    })?;
 
             if output.status.success() {
                 Ok(())
@@ -353,7 +352,8 @@ fn query_mutter_idle_seconds() -> Option<f64> {
     ]);
     // Capped: `gdbus call` waits on a D-Bus reply, and this one is issued on a
     // desktop that may not have a Mutter to answer it.
-    let output = output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Reading the idle time").ok()?;
+    let output =
+        output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Reading the idle time").ok()?;
 
     if !output.status.success() {
         return None;

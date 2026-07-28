@@ -347,8 +347,8 @@ fn run_ydotool(args: &[String]) -> Result<()> {
 
     let mut cmd = std::process::Command::new("ydotool");
     cmd.args(args);
-    let output = output_capped_blocking(cmd, YDOTOOL_TIMEOUT, "ydotool input injection")
-        .map_err(|e| {
+    let output =
+        output_capped_blocking(cmd, YDOTOOL_TIMEOUT, "ydotool input injection").map_err(|e| {
             if is_spawn_failure(&e) {
                 DesktopError::InputFailed(format!("Failed to spawn ydotool: {e}"))
             } else {
@@ -477,9 +477,15 @@ mod tests {
         let err = pick_rail(true, false).expect_err("must not claim a rail it does not have");
         let msg = err.to_string();
         assert!(msg.contains("ydotool"), "must name the fix: {msg}");
-        assert!(msg.contains("ydotoold"), "the daemon is half the install: {msg}");
+        assert!(
+            msg.contains("ydotoold"),
+            "the daemon is half the install: {msg}"
+        );
         // And it must leave the model a route that still works today.
-        assert!(msg.contains("ax_action"), "must name a working alternative: {msg}");
+        assert!(
+            msg.contains("ax_action"),
+            "must name a working alternative: {msg}"
+        );
     }
 
     #[test]

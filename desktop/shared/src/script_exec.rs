@@ -369,7 +369,11 @@ mod tests {
             "test",
         )
         .expect("a chatty command must not deadlock");
-        assert!(out.stdout.len() > 64 * 1024, "got {} bytes", out.stdout.len());
+        assert!(
+            out.stdout.len() > 64 * 1024,
+            "got {} bytes",
+            out.stdout.len()
+        );
     }
 
     #[test]
