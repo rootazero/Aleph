@@ -14,7 +14,7 @@ readme = "README.md"
 aleph-desktop = { path = "../shared" }
 aleph-protocol = { path = "../../shared/protocol" }
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "process"] }
+tokio = { version = "1", features = ["rt", "process", "sync", "time"] }
 tracing = "0.1"
 chrono = { workspace = true }
 serde_json = { workspace = true }
@@ -23,9 +23,18 @@ serde_json = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 
+[dev-dependencies]
+# The live AT-SPI probes in tests/atspi_live.rs need a runtime; the crate's own
+# tokio feature set is `rt` + `process` only.
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI2 accessibility over D-Bus — the Linux counterpart to macOS AX and
 # Windows UI Automation. Runs on zbus, which is already in the dependency
 # graph (xcap / tauri plugins), so this adds a protocol layer, not a stack.
 atspi = { version = "0.30", default-features = false, features = ["connection", "proxies", "tokio"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+# Bounded-concurrency stream combinators for the AT-SPI enrichment pass. Already
+# a workspace dependency (and already in the graph beneath zbus) — this adds a
+# combinator, not a stack.
+futures = { workspace = true }

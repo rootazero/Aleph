@@ -407,10 +407,23 @@ pub(crate) fn mouse_button(x: i32, y: i32, button: MouseButton, action: PressAct
 /// the end (ydotool `mousemove` is instantaneous); animated stepping would spawn
 /// one subprocess per frame, so the fallback keeps it atomic.
 #[cfg(target_os = "linux")]
-pub(crate) fn drag(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<()> {
+pub(crate) fn drag(
+    start_x: i32,
+    start_y: i32,
+    end_x: i32,
+    end_y: i32,
+    duration_ms: Option<u64>,
+) -> Result<()> {
     run_ydotool(&mousemove_args(start_x, start_y))?;
     run_ydotool(&click_args(MouseButton::Left, PressAction::Press))?;
-    run_ydotool(&mousemove_args(end_x, end_y))?;
+    // Interpolated, not a single jump: a compositor delivers whatever motion it
+    // is given, and the toolkit on the other side needs motion-while-held to arm
+    // drag-and-drop at all. This rail used to teleport and say so in a comment
+    // ("drag is atomic"), which described the implementation rather than what
+    // the applications do with it. See `super::drag_path`.
+    for (x, y) in super::drag_path(start_x, start_y, end_x, end_y, duration_ms).0 {
+        run_ydotool(&mousemove_args(x, y))?;
+    }
     run_ydotool(&click_args(MouseButton::Left, PressAction::Release))?;
     tracing::info!(
         start_x,
