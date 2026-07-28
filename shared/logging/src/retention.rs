@@ -61,18 +61,25 @@ pub fn cleanup_old_logs(
                 continue;
             }
             file_name.to_ascii_lowercase().ends_with(".log")
-                || file_name.to_ascii_lowercase().rsplit_once(".log.").is_some_and(|(_, suffix)| {
-                    suffix.len() == 10
-                        && suffix.chars().nth(4) == Some('-')
-                        && suffix.chars().nth(7) == Some('-')
-                })
+                || file_name
+                    .to_ascii_lowercase()
+                    .rsplit_once(".log.")
+                    .is_some_and(|(_, suffix)| {
+                        suffix.len() == 10
+                            && suffix.chars().nth(4) == Some('-')
+                            && suffix.chars().nth(7) == Some('-')
+                    })
         };
         if !is_log_file {
             continue;
         }
 
-        let Ok(metadata) = fs::metadata(&path) else { continue; };
-        let Ok(modified) = metadata.modified() else { continue; };
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
 
         if modified < cutoff {
             match fs::remove_file(&path) {

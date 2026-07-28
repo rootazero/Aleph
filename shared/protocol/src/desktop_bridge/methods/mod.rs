@@ -79,9 +79,7 @@ const NAMESPACES: &[Namespace] = &[
 /// back to a minute again.
 #[must_use]
 pub fn suggested_timeout_ms(method: &str) -> Option<u64> {
-    let ns = NAMESPACES
-        .iter()
-        .find(|ns| method.starts_with(ns.prefix))?;
+    let ns = NAMESPACES.iter().find(|ns| method.starts_with(ns.prefix))?;
     Some(
         ns.overrides
             .iter()
