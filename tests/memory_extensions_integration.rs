@@ -7,8 +7,6 @@
 //! 3. POC EnvelopeRelevanceFloorExtension prunes envelope items end-to-end
 //!    via real MemoryContextProvider.
 
-#![cfg(feature = "test-helpers")]
-
 use alephcore::memory::extensions::traits::MemoryExtension;
 use alephcore::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx};
 use alephcore::memory::extensions::{

@@ -72,6 +72,46 @@ impl Drop for AlephHomeEnvGuard {
     }
 }
 
+/// A throwaway `ALEPH_HOME` for a test that never names one.
+///
+/// Aleph state resolves off `ALEPH_HOME`, falling back to the *real* `~/.aleph`
+/// when it is unset. So a test that merely reads config or opens a store still
+/// lands in the developer's home unless it says otherwise — and there it both
+/// mutates real state and races every other unisolated test for it. Two ways
+/// that bites, one loud and one quiet:
+///
+/// * `Config::load()` persists a default config when the file is missing, so a
+///   read reaches a write and trips `config::save`'s real-home assertion. It
+///   only fires where `~/.aleph/config.toml` does *not* already exist, which is
+///   every CI runner and no developer machine — hence green locally, red in CI.
+/// * Stores under `~/.aleph/data` are shared, so two tests opening the same
+///   fresh SQLite file collide with "database is locked".
+///
+/// Hold one of these for the whole test body when the test has no opinion about
+/// where Aleph's home is — only that it must not be the real one. Reach for
+/// [`AlephHomeEnvGuard`] directly instead when the test needs to *populate* the
+/// directory before pointing at it. The two share one mutex and neither is
+/// reentrant, so never nest them.
+#[cfg(test)]
+pub(crate) struct IsolatedAlephHome {
+    // Declaration order is drop order: restore the env var, then delete the
+    // directory it pointed at.
+    _guard: AlephHomeEnvGuard,
+    _dir: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl IsolatedAlephHome {
+    pub(crate) fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir for isolated ALEPH_HOME");
+        let guard = AlephHomeEnvGuard::acquire_and_set(dir.path());
+        Self {
+            _guard: guard,
+            _dir: dir,
+        }
+    }
+}
+
 /// Get the user's home directory in a cross-platform way
 ///
 /// Tries in order:

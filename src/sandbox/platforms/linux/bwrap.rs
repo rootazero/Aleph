@@ -297,7 +297,14 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
-                push_metadata_protection_args(args, std::iter::once(cwd))?;
+                // Every root just made writable needs the protection, not only
+                // `cwd`: each extra `--bind` above is a root the sandboxed
+                // process can write into, so protecting `cwd` alone left
+                // `<extra>/.git` (and `.aleph` / `.codex` / `.agents`) creatable
+                // and writable there. Same shape as `ReadWritePaths` below.
+                let mut all = vec![cwd];
+                all.extend(paths.iter().map(|p| p.as_path()));
+                push_metadata_protection_args(args, all)?;
             }
             FsPolicy::ReadWritePaths { read, write } => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {

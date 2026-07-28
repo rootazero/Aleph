@@ -323,6 +323,19 @@ harness = false
 name = "cron_probe"
 required-features = ["test-helpers"]
 
+# These two need `providers::recording_mock`, which is `cfg(any(test,
+# feature = "test-helpers"))`. Declaring the requirement makes cargo *skip*
+# them without the feature; relying on a bare `#![cfg(feature = ...)]` inside
+# the file instead compiles an empty binary that reports "0 passed" — which is
+# how both sat dead and unnoticed while still looking green.
+[[test]]
+name = "memory_compound_ingest"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "memory_reflect_integration"
+required-features = ["test-helpers"]
+
 # Channel instanceless testing framework
 [[test]]
 name = "webhook_contract_test"

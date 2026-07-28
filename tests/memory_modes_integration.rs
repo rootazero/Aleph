@@ -14,8 +14,6 @@
 //! The dep-free tools (memory_reflect, recall_context) are the reliable signal
 //! for mode-gating correctness.
 
-#![cfg(feature = "test-helpers")]
-
 use std::sync::Arc;
 
 use alephcore::executor::{BuiltinToolConfig, BuiltinToolRegistry};
@@ -88,6 +86,28 @@ fn test_assembler_config() -> AssemblerConfig {
 // The tmp handle keeps the temp dir alive for the duration of the test.
 // ---------------------------------------------------------------------------
 
+/// Point Aleph's state directory at a throwaway home for this test binary.
+///
+/// `BuiltinToolRegistry::with_config` below opens the strategy and goal stores
+/// under `ALEPH_HOME`, falling back to the real `~/.aleph` when it is unset —
+/// so without this the suite creates and writes files in the developer's live
+/// data directory. The tempdir under `tmp` only covers the memory DB.
+///
+/// Set once per process and never restored: all three tests want the same
+/// throwaway home, and `set_var` racing other threads is undefined behaviour.
+/// `get_or_init` runs the closure exactly once and blocks the rest until it
+/// returns, so the write happens before any test can reach a store.
+/// (`AlephHomeEnvGuard` is `#[cfg(test)]` and lib-internal, hence not reusable
+/// from an integration binary.)
+fn isolate_aleph_home() {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let dir = tempdir().expect("tempdir for isolated ALEPH_HOME");
+        std::env::set_var("ALEPH_HOME", dir.path());
+        dir
+    });
+}
+
 async fn build_pipeline(
     mode: MemoryInjectionMode,
 ) -> (
@@ -95,6 +115,7 @@ async fn build_pipeline(
     BuiltinToolRegistry,
     tempfile::TempDir,
 ) {
+    isolate_aleph_home();
     let tmp = tempdir().unwrap();
 
     // Single DB file for all memory tables.
@@ -180,14 +201,26 @@ async fn build_pipeline(
         .with_injection_mode(mode);
 
     // BuiltinToolRegistry with memory_db + embedder so dep-gated tools register.
-    let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-        injection_mode: mode,
-        memory_db: Some(backend_arc.clone() as MemoryBackend),
-        embedder: Some(Arc::clone(&embedder)),
-        ..Default::default()
-    })
-    .await
-    .expect("builtin tool registry");
+    //
+    // Serialised: the goal and strategy stores are process-global and live under
+    // the single `ALEPH_HOME` above, so three tests constructing registries at
+    // once race to create and migrate the same fresh SQLite files and lose with
+    // "database is locked". Each `#[tokio::test]` drives its own current-thread
+    // runtime, so blocking here parks only this test's thread.
+    static REGISTRY_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let registry = {
+        let _serialise = REGISTRY_INIT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: mode,
+            memory_db: Some(backend_arc.clone() as MemoryBackend),
+            embedder: Some(Arc::clone(&embedder)),
+            ..Default::default()
+        })
+        .await
+        .expect("builtin tool registry")
+    };
 
     (provider, registry, tmp)
 }

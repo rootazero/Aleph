@@ -48,6 +48,30 @@ impl NotificationService {
         &self,
         config: PushNotificationConfig,
     ) -> A2AResult<PushNotificationConfig> {
+        // A webhook target is delivered over HTTP, so anything else is a
+        // mistake at best and an SSRF-via-alternate-scheme vector at worst
+        // (`ftp://internal/…`, `gopher://internal:6379/…`). The SSRF engine
+        // below validates the *host* but never the scheme, so a host-bearing
+        // alternate scheme sails straight through it — same reason
+        // `browser::network_policy::check_url` screens the scheme up-front.
+        // Hostless schemes (`file:///etc/passwd`) are caught here too, rather
+        // than incidentally by the engine's no-host rejection.
+        match url::Url::parse(&config.url) {
+            Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
+            Ok(parsed) => {
+                return Err(A2AError::InvalidParams(format!(
+                    "pushNotificationConfig.url has unsupported scheme '{}': \
+                     push notifications allow only http/https",
+                    parsed.scheme()
+                )));
+            }
+            Err(e) => {
+                return Err(A2AError::InvalidParams(format!(
+                    "pushNotificationConfig.url is not a valid URL: {e}"
+                )));
+            }
+        }
+
         validate_url_async(&config.url, &SsrfPolicy::default())
             .await
             .map(|(_, _pinned)| ())

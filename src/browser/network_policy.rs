@@ -445,7 +445,22 @@ mod tests {
     #[tokio::test]
     async fn test_allowed_domains_whitelist() {
         let _lock = serial_test_lock();
-        let _scope = install_resolved("random.com", "8.8.8.8".parse().unwrap());
+        // Every host this test navigates to needs a resolver override, not just
+        // the rejected one: `check_url` resolves before the allowlist gate, so a
+        // host left to real DNS turns "is it allowed?" into "does it exist on
+        // the internet right now?". `app.trusted.com` / `api.example.org` do not
+        // resolve on a CI runner, which failed the two allow assertions below
+        // while passing anywhere with a wildcard-answering resolver.
+        let _scope = install_resolved_multi(
+            [
+                ("app.trusted.com", "8.8.8.8"),
+                ("api.example.org", "8.8.8.8"),
+                ("random.com", "8.8.8.8"),
+            ]
+            .into_iter()
+            .map(|(host, ip)| (host.to_string(), vec![ip.parse().unwrap()]))
+            .collect(),
+        );
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],

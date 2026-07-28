@@ -695,10 +695,10 @@ impl FailoverProvider {
             let map = self.health.0.read().await;
             for name in &names {
                 let open = map.get(*name).is_some_and(|st| {
+                    // Open *and still cooling down*: no recorded failure, or the
+                    // cooldown has not elapsed yet.
                     st.circuit == CircuitState::Open
-                        && !st
-                            .last_failure
-                            .is_some_and(|at| at.elapsed() >= st.cooldown)
+                        && st.last_failure.is_none_or(|at| at.elapsed() < st.cooldown)
                 });
                 if open {
                     out.insert((*name).to_string());

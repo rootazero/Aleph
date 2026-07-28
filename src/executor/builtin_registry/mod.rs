@@ -36,6 +36,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_creation() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = BuiltinToolRegistry::new().await.unwrap();
 
         // Verify all tools are registered
@@ -52,6 +53,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_metadata() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = BuiltinToolRegistry::new().await.unwrap();
 
         let search = registry.get_tool("search").unwrap();
@@ -62,6 +64,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = BuiltinToolRegistry::new().await.unwrap();
 
         let result = registry
@@ -75,6 +78,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_plugin_handler_uses_extension_snapshot_for_dynamic_tool() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let manager = Arc::new(
             crate::extension::ExtensionManager::with_defaults()
                 .await
@@ -110,6 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_plugin_handler_ignores_disabled_plugin_tool() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let manager = Arc::new(
             crate::extension::ExtensionManager::with_defaults()
                 .await
@@ -238,6 +243,7 @@ mod tests {
         async fn test_sessions_tools_always_registered_metadata() {
             // Sessions tool metadata is always registered (so LLM sees them),
             // but execution fails without GatewayContext injection.
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
             let registry = BuiltinToolRegistry::new().await.unwrap();
             assert!(registry.get_tool("session_list").is_some());
             assert!(registry.get_tool("session_send").is_some());
@@ -252,6 +258,7 @@ mod tests {
         #[tokio::test]
         async fn test_sessions_tools_registered_with_context() {
             // With gateway_context, sessions tools should be registered
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
             let gateway_context = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),
@@ -275,6 +282,7 @@ mod tests {
         #[tokio::test]
         async fn test_sessions_list_execution_without_context() {
             // Without gateway_context, session.list should fail with error
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
             let registry = BuiltinToolRegistry::new().await.unwrap();
 
             let result = registry
@@ -292,6 +300,7 @@ mod tests {
         #[tokio::test]
         async fn test_sessions_list_execution_with_context() {
             // With gateway_context, session.list should execute successfully
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
             let gateway_context = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),

@@ -97,6 +97,23 @@ max_summary_depth = 2
         let config_dir = TempDir::new().expect("Failed to create temp dir");
         Self::write_config(config_dir.path());
 
+        // HARD ISOLATION GUARD — same contract as `provider_rpc_probe`. `--config`
+        // only redirects config.toml; data, vault, singleton lock and logs still
+        // resolve from `ALEPH_HOME` (see alephcore::utils::paths::get_config_dir),
+        // so a probe without it runs a real server against the developer's real
+        // ~/.aleph/data. Refuse to start if the directory we are about to hand it
+        // is somehow not under the system temp dir.
+        let aleph_home = config_dir.path().to_path_buf();
+        let tmp_root = std::env::temp_dir();
+        let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        assert!(
+            canon(&aleph_home).starts_with(canon(&tmp_root)),
+            "REFUSING to start probe server: ALEPH_HOME={:?} is not under the \
+             system temp dir {:?}. Aborting to avoid mutating real user data.",
+            aleph_home,
+            tmp_root,
+        );
+
         let port = Self::find_free_port();
         let config_path = config_dir.path().join("config.toml");
 
@@ -113,8 +130,15 @@ max_summary_depth = 2
             binary_path
         );
 
-        // Spawn the pre-built binary directly (no cargo overhead)
+        // Spawn the pre-built binary directly (no cargo overhead).
+        //
+        // `ALEPH_HOME` is the single authoritative knob: config, data, vault,
+        // singleton lock and logs all resolve under it, so each probe server is
+        // self-contained and CANNOT touch the real ~/.aleph. `HOME` is set too as
+        // a belt-and-suspenders fallback for any path that still consults it.
         let child = Command::new(&binary_path)
+            .env("ALEPH_HOME", config_dir.path())
+            .env("HOME", config_dir.path())
             .args([
                 "--config",
                 config_path.to_str().unwrap(),

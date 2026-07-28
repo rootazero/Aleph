@@ -857,10 +857,19 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn tmp_style_root_resolves_through_symlink() {
-        let ws =
+        // Build the symlinked root instead of borrowing the platform's: only
+        // macOS hands out a `/tmp` that is itself a symlink (to `/private/tmp`).
+        // On Linux `/tmp` is a real directory, so canonicalising it returns the
+        // path unchanged and the sanity assertion below failed the whole test on
+        // every Linux runner — the case this test exists to cover was never
+        // actually exercised there.
+        let base =
             std::path::PathBuf::from("/tmp").join(format!("aleph_acp_tmp_{}", unique_suffix()));
-        let _ = tokio::fs::remove_dir_all(&ws).await;
-        tokio::fs::create_dir_all(&ws).await.unwrap();
+        let real = base.join("real");
+        let ws = base.join("link");
+        let _ = tokio::fs::remove_dir_all(&base).await;
+        tokio::fs::create_dir_all(&real).await.unwrap();
+        tokio::fs::symlink(&real, &ws).await.unwrap();
         tokio::fs::write(ws.join("hello.txt"), "via-tmp\n")
             .await
             .unwrap();
@@ -868,7 +877,7 @@ mod tests {
         let real_canon = std::fs::canonicalize(&ws).unwrap();
         assert_ne!(
             ws, real_canon,
-            "sanity: /tmp must resolve through a symlink for this test"
+            "sanity: the workspace root must resolve through a symlink for this test"
         );
 
         let h = handler_at(&ws, PermissionPolicy::ApproveAll);
@@ -893,6 +902,6 @@ mod tests {
             .unwrap();
         assert_eq!(written, "ok");
 
-        let _ = tokio::fs::remove_dir_all(&ws).await;
+        let _ = tokio::fs::remove_dir_all(&base).await;
     }
 }

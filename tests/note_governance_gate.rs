@@ -3,8 +3,6 @@
 //! primitive used by `DefaultCompoundIngestor::filter_ops_through_gate`
 //! actually side-effects the review queue end-to-end.
 
-#![cfg(feature = "test-helpers")]
-
 use std::sync::Arc;
 
 use alephcore::memory::notes::governance::gate::{

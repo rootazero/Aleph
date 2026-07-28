@@ -30,6 +30,7 @@ mod spec3_tool_gating_tests {
 
     #[tokio::test]
     async fn context_mode_skips_all_six_memory_retrieval_tools() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = build_registry_with_mode(MemoryInjectionMode::Context).await;
         assert_eq!(
             count_memory_tools_registered(&registry),
@@ -40,6 +41,7 @@ mod spec3_tool_gating_tests {
 
     #[tokio::test]
     async fn tools_mode_registers_all_six_memory_retrieval_tools() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = build_registry_with_mode(MemoryInjectionMode::Tools).await;
         // memory_search, memory_browse, memory_explore, memory_timeline need live deps
         // (memory_db / embedder / state_db) so they won't appear — but memory_reflect
@@ -57,6 +59,7 @@ mod spec3_tool_gating_tests {
 
     #[tokio::test]
     async fn hybrid_mode_registers_dep_free_retrieval_tools() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = build_registry_with_mode(MemoryInjectionMode::Hybrid).await;
         assert!(
             registry.has_tool("memory_reflect"),
@@ -70,6 +73,7 @@ mod spec3_tool_gating_tests {
 
     #[tokio::test]
     async fn context_mode_skips_dep_free_retrieval_tools() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = build_registry_with_mode(MemoryInjectionMode::Context).await;
         assert!(
             !registry.has_tool("memory_reflect"),
@@ -88,6 +92,7 @@ mod spec3_tool_gating_tests {
         // With no memory_db the tool won't be created, but that's a dep constraint,
         // not a mode constraint.  The test confirms it's absent for the *same* reason
         // in all modes (dep missing), not because of injection_mode.
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         for mode in [
             MemoryInjectionMode::Context,
             MemoryInjectionMode::Tools,
@@ -103,6 +108,7 @@ mod spec3_tool_gating_tests {
 
     #[tokio::test]
     async fn session_complete_always_registered_regardless_of_mode() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         for mode in [
             MemoryInjectionMode::Context,
             MemoryInjectionMode::Tools,
@@ -137,6 +143,7 @@ mod agent_info_wiring_tests {
 
     #[tokio::test]
     async fn agent_info_is_always_registered() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = minimal_registry().await;
         assert!(
             registry.has_tool("agent_info"),
@@ -146,6 +153,7 @@ mod agent_info_wiring_tests {
 
     #[tokio::test]
     async fn agent_info_dispatches_for_builtin_agent() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = minimal_registry().await;
         let result = registry
             .execute_tool("agent_info", serde_json::json!({"agent_id": "explore"}))

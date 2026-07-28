@@ -917,6 +917,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_with_temp_dir() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::TempDir::new().unwrap();
         let skill_file = dir.path().join("SKILL.md");
 
@@ -941,6 +942,7 @@ You are a test expert."#;
 
     #[tokio::test]
     async fn rebuild_increments_version() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::TempDir::new().unwrap();
         let skill_file = dir.path().join("SKILL.md");
 
@@ -968,6 +970,7 @@ Content."#;
 
     #[tokio::test]
     async fn list_skills() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::TempDir::new().unwrap();
 
         // Create two skill subdirectories with SKILL.md files
@@ -1010,6 +1013,7 @@ Content two."#,
 
     #[tokio::test]
     async fn skill_status_reports() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::TempDir::new().unwrap();
         let skill_file = dir.path().join("SKILL.md");
 
@@ -1134,6 +1138,7 @@ Content."#,
     #[tokio::test]
     async fn full_status_returns_entries() {
         use crate::domain::skill::SkillContent;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
             "test:skill",
@@ -1152,6 +1157,7 @@ Content."#,
     #[tokio::test]
     async fn remove_skill_from_registry() {
         use crate::domain::skill::SkillContent;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
             "test:removable",
@@ -1174,6 +1180,7 @@ Content."#,
     #[tokio::test]
     async fn remove_skill_rejects_bundled() {
         use crate::domain::skill::SkillContent;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
             "test:bundled",
@@ -1197,6 +1204,7 @@ Content."#,
     #[tokio::test]
     async fn subscribe_receives_events() {
         use crate::domain::skill::SkillContent;
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let system = SkillSystem::new();
         let mut rx = system.subscribe();
 

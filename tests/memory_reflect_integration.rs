@@ -163,6 +163,7 @@ async fn build_reflector(
                     &row.channel,
                     &[hit],
                     row.session_id.as_deref(),
+                    &row.agent_id,
                     &row.namespace,
                 )
                 .map(|_| ())

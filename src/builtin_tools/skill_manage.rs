@@ -721,14 +721,26 @@ mod tests {
     /// Authoring root lives under a `.aleph/skills` segment so that
     /// `guess_source` classifies test skills as `Workspace` (mutable),
     /// mirroring how the production `~/.aleph/skills` resolves to `Global`.
-    async fn tool_with_tempdir() -> (SkillManageTool, PathBuf, tempfile::TempDir) {
+    ///
+    /// The third element is a keep-alive: the authoring tempdir plus a
+    /// throwaway `ALEPH_HOME`. `SkillSystem::init` reaches `Config::load()`,
+    /// which persists a default config when none exists — without the
+    /// isolation that write lands in the real `~/.aleph`. The authoring root
+    /// stays a *separate* tempdir so it keeps resolving as `Workspace`; making
+    /// it the isolated home's `skills/` would reclassify it as `Global`.
+    async fn tool_with_tempdir() -> (
+        SkillManageTool,
+        PathBuf,
+        (tempfile::TempDir, crate::utils::paths::IsolatedAlephHome),
+    ) {
+        let home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join(".aleph").join("skills");
         tokio::fs::create_dir_all(&root).await.expect("create root");
         let system = SkillSystem::new();
         system.init(vec![root.clone()]).await.expect("init");
         let tool = SkillManageTool::new(system).with_authoring_root(root.clone());
-        (tool, root, dir)
+        (tool, root, (dir, home))
     }
 
     fn create_args(name: &str, body: &str) -> SkillManageArgs {

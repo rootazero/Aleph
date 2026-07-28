@@ -86,8 +86,18 @@ jobs:
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 
+      # `--features test-helpers` gates `providers::recording_mock`, which two
+      # of these need. Without it cargo silently skips them (they declare
+      # `required-features`), which is how they stayed unrun for months.
       - name: Run integration tests
-        run: cargo test -p alephcore --test sandbox_capability_approval
+        run: >
+          cargo test -p alephcore --features test-helpers
+          --test sandbox_capability_approval
+          --test memory_modes_integration
+          --test note_governance_gate
+          --test memory_extensions_integration
+          --test memory_compound_ingest
+          --test memory_reflect_integration
 
   lint:
     name: Lint
@@ -185,10 +195,18 @@ jobs:
         # it ("runner has received a shutdown signal", exit 143). Compile the
         # bench targets unoptimised: cheap, low-memory, and sufficient for a
         # build check.
+        #
+        # `--benches` restricts the selection to the `[[bench]]` targets. Bare
+        # `cargo bench` *also* builds the lib as a test harness (the lib target
+        # defaults to `bench = true`), so it was compiling all ~14.6k
+        # `#[cfg(test)]` tests under the bench profile — the actual memory hog,
+        # and pure waste here since the Test jobs already build that harness.
+        # The log confirms it: the last thing it emitted before exit 143 was
+        # warnings from `src/config/tests/dispatcher.rs`.
         env:
           CARGO_PROFILE_BENCH_OPT_LEVEL: "0"
           CARGO_PROFILE_BENCH_DEBUG: "0"
-        run: cargo bench --no-run
+        run: cargo bench --no-run --benches
 
   loom-tests:
     name: Loom Concurrency
