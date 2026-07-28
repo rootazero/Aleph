@@ -314,8 +314,8 @@ fn uia_gate() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(windows)]
 mod imp {
     use super::{
-        ax_action_to_patterns, control_type_to_ax_role, AxPattern, MAX_NODES, RESOLVE_DEPTH,
-        ROLE_SCAN_DEPTH, WALK_BUDGET,
+        ax_action_to_patterns, control_type_to_ax_role, AxPattern, RESOLVE_DEPTH, ROLE_SCAN_DEPTH,
+        WALK_BUDGET,
     };
     use std::time::Instant;
     // The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract
