@@ -260,6 +260,28 @@ pub trait ScreenCapability: Send + Sync {
         ))
     }
 
+    /// Hold or release a key/chord in `pid` only, without stealing focus.
+    ///
+    /// The held-input counterpart of [`key_combo_targeted`]. It matters more
+    /// than the atomic chord does: a press outlives the call, so the release
+    /// that pairs with it happens in some *later* call — and it must ride the
+    /// same rail. Releasing a targeted press on the global tap leaves the target
+    /// process's key permanently down while banging a stray release into
+    /// whatever the user has in front of them.
+    ///
+    /// [`key_combo_targeted`]: ScreenCapability::key_combo_targeted
+    async fn key_button_targeted(
+        &self,
+        pid: i32,
+        keys: &[String],
+        action: PressAction,
+    ) -> Result<()> {
+        let _ = (pid, keys, action);
+        Err(crate::DesktopError::NotImplemented(
+            "key_button_targeted".into(),
+        ))
+    }
+
     /// Press/release a mouse button independently at global point (`x`, `y`),
     /// delivered to `pid` only.
     async fn mouse_button_targeted(

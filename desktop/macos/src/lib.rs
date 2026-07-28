@@ -10,6 +10,9 @@ mod sleep_inhibitor;
 mod system;
 
 pub use sleep_inhibitor::MacosPower;
+// Exposed for `tests/escape_listener_e2e.rs`, which proves the abort key is
+// actually observed — the property that silently failed under `NSEvent`.
+pub use escape_listener::EscapeListener;
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -32,7 +35,6 @@ use tracing::debug;
 
 use automation::MacOSAutomation;
 use ax::BridgeAccessibility;
-use escape_listener::EscapeListener;
 use permission::MacOSPermission;
 use pim::MacOSPim;
 use screen::MacOSScreen;

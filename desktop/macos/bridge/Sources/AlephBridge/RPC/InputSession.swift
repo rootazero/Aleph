@@ -111,6 +111,21 @@ struct KeyComboResult: Codable {
     let delivery: String
 }
 
+/// Params for `input.key_button` — hold a chord down, or let it back up.
+///
+/// Distinct from `input.key_combo` because the press outlives the call: the
+/// release arrives in a LATER request, and it has to reach the same process.
+struct KeyButtonParams: Codable {
+    var keys: [String]
+    var action: PressAction
+    var pid: Int32?
+}
+
+struct KeyButtonResult: Codable {
+    let ok: Bool
+    let delivery: String
+}
+
 struct ScrollParams: Codable {
     var direction: String
     var amount: Int32
@@ -390,6 +405,18 @@ actor InputSession {
 
     private let source = CGEventSource(stateID: .combinedSessionState)
 
+    /// Modifiers this rail is currently holding down, per target process.
+    ///
+    /// The one piece of cross-call state in this file, and it is unavoidable: a
+    /// modifier held by `input.key_button` stays down across requests, and the
+    /// events sent in between have to carry it. `flags` is how an app reads a
+    /// chord off a key event, so without this a caller that pressed ⌘ and then
+    /// asked for `key_combo(key: "a")` would get a bare "a" — the key-down for ⌘
+    /// was delivered, but nothing after it said ⌘ was down. It is keyed by pid
+    /// because the rail is, and it only ever holds MODIFIERS: an ordinary key
+    /// left down has no representation in `flags` and no effect on other events.
+    private var heldModifiers: [pid_t: CGEventFlags] = [:]
+
     // MARK: Actions
 
     func click(_ params: ClickParams) throws -> ClickResult {
@@ -461,7 +488,11 @@ actor InputSession {
         // the chord off `flags` on the key-down, but a modifier that never went
         // down is a modifier the app's own state tracking never saw — so the
         // flags are set AND the key-downs are posted.
-        var flags: CGEventFlags = []
+        //
+        // Seeded with whatever `input.key_button` is holding for this pid: a
+        // caller that pressed ⌘ and then asks for "a" means ⌘A, and the flags on
+        // this event are the only place that can be said.
+        var flags: CGEventFlags = heldModifiers[pid] ?? []
         for mod in mods {
             flags.insert(mod.flag)
             try postKey(source: source, code: mod.code, down: true, flags: flags, pid: pid)
@@ -473,6 +504,88 @@ actor InputSession {
             try postKey(source: source, code: mod.code, down: false, flags: flags, pid: pid)
         }
         return KeyComboResult(ok: true, delivery: DELIVERY_TARGETED)
+    }
+
+    /// Hold a chord down, or let it back up, in one process.
+    ///
+    /// Order mirrors the global rail (`desktop/shared/src/action/input.rs`):
+    /// press forward, release in reverse, `click` does both. That ordering is
+    /// not cosmetic — a chord released left-to-right hands the app a window in
+    /// which the modifier is up but the key it modified is still down.
+    func keyButton(_ params: KeyButtonParams) throws -> KeyButtonResult {
+        let pid = try requirePid(params.pid, method: "input.key_button")
+        guard !params.keys.isEmpty else {
+            throw RpcError(code: -32_602, message: "input.key_button requires at least one key", data: nil)
+        }
+        let source = try eventSource()
+
+        // A key is either a modifier (contributes a flag) or an ordinary key.
+        // Resolve every one of them BEFORE posting anything: a chord that fails
+        // halfway leaves keys physically down that nobody knows to release.
+        enum Chorded {
+            case modifier(flag: CGEventFlags, code: CGKeyCode)
+            case plain(code: CGKeyCode)
+        }
+        let chord: [Chorded] = try params.keys.map { name in
+            if let mod = modifierKey(for: name) {
+                return .modifier(flag: mod.flag, code: mod.code)
+            }
+            guard let code = virtualKeyCode(for: name) else {
+                throw RpcError(
+                    code: -32_602,
+                    message: "unknown key: '\(name)'. Use a modifier (meta/command/cmd, shift, control/ctrl, "
+                        + "alt/option), a single ANSI character, or a named key (space, return, tab, escape, "
+                        + "backspace, delete, arrows, home, end, pageup, pagedown, f1-f12)",
+                    data: nil
+                )
+            }
+            return .plain(code: code)
+        }
+
+        var flags: CGEventFlags = heldModifiers[pid] ?? []
+
+        func pressForward() throws {
+            for item in chord {
+                switch item {
+                case .modifier(let flag, let code):
+                    flags.insert(flag)
+                    try postKey(source: source, code: code, down: true, flags: flags, pid: pid)
+                case .plain(let code):
+                    try postKey(source: source, code: code, down: true, flags: flags, pid: pid)
+                }
+            }
+        }
+        func releaseReversed() throws {
+            for item in chord.reversed() {
+                switch item {
+                case .modifier(let flag, let code):
+                    flags.remove(flag)
+                    try postKey(source: source, code: code, down: false, flags: flags, pid: pid)
+                case .plain(let code):
+                    try postKey(source: source, code: code, down: false, flags: flags, pid: pid)
+                }
+            }
+        }
+
+        switch params.action {
+        case .press:
+            try pressForward()
+        case .release:
+            try releaseReversed()
+        case .click:
+            try pressForward()
+            try releaseReversed()
+        }
+
+        // Record what is still down so later events on this rail carry it.
+        // Empty entries are dropped rather than kept as `[]`, so the map holds
+        // only processes this rail is actually holding something in.
+        if flags.isEmpty {
+            heldModifiers.removeValue(forKey: pid)
+        } else {
+            heldModifiers[pid] = flags
+        }
+        return KeyButtonResult(ok: true, delivery: DELIVERY_TARGETED)
     }
 
     func scroll(_ params: ScrollParams) throws -> ScrollResult {

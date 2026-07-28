@@ -285,45 +285,6 @@
     "title": "ClipResult",
     "type": "object"
   },
-  "ClipboardReadResult": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "properties": {
-      "text": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "text"
-    ],
-    "title": "ClipboardReadResult",
-    "type": "object"
-  },
-  "ClipboardWriteParams": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "properties": {
-      "text": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "text"
-    ],
-    "title": "ClipboardWriteParams",
-    "type": "object"
-  },
-  "ClipboardWriteResult": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "properties": {
-      "ok": {
-        "type": "boolean"
-      }
-    },
-    "required": [
-      "ok"
-    ],
-    "title": "ClipboardWriteResult",
-    "type": "object"
-  },
   "CursorPositionResult": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
@@ -536,6 +497,63 @@
       "ok"
     ],
     "title": "HoverResult",
+    "type": "object"
+  },
+  "KeyButtonParams": {
+    "$defs": {
+      "PressAction": {
+        "enum": [
+          "press",
+          "release",
+          "click"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Hold a key/chord down, or let it back up, without the atomic\npress-and-release [`KeyComboParams`] performs.\n\nThis exists because a held key is the one input that outlives the call that\nmade it: `key_combo` is over when it returns, `key_button` leaves a physical\nkey down until something releases it. Its own method — rather than a flag on\n`key_combo` — keeps that difference visible at the wire, and lets the held\nkey ride the same targeted rail its release will have to ride.",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/PressAction"
+      },
+      "keys": {
+        "description": "The chord, e.g. `[\"cmd\", \"shift\"]` or `[\"a\"]`. Modifiers and ordinary\nkeys are not separated here — the whole chord goes down or up together.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "pid": {
+        "description": "Target process for the targeted rail; absent ⇒ global HID tap.",
+        "format": "int32",
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "keys",
+      "action"
+    ],
+    "title": "KeyButtonParams",
+    "type": "object"
+  },
+  "KeyButtonResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "delivery": {
+        "default": "global",
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "KeyButtonResult",
     "type": "object"
   },
   "KeyComboParams": {

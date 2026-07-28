@@ -132,12 +132,15 @@ defined in `shared/protocol/src/desktop_bridge/methods/`; the handlers that
 serve them are registered in `desktop/macos/bridge/Sources/AlephBridge/RPC/`.
 The two sides are kept honest by the golden-fixture test (§7).
 
-**The tables below are the registered surface — 54 methods.** `bridge.handshake`
+**The tables below are the registered surface — 55 methods.** `bridge.handshake`
 advertises exactly this list as `supported_methods`, so a method absent here is
-a method the Rust client will not attempt. Two protocol constants have no
-handler and no caller: `input.clipboard_read` / `input.clipboard_write` —
-clipboard access is done in-process by the limb (`desktop/macos/src/system/
-clipboard.rs`, `NSPasteboard`), never over the bridge.
+a method the Rust client will not attempt. There are no longer any declared-but-
+unserved constants: `input.clipboard_read` / `input.clipboard_write` had neither
+a handler nor a caller and were removed (clipboard access is done in-process by
+the limb — `desktop/macos/src/system/clipboard.rs`, `NSPasteboard` — never over
+the bridge). **Do not re-add a constant ahead of its handler**: a published
+method with nothing behind it answers `-32601` at runtime, which reads to the
+model as "this feature is broken" rather than "this feature does not exist".
 
 There is no `window.*` namespace. Window listing, focusing, moving and app
 launch/quit run in-process in the limb (`desktop/shared/src/action/window.rs`),
@@ -183,6 +186,7 @@ read `delivery` back rather than assume — see `ensure_targeted` in
 | `input.double_click` | Double-click at a point (one event stream with an incrementing click-state, not two clicks) |
 | `input.type_text` | Type a string at the current keyboard focus |
 | `input.key_combo` | Press and release a chord atomically |
+| `input.key_button` | Hold a chord down, or let it back up (`action`: press / release / click). The one input that outlives its call, so its release must reach the same pid — the helper tracks which modifiers it is holding per process and stamps them onto later key events (a bare `key_combo` sent while ⌘ is held is still ⌘-something) |
 | `input.scroll` | Scroll by a pixel delta, quantized to wheel clicks |
 | `input.drag` | Press, move, release between two points |
 | `input.hover` | Move the pointer without clicking |

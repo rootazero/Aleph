@@ -43,11 +43,24 @@ struct HeldButton {
     pid: Option<i32>,
 }
 
+/// A key chord held down, and the rail its press rode.
+///
+/// `pid` carries the same obligation it does for [`HeldButton`]: a chord pressed
+/// into one process must be released into that same process. A global release of
+/// a targeted press leaves the target's key permanently down (nothing else will
+/// ever send it an up) *and* fires a stray release at whatever the user has in
+/// front of them.
+#[derive(Debug, Clone, PartialEq)]
+struct HeldKeys {
+    keys: Vec<String>,
+    pid: Option<i32>,
+}
+
 /// Everything one session currently holds down.
 #[derive(Debug, Default)]
 struct SessionHeld {
     /// Key chords, exactly as `key_button` received them.
-    keys: Vec<Vec<String>>,
+    keys: Vec<HeldKeys>,
     buttons: Vec<HeldButton>,
 }
 
@@ -75,14 +88,20 @@ pub fn current_session_id() -> String {
 
 /// Record that `keys` are now held down (a `PressAction::Press` on
 /// `key_button`). `Click` presses and releases atomically and must not be
-/// recorded.
-pub fn record_key_press(session_id: &str, keys: &[String]) {
+/// recorded. `pid` is `Some` when the press rode the targeted rail, so its
+/// release rides the same one.
+pub fn record_key_press(session_id: &str, keys: &[String], pid: Option<i32>) {
     if keys.is_empty() {
         return;
     }
     let mut map = HELD_INPUTS.lock().unwrap_or_else(|e| e.into_inner());
     let held = map.entry(session_id.to_string()).or_default();
-    let chord = keys.to_vec();
+    let chord = HeldKeys {
+        keys: keys.to_vec(),
+        pid,
+    };
+    // Same chord on the *other* rail is a different physical obligation, so it
+    // is recorded separately rather than deduplicated away.
     if !held.keys.contains(&chord) {
         held.keys.push(chord);
     }
@@ -99,7 +118,11 @@ pub fn clear_key_release(session_id: &str, keys: &[String]) {
     let Some(held) = map.get_mut(session_id) else {
         return;
     };
-    held.keys.retain(|chord| chord.as_slice() != keys);
+    // Matched on the chord alone, not the rail: the model released these keys
+    // and the tool just routed that release on whichever rail it chose. Keeping
+    // a same-chord entry from the other rail would make the boundary re-release
+    // keys the OS already let up.
+    held.keys.retain(|chord| chord.keys.as_slice() != keys);
     if held.is_empty() {
         map.remove(session_id);
     }
@@ -175,10 +198,22 @@ pub async fn release_all_sessions(screen: &dyn ScreenCapability) -> usize {
 
 async fn release_held(held: &SessionHeld, screen: &dyn ScreenCapability) -> usize {
     let mut released = 0;
-    for keys in &held.keys {
-        match screen.key_button(keys, PressAction::Release).await {
+    for chord in &held.keys {
+        // Release on the rail the press rode, for the same reason the buttons
+        // below do: a targeted press is only matched by a targeted release.
+        let result = match chord.pid {
+            Some(pid) => {
+                screen
+                    .key_button_targeted(pid, &chord.keys, PressAction::Release)
+                    .await
+            }
+            None => screen.key_button(&chord.keys, PressAction::Release).await,
+        };
+        match result {
             Ok(()) => released += 1,
-            Err(e) => warn!(error = %e, keys = ?keys, "held_inputs: failed to release held key(s)"),
+            Err(e) => {
+                warn!(error = %e, keys = ?chord.keys, pid = ?chord.pid, "held_inputs: failed to release held key(s)")
+            }
         }
     }
     for b in &held.buttons {
@@ -256,6 +291,7 @@ mod tests {
         button_releases: StdMutex<Vec<(MouseButton, f64, f64)>>,
         /// Targeted releases, tagged with the pid they were routed to.
         targeted_button_releases: StdMutex<Vec<(i32, MouseButton, f64, f64)>>,
+        targeted_key_releases: StdMutex<Vec<(i32, Vec<String>)>>,
         fail: bool,
     }
 
@@ -316,6 +352,22 @@ mod tests {
                 .push((button, x, y));
             Ok(())
         }
+        async fn key_button_targeted(
+            &self,
+            pid: i32,
+            keys: &[String],
+            action: PressAction,
+        ) -> DResult<()> {
+            assert_eq!(action, PressAction::Release, "ledger only issues releases");
+            if self.fail {
+                return Err(DesktopError::InputFailed("boom".into()));
+            }
+            self.targeted_key_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((pid, keys.to_vec()));
+            Ok(())
+        }
         async fn mouse_button_targeted(
             &self,
             pid: i32,
@@ -344,7 +396,7 @@ mod tests {
     fn record_then_clear_leaves_nothing_held() {
         let _g = guard();
         let sid = "held-record-clear";
-        record_key_press(sid, &keys(&["cmd"]));
+        record_key_press(sid, &keys(&["cmd"]), None);
         record_button_press(sid, MouseButton::Left, 10.0, 20.0, None);
         assert_eq!(held_count(sid), 2);
 
@@ -357,8 +409,8 @@ mod tests {
     fn repeated_press_records_once() {
         let _g = guard();
         let sid = "held-dedupe";
-        record_key_press(sid, &keys(&["ctrl", "shift"]));
-        record_key_press(sid, &keys(&["ctrl", "shift"]));
+        record_key_press(sid, &keys(&["ctrl", "shift"]), None);
+        record_key_press(sid, &keys(&["ctrl", "shift"]), None);
         record_button_press(sid, MouseButton::Left, 1.0, 1.0, None);
         record_button_press(sid, MouseButton::Left, 9.0, 9.0, None);
         assert_eq!(held_count(sid), 2, "one chord + one button");
@@ -377,7 +429,7 @@ mod tests {
     fn empty_key_press_is_not_recorded() {
         let _g = guard();
         let sid = "held-empty-keys";
-        record_key_press(sid, &[]);
+        record_key_press(sid, &[], None);
         assert_eq!(held_count(sid), 0);
     }
 
@@ -385,7 +437,7 @@ mod tests {
     fn release_all_releases_and_is_idempotent() {
         let _g = guard();
         let sid = "held-release-all";
-        record_key_press(sid, &keys(&["cmd"]));
+        record_key_press(sid, &keys(&["cmd"]), None);
         record_button_press(sid, MouseButton::Left, 100.0, 200.0, None);
 
         let screen = RecordingScreen::default();
@@ -459,11 +511,72 @@ mod tests {
         );
     }
 
+    /// The key rail's half of the same rule. A chord held inside one process is
+    /// only let up inside that process: releasing it on the global tap would
+    /// leave the target's key down forever *and* fire a stray release into
+    /// whatever the user is typing in.
+    #[test]
+    fn a_targeted_key_press_is_released_on_the_targeted_rail() {
+        let _g = guard();
+        let sid = "held-targeted-keys";
+        record_key_press(sid, &keys(&["cmd", "shift"]), Some(4242));
+
+        let screen = RecordingScreen::default();
+        assert_eq!(block_on(release_all(sid, &screen)), 1);
+
+        assert_eq!(
+            screen
+                .targeted_key_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_slice(),
+            &[(4242, keys(&["cmd", "shift"]))]
+        );
+        assert!(
+            screen
+                .key_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "targeted key press must not release on the global rail"
+        );
+    }
+
+    /// The same chord held on both rails is two obligations, not one — the
+    /// dedup must not collapse them, or one process keeps a key down forever.
+    #[test]
+    fn the_same_chord_on_two_rails_is_two_holds() {
+        let _g = guard();
+        let sid = "held-two-rails";
+        record_key_press(sid, &keys(&["cmd"]), Some(7));
+        record_key_press(sid, &keys(&["cmd"]), None);
+        assert_eq!(held_count(sid), 2);
+
+        let screen = RecordingScreen::default();
+        assert_eq!(block_on(release_all(sid, &screen)), 2);
+        assert_eq!(
+            screen
+                .targeted_key_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
+        assert_eq!(
+            screen
+                .key_releases
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn failed_release_is_swallowed_and_still_clears() {
         let _g = guard();
         let sid = "held-release-fails";
-        record_key_press(sid, &keys(&["cmd"]));
+        record_key_press(sid, &keys(&["cmd"]), None);
         let screen = RecordingScreen {
             fail: true,
             ..Default::default()
@@ -479,7 +592,7 @@ mod tests {
     #[test]
     fn release_all_sessions_drains_every_session() {
         let _g = guard();
-        record_key_press("held-multi-a", &keys(&["cmd"]));
+        record_key_press("held-multi-a", &keys(&["cmd"]), None);
         record_button_press("held-multi-b", MouseButton::Right, 5.0, 6.0, None);
 
         let screen = RecordingScreen::default();

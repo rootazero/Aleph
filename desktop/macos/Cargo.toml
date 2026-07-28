@@ -28,9 +28,11 @@ objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSProcessInfo", "NSURL",
     "NSData", "NSEnumerator", "NSBundle", "NSLocale",
 ] }
+# `NSEvent` (+ its `block2` glue) was dropped with the escape listener's
+# `NSEvent` monitors: they never fired in a daemon, and the replacement is a
+# CoreGraphics event tap (see `escape_listener.rs`).
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard", "NSWorkspace", "NSRunningApplication", "NSImage",
-    "NSEvent", "block2",
 ] }
 objc2-user-notifications = { version = "0.3", features = [
     "UNUserNotificationCenter", "UNNotificationContent",

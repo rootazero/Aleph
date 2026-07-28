@@ -227,10 +227,25 @@ fn windows_window_list() -> Result<Vec<WindowInfo>> {
 /// last input, and the API still returns without saying so usefully. Polling
 /// `GetForegroundWindow` for the real outcome is the only way to know; orca's
 /// Windows runtime lands on the same 500 ms ceiling (`Wait-OrcaWindowFocused`).
-#[cfg(target_os = "windows")]
+///
+/// macOS is the same shape for the same reason. `NSRunningApplication.activate`
+/// posts a request to the window server and returns before it is honoured — or
+/// declined, which macOS does for a process that is not itself in the user's
+/// activation chain. `isActive` is the outcome, so it is polled on the same
+/// budget rather than assumed.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FOREGROUND_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Apple Event ceiling for the `System Events` window-geometry script.
+///
+/// Not a Rust timeout: this is the number embedded in the AppleScript's
+/// `with timeout of … seconds` block, which is the only cap available to a
+/// synchronous per-OS arm. Generous enough for a slow-but-live app, far short of
+/// the harness's per-turn budget.
+#[cfg(target_os = "macos")]
+const AX_SCRIPT_TIMEOUT_SECS: u32 = 15;
 
 /// Raise a window and report whether it actually reached the foreground.
 ///
@@ -530,7 +545,11 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
     };
     #[allow(deprecated)]
     // ActivateIgnoringOtherApps deprecated in macOS 14 but still functional.
-    app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+    //
+    // The return value is deliberately discarded: measured on macOS 27, it is
+    // `true` even when the activation is refused outright and the app never
+    // comes forward. Only `isActive` below distinguishes the two.
+    let _ = app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
 
     // Bring the *specific* window forward, not just whatever the app had
     // frontmost. Best-effort: without a match / Accessibility permission we have
@@ -549,7 +568,42 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
             pid, "No window bounds; app activated only (macOS)"
         ),
     }
-    Ok(())
+
+    // Verify rather than assume — this function used to discard `activate`'s
+    // answer and return `Ok(())` unconditionally.
+    //
+    // Measured on macOS 27 from a non-bundled background process (what
+    // `aleph-server` is): launching TextEdit and then activating it left Safari
+    // frontmost for the full second, `isActive` false throughout, while
+    // `activate` reported `true` — and `AXUIElementSetAttributeValue(app,
+    // AXFrontmost, true)` returned `kAXErrorSuccess` and did nothing either.
+    // macOS simply declines to hand the foreground to a process the user is not
+    // driving. So the old `Ok(())` was reporting a state change that provably
+    // did not happen, and the model's next keystroke went to whatever the user
+    // actually had in front of them. Polling `isActive` is the only signal that
+    // tells the two apart (it reads `true` immediately for an app that is
+    // genuinely active, so a verified success is never lost to the poll).
+    let deadline = std::time::Instant::now() + FOREGROUND_WAIT;
+    loop {
+        if app.isActive() {
+            info!(window_id, pid, "Window focused (macOS)");
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(FOREGROUND_POLL);
+    }
+
+    Err(DesktopError::WindowFailed(format!(
+        "window {window_id} (pid {pid}) did not become frontmost within {} ms — macOS declines \
+         activation requests from a background process the user is not currently driving. \
+         Nothing you need here requires focus, though: set_value / ax_action address the element \
+         directly, screenshot with window_id captures the window even while it is covered, and \
+         click / type_text / key_combo deliver into the process when given `app`, `pid` or \
+         `window_id`.",
+        FOREGROUND_WAIT.as_millis()
+    )))
 }
 
 /// Set a window's position and/or size via the `System Events` Accessibility
@@ -609,12 +663,20 @@ fn macos_set_window_bounds(
         }
     }
 
+    // `with timeout of N seconds` bounds the Apple Event, which is the thing that
+    // actually hangs here: every line inside the `tell` block is a synchronous
+    // round trip into System Events, which is itself waiting on the target app.
+    // Against a beachballing app the default Apple Event timeout is long enough
+    // to eat the whole turn, on a *blocking* thread, for a window nudge. There is
+    // no in-process cap to fall back on — this call runs from the synchronous
+    // per-OS arm, not from `script_exec::output_capped`.
     let script = format!(
         r#"on run argv
 set pid to (item 1 of argv) as integer
 set t to item 2 of argv
 set a to (item 3 of argv) as integer
 set b to (item 4 of argv) as integer
+with timeout of {AX_SCRIPT_TIMEOUT_SECS} seconds
 tell application "System Events"
 set proc to first process whose unix id is pid
 tell proc
@@ -632,6 +694,7 @@ end if
 {setter}
 end tell
 end tell
+end timeout
 end run"#
     );
 

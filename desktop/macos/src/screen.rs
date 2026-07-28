@@ -440,6 +440,25 @@ impl ScreenCapability for MacOSScreen {
         ensure_targeted(rpc_input::METHOD_KEY_COMBO, r.ok, &r.delivery)
     }
 
+    async fn key_button_targeted(
+        &self,
+        pid: i32,
+        keys: &[String],
+        action: PressAction,
+    ) -> Result<()> {
+        let r: rpc_input::KeyButtonResult = self
+            .call_input(
+                rpc_input::METHOD_KEY_BUTTON,
+                rpc_input::KeyButtonParams {
+                    keys: keys.to_vec(),
+                    action: to_rpc_press(action),
+                    pid: Some(pid),
+                },
+            )
+            .await?;
+        ensure_targeted(rpc_input::METHOD_KEY_BUTTON, r.ok, &r.delivery)
+    }
+
     async fn mouse_button_targeted(
         &self,
         pid: i32,

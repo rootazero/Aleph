@@ -1,5 +1,7 @@
 //! macOS automation capability using `osascript` and `shortcuts` CLI.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tokio::process::Command;
 
@@ -7,6 +9,16 @@ use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
 use aleph_desktop::script_exec::{output_capped, spawn_background, RUN_SCRIPT_TIMEOUT};
 use aleph_desktop::traits::AutomationCapability;
 use aleph_desktop::{DesktopError, Result};
+
+/// Hard ceiling for the `shortcuts` CLI.
+///
+/// `run_script` has had a cap since the Linux round; these two never did, and
+/// they are the easier ones to hang: a Shortcut can open a dialog, wait on a
+/// sign-in sheet, or drive another app, and `shortcuts run` then simply never
+/// returns — taking the whole turn to the harness's 300s ceiling and leaking the
+/// child. Shorter than [`RUN_SCRIPT_TIMEOUT`] because a Shortcut that has not
+/// finished in a minute is waiting on a human, not computing.
+const SHORTCUT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// macOS automation via `osascript` (AppleScript/JXA) and `shortcuts` CLI.
 pub struct MacOSAutomation {
@@ -84,13 +96,9 @@ impl AutomationCapability for MacOSAutomation {
     }
 
     async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {
-        let output = Command::new("shortcuts")
-            .arg("list")
-            .output()
-            .await
-            .map_err(|e| {
-                DesktopError::InputFailed(format!("failed to run `shortcuts list`: {e}"))
-            })?;
+        let mut cmd = Command::new("shortcuts");
+        cmd.arg("list");
+        let output = output_capped(cmd, SHORTCUT_TIMEOUT).await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -121,9 +129,7 @@ impl AutomationCapability for MacOSAutomation {
             cmd.arg("--input-type").arg("text").arg("--input").arg(data);
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            DesktopError::InputFailed(format!("failed to run shortcut `{name}`: {e}"))
-        })?;
+        let output = output_capped(cmd, SHORTCUT_TIMEOUT).await?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())

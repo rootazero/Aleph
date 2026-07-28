@@ -651,7 +651,7 @@ impl AlephTool for DesktopTool {
 
 ALWAYS SAY WHICH APP YOU ARE DRIVING. Pass `app` (name or bundle id, e.g.
 "Notes" / "com.apple.Notes"), or `pid`, or `window_id` on every click, drag,
-hover, scroll, type_text, key_combo, mouse_button and paste. The event is then
+hover, scroll, type_text, key_combo, key_button, mouse_button and paste. The event is then
 delivered straight into that process: the user's physical mouse pointer never
 moves, and the app does not have to be frontmost — you work in the background
 while the user keeps using their machine. This is the preferred path.
@@ -689,7 +689,7 @@ Actions:
 - mouse_button: Press/release mouse at (x, y). Requires press_action (press/release/click).
 - type_text: Type text at the current keyboard focus. Blind by nature — the keystrokes go wherever focus actually is — so it is pre-flighted against the accessibility layer: it refuses when nothing is focused, or when the focused element reports that it takes no typed value, and tells you what to do instead (click the input, or use set_value). Typing into a secure/password field is always refused. If the app's accessibility tree lies (canvas, terminal, some Electron shells), pass force:true to type anyway — force does not lift the password refusal. Where no accessibility layer is available the pre-flight is skipped entirely.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
-- key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts.
+- key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts. Send the matching release on the same target you pressed against: a key held in one app is only let up in that app.
 - scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went. When you name a target app/pid/window_id, also pass x/y — a background scroll never moves the cursor, so the point is the only thing telling the app which view to scroll (any point inside it works, e.g. an element `center`).
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.
