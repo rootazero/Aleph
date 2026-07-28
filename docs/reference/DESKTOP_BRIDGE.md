@@ -61,17 +61,52 @@ keeps stdout open, so the reader loop never observes EOF. To stop such a
 helper from wedging an agent turn indefinitely, every RPC is bounded by a
 per-call deadline:
 
-- `SwiftBridge::call` uses `DEFAULT_RPC_TIMEOUT` (60 s) — ample for the
-  slowest interactive operations (OCR, AX tree walks, PIM queries, a single
-  camera snap).
-- `SwiftBridge::call_with_timeout` takes an explicit deadline. Long-running
-  capture operations use it: `camera.clip` and `audio.record` pass
-  `requested_duration + 30 s`; `speech.transcribe_file` passes a flat 300 s.
+- `SwiftBridge::call` spends **the deadline the protocol declares for that
+  method** (`methods::suggested_timeout_ms` → `bridge::client::rpc_timeout_for`).
+  Resolution is: an exact per-method override, else the namespace default, else
+  the client's `DEFAULT_RPC_TIMEOUT` (60 s) for a method outside every known
+  namespace.
+- `SwiftBridge::call_with_timeout` takes an explicit deadline, and is for the
+  operations whose length is a function of their *arguments*: `camera.clip` and
+  `audio.record` pass `requested_duration + 30 s`; `speech.transcribe_file`
+  passes a flat 300 s.
+
+The deadlines live next to the method constants they belong to
+(`shared/protocol/src/desktop_bridge/methods/*.rs`, `DEFAULT_TIMEOUT_MS` +
+`TIMEOUT_OVERRIDES_MS`). Current values:
+
+| namespace | default | overrides |
+|---|---|---|
+| `ax.*` | 15 s | `query_focused` 3 s |
+| `bridge.*` | 5 s | `ping` 2 s |
+| `input.*` | 2 s | `click` / `double_click` 5 s |
+| `media.*` | 60 s | `camera.snap` 10 s, `audio.list_devices` 5 s, `audio.mic_meter` 2 s, `audio.record_stop` 15 s |
+| `perm.*` | 10 s | — |
+| `pim.*` | 60 s | — |
+| `screen.*` | 10 s | `ocr` 20 s, `list_displays` 5 s |
+
+> ⚠️ **Declaring a deadline is not the same as spending one.** These numbers
+> existed for a long time as ten free-floating `SUGGESTED_TIMEOUT_MS*` constants
+> with **zero consumers**: every call rode the 60 s catch-all instead. The two
+> that hurt were `ax.query_focused` (the `type_text` focus gate issues it before
+> every keystroke batch — 3 s intended, 60 s actual) and `screen.capture`, which
+> has an xcap fallback, so the deadline was exactly how long a wedged helper
+> delayed a capture that would have succeeded instantly on the other transport.
+> The namespace fallback exists so a method added later inherits a sane budget
+> rather than silently reverting to a minute.
 
 On timeout the caller receives `DesktopError::BridgeTimeout`, the in-flight
 slot is dropped (no leak), and the helper is **left running** — only that one
 call fails. A late reply from a merely-slow helper is discarded by the reader
 loop as an unknown id. Timeouts do not count toward the restart window.
+
+A client-side deadline bounds *the call*, not the helper's work. For AX that is
+not enough on its own: `AxQuerier` is an actor, so every accessibility operation
+is serialised behind whichever one is currently blocked on an unresponsive
+application. `AXUIElementSetMessagingTimeout` (2 s) is applied at every point a
+handle enters a walk — the application element, the system-wide element, and each
+child, because the setting is per-element and is **not** inherited by elements
+copied out of one.
 
 ## 2. Protocol
 
@@ -197,8 +232,8 @@ read `delivery` back rather than assume — see `ensure_targeted` in
 
 | Method | Permission required | Purpose |
 |---|---|---|
-| `ax.query_focused` | Accessibility (TCC) | Element currently holding keyboard focus + its ancestors |
-| `ax.query_tree` | Accessibility (TCC) | Full subtree rooted at a given PID (defaults to frontmost app) |
+| `ax.query_focused` | Accessibility (TCC) | The focused element — **of a given `pid`**, or of the system when none is given |
+| `ax.query_tree` | Accessibility (TCC) | Budgeted subtree rooted at a given PID (defaults to frontmost app) |
 | `ax.query_by_role` | Accessibility (TCC) | Collect all elements matching an AX role string |
 | `ax.set_value` | Accessibility (TCC) | Locate an element by stateless locator (role/title/center scoring) and write its `AXValue`, reading it back for verification |
 | `ax.perform_action` | Accessibility (TCC) | Locate an element the same way and perform a native AX action (`AXPress`, `AXShowMenu`, …) |
@@ -206,6 +241,31 @@ read `delivery` back rather than assume — see `ensure_targeted` in
 Elements report their own `actions` list and an `enabled` flag, so a caller
 never has to guess an action name. Values of secure (password) fields are
 redacted at the handler, never crossing the IPC boundary.
+
+**`query_focused`'s `pid` is not a filter, it is the question.** With a pid the
+helper asks *that application* for its own `AXFocusedUIElement`; without one it
+reads the system-wide focus. The distinction is what the targeted input rail runs
+on: that rail delivers keystrokes into a named process without bringing it
+forward, so the system-focused element usually belongs to a different app
+entirely. Reading it there is how the `type_text` focus gate — password-field
+refusal included — came to inspect a window the keystrokes were never going to
+reach. Contract for every limb: a `Some(pid)` answer **belongs to that process**,
+and "some other app holds focus" is `None`, never that app's element. A platform
+that can only answer system-wide honours this by filtering.
+
+**Walks are budgeted, and say so.** `max_nodes` (default
+`ax::DEFAULT_MAX_NODES` = 1500, ceiling 10 000) bounds a walk; `QueryResult` /
+`QueryListResult` carry `node_count` and `truncated`. Depth alone does not bound
+a tree — a browser or a long document is wide, not deep — and every node costs
+several round trips into the target app on the way out plus a few hundred bytes
+of model context on the way in.
+
+> ⚠️ There used to be three of these numbers and none of them was visible:
+> the macOS helper stopped at 10 000 nodes, Windows UI Automation at 4 000, the
+> Linux AT-SPI walk at 1 500, each cutting the tree **silently**. A model handed a
+> clipped subtree with no marker concludes the control it is hunting for does not
+> exist and goes off to do something else. How much of an app one query may return
+> is a property of the protocol, not of whichever limb answers.
 
 ### perm.* — Permission introspection
 

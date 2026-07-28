@@ -36,7 +36,14 @@ use crate::system_types::InstalledApp;
 /// changes answers it by putting up a save sheet and staying exactly where it
 /// was. Reporting success at that point tells the model the app is closed while
 /// the user is looking at a modal dialog.
-const TERMINATE_WAIT: std::time::Duration = std::time::Duration::from_millis(1_500);
+///
+/// Three seconds because the two ways to be wrong here are not symmetric. Too
+/// short turns a large app that is merely slow to flush state into a reported
+/// failure, and the model then retries or works around something that was
+/// already happening. Too long only costs the turn a few seconds. Ordinary apps
+/// are gone well inside half a second; this is sized for the slow tail, not for
+/// the median.
+const TERMINATE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Poll interval while waiting for termination.
 const TERMINATE_POLL: std::time::Duration = std::time::Duration::from_millis(50);
