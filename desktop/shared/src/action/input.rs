@@ -1,9 +1,9 @@
 //! Mouse and keyboard input actions using enigo.
 
-use enigo::{Axis, Coordinate, Direction, Keyboard, Mouse};
+use enigo::{Axis, Direction, Keyboard, Mouse};
 use tracing::info;
 
-use super::{new_enigo, new_enigo_holding, to_enigo_button, validate_coordinate};
+use super::{move_pointer, new_enigo, new_enigo_holding, to_enigo_button, validate_coordinate};
 use crate::error::DesktopError;
 use crate::error::Result;
 use crate::MouseButton;
@@ -32,9 +32,7 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
 
     let mut enigo = new_enigo()?;
 
-    enigo
-        .move_mouse(ix, iy, Coordinate::Abs)
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    move_pointer(&mut enigo, ix, iy, "mouse")?;
 
     enigo
         .button(enigo_button, Direction::Click)
@@ -272,9 +270,7 @@ pub fn double_click(x: f64, y: f64, button: MouseButton) -> Result<()> {
 
     let btn = to_enigo_button(button);
     let mut enigo = new_enigo()?;
-    enigo
-        .move_mouse(ix, iy, Coordinate::Abs)
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    move_pointer(&mut enigo, ix, iy, "mouse")?;
     enigo
         .button(btn, Direction::Click)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to click: {e}")))?;
@@ -308,9 +304,7 @@ pub fn drag(
 
     let mut enigo = new_enigo()?;
 
-    enigo
-        .move_mouse(sx, sy, Coordinate::Abs)
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to move to start: {e}")))?;
+    move_pointer(&mut enigo, sx, sy, "to start")?;
     enigo
         .button(enigo::Button::Left, Direction::Press)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to press for drag: {e}")))?;
@@ -332,18 +326,12 @@ pub fn drag(
                 let eased = 1.0 - (1.0 - t).powi(3);
                 let cx = (f64::from(ex) - f64::from(sx)).mul_add(eased, f64::from(sx));
                 let cy = (f64::from(ey) - f64::from(sy)).mul_add(eased, f64::from(sy));
-                enigo
-                    .move_mouse(cx as i32, cy as i32, Coordinate::Abs)
-                    .map_err(|e| {
-                        DesktopError::InputFailed(format!("Failed to move during drag: {e}"))
-                    })?;
+                move_pointer(&mut enigo, cx as i32, cy as i32, "during drag")?;
                 std::thread::sleep(step_delay);
             }
         }
         _ => {
-            enigo
-                .move_mouse(ex, ey, Coordinate::Abs)
-                .map_err(|e| DesktopError::InputFailed(format!("Failed to move to end: {e}")))?;
+            move_pointer(&mut enigo, ex, ey, "to end")?;
         }
     }
 
@@ -373,9 +361,7 @@ pub fn hover(x: f64, y: f64) -> Result<()> {
     }
 
     let mut enigo = new_enigo()?;
-    enigo
-        .move_mouse(ix, iy, Coordinate::Abs)
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    move_pointer(&mut enigo, ix, iy, "mouse")?;
     info!(x, y, "Hover performed");
     Ok(())
 }
@@ -428,9 +414,7 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
         crate::PressAction::Click => new_enigo()?,
         crate::PressAction::Press | crate::PressAction::Release => new_enigo_holding()?,
     };
-    enigo
-        .move_mouse(ix, iy, Coordinate::Abs)
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    move_pointer(&mut enigo, ix, iy, "mouse")?;
     enigo
         .button(btn, dir)
         .map_err(|e| DesktopError::InputFailed(format!("Failed mouse button action: {e}")))?;

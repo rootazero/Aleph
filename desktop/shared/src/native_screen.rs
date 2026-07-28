@@ -26,8 +26,24 @@ pub struct NativeScreen {
 
 impl NativeScreen {
     /// Create a new `NativeScreen` instance.
+    ///
+    /// Settles this process's DPI awareness on Windows before returning. That
+    /// used to live only in `WindowsPlatform::new`, on the reasoning that it was
+    /// the single per-OS construction point — but it is not the only door into
+    /// this capability: `src/vision/providers/platform_ocr.rs` builds a
+    /// `NativeScreen` directly, so a vision request arriving before any desktop
+    /// tool captured the screen while the process was still DPI-unaware. The
+    /// symptom is not a crash but a contradiction: [`crate::perception`]'s
+    /// `coordinate_scale` reads the *live* awareness level, so the same display
+    /// reported one `scale_factor` to the OCR path and a different one to the
+    /// desktop tools a moment later.
+    ///
+    /// The opt-in is latched by a `OnceLock`, so putting it on the shared
+    /// constructor costs one atomic load per platform object and closes the
+    /// door. See [`crate::win_dpi`].
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        crate::win_dpi::ensure_process_dpi_aware();
         Self { _private: () }
     }
 }

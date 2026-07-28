@@ -197,6 +197,83 @@ fn visible_frame(hwnd: windows::Win32::Foundation::HWND) -> Option<BoundingBox> 
     })
 }
 
+/// The invisible border between `GetWindowRect` and the frame a person sees.
+///
+/// On a DWM-composited desktop `GetWindowRect` reports a rectangle roughly 7 px
+/// larger per side than the window's visible edges — the grab handles. Reads go
+/// through [`visible_frame`], which strips it. **Writes did not**, and that
+/// asymmetry is a bug with a compounding shape: `move_window(w.bounds.x,
+/// w.bounds.y)` set the *raw* origin to the *visible* origin, nudging the window
+/// down-right by the border on every round trip, and `resize_window(w, h)` set
+/// the raw size to the visible size, shrinking what the user sees by the border
+/// on both axes each time.
+///
+/// All zeroes when DWM does not answer (a pre-composition desktop, or a window
+/// that has none) — which is exactly right, because then `GetWindowRect` *is*
+/// the visible frame and no compensation is due.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FramePadding {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl FramePadding {
+    /// The raw origin to pass `SetWindowPos` so the **visible** frame lands at
+    /// `(x, y)`.
+    #[must_use]
+    pub const fn raw_origin(self, x: i32, y: i32) -> (i32, i32) {
+        (x - self.left, y - self.top)
+    }
+
+    /// The raw size to pass `SetWindowPos` so the **visible** frame measures
+    /// `width` × `height`.
+    #[must_use]
+    pub const fn raw_size(self, width: i32, height: i32) -> (i32, i32) {
+        (
+            width + self.left + self.right,
+            height + self.top + self.bottom,
+        )
+    }
+}
+
+/// Measure a window's invisible border by differencing its two rectangles.
+#[must_use]
+pub fn frame_padding(hwnd: windows::Win32::Foundation::HWND) -> FramePadding {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut raw = RECT::default();
+    // SAFETY: documented Win32 geometry read into a local `RECT`.
+    if unsafe { GetWindowRect(hwnd, &mut raw) }.is_err() {
+        return FramePadding::default();
+    }
+
+    let mut extended = RECT::default();
+    // SAFETY: writes a `RECT` into `extended`; the size argument matches.
+    let dwm_ok = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            std::ptr::addr_of_mut!(extended).cast(),
+            std::mem::size_of::<RECT>() as u32,
+        )
+    }
+    .is_ok();
+    if !dwm_ok {
+        return FramePadding::default();
+    }
+
+    FramePadding {
+        left: extended.left - raw.left,
+        top: extended.top - raw.top,
+        right: raw.right - extended.right,
+        bottom: raw.bottom - extended.bottom,
+    }
+}
+
 /// The process id owning the foreground window, if there is one.
 #[must_use]
 pub fn foreground_pid() -> Option<u32> {
@@ -413,5 +490,70 @@ pub fn running_apps() -> Vec<RunningApp> {
         );
     }
 
-    by_pid.into_values().collect()
+    // `HashMap` iteration order is randomized per process *and* per insertion
+    // history, so the same desktop produced a differently-ordered app list on
+    // every call — for a list a model reads, remembers, and refers back to by
+    // position. Frontmost first, then by name: stable, and the entry most likely
+    // to be meant leads.
+    let mut apps: Vec<RunningApp> = by_pid.into_values().collect();
+    apps.sort_by(|a, b| {
+        b.is_active
+            .cmp(&a.is_active)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.pid.cmp(&b.pid))
+    });
+    apps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Windows 11 default: ~7 px of invisible grab border on the sides and
+    /// bottom, none on top (the caption reaches the visible edge).
+    const TYPICAL: FramePadding = FramePadding {
+        left: 7,
+        top: 0,
+        right: 7,
+        bottom: 7,
+    };
+
+    #[test]
+    fn placing_the_visible_frame_offsets_the_raw_origin_by_the_border() {
+        // `window_list` reported the visible frame at (100, 60). Feeding those
+        // numbers straight back to `SetWindowPos` moved the window right and
+        // down by the border, so read-then-write drifted every round trip.
+        assert_eq!(TYPICAL.raw_origin(100, 60), (93, 60));
+    }
+
+    #[test]
+    fn sizing_the_visible_frame_grows_the_raw_size_by_the_border() {
+        // Same shape on the size axis: asking for 800×600 of *visible* window
+        // used to hand `SetWindowPos` 800×600 of *raw* window, which is
+        // 786×593 visible — shrinking a little more on every call.
+        assert_eq!(TYPICAL.raw_size(800, 600), (814, 607));
+    }
+
+    #[test]
+    fn a_window_without_dwm_padding_is_not_compensated() {
+        let none = FramePadding::default();
+        assert_eq!(none.raw_origin(100, 60), (100, 60));
+        assert_eq!(none.raw_size(800, 600), (800, 600));
+    }
+
+    #[test]
+    fn origin_and_size_round_trip_through_the_padding() {
+        // The property that matters: whatever the caller asked to see is what
+        // the visible frame ends up being.
+        let (rx, ry) = TYPICAL.raw_origin(300, 200);
+        let (rw, rh) = TYPICAL.raw_size(640, 480);
+        assert_eq!((rx + TYPICAL.left, ry + TYPICAL.top), (300, 200));
+        assert_eq!(
+            (
+                rw - TYPICAL.left - TYPICAL.right,
+                rh - TYPICAL.top - TYPICAL.bottom
+            ),
+            (640, 480)
+        );
+    }
 }

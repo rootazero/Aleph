@@ -315,14 +315,70 @@ fn windows_focus_window(window_id: u64) -> Result<()> {
     )))
 }
 
+/// Resolve a window id to a live `HWND`, or say it is not a window.
+#[cfg(target_os = "windows")]
+fn windows_hwnd(window_id: u64) -> Result<windows::Win32::Foundation::HWND> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+
+    let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
+    // SAFETY: documented validity check; a stale or forged id answers `false`.
+    if unsafe { IsWindow(hwnd) }.as_bool() {
+        Ok(hwnd)
+    } else {
+        Err(DesktopError::WindowFailed(format!(
+            "No window found with id {window_id}"
+        )))
+    }
+}
+
+/// Take a maximized window out of the maximized state before it is moved or
+/// resized, **without** activating it.
+///
+/// A maximized window ignores geometry: Windows keeps the `SW_SHOWMAXIMIZED`
+/// state, so `SetWindowPos` either does nothing visible or leaves the window in
+/// a state that snaps back at the next restore. `ShowWindow(SW_RESTORE)` fixes
+/// that but *activates* the window — yanking focus off whatever the user is
+/// typing in, which is the one thing R5 rules out. `SetWindowPlacement` with
+/// `SW_SHOWNOACTIVATE` changes the state and nothing else.
+#[cfg(target_os = "windows")]
+fn windows_unmaximize(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, IsZoomed, SetWindowPlacement, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
+    };
+
+    // SAFETY: `hwnd` is validated; both placement calls read/write a
+    // fully-initialized `WINDOWPLACEMENT` whose `length` field is set as the API
+    // requires.
+    unsafe {
+        if !IsZoomed(hwnd).as_bool() {
+            return;
+        }
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        if GetWindowPlacement(hwnd, std::ptr::addr_of_mut!(placement)).is_err() {
+            return;
+        }
+        placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+        let _ = SetWindowPlacement(hwnd, std::ptr::addr_of!(placement));
+    }
+}
+
 /// Reposition and/or resize a window via Win32 `SetWindowPos`.
 ///
 /// `SWP_NOZORDER | SWP_NOACTIVATE` are always added so the call never changes
 /// the Z-order or steals focus; callers pass `SWP_NOSIZE` (move only) or
 /// `SWP_NOMOVE` (resize only) to pin the dimension they want preserved.
+///
+/// `x`/`y`/`cx`/`cy` are **raw** window-rect values, already compensated for the
+/// invisible DWM border by the callers via
+/// [`crate::win_window::FramePadding`] — the geometry a caller passes in is the
+/// visible frame, because that is the geometry `window_list` handed it.
 #[cfg(target_os = "windows")]
 fn windows_set_window_pos(
-    window_id: u64,
+    hwnd: windows::Win32::Foundation::HWND,
     x: i32,
     y: i32,
     cx: i32,
@@ -330,21 +386,12 @@ fn windows_set_window_pos(
     flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
 ) -> Result<()> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
-    let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
-
-    // SAFETY: the handle is validated by `IsWindow` before the state-changing
-    // call; `SetWindowPos` is a documented Win32 API and the insert-after
-    // handle is ignored because `SWP_NOZORDER` is always set.
+    // SAFETY: `hwnd` was validated by `windows_hwnd`; `SetWindowPos` is a
+    // documented Win32 API and the insert-after handle is ignored because
+    // `SWP_NOZORDER` is always set.
     unsafe {
-        if !IsWindow(hwnd).as_bool() {
-            return Err(DesktopError::WindowFailed(format!(
-                "No window found with id {window_id}"
-            )));
-        }
         SetWindowPos(
             hwnd,
             HWND::default(),
@@ -364,7 +411,12 @@ fn windows_set_window_pos(
 fn windows_move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE;
 
-    windows_set_window_pos(window_id, x, y, 0, 0, SWP_NOSIZE)?;
+    let hwnd = windows_hwnd(window_id)?;
+    windows_unmaximize(hwnd);
+    // `(x, y)` is where the caller wants the *visible* frame, which is the space
+    // `window_list` reports bounds in; `SetWindowPos` speaks the raw rect.
+    let (raw_x, raw_y) = crate::win_window::frame_padding(hwnd).raw_origin(x, y);
+    windows_set_window_pos(hwnd, raw_x, raw_y, 0, 0, SWP_NOSIZE)?;
     info!(window_id, x, y, "Window moved (Windows)");
     Ok(())
 }
@@ -380,7 +432,11 @@ fn windows_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> 
     let cy = i32::try_from(height)
         .map_err(|_| DesktopError::WindowFailed(format!("height {height} exceeds i32 range")))?;
 
-    windows_set_window_pos(window_id, 0, 0, cx, cy, SWP_NOMOVE)?;
+    let hwnd = windows_hwnd(window_id)?;
+    windows_unmaximize(hwnd);
+    // Same asymmetry as the move path: the caller means the visible frame.
+    let (raw_w, raw_h) = crate::win_window::frame_padding(hwnd).raw_size(cx, cy);
+    windows_set_window_pos(hwnd, 0, 0, raw_w, raw_h, SWP_NOMOVE)?;
     info!(window_id, width, height, "Window resized (Windows)");
     Ok(())
 }

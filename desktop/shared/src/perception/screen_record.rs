@@ -659,6 +659,14 @@ pub fn screen_record(
     })
 }
 
+/// Headroom over a recording's own length before it counts as wedged.
+///
+/// Mirrors `media.rs`'s `FFMPEG_MARGIN`, for the same reason: opening a capture
+/// device and muxing the final file are slow on some hardware but not
+/// minutes-slow, whereas a device held by another application never opens at all.
+#[cfg(target_os = "windows")]
+const RECORD_STARTUP_MARGIN: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Build the `ffmpeg` argument vector for a `gdigrab` screen recording (Windows).
 ///
 /// Pure function (no I/O) so the argument assembly can be unit-tested without a
@@ -753,12 +761,19 @@ pub fn screen_record(
 
     // `hidden_std_command`: a console child spawned from the windowless daemon
     // would flash a black console over whatever the recording is capturing.
-    let output = hidden_std_command("ffmpeg")
-        .args(&args)
-        .output()
-        .map_err(|e| {
-            DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-        })?;
+    let mut cmd = hidden_std_command("ffmpeg");
+    cmd.args(&args);
+
+    // `-t` is not a guarantee. When `with_audio` names a DirectShow microphone
+    // that another application already holds, ffmpeg blocks in the device-open
+    // call *before* the duration ever starts counting — the same infinite wait
+    // `media.rs` caps, on the one capture path that had no cap. The margin
+    // covers device negotiation and the final mux.
+    let deadline =
+        std::time::Duration::from_secs_f64(config.duration_secs.max(0.0)) + RECORD_STARTUP_MARGIN;
+    let output = crate::script_exec::output_capped_blocking(cmd, deadline).map_err(|e| {
+        DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -67,22 +67,25 @@ const fn consent_capability(kind: PermissionKind) -> Option<&'static str> {
 
 /// Status for kinds Windows does not gate behind a `ConsentStore` entry.
 ///
-/// A Win32 desktop process can capture the screen, send synthetic input, and
-/// post toast notifications with no per-app grant, so those report `Granted`.
-/// Kinds that simply do not map onto a Windows concept (or that Aleph cannot
-/// determine without overreaching) report `Unknown`, mirroring how the macOS
-/// native probe returns `Unknown` for bridge-only kinds.
+/// A Win32 desktop process can capture the screen and send synthetic input with
+/// no per-app grant, so those report `Granted`. Kinds that simply do not map
+/// onto a Windows concept (or that Aleph cannot determine without overreaching)
+/// report `Unknown`, mirroring how the macOS native probe returns `Unknown` for
+/// bridge-only kinds.
+///
+/// `Notifications` is **not** in here: it has no per-app consent prompt but it
+/// does have a machine-wide off switch — see [`toast_status`].
 const fn ungated_status(kind: PermissionKind) -> PermissionStatus {
     match kind {
         PermissionKind::ScreenRecording
         | PermissionKind::Accessibility
-        | PermissionKind::InputMonitoring
-        | PermissionKind::Notifications => PermissionStatus::Granted,
-        // Consent-gated kinds are handled before this is reached; list them so
+        | PermissionKind::InputMonitoring => PermissionStatus::Granted,
+        // Kinds resolved by their own probe before this is reached; listed so
         // the match stays exhaustive and a newly gated kind fails the compile.
-        PermissionKind::Camera | PermissionKind::Microphone | PermissionKind::Location => {
-            PermissionStatus::Unknown
-        }
+        PermissionKind::Camera
+        | PermissionKind::Microphone
+        | PermissionKind::Location
+        | PermissionKind::Notifications => PermissionStatus::Unknown,
         PermissionKind::SpeechRecognition
         | PermissionKind::FullDisk
         | PermissionKind::Automation
@@ -90,6 +93,49 @@ const fn ungated_status(kind: PermissionKind) -> PermissionStatus {
         | PermissionKind::Calendars
         | PermissionKind::Reminders
         | PermissionKind::Photos => PermissionStatus::Unknown,
+    }
+}
+
+/// Where Windows keeps the master "show notifications at all" switch.
+#[cfg_attr(not(windows), allow(dead_code))]
+const PUSH_NOTIFICATIONS_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\PushNotifications";
+
+/// Map the `ToastEnabled` registry value onto a permission status.
+///
+/// Pure, so the rule is testable on any host. The value is **absent on a machine
+/// where the user has never turned notifications off**, which is the common
+/// case and means enabled — so `None` is `Granted`, and only an explicit `0` is
+/// a denial.
+#[cfg_attr(not(windows), allow(dead_code))]
+const fn toast_enabled_status(raw: Option<u32>) -> PermissionStatus {
+    match raw {
+        Some(0) => PermissionStatus::Denied,
+        _ => PermissionStatus::Granted,
+    }
+}
+
+/// Whether a toast posted by this process would actually reach the user.
+///
+/// This kind used to be hard-coded `Granted` on the reasoning that Windows has
+/// no per-app consent prompt for a desktop process — true, and beside the point.
+/// Notifications have a machine-wide switch, and with it off `send_notification`
+/// succeeds and nothing appears. Reporting `Granted` there sends the model (and
+/// the `permission` guide the user reads) looking for a bug in the wrong place,
+/// which is exactly what a permission probe exists to prevent.
+fn toast_status() -> PermissionStatus {
+    #[cfg(windows)]
+    {
+        use aleph_desktop::win_registry::{read_u32, Hive};
+
+        toast_enabled_status(read_u32(
+            Hive::CurrentUser,
+            PUSH_NOTIFICATIONS_KEY,
+            "ToastEnabled",
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        PermissionStatus::Unknown
     }
 }
 
@@ -114,6 +160,10 @@ const fn settings_uri(kind: PermissionKind) -> &'static str {
         PermissionKind::Camera => "ms-settings:privacy-webcam",
         PermissionKind::Microphone => "ms-settings:privacy-microphone",
         PermissionKind::Location => "ms-settings:privacy-location",
+        // Notifications are not a privacy capability on Windows; their switch
+        // lives under System, and sending the user to the privacy page for it
+        // is a dead end.
+        PermissionKind::Notifications => "ms-settings:notifications",
         _ => "ms-settings:privacy",
     }
 }
@@ -128,6 +178,9 @@ const fn rationale(kind: PermissionKind) -> &'static str {
         PermissionKind::Location => {
             "Aleph needs location access to answer location-aware requests."
         }
+        PermissionKind::Notifications => {
+            "Aleph posts a desktop notification when it finishes something you asked for."
+        }
         _ => "Aleph uses this capability to act on your desktop on your behalf.",
     }
 }
@@ -138,6 +191,7 @@ fn steps(kind: PermissionKind) -> Vec<String> {
         PermissionKind::Camera => ("Privacy & security → Camera", "Camera access"),
         PermissionKind::Microphone => ("Privacy & security → Microphone", "Microphone access"),
         PermissionKind::Location => ("Privacy & security → Location", "Location services"),
+        PermissionKind::Notifications => ("System → Notifications", "Notifications"),
         _ => {
             return vec![
                 "Open Settings → Privacy & security.".to_string(),
@@ -203,13 +257,17 @@ fn query_consent(capability: &str) -> PermissionStatus {
     }
 }
 
-/// Resolve the status for any kind: consent-gated kinds hit the registry,
-/// everything else uses the static [`ungated_status`] mapping.
+/// Resolve the status for any kind: consent-gated kinds hit the `ConsentStore`,
+/// notifications hit their own master switch, everything else uses the static
+/// [`ungated_status`] mapping.
 fn status_for(kind: PermissionKind) -> PermissionStatus {
-    match consent_capability(kind) {
-        Some(cap) => query_consent(cap),
-        None => ungated_status(kind),
+    if let Some(cap) = consent_capability(kind) {
+        return query_consent(cap);
     }
+    if matches!(kind, PermissionKind::Notifications) {
+        return toast_status();
+    }
+    ungated_status(kind)
 }
 
 /// Open the Settings page for a kind via `cmd /C start`. Returns whether the
@@ -251,10 +309,12 @@ impl PermissionCapability for WindowsPermission {
 
     async fn request(&self, permission: PermissionKind) -> Result<PermissionInfo> {
         // Windows desktop apps cannot raise a consent prompt programmatically.
-        // For genuinely gated kinds the helpful analogue to the macOS prompt is
-        // to open the Settings page so the user can grant it; then report the
-        // current status. Ungated kinds need no action.
-        if consent_capability(permission).is_some() {
+        // For kinds the user can actually toggle, the helpful analogue to the
+        // macOS prompt is to open that Settings page; then report the current
+        // status. Kinds with nothing to toggle need no action.
+        let togglable = consent_capability(permission).is_some()
+            || matches!(permission, PermissionKind::Notifications);
+        if togglable {
             let _ = open_settings_uri(permission).await;
         }
         Ok(build_info(permission, status_for(permission)))
@@ -321,7 +381,6 @@ mod tests {
             PermissionKind::ScreenRecording,
             PermissionKind::Accessibility,
             PermissionKind::InputMonitoring,
-            PermissionKind::Notifications,
         ] {
             assert_eq!(
                 ungated_status(kind),
@@ -329,6 +388,28 @@ mod tests {
                 "{kind:?} should be Granted on Windows"
             );
         }
+    }
+
+    #[test]
+    fn notifications_follow_the_machine_wide_toast_switch() {
+        // The regression: `Notifications` was hard-coded `Granted`, so on a
+        // machine with notifications switched off `send_notification` reported
+        // delivery, the permission probe agreed nothing was wrong, and the user
+        // saw nothing.
+        assert_eq!(toast_enabled_status(Some(0)), PermissionStatus::Denied);
+        assert_eq!(toast_enabled_status(Some(1)), PermissionStatus::Granted);
+        // Absent is the state of a machine where the user never turned them off.
+        assert_eq!(toast_enabled_status(None), PermissionStatus::Granted);
+    }
+
+    #[test]
+    fn notifications_point_at_their_own_settings_page() {
+        // The privacy page has no notification switch on it at all.
+        assert_eq!(
+            settings_uri(PermissionKind::Notifications),
+            "ms-settings:notifications"
+        );
+        assert_eq!(steps(PermissionKind::Notifications).len(), 4);
     }
 
     #[test]

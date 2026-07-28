@@ -42,6 +42,9 @@ pub mod script_exec;
 pub mod system_types;
 pub mod traits;
 pub mod win_dpi;
+// Absolute pointer positioning. Like `win_dpi`, the arithmetic compiles (and is
+// unit-tested) everywhere; only the `SendInput` call is Windows-gated.
+pub mod win_input;
 #[cfg(windows)]
 pub mod win_registry;
 #[cfg(windows)]
