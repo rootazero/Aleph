@@ -42,7 +42,8 @@ const REASON: &str = "self-signed / untrusted issuer";
 
 /// The auth-challenge completion block: `(disposition, credential) -> void`,
 /// matching `NSURLSessionAuthChallengeDisposition`-based WKWebView challenges.
-type ChallengeCompletion = Block<dyn Fn(NSURLSessionAuthChallengeDisposition, *mut NSURLCredential)>;
+type ChallengeCompletion =
+    Block<dyn Fn(NSURLSessionAuthChallengeDisposition, *mut NSURLCredential)>;
 
 /// Inject the challenge handler into wry's navigation-delegate class, once.
 /// `webview` is the `WKWebView` pointer from Tauri's `PlatformWebview::inner()`.

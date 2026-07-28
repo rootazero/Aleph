@@ -98,7 +98,13 @@ mod tests {
         // The blast radius matters: `secure` is a hard block that `force` cannot
         // lift, so a checkbox labelled "Show password" or a group inside a
         // password manager must not silently disable typing everywhere.
-        for role in ["AXCheckBox", "AXButton", "AXGroup", "AXStaticText", "AXWindow"] {
+        for role in [
+            "AXCheckBox",
+            "AXButton",
+            "AXGroup",
+            "AXStaticText",
+            "AXWindow",
+        ] {
             assert!(
                 !is_password_like(role, &["Show password", "", ""]),
                 "{role} must not be judged by its label"

@@ -520,7 +520,10 @@ mod tests {
             "{joined}"
         );
         // Exactly one frame is still encoded, so the capture stays a snapshot.
-        let frames = args.iter().position(|a| a == "-frames:v").expect("-frames:v");
+        let frames = args
+            .iter()
+            .position(|a| a == "-frames:v")
+            .expect("-frames:v");
         assert_eq!(args[frames + 1], "1");
         assert_eq!(args.last().unwrap(), "/tmp/out.jpg");
     }

@@ -36,8 +36,7 @@ fn handle_url(app: &AppHandle, url: &str) {
     // records "what scheme did the user invoke", and drop to debug
     // for the full URL behind a feature most operators never enable.
     tracing::info!("deep link received: {}", redacted_for_log(url));
-    if tracing::level_filters::LevelFilter::current()
-        >= tracing::level_filters::LevelFilter::DEBUG
+    if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG
     {
         tracing::debug!("deep link full URL: {url}");
     }
@@ -65,10 +64,7 @@ fn redacted_for_log(url: &str) -> String {
         Err(_) => {
             // Not a parseable absolute URL — best effort: drop the
             // first `?` or `#` and everything after.
-            let end = url
-                .find('?')
-                .or_else(|| url.find('#'))
-                .unwrap_or(url.len());
+            let end = url.find('?').or_else(|| url.find('#')).unwrap_or(url.len());
             url[..end].to_string()
         }
     }

@@ -17,7 +17,9 @@ use async_trait::async_trait;
 async fn frontmost_pid() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        crate::ax_frontmost_pid().await.and_then(|p| u64::try_from(p).ok())
+        crate::ax_frontmost_pid()
+            .await
+            .and_then(|p| u64::try_from(p).ok())
     }
     #[cfg(not(target_os = "linux"))]
     {

@@ -12,7 +12,6 @@ use crate::MouseButton;
 /// implementation from looping billions of times on a malicious `i32::MAX`.
 const MAX_SCROLL_CLICKS: i32 = 10_000;
 
-
 /// Move the mouse to (x, y) and click the specified button.
 ///
 /// # Errors

@@ -88,7 +88,10 @@ impl AppCache {
             // it into the child map would build a cycle the walk could not
             // terminate on.
             if parent != path {
-                ordered.entry(parent).or_default().push((item.index, path.clone()));
+                ordered
+                    .entry(parent)
+                    .or_default()
+                    .push((item.index, path.clone()));
             }
             by_path.insert(path, item);
         }

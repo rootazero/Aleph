@@ -75,7 +75,11 @@ async fn a_snapshot_of_the_frontmost_app_is_bounded_in_wall_clock() {
     );
     assert!(!all.is_empty());
     for e in &all {
-        assert!(e.role.starts_with("AX"), "role {:?} left the vocabulary", e.role);
+        assert!(
+            e.role.starts_with("AX"),
+            "role {:?} left the vocabulary",
+            e.role
+        );
         if let Some(b) = &e.bounds {
             assert!(b.width > 0.0 && b.height > 0.0, "unusable rectangle {b:?}");
         }
@@ -296,5 +300,8 @@ async fn cached_attributes_equal_live_ones() {
         }
         break;
     }
-    assert!(compared > 0, "no application served a cache to compare against");
+    assert!(
+        compared > 0,
+        "no application served a cache to compare against"
+    );
 }

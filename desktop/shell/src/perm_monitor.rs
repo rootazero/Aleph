@@ -135,8 +135,8 @@ mod macos {
             {
                 Some(p) if p.exists() => p,
                 _ => {
-                    if let Some(p) = find_in_path("AlephBridge")
-                        .or_else(|| find_in_path("aleph-bridge"))
+                    if let Some(p) =
+                        find_in_path("AlephBridge").or_else(|| find_in_path("aleph-bridge"))
                     {
                         p
                     } else {

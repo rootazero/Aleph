@@ -13,9 +13,9 @@ mod system;
 
 pub use automation::LinuxAutomation;
 #[cfg(target_os = "linux")]
-pub use ax::LinuxAccessibility;
-#[cfg(target_os = "linux")]
 pub(crate) use ax::frontmost_pid as ax_frontmost_pid;
+#[cfg(target_os = "linux")]
+pub use ax::LinuxAccessibility;
 pub use escape_listener::LinuxEscapeListener;
 pub use media::LinuxMedia;
 pub use permission::LinuxPermission;

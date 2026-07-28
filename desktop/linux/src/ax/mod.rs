@@ -443,7 +443,10 @@ impl AccessibilityCapability for LinuxAccessibility {
                     Some(text) => text.get_text(0, -1).await.ok(),
                     None => None,
                 };
-                (performed, verify_text(&params.value, actual.as_deref(), secure))
+                (
+                    performed,
+                    verify_text(&params.value, actual.as_deref(), secure),
+                )
             }
             None => {
                 let value = ifaces.value().await.ok_or_else(|| {
