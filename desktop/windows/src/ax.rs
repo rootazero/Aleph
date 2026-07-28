@@ -123,57 +123,12 @@ mod role_map {
     }
 }
 
-/// AX roles (as mapped by [`control_type_to_ax_role`]) that take typed text and
-/// are therefore the only ones the label heuristic in [`is_password_like`] is
-/// allowed to judge.
-///
-/// Restricting it matters: `secure` is a **hard block** on `type_text` that
-/// `force` cannot override, so a heuristic that fired on any element whose label
-/// merely contains "password" would refuse legitimate typing next to a
-/// "Show password" checkbox or inside a window titled "Password Manager".
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
-const TEXT_ENTRY_ROLES: &[&str] = &["AXTextField", "AXComboBox"];
-
-/// Substrings that mark a text entry as carrying a credential.
-///
-/// Mirrors the term list orca's Windows runtime uses, because the failure being
-/// prevented is identical: some frameworks (Electron, Qt, custom-drawn editors)
-/// never set the UIA `IsPassword` property on a field that is nonetheless
-/// masked, and typing a credential into the wrong place is not recoverable.
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
-const CREDENTIAL_TERMS: &[&str] = &[
-    "password",
-    "passcode",
-    "passphrase",
-    "secret",
-    "one-time code",
-    "verification code",
-];
-
-/// Whether a text entry's labels mark it as a credential field.
-///
-/// The second signal behind UIA's own `IsPassword` — pure, so the judgement is
-/// unit-testable without a live desktop. `role` is the **mapped** AX role;
-/// `labels` are the element's Name / `AutomationId` / `ClassName`, whichever the
-/// provider filled in.
-///
-/// Deliberately mechanical: it matches fixed substrings on fixed fields and
-/// reads nothing else about the element (R7/P8).
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
-pub fn is_password_like(role: &str, labels: &[&str]) -> bool {
-    if !TEXT_ENTRY_ROLES.contains(&role) {
-        return false;
-    }
-    let haystack = labels.join(" ").to_lowercase();
-    if CREDENTIAL_TERMS.iter().any(|t| haystack.contains(t)) {
-        return true;
-    }
-    // "pin" only as a whole word — "spinner", "pinned" and "shipping" are not
-    // credential fields.
-    haystack
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|w| w == "pin")
-}
+// The credential-label heuristic that backs `secure` lives in
+// `aleph_desktop::ax_secure` — the Linux AT-SPI limb has the same blind spot on
+// the same frameworks (Electron / Qt editors that never set the native
+// "this is a password" signal), and it cannot reach into this crate. Imported
+// under its own name so `is_secure_element` below reads unchanged.
+use aleph_desktop::is_password_like;
 
 /// The AX action names a UIA element's available patterns can honour.
 ///
@@ -1305,62 +1260,9 @@ mod tests {
         ));
     }
 
-    // ── Credential-field heuristic ───────────────────────────────────────────
-
-    #[test]
-    fn labelled_credential_fields_are_secure() {
-        for label in [
-            "Password",
-            "password",
-            "Enter your passphrase",
-            "One-time code",
-            "Verification code",
-            "Client Secret",
-            "PIN",
-        ] {
-            assert!(
-                is_password_like("AXTextField", &[label, "", ""]),
-                "{label:?} should read as a credential field"
-            );
-        }
-    }
-
-    #[test]
-    fn the_heuristic_reads_automation_id_and_class_name_too() {
-        // Electron and Qt often leave Name empty and put the meaning elsewhere.
-        assert!(is_password_like("AXTextField", &["", "login-password", ""]));
-        assert!(is_password_like("AXTextField", &["", "", "PasswordBox"]));
-    }
-
-    #[test]
-    fn only_text_entry_roles_are_judged_by_label() {
-        // The blast radius matters: `secure` is a hard block that `force` cannot
-        // lift, so a checkbox labelled "Show password" or a group inside a
-        // password manager must not silently disable typing everywhere.
-        for role in ["AXCheckBox", "AXButton", "AXGroup", "AXStaticText"] {
-            assert!(
-                !is_password_like(role, &["Show password", "", ""]),
-                "{role} must not be judged by its label"
-            );
-        }
-    }
-
-    #[test]
-    fn pin_matches_only_as_a_whole_word() {
-        assert!(is_password_like("AXTextField", &["Enter PIN", "", ""]));
-        for benign in ["Spinner value", "Pinned tabs", "Shipping address"] {
-            assert!(
-                !is_password_like("AXTextField", &[benign, "", ""]),
-                "{benign:?} is not a credential field"
-            );
-        }
-    }
-
-    #[test]
-    fn an_ordinary_field_is_not_secure() {
-        assert!(!is_password_like("AXTextField", &["Email address", "", ""]));
-        assert!(!is_password_like("AXTextField", &["", "", ""]));
-    }
+    // The credential-label heuristic and its tests live in
+    // `aleph_desktop::ax_secure`, which both this limb and the Linux AT-SPI one
+    // consume — the tests moved with it rather than being duplicated here.
 
     // ── Advertised actions ───────────────────────────────────────────────────
 

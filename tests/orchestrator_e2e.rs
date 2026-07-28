@@ -32,6 +32,7 @@ async fn default_agent_roundtrip() {
             transient_context: None,
             think_level: None,
             envelope: alephcore::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         .expect("dispatch");

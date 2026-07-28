@@ -201,13 +201,14 @@ fn run(args: Vec<String>) -> Result<String> {
     // Capped: `swaymsg` waits on the compositor's IPC socket, and a wedged sway
     // (or a stale `SWAYSOCK` after a restart) leaves it blocked with no timeout
     // of its own — which would pin the whole turn.
-    let out = output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Talking to sway").map_err(|e| {
-        if is_spawn_failure(&e) {
-            DesktopError::WindowFailed(format!("Failed to run swaymsg: {e}"))
-        } else {
-            DesktopError::WindowFailed(e.to_string())
-        }
-    })?;
+    let out =
+        output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Talking to sway").map_err(|e| {
+            if is_spawn_failure(&e) {
+                DesktopError::WindowFailed(format!("Failed to run swaymsg: {e}"))
+            } else {
+                DesktopError::WindowFailed(e.to_string())
+            }
+        })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(DesktopError::WindowFailed(format!(

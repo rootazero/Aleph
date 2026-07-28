@@ -36,6 +36,24 @@ pub const RUN_SCRIPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// ([`is_spawn_failure`]) can never drift apart.
 const SPAWN_FAILURE_PREFIX: &str = "failed to spawn process";
 
+/// Marker inside the error [`output_capped`] and [`output_capped_blocking`]
+/// return when the deadline elapsed. Kept as a shared const for the same reason
+/// as [`SPAWN_FAILURE_PREFIX`]: its producers and its classifier
+/// ([`is_deadline_failure`]) must not drift apart.
+const DEADLINE_MARKER: &str = "and was terminated";
+
+/// True when `e` is the timeout error the capped runners produce.
+///
+/// The distinction a caller needs is *why* the previous attempt failed. Falling
+/// through to another candidate is right when the first binary was missing
+/// ([`is_spawn_failure`]) and wrong when it was there and hung: a second
+/// candidate that addresses the same wedged service just spends a second full
+/// deadline before failing the same way.
+#[must_use]
+pub fn is_deadline_failure(e: &DesktopError) -> bool {
+    matches!(e, DesktopError::InputFailed(m) if m.contains(DEADLINE_MARKER))
+}
+
 /// True when `e` is the spawn-failure error [`output_capped`] produces — the
 /// interpreter/binary could not be launched. Callers that try a sequence of
 /// candidate binaries (e.g. `pwsh` → `powershell`) use this to fall through
@@ -102,7 +120,7 @@ pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output
             "{SPAWN_FAILURE_PREFIX}: {e}"
         ))),
         Err(_elapsed) => Err(DesktopError::InputFailed(format!(
-            "script exceeded {}s and was terminated. For a long-running process \
+            "script exceeded {}s {DEADLINE_MARKER}. For a long-running process \
              (dev server, file watcher, daemon) use the automation `run_background` \
              action instead, then read its log file.",
             timeout.as_secs()
@@ -245,7 +263,7 @@ pub fn output_capped_blocking_with_stdin(
         let _ = child.kill();
         let _ = child.wait();
         return Err(DesktopError::InputFailed(format!(
-            "{what} exceeded {}s and was terminated. The underlying desktop \
+            "{what} exceeded {}s {DEADLINE_MARKER}. The underlying desktop \
              service did not respond — check that it is running, or retry.",
             timeout.as_secs()
         )));
@@ -369,7 +387,11 @@ mod tests {
             "test",
         )
         .expect("a chatty command must not deadlock");
-        assert!(out.stdout.len() > 64 * 1024, "got {} bytes", out.stdout.len());
+        assert!(
+            out.stdout.len() > 64 * 1024,
+            "got {} bytes",
+            out.stdout.len()
+        );
     }
 
     #[test]

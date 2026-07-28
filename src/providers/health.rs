@@ -191,9 +191,12 @@ impl From<&AlephError> for Option<ProviderError> {
 /// - Messages containing 5xx status codes → Transient(ServerError)
 /// - Messages containing 404 + "model" → Permanent(ModelNotFound)
 fn classify_provider_error_message(message: &str) -> Option<ProviderError> {
-    // Check for 5xx server errors
+    // Status codes are matched with `has_status_code`, not as substrings: a
+    // message quoting `"1500 tokens"` or a request id like `req_5040` carries
+    // the digits of a 5xx without being one, and the verdict here decides
+    // whether a provider is treated as sick.
     for status in [500, 502, 503, 504, 529] {
-        if message.contains(&status.to_string()) {
+        if crate::providers::llm_retry::has_status_code(message, status) {
             return Some(ProviderError::Transient(TransientError::ServerError {
                 status,
             }));
@@ -201,7 +204,9 @@ fn classify_provider_error_message(message: &str) -> Option<ProviderError> {
     }
 
     // Check for 404 + model (model not found on provider)
-    if message.contains("404") && message.to_lowercase().contains("model") {
+    if crate::providers::llm_retry::has_status_code(message, 404)
+        && message.to_lowercase().contains("model")
+    {
         return Some(ProviderError::Permanent(PermanentError::ModelNotFound));
     }
 
@@ -511,6 +516,21 @@ mod tests {
     #[test]
     fn aleph_unrelated_error_returns_none() {
         let err = AlephError::other("something unrelated");
+        let provider_err: Option<ProviderError> = (&err).into();
+        assert_eq!(provider_err, None);
+    }
+
+    #[test]
+    fn digits_inside_a_longer_number_are_not_a_status_code() {
+        // A 400 (request-specific, deliberately NOT a health signal) that
+        // happens to quote a token count used to classify as a 5xx server
+        // error and degrade a healthy provider.
+        let err = AlephError::provider("400 invalid request: 1500 tokens exceeds per-message cap");
+        let provider_err: Option<ProviderError> = (&err).into();
+        assert_eq!(provider_err, None);
+
+        // And a request id carrying "404" is not a missing model.
+        let err = AlephError::provider("model call failed, request id req_40450");
         let provider_err: Option<ProviderError> = (&err).into();
         assert_eq!(provider_err, None);
     }

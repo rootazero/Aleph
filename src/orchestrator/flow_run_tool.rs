@@ -94,6 +94,9 @@ impl FlowRunTool {
             // No per-run thinking directive on this path — the provider keeps its
             // own default, which is what every release before this field sent.
             think_level: None,
+            // A sub-flow has no chat-window picker behind it; the child's model
+            // comes from its own agent pin / brain preset.
+            model_directive: None,
             // Subagent sub-flows resolve no tier / mode / workspace of their own;
             // they inherit the parent's via the surrounding RunRequest path.
             envelope: crate::thinker::TurnEnvelope::none(),

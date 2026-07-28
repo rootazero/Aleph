@@ -23,6 +23,7 @@
 pub mod action;
 pub mod automation_types;
 pub mod ax_rank;
+pub mod ax_secure;
 pub mod bridge;
 pub mod coord;
 pub mod error;
@@ -57,6 +58,7 @@ pub mod win_registry;
 pub mod win_window;
 
 pub use ax_rank::{rank_candidates, RankCandidate};
+pub use ax_secure::is_password_like;
 pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;

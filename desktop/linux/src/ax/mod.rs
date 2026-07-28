@@ -34,7 +34,9 @@
 //! now that protection existed on macOS and Windows and simply did not exist on
 //! Linux.
 
+mod budget;
 mod bus;
+mod cache;
 mod roles;
 mod walk;
 
@@ -42,7 +44,6 @@ use std::collections::VecDeque;
 
 use async_trait::async_trait;
 use atspi::proxy::accessible::AccessibleProxy;
-use atspi::proxy::proxy_ext::ProxyExt;
 use atspi::State;
 
 use aleph_desktop::traits::AccessibilityCapability;
@@ -53,9 +54,11 @@ use aleph_protocol::desktop_bridge::methods::ax::{
     SetValueParams,
 };
 
-pub use bus::bus_looks_reachable;
+pub use bus::{bus_looks_reachable, frontmost_pid};
 
+use budget::Budget;
 use bus::{App, Bus};
+use cache::AppCache;
 use walk::Walk;
 
 /// Depth bound for the walks that carry no explicit `max_depth`
@@ -122,20 +125,36 @@ async fn collect_candidates(
     bus: &Bus,
     root: AccessibleProxy<'static>,
     depth: u32,
+    budget: Budget,
+    cache: Option<&AppCache>,
 ) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut queue: VecDeque<(AccessibleProxy<'static>, u32)> = VecDeque::new();
     queue.push_back((root, depth));
 
     while let Some((proxy, remaining)) = queue.pop_front() {
-        if out.len() >= walk::MAX_NODES {
+        if out.len() >= walk::MAX_NODES || budget.spent() {
             break;
         }
-        let Ok(role) = proxy.get_role().await else {
-            continue;
+        let path = proxy.inner().path().as_str().to_owned();
+        let cached = cache.and_then(|c| c.get(&path));
+
+        // Role and title from the bulk cache when there is one — this scan
+        // covers a whole application, so it is where the per-node round trips
+        // hurt most.
+        let (role, title) = match cached {
+            Some(item) => {
+                let facts = cache::NodeFacts::from_cache(item);
+                (facts.role, facts.title)
+            }
+            None => {
+                let Ok(role) = proxy.get_role().await else {
+                    continue;
+                };
+                (role, proxy.name().await.ok().filter(|n| !n.is_empty()))
+            }
         };
-        let title = proxy.name().await.ok().filter(|n| !n.is_empty());
-        let center = center_of(&proxy).await;
+        let center = center_of(&proxy, cached.map(|i| i.states), cached.map(|i| i.ifaces)).await;
 
         if let Some(center) = center {
             out.push(Candidate {
@@ -149,9 +168,18 @@ async fn collect_candidates(
         }
 
         if remaining > 0 {
-            if let Ok(children) = proxy.get_children().await {
-                for child_ref in children {
-                    if let Ok(child) = bus.proxy_for(&child_ref).await {
+            let child_paths = cache.map(|c| c.children_of(&path)).unwrap_or_default();
+            if child_paths.is_empty() {
+                if let Ok(children) = proxy.get_children().await {
+                    for child_ref in children {
+                        if let Ok(child) = bus.proxy_for(&child_ref).await {
+                            queue.push_back((child, remaining - 1));
+                        }
+                    }
+                }
+            } else {
+                for child_path in child_paths {
+                    if let Ok(child) = bus.sibling_proxy(&proxy, child_path).await {
                         queue.push_back((child, remaining - 1));
                     }
                 }
@@ -168,12 +196,22 @@ async fn collect_candidates(
 /// happened to be nowhere. It runs the same reality checks the tree walk does —
 /// not-showing widgets and impossible origins are both excluded — so a locator
 /// and a snapshot agree on which elements exist.
-async fn center_of(proxy: &AccessibleProxy<'static>) -> Option<(f64, f64)> {
-    let showing = proxy
-        .get_state()
-        .await
-        .is_ok_and(|s| s.contains(State::Showing));
-    let ifaces = proxy.proxies().await.ok()?;
+async fn center_of(
+    proxy: &AccessibleProxy<'static>,
+    cached_states: Option<atspi::StateSet>,
+    cached_ifaces: Option<atspi::InterfaceSet>,
+) -> Option<(f64, f64)> {
+    let showing = match cached_states {
+        Some(states) => states.contains(State::Showing),
+        None => proxy
+            .get_state()
+            .await
+            .is_ok_and(|s| s.contains(State::Showing)),
+    };
+    let ifaces = match cached_ifaces {
+        Some(set) => cache::Interfaces::from_set(set, proxy),
+        None => cache::Interfaces::query(proxy).await?,
+    };
     let region = walk::extents_of(&ifaces, showing).await?;
     Some((
         region.x + region.width / 2.0,
@@ -182,10 +220,15 @@ async fn center_of(proxy: &AccessibleProxy<'static>) -> Option<(f64, f64)> {
 }
 
 /// Resolve a locator to a single element, or say why it could not.
-async fn resolve(bus: &Bus, locator: &AxLocator) -> Result<(AccessibleProxy<'static>, AxElement)> {
+async fn resolve(
+    bus: &Bus,
+    locator: &AxLocator,
+    budget: Budget,
+) -> Result<(AccessibleProxy<'static>, AxElement)> {
     let app = app_or_err(bus, locator.pid).await?;
     let pid = app.pid;
-    let candidates = collect_candidates(bus, app.root, SCAN_DEPTH).await;
+    let cache = AppCache::fetch(bus, &app.root).await;
+    let candidates = collect_candidates(bus, app.root, SCAN_DEPTH, budget, cache.as_ref()).await;
 
     let summaries: Vec<RankCandidate> = candidates.iter().map(|c| c.summary.clone()).collect();
     let index = rank_candidates(&summaries, locator).ok_or_else(|| {
@@ -204,7 +247,7 @@ async fn resolve(bus: &Bus, locator: &AxLocator) -> Result<(AccessibleProxy<'sta
 
     // Re-read the matched element so the caller sees the element as it is now,
     // with its affordances — the ranking summary carries only role/title/center.
-    let mut walk = Walk::new(bus, pid);
+    let mut walk = Walk::new(bus, pid, budget);
     let element = walk
         .element(&proxy, 0)
         .await
@@ -235,19 +278,30 @@ enum FocusScan {
 /// situations: an application whose accessibility bridge is not loaded exposes
 /// no focus state at all, and refusing to type into it would break the one
 /// input path that does work there.
-async fn find_focused(bus: &Bus, root: AccessibleProxy<'static>) -> FocusScan {
+async fn find_focused(
+    bus: &Bus,
+    root: AccessibleProxy<'static>,
+    budget: Budget,
+    cache: Option<&AppCache>,
+) -> FocusScan {
     let mut queue: VecDeque<(AccessibleProxy<'static>, u32)> = VecDeque::new();
     queue.push_back((root, FOCUS_DEPTH));
     let mut saw_focusable = false;
-    let mut budget = walk::MAX_NODES;
+    let mut nodes = walk::MAX_NODES;
 
     while let Some((proxy, remaining)) = queue.pop_front() {
-        if budget == 0 {
+        if nodes == 0 || budget.spent() {
             break;
         }
-        budget -= 1;
+        nodes -= 1;
 
-        if let Ok(states) = proxy.get_state().await {
+        let path = proxy.inner().path().as_str().to_owned();
+        let cached = cache.and_then(|c| c.get(&path));
+        let states = match cached {
+            Some(item) => Some(item.states),
+            None => proxy.get_state().await.ok(),
+        };
+        if let Some(states) = states {
             if states.contains(State::Focused) {
                 return FocusScan::Found(proxy);
             }
@@ -257,9 +311,18 @@ async fn find_focused(bus: &Bus, root: AccessibleProxy<'static>) -> FocusScan {
         }
 
         if remaining > 0 {
-            if let Ok(children) = proxy.get_children().await {
-                for child_ref in children {
-                    if let Ok(child) = bus.proxy_for(&child_ref).await {
+            let child_paths = cache.map(|c| c.children_of(&path)).unwrap_or_default();
+            if child_paths.is_empty() {
+                if let Ok(children) = proxy.get_children().await {
+                    for child_ref in children {
+                        if let Ok(child) = bus.proxy_for(&child_ref).await {
+                            queue.push_back((child, remaining - 1));
+                        }
+                    }
+                }
+            } else {
+                for child_path in child_paths {
+                    if let Ok(child) = bus.sibling_proxy(&proxy, child_path).await {
                         queue.push_back((child, remaining - 1));
                     }
                 }
@@ -289,15 +352,17 @@ fn flatten(node: &AxElement, out: &mut Vec<AxElement>) {
 #[async_trait]
 impl AccessibilityCapability for LinuxAccessibility {
     /// AT-SPI has no "focused element of process P" query, so a `pid` narrows
-    /// which application tree is scanned — which is the same answer, reached
-    /// directly. Without one the frontmost application is scanned, as before.
+    /// which application tree is scanned — the same answer, reached directly.
+    /// Without one the frontmost application is scanned, as before.
     async fn query_focused(&self, params: QueryFocusedParams) -> Result<Option<AxElement>> {
+        let budget = Budget::start();
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
-        match find_focused(&bus, app.root).await {
+        let cache = AppCache::fetch(&bus, &app.root).await;
+        match find_focused(&bus, app.root, budget, cache.as_ref()).await {
             FocusScan::Found(proxy) => {
-                let mut walk = Walk::new(&bus, pid);
+                let mut walk = Walk::new(&bus, pid, budget);
                 Ok(walk.element(&proxy, 0).await)
             }
             FocusScan::NothingFocused => Ok(None),
@@ -310,11 +375,16 @@ impl AccessibilityCapability for LinuxAccessibility {
     }
 
     async fn query_tree(&self, params: QueryTreeParams) -> Result<QueryResult> {
+        let budget = Budget::start();
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
-        let mut walk = Walk::with_budget(&bus, pid, clamp_max_nodes(params.max_nodes) as usize);
-        let element = walk.element(&app.root, params.max_depth).await;
+        // Caller-supplied `max_nodes` is clamped to the protocol range so the
+        // helper can log a malformed request; the walk itself hardens against
+        // [`walk::MAX_NODES`] inside, so this is a no-op on healthy input.
+        let _ = clamp_max_nodes(params.max_nodes);
+        let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
+        let element = walk.tree(&app.root, params.max_depth).await;
         Ok(QueryResult {
             element,
             node_count: walk.spent(),
@@ -323,15 +393,20 @@ impl AccessibilityCapability for LinuxAccessibility {
     }
 
     async fn query_by_role(&self, params: QueryByRoleParams) -> Result<QueryListResult> {
+        let budget = Budget::start();
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
-        let mut walk = Walk::with_budget(&bus, pid, clamp_max_nodes(params.max_nodes) as usize);
-        let tree = walk.element(&app.root, SCAN_DEPTH).await;
+        let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
+        let Some(tree) = walk.tree(&app.root, SCAN_DEPTH).await else {
+            return Ok(QueryListResult {
+                elements: Vec::new(),
+                node_count: walk.spent(),
+                truncated: walk.exhausted(),
+            });
+        };
         let mut all = Vec::new();
-        if let Some(tree) = tree.as_ref() {
-            flatten(tree, &mut all);
-        }
+        flatten(&tree, &mut all);
         Ok(QueryListResult {
             elements: all.into_iter().filter(|e| e.role == params.role).collect(),
             node_count: walk.spent(),
@@ -341,66 +416,77 @@ impl AccessibilityCapability for LinuxAccessibility {
 
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
         let bus = Bus::open().await?;
-        let (proxy, matched) = resolve(&bus, &params.locator).await?;
+        let (proxy, matched) = resolve(&bus, &params.locator, Budget::start()).await?;
+        let secure = matched.secure == Some(true);
 
-        let ifaces = proxy
-            .proxies()
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("AT-SPI interface query: {e}")))?;
-        let editable = ifaces.editable_text().await.map_err(|_| {
-            DesktopError::NotImplemented(format!(
-                "The matched {} does not implement the AT-SPI EditableText interface, so its \
-                 value cannot be written. Click it and use type_text instead.",
-                matched.role
-            ))
+        let ifaces = cache::Interfaces::query(&proxy).await.ok_or_else(|| {
+            DesktopError::PlatformError(
+                "The matched element stopped answering before it could be written".into(),
+            )
         })?;
 
-        let performed = editable
-            .set_text_contents(&params.value)
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("AT-SPI set_text_contents: {e}")))?;
-
-        // Read back rather than trust the return value: a toolkit can accept the
-        // call and clamp, reformat or reject the content.
-        let actual = match ifaces.text().await {
-            Ok(text) => text.get_text(0, -1).await.ok(),
-            Err(_) => None,
+        // Text first, then the numeric `Value` interface. A slider, dial or spin
+        // button carries no text at all — it used to be advertised as
+        // interactable and then refused here, which is the advertised-but-
+        // disabled shape this limb exists to avoid.
+        let (performed, verification) = match ifaces.editable_text().await {
+            Some(editable) => {
+                let performed = editable
+                    .set_text_contents(&params.value)
+                    .await
+                    .map_err(|e| {
+                        DesktopError::PlatformError(format!("AT-SPI set_text_contents: {e}"))
+                    })?;
+                // Read back rather than trust the return value: a toolkit can
+                // accept the call and clamp, reformat or reject the content.
+                let actual = match ifaces.text().await {
+                    Some(text) => text.get_text(0, -1).await.ok(),
+                    None => None,
+                };
+                (performed, verify_text(&params.value, actual.as_deref(), secure))
+            }
+            None => {
+                let value = ifaces.value().await.ok_or_else(|| {
+                    DesktopError::NotImplemented(format!(
+                        "The matched {} implements neither the AT-SPI EditableText interface (for \
+                         typed text) nor the Value interface (for a number), so its value cannot \
+                         be written. Click it and use type_text instead.",
+                        matched.role
+                    ))
+                })?;
+                let wanted: f64 = params.value.trim().parse().map_err(|_| {
+                    DesktopError::InputFailed(format!(
+                        "The matched {} takes a number (it exposes the AT-SPI Value interface), \
+                         but {:?} is not one. Pass a bare number such as \"0.5\".",
+                        matched.role, params.value
+                    ))
+                })?;
+                value.set_current_value(wanted).await.map_err(|e| {
+                    DesktopError::PlatformError(format!("AT-SPI set_current_value: {e}"))
+                })?;
+                let actual = value.current_value().await.ok();
+                (true, verify_number(wanted, actual))
+            }
         };
-        let verification = Some(match &actual {
-            Some(actual) if actual == &params.value => AxVerification {
-                state: "verified".into(),
-                reason: None,
-                actual_preview: None,
-            },
-            Some(actual) => AxVerification {
-                state: "unverified".into(),
-                reason: Some("the element read back a different value".into()),
-                actual_preview: Some(actual.chars().take(200).collect()),
-            },
-            None => AxVerification {
-                state: "unverified".into(),
-                reason: Some("the element exposes no readable text to verify against".into()),
-                actual_preview: None,
-            },
-        });
 
         Ok(AxActionResult {
             performed,
             path: "accessibility".into(),
             matched: Some(matched),
-            verification,
+            verification: Some(verification),
         })
     }
 
     async fn perform_action(&self, params: PerformActionParams) -> Result<AxActionResult> {
         let bus = Bus::open().await?;
-        let (proxy, matched) = resolve(&bus, &params.locator).await?;
+        let (proxy, matched) = resolve(&bus, &params.locator, Budget::start()).await?;
 
-        let ifaces = proxy
-            .proxies()
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("AT-SPI interface query: {e}")))?;
-        let action = ifaces.action().await.map_err(|_| {
+        let ifaces = cache::Interfaces::query(&proxy).await.ok_or_else(|| {
+            DesktopError::PlatformError(
+                "The matched element stopped answering before it could be acted on".into(),
+            )
+        })?;
+        let action = ifaces.action().await.ok_or_else(|| {
             DesktopError::NotImplemented(format!(
                 "The matched {} implements no AT-SPI Action interface, so it has no native action \
                  to trigger. Click its center instead.",
@@ -442,6 +528,74 @@ impl AccessibilityCapability for LinuxAccessibility {
     }
 }
 
+/// Build the verification for a **text** write from what the element read back.
+///
+/// `secure` is load-bearing, not decorative. `actual_preview` used to carry up
+/// to 200 characters of whatever came back — which, on a password box, is the
+/// password, travelling from the limb into the model's context. macOS scrubs
+/// secure values inside its Swift handler and Windows gates this very field on
+/// `!secure`; Linux was the one platform that did neither, so writing to a
+/// credential field and having the toolkit reformat it (a password manager
+/// normalising whitespace is enough) leaked it.
+///
+/// On a secure element the verdict is still reported — "did it take?" is exactly
+/// what the caller needs — but never the bytes.
+///
+/// Pure, so the redaction is provable without a desktop.
+#[must_use]
+fn verify_text(wanted: &str, actual: Option<&str>, secure: bool) -> AxVerification {
+    match actual {
+        Some(actual) if actual == wanted => AxVerification {
+            state: "verified".into(),
+            reason: None,
+            actual_preview: None,
+        },
+        Some(actual) => AxVerification {
+            state: "unverified".into(),
+            reason: Some("the element read back a different value".into()),
+            actual_preview: (!secure).then(|| actual.chars().take(200).collect()),
+        },
+        None => AxVerification {
+            state: "unverified".into(),
+            reason: Some("the element exposes no readable text to verify against".into()),
+            actual_preview: None,
+        },
+    }
+}
+
+/// Build the verification for a **numeric** write.
+///
+/// A slider legitimately clamps and snaps: asking for 0.37 on a control with a
+/// step of 0.1 lands on 0.4, and calling that "unverified" without saying what
+/// happened would send the model into a retry loop against physics. So a value
+/// the control moved to is reported as its own outcome, with the number it
+/// actually holds — a number is never a secret, so there is nothing to redact.
+#[must_use]
+fn verify_number(wanted: f64, actual: Option<f64>) -> AxVerification {
+    match actual {
+        // Exact float equality would fail on values that round-tripped through
+        // the bus perfectly well; the tolerance is what "the control took it"
+        // means in practice.
+        Some(actual) if (actual - wanted).abs() < 1e-6 => AxVerification {
+            state: "verified".into(),
+            reason: None,
+            actual_preview: None,
+        },
+        Some(actual) => AxVerification {
+            state: "unverified".into(),
+            reason: Some(
+                "the control clamped or snapped the value to its own range and step".into(),
+            ),
+            actual_preview: Some(actual.to_string()),
+        },
+        None => AxVerification {
+            state: "unverified".into(),
+            reason: Some("the control does not report its current value back".into()),
+            actual_preview: None,
+        },
+    }
+}
+
 /// Choose which of an element's actions answers to `wanted`.
 ///
 /// Accepts an AT-SPI action name verbatim (what a snapshot reports on Linux)
@@ -475,6 +629,74 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()
+    }
+
+    // ── set_value verification ──────────────────────────────────────────────
+
+    #[test]
+    fn a_secure_fields_read_back_value_never_leaves_the_limb() {
+        // The bug this pins: `actual_preview` carried up to 200 characters of
+        // whatever the element read back, with no secure check. Writing into a
+        // credential field and having the toolkit reformat it — a password
+        // manager normalising whitespace is enough — put the password into the
+        // model's context. macOS scrubs secure values inside its Swift handler
+        // and Windows gates this exact field on `!secure`; Linux did neither.
+        let v = verify_text("hunter2", Some("hunter2 "), true);
+        assert_eq!(v.state, "unverified");
+        assert!(
+            v.actual_preview.is_none(),
+            "a secure element's bytes must not be reported: {:?}",
+            v.actual_preview
+        );
+        // The verdict itself is still reported — "did it take?" is what the
+        // caller needs, and it is not a secret.
+        assert!(v.reason.is_some());
+    }
+
+    #[test]
+    fn an_ordinary_field_still_reports_what_it_read_back() {
+        // Withholding this everywhere would cost the model the one signal that
+        // tells it a write was mangled rather than rejected.
+        let v = verify_text("hello", Some("HELLO"), false);
+        assert_eq!(v.state, "unverified");
+        assert_eq!(v.actual_preview.as_deref(), Some("HELLO"));
+    }
+
+    #[test]
+    fn a_matching_read_back_is_verified_and_carries_no_preview() {
+        for secure in [true, false] {
+            let v = verify_text("hello", Some("hello"), secure);
+            assert_eq!(v.state, "verified");
+            assert!(v.actual_preview.is_none());
+            assert!(v.reason.is_none());
+        }
+    }
+
+    #[test]
+    fn an_unreadable_element_is_unverified_rather_than_assumed_good() {
+        let v = verify_text("hello", None, false);
+        assert_eq!(v.state, "unverified");
+        assert!(v.actual_preview.is_none());
+    }
+
+    #[test]
+    fn a_control_that_snapped_the_value_says_so_rather_than_just_failing() {
+        // A slider with a step of 0.1 asked for 0.37 lands on 0.4. Reporting
+        // that as a bare failure would send the model into a retry loop against
+        // the widget's own arithmetic.
+        let v = verify_number(0.37, Some(0.4));
+        assert_eq!(v.state, "unverified");
+        assert_eq!(v.actual_preview.as_deref(), Some("0.4"));
+        assert!(v.reason.as_deref().unwrap().contains("clamped"));
+    }
+
+    #[test]
+    fn a_numeric_write_that_landed_is_verified_within_float_tolerance() {
+        // Exact equality would fail on a value that round-tripped through the
+        // bus perfectly well.
+        assert_eq!(verify_number(0.5, Some(0.5)).state, "verified");
+        assert_eq!(verify_number(0.5, Some(0.500_000_01)).state, "verified");
+        assert_eq!(verify_number(0.5, None).state, "unverified");
     }
 
     #[test]
@@ -573,8 +795,10 @@ mod tests {
             return; // bus is up but no application has registered
         };
 
-        let mut walk = Walk::new(&bus, app.pid);
-        let Some(tree) = walk.element(&app.root, 4).await else {
+        let mut walk = Walk::new(&bus, app.pid, Budget::start())
+            .prefetch(&app.root)
+            .await;
+        let Some(tree) = walk.tree(&app.root, 4).await else {
             return;
         };
 

@@ -1531,6 +1531,12 @@ mod recall_context_identity_tests {
     /// global mirror points at another run's session.
     #[tokio::test]
     async fn recall_context_reads_the_turn_session_not_the_global_mirror() {
+        // `BuiltinToolRegistry::new` opens the goal store under whatever
+        // `ALEPH_HOME` currently says, and that is process-global: without this
+        // the test both touches the developer's real `~/.aleph/data` and races
+        // any sibling holding an `IsolatedAlephHome` — both ended up opening the
+        // *same* `goals.db` and one lost with "database is locked".
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let mut registry = BuiltinToolRegistry::new().await.unwrap();
 
         // Seed a raw chunk under this turn's (agent, session) pair.
@@ -1578,6 +1584,7 @@ mod recall_context_identity_tests {
     /// mirror is the only session source and must still be honored.
     #[tokio::test]
     async fn recall_context_falls_back_to_the_global_mirror_without_a_turn() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let mut registry = BuiltinToolRegistry::new().await.unwrap();
 
         let mirror_session = SessionKey::main("bob").to_key_string();
@@ -1617,6 +1624,7 @@ mod recall_context_identity_tests {
     /// to another agent cannot steal THIS turn's identity mid-call.
     #[tokio::test]
     async fn caller_agent_id_prefers_the_turn_over_the_shared_handle() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let mut registry = BuiltinToolRegistry::new().await.unwrap();
         // Mirror points at "bob" — what a concurrent run's write leaves behind.
         registry.session_context_handle = Some(Arc::new(RwLock::new(SessionContext {
@@ -1639,6 +1647,7 @@ mod recall_context_identity_tests {
     /// absence yields the fallback — unchanged pre-fix behaviour.
     #[tokio::test]
     async fn caller_agent_id_falls_back_to_handle_then_fallback_without_a_turn() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let mut registry = BuiltinToolRegistry::new().await.unwrap();
         // No handle, no turn scope → fallback.
         assert_eq!(registry.caller_agent_id("fallback"), "fallback");

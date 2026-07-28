@@ -2,6 +2,14 @@
 
 > 对应 [FEATURE_LOCATOR.md §5.4](FEATURE_LOCATOR.md)。本文是**模型参考数据层的契约文档**：四张表怎么分工、怎么 join、什么时候允许陈旧、漂移由谁守。
 > 内含 **opencode / kimi-cli 对照表（Gap Analysis）**——**改这一层之前先看那张表，不必重做一遍对比**。
+>
+> ⚠️ **本文只回答「这个模型是什么」，不回答「这一轮用哪个模型」**。后者只有一个决定点：
+> `src/orchestrator/harness_bridge/runner_impl.rs::effective_model_directive`
+> —— **per-turn pick（Panel 模型 pill / `[voice]` 钉，经 `FlowRequest.model_directive`）▸
+> session `select_model` pick ▸ agent `model_hint` ▸ `BrainRef` preset**。
+> 新增任何模型来源都必须进那个函数：Panel 的模型 pill 曾经完整地产出到 `RunRequest.model_override`
+> 却从未抵达绑定点，只到达附件的 vision 判断与 `ModelResolved` 横幅——**UI 确认了切换，作答的仍是旧模型**
+> （详见 [FEATURE_LOCATOR §3.6](FEATURE_LOCATOR.md) round-2）。
 
 ---
 
