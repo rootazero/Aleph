@@ -52,7 +52,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use aleph_desktop::bridge::client::SwiftBridge;
 use aleph_protocol::desktop_bridge::methods::ax::{
     AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams, QueryListResult,
-    QueryResult, QueryTreeParams, SetValueParams,
+    QueryResult, QueryTreeParams, SetValueParams, DEFAULT_MAX_NODES,
 };
 use aleph_protocol::desktop_bridge::methods::input::{
     ClickParams, CursorPositionResult, DragParams, MouseButton, ScrollParams, TypeTextParams,
@@ -374,6 +374,7 @@ async fn tier_a_ax_press_increments_the_fixtures_own_counter() {
             QueryByRoleParams {
                 role: "AXButton".to_string(),
                 pid: Some(before.pid),
+                max_nodes: DEFAULT_MAX_NODES,
             },
         )
         .await
@@ -496,6 +497,7 @@ async fn tier_a_secure_field_value_never_appears_in_a_snapshot() {
             QueryTreeParams {
                 pid: Some(state.pid),
                 max_depth: 10,
+                max_nodes: DEFAULT_MAX_NODES,
             },
         )
         .await
@@ -551,6 +553,7 @@ async fn tier_a_fixture_geometry_agrees_with_the_bridges_ax_bounds() {
             QueryByRoleParams {
                 role: "AXButton".to_string(),
                 pid: Some(state.pid),
+                max_nodes: DEFAULT_MAX_NODES,
             },
         )
         .await

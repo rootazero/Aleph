@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use aleph_protocol::desktop_bridge::methods::ax::QueryFocusedParams;
 use serde_json::json;
 
 use crate::sync_primitives::Arc;
@@ -36,7 +37,7 @@ pub(super) async fn gather_post_state(
     }
 
     if let Some(ax) = platform.ax() {
-        if let Ok(Some(el)) = ax.query_focused().await {
+        if let Ok(Some(el)) = ax.query_focused(QueryFocusedParams::default()).await {
             state.insert(
                 "focused_element".into(),
                 json!({

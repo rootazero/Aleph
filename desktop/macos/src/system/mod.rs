@@ -1,11 +1,10 @@
 //! macOS `SystemCapability` implementation using native APIs (objc2).
 
-mod clipboard;
 mod notification;
 mod sysinfo;
 mod workspace;
 
-use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+use aleph_desktop::system_types::{AppInfo, ClipboardContent, InstalledApp, SystemInfo};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::Result;
 use async_trait::async_trait;
@@ -41,16 +40,28 @@ impl SystemCapability for MacOSSystem {
         workspace::list_running_apps()
     }
 
+    async fn list_installed_apps(&self) -> Result<Vec<InstalledApp>> {
+        // A few hundred directory reads plus a LaunchServices bundle probe
+        // each — not something to run on the runtime's poll thread.
+        tokio::task::spawn_blocking(aleph_desktop::macos::app::list_installed)
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::InputFailed(format!(
+                    "list_installed_apps task join error: {e}"
+                ))
+            })?
+    }
+
     async fn send_notification(&self, title: &str, body: &str) -> Result<()> {
         notification::send_notification(title, body).await
     }
 
     async fn clipboard_read(&self) -> Result<ClipboardContent> {
-        clipboard::read()
+        aleph_desktop::macos::clipboard::read()
     }
 
     async fn clipboard_write(&self, text: &str) -> Result<()> {
-        clipboard::write(text)
+        aleph_desktop::macos::clipboard::write_text(text)
     }
 
     async fn system_info(&self) -> Result<SystemInfo> {

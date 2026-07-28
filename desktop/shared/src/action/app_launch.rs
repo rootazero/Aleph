@@ -1,17 +1,17 @@
 //! Application launch (platform-specific).
 
-// Only the macOS and Windows arms log inline; the Linux arms delegate to
-// `crate::linux::app` / `crate::action::window_linux`, which own their own logging.
-#[cfg(not(target_os = "linux"))]
+// Only the Windows arms log inline; macOS delegates to `crate::macos::app` and
+// Linux to `crate::linux::app`, both of which own their own logging.
+#[cfg(target_os = "windows")]
 use tracing::info;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use crate::error::DesktopError;
 use crate::error::Result;
 
 /// Launch an application by name or bundle ID.
 ///
-/// - **macOS**: `open -b <bundle_id>` (or `open -a <app_name>` if not a bundle ID)
+/// - **macOS**: `NSWorkspace`, by bundle id or by name — see [`crate::macos::app::launch`]
 /// - **Linux**: Resolves a `.desktop` entry (by id, `Name=`, or `Exec=`), else a
 ///   `PATH` executable, else `xdg-open` for URLs and real paths — see
 ///   [`crate::linux::app::launch`].
@@ -24,32 +24,9 @@ use crate::error::Result;
 pub fn launch_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::NSWorkspace;
-        use objc2_foundation::{NSString, NSURL};
-
-        let ws = NSWorkspace::sharedWorkspace();
-        let ns_name = NSString::from_str(app_name);
-
-        #[allow(deprecated)]
-        let url = if app_name.contains('.') {
-            ws.URLForApplicationWithBundleIdentifier(&ns_name)
-        } else {
-            ws.fullPathForApplication(&ns_name)
-                .map(|p| NSURL::fileURLWithPath(&p))
-        };
-
-        let url = url.ok_or_else(|| {
-            DesktopError::InputFailed(format!("Application '{app_name}' not found"))
-        })?;
-
-        if !ws.openURL(&url) {
-            return Err(DesktopError::InputFailed(format!(
-                "Failed to launch '{app_name}'"
-            )));
-        }
-
-        info!(app_name, "App launched (macOS)");
-        Ok(())
+        // One macOS answer to "what does this app name mean", shared with the
+        // `system` tool's arm — see `crate::macos::app`.
+        crate::macos::app::launch(app_name)
     }
 
     #[cfg(target_os = "linux")]
@@ -112,7 +89,8 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 
 /// Quit/close an application by name or bundle ID.
 ///
-/// - **macOS**: Uses `NSRunningApplication` to find and terminate the app by bundle ID.
+/// - **macOS**: `NSRunningApplication`, matched by bundle id **or** name, with the
+///   termination verified rather than assumed — see [`crate::macos::app::quit`].
 /// - **Linux**: Asks the window manager to close the app's windows, then falls back
 ///   to `SIGTERM` on processes whose executable name matches exactly — never a
 ///   command-line match. See [`crate::linux::app::quit`].
@@ -126,22 +104,11 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 pub fn quit_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::NSRunningApplication;
-        use objc2_foundation::NSString;
-
-        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(
-            &NSString::from_str(app_name),
-        );
-        if apps.is_empty() {
-            return Err(DesktopError::InputFailed(format!(
-                "No running application found with identifier '{app_name}'"
-            )));
-        }
-        for app in &apps {
-            app.terminate();
-        }
-        info!(app_name, "App quit requested (macOS)");
-        Ok(())
+        // Was bundle-id-only here and name-or-bundle-id in the `system` tool's
+        // arm, so an app launched by name could not be closed by name. Both go
+        // through `crate::macos::app` now, which also waits to see the app
+        // actually go rather than reporting the request as the outcome.
+        crate::macos::app::quit(app_name)
     }
 
     #[cfg(target_os = "linux")]

@@ -40,7 +40,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams, DEFAULT_MAX_NODES};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -412,20 +412,33 @@ impl AlephTool for DesktopSom {
         let pid = args.pid.or_else(|| window.as_ref().map(|w| w.pid));
 
         // 1. Collect actionable elements.
-        let root = match ax.query_tree(QueryTreeParams { pid, max_depth }).await {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                return Ok(DesktopOutput {
-                    success: true,
-                    data: Some(json!({ "count": 0, "elements": [] })),
-                    message: Some("No accessible UI tree for the target application.".into()),
-                });
-            }
+        let tree = match ax
+            .query_tree(QueryTreeParams {
+                pid,
+                max_depth,
+                max_nodes: DEFAULT_MAX_NODES,
+            })
+            .await
+        {
+            Ok(r) => r,
             Err(e) => {
                 return Ok(DesktopOutput {
                     success: false,
                     data: None,
-                    message: Some(format!("AX query failed: {e}")),
+                    message: Some(super::recovery::with_hint(format!("AX query failed: {e}"))),
+                });
+            }
+        };
+        // A budget-exhausted walk means marks are MISSING from the overlay, and
+        // an overlay is exactly the artefact a model treats as exhaustive.
+        let tree_truncated = tree.truncated;
+        let root = match tree.element {
+            Some(r) => r,
+            None => {
+                return Ok(DesktopOutput {
+                    success: true,
+                    data: Some(json!({ "count": 0, "elements": [] })),
+                    message: Some("No accessible UI tree for the target application.".into()),
                 });
             }
         };
@@ -576,6 +589,7 @@ impl AlephTool for DesktopSom {
             "app_pid": root.pid,
             "count": elements_json.len(),
             "truncated": truncated,
+            "tree_truncated": tree_truncated,
             "elements": elements_json,
         });
         if let (Some(w), Some(obj)) = (window.as_ref(), data.as_object_mut()) {
@@ -592,7 +606,16 @@ impl AlephTool for DesktopSom {
         Ok(DesktopOutput {
             success: true,
             data: Some(data),
-            message: None,
+            // A set of marks reads as an inventory: every actionable thing,
+            // numbered. When the walk ran out of budget it is not one, and the
+            // model has to be told — otherwise "it is not on the screen" is the
+            // conclusion it draws from a mark that was simply never reached.
+            message: tree_truncated.then(|| {
+                "The accessibility walk hit its node budget, so these marks do NOT cover the \
+                 whole app — some interactable elements were never examined. Pass `pid` (or a \
+                 `window_id`) to narrow it."
+                    .to_string()
+            }),
         })
     }
 }

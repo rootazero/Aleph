@@ -31,6 +31,12 @@ pub mod error;
 // its consumers are all Linux-gated.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod linux;
+// macOS app lifecycle + clipboard, shared by this crate's `action` arms and by
+// the `aleph-desktop-macos` capability impls. Unlike `linux`, there is no pure
+// half to keep host-compilable — it is `NSWorkspace` and `NSPasteboard` all the
+// way down.
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod media_types;
 pub mod native_screen;
 pub mod perception;

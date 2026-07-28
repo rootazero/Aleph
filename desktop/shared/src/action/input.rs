@@ -430,16 +430,7 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
 pub fn clipboard_read() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-
-        let pb = NSPasteboard::generalPasteboard();
-        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
-        // always initialized and thread-safe.
-        let pasteboard_type = unsafe { NSPasteboardTypeString };
-        match pb.stringForType(pasteboard_type) {
-            Some(s) => Ok(s.to_string()),
-            None => Ok(String::new()),
-        }
+        crate::macos::clipboard::read_text()
     }
 
     #[cfg(target_os = "linux")]
@@ -470,18 +461,9 @@ pub fn clipboard_read() -> Result<String> {
 pub fn clipboard_write(text: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-        use objc2_foundation::NSString;
-
-        let pb = NSPasteboard::generalPasteboard();
-        pb.clearContents();
-        let ns_string = NSString::from_str(text);
-        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
-        // always initialized and thread-safe.
-        let pasteboard_type = unsafe { NSPasteboardTypeString };
-        pb.setString_forType(&ns_string, pasteboard_type);
-        info!("Clipboard write performed");
-        Ok(())
+        // This arm used to drop `setString:forType:`'s answer on the floor and
+        // return `Ok(())` regardless — a refused write reported as a copy.
+        crate::macos::clipboard::write_text(text)
     }
 
     #[cfg(target_os = "linux")]

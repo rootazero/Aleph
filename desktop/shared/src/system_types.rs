@@ -16,6 +16,26 @@ pub struct AppInfo {
     pub is_active: bool,
 }
 
+/// An application that exists on this machine, whether or not it is running.
+///
+/// Distinct from [`AppInfo`], which describes a *process*. The distinction is
+/// load-bearing: `launch_app` takes a name or a bundle identifier, and until
+/// this existed the only list a model could obtain was of things already
+/// running — so "open Numbers" had no path to `com.apple.Numbers` except a
+/// guess. `AppInfo` cannot stand in for it, because its `pid`/`is_active` fields
+/// have no meaning for something that is not running and reporting them as
+/// absent/false would read as a claim about a process rather than about a file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledApp {
+    /// Display name, as shown in Finder (the bundle's file stem).
+    pub name: String,
+    /// Bundle identifier, e.g. `com.apple.Numbers`. Empty when the bundle does
+    /// not declare one — the name is then the only usable handle.
+    pub bundle_id: String,
+    /// Absolute path to the application bundle.
+    pub path: String,
+}
+
 /// Content read from or written to the system clipboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardContent {

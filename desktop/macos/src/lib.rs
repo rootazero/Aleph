@@ -321,15 +321,14 @@ impl MediaCapability for MacOSPlatform {
             RecordAudioResult, RecordStopParams, METHOD_AUDIO_RECORD_STOP,
         };
         debug!("Proxying audio record_stop to Swift helper");
-        // The helper finalises the encoder before replying; the recording is
-        // user-bounded so cap generously rather than by a known duration.
+        // The helper finalises the encoder before replying, which is why this
+        // gets its own (longer) budget — but that budget is the protocol's to
+        // state, not this limb's to re-spell. It used to be a bare
+        // `Duration::from_secs(15)` here, i.e. a second copy of a number the
+        // protocol had no idea about.
         let rpc: RecordAudioResult = self
             .bridge
-            .call_with_timeout(
-                METHOD_AUDIO_RECORD_STOP,
-                RecordStopParams {},
-                Duration::from_secs(15),
-            )
+            .call(METHOD_AUDIO_RECORD_STOP, RecordStopParams {})
             .await
             .map_err(|e| preserve_typed("media.audio.record_stop", e))?;
         Ok(AudioRecordResult {

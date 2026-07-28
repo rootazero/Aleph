@@ -19,13 +19,52 @@ pub const METHOD_QUERY_BY_ROLE: &str = "ax.query_by_role";
 pub const METHOD_SET_VALUE: &str = "ax.set_value";
 pub const METHOD_PERFORM_ACTION: &str = "ax.perform_action";
 pub const NOTIFY_MUTATION: &str = "ax.mutation";
-pub const SUGGESTED_TIMEOUT_MS: u64 = 3_000;
+
+// ── Deadlines ────────────────────────────────────────────────────────────────
+
+/// Deadline for the AX calls that walk a tree.
+///
+/// A walk is bounded by `max_nodes` (see [`QueryTreeParams`]) rather than by the
+/// clock, but each node costs several round trips into the *target* app, so a
+/// merely-slow app must still be given room to answer. What this cap is for is
+/// the app that has stopped answering at all.
+pub const DEFAULT_TIMEOUT_MS: u64 = 15_000;
+
+/// Deadline for [`METHOD_QUERY_FOCUSED`].
+///
+/// This one runs on the hot path — the `type_text` focus gate issues it before
+/// every single keystroke batch — and it reads exactly one element. It has no
+/// business taking as long as a tree walk.
+pub const TIMEOUT_MS_QUERY_FOCUSED: u64 = 3_000;
+
+pub const TIMEOUT_OVERRIDES_MS: &[(&str, u64)] =
+    &[(METHOD_QUERY_FOCUSED, TIMEOUT_MS_QUERY_FOCUSED)];
 
 // ── Request params ───────────────────────────────────────────────────────────
 
-/// Params for `ax.query_focused` — no inputs required.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct QueryFocusedParams {}
+/// Params for `ax.query_focused`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct QueryFocusedParams {
+    /// pid to ask about; `null` means "whatever the *system* currently focuses".
+    ///
+    /// The distinction is the whole point of the field. Aleph's default input
+    /// rail on macOS delivers into a named process without bringing it forward,
+    /// so the system-focused element routinely belongs to some *other* app — and
+    /// a focus check that reads it is inspecting the wrong window. With a pid the
+    /// helper asks that application for its own `AXFocusedUIElement`, which is
+    /// where the keystrokes are actually going to land.
+    ///
+    /// A helper or platform that can only answer system-wide must still honour
+    /// the contract below by filtering, never by widening the answer.
+    ///
+    /// # Contract
+    ///
+    /// When `pid` is `Some`, a returned element **belongs to that process**.
+    /// "Some other app holds focus" is reported as `None`, not as that app's
+    /// element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+}
 
 /// Params for `ax.query_tree`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -36,10 +75,64 @@ pub struct QueryTreeParams {
     /// Maximum depth of the returned subtree (default 6 to bound response size).
     #[serde(default = "default_depth")]
     pub max_depth: u32,
+    /// Maximum number of nodes to return, across the whole subtree.
+    ///
+    /// Depth alone does not bound a tree: a browser or a long document is wide,
+    /// not deep, so `max_depth` can be satisfied while the walk still emits tens
+    /// of thousands of nodes. Every one of them costs several round trips into
+    /// the target app on the way out and a few hundred bytes of the model's
+    /// context on the way in.
+    ///
+    /// When the budget is reached the walk stops and [`QueryResult::truncated`]
+    /// says so — the caller is told it is holding a partial tree rather than
+    /// being left to assume the app really is that small.
+    #[serde(default = "default_max_nodes")]
+    pub max_nodes: u32,
 }
 
 const fn default_depth() -> u32 {
     6
+}
+
+/// Node budget for one tree walk.
+///
+/// Enough to carry a real application window (a populated Chromium window
+/// measures in the high hundreds), small enough that a pathological tree cannot
+/// spend the call's whole deadline or the model's whole context.
+///
+/// This is the contract's answer, and it exists because there used to be three:
+/// the macOS helper stopped at 10 000 nodes, Windows UI Automation at 4 000 and
+/// the Linux AT-SPI walk at 1 500 — three private constants, none of them
+/// visible to the caller, each silently cutting the tree at a different size.
+/// "How much of an app may one query return" is a property of the protocol, not
+/// of whichever limb happens to answer.
+pub const DEFAULT_MAX_NODES: u32 = 1_500;
+
+/// Ceiling a caller may raise [`QueryTreeParams::max_nodes`] to.
+///
+/// The budget is adjustable because some trees genuinely are large, and fixed at
+/// the top because every node is several round trips into another process: an
+/// unbounded request is a request to spend the whole call deadline.
+pub const MAX_MAX_NODES: u32 = 10_000;
+
+/// Clamp a caller-supplied node budget into the range limbs will honour.
+///
+/// Zero is treated as "unspecified" rather than "return nothing": a budget of
+/// none is never what a caller means, and an empty tree is the one answer a
+/// model cannot tell apart from an inaccessible app.
+#[must_use]
+pub const fn clamp_max_nodes(requested: u32) -> u32 {
+    if requested == 0 {
+        DEFAULT_MAX_NODES
+    } else if requested > MAX_MAX_NODES {
+        MAX_MAX_NODES
+    } else {
+        requested
+    }
+}
+
+const fn default_max_nodes() -> u32 {
+    DEFAULT_MAX_NODES
 }
 
 /// Params for `ax.query_by_role`.
@@ -50,6 +143,11 @@ pub struct QueryByRoleParams {
     /// pid of the target application; `null` means "use the frontmost app".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
+    /// Node budget for the walk this search runs over — see
+    /// [`QueryTreeParams::max_nodes`]. Bounds the *search*, not the number of
+    /// matches.
+    #[serde(default = "default_max_nodes")]
+    pub max_nodes: u32,
 }
 
 /// Stateless element locator for `ax.set_value` / `ax.perform_action`.
@@ -185,16 +283,37 @@ pub struct AxElement {
 ///
 /// `element` is `null` when no element was found (e.g. no focused element,
 /// or the process is not accessible).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct QueryResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element: Option<AxElement>,
+    /// Nodes actually walked, whether or not they all made it into `element`.
+    ///
+    /// `0` from a helper that predates the budget — like the affordance fields,
+    /// absent means "not told", never "none".
+    #[serde(default)]
+    pub node_count: u32,
+    /// `true` when the walk stopped on [`QueryTreeParams::max_nodes`], i.e. the
+    /// subtree is **incomplete**.
+    ///
+    /// A silent cut is the dangerous version of this: a model handed a pruned
+    /// tree with no marker concludes the control it is looking for does not
+    /// exist, and goes off to do something else. Say it out loud instead.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Result for `ax.query_by_role`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct QueryListResult {
     pub elements: Vec<AxElement>,
+    /// Nodes walked while searching (not the number of matches).
+    #[serde(default)]
+    pub node_count: u32,
+    /// `true` when the search stopped on the node budget — there may be further
+    /// matches this call never reached.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -211,9 +330,18 @@ mod tests {
 
     #[test]
     fn query_focused_params_roundtrip() {
-        let p = QueryFocusedParams {};
+        let p = QueryFocusedParams { pid: Some(4242) };
         let json = serde_json::to_string(&p).unwrap();
-        let _back: QueryFocusedParams = serde_json::from_str(&json).unwrap();
+        let back: QueryFocusedParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pid, Some(4242));
+    }
+
+    /// An older client sends `{}`, which must still mean "ask the system".
+    #[test]
+    fn query_focused_params_without_a_pid_are_the_system_wide_question() {
+        let back: QueryFocusedParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(back.pid, None);
+        assert_eq!(serde_json::to_string(&back).unwrap(), "{}");
     }
 
     #[test]
@@ -221,6 +349,7 @@ mod tests {
         let p = QueryByRoleParams {
             role: "AXButton".to_string(),
             pid: Some(1234),
+            max_nodes: DEFAULT_MAX_NODES,
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: QueryByRoleParams = serde_json::from_str(&json).unwrap();
@@ -288,6 +417,34 @@ mod tests {
         assert!(r.element.is_none());
     }
 
+    /// A helper that predates the node budget sends neither field. Absent must
+    /// decode as "not told" — and `truncated: false` is the safe reading, since
+    /// such a helper applies its own (larger) cap and never reports one.
+    #[test]
+    fn budget_fields_absent_decode_as_untruncated() {
+        let r: QueryResult = serde_json::from_str(r#"{"element":null}"#).unwrap();
+        assert_eq!(r.node_count, 0);
+        assert!(!r.truncated);
+    }
+
+    #[test]
+    fn a_max_nodes_request_is_clamped_into_range() {
+        assert_eq!(clamp_max_nodes(0), DEFAULT_MAX_NODES);
+        assert_eq!(clamp_max_nodes(1), 1);
+        assert_eq!(clamp_max_nodes(DEFAULT_MAX_NODES), DEFAULT_MAX_NODES);
+        assert_eq!(clamp_max_nodes(MAX_MAX_NODES + 1), MAX_MAX_NODES);
+        assert_eq!(clamp_max_nodes(u32::MAX), MAX_MAX_NODES);
+    }
+
+    /// The tree params carry the budget by default, so a caller that spells only
+    /// `pid` still gets a bounded walk rather than an unbounded one.
+    #[test]
+    fn tree_params_default_to_the_declared_budget() {
+        let p: QueryTreeParams = serde_json::from_str(r#"{"pid":7}"#).unwrap();
+        assert_eq!(p.max_nodes, DEFAULT_MAX_NODES);
+        assert_eq!(p.max_depth, 6);
+    }
+
     #[test]
     fn query_list_result_roundtrip() {
         let r = QueryListResult {
@@ -297,6 +454,8 @@ mod tests {
                 pid: 99,
                 ..Default::default()
             }],
+            node_count: 12,
+            truncated: false,
         };
         let json = serde_json::to_string(&r).unwrap();
         let back: QueryListResult = serde_json::from_str(&json).unwrap();

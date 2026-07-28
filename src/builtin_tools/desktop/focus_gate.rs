@@ -28,7 +28,7 @@
 //! et al) — it cannot see a password box inside Safari or a `sudo` prompt in
 //! Terminal, and this closes that hole.
 
-use aleph_protocol::desktop_bridge::methods::ax::AxElement;
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryFocusedParams};
 
 use crate::sync_primitives::Arc;
 
@@ -103,8 +103,15 @@ pub(super) fn evaluate(focused: Option<&AxElement>, force: bool) -> Gate {
 
 /// Run the gate against the live desktop. Returns `Some(refusal)` when the
 /// keystrokes must not be emitted, `None` to proceed.
+///
+/// `pid` names the process the keystrokes are being delivered into, and is what
+/// makes this gate look at the right window: on the targeted rail the keystrokes
+/// go somewhere that is usually *not* frontmost, so the system-focused element
+/// belongs to a different app entirely. `None` means the global rail, where the
+/// system-focused element genuinely is the destination.
 pub(super) async fn check(
     platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
+    pid: Option<i32>,
     force: bool,
 ) -> Option<DesktopOutput> {
     // No accessibility layer at all: a desktop with accessibility switched off, or a
@@ -112,7 +119,7 @@ pub(super) async fn check(
     // must not block.
     let ax = platform.ax()?;
 
-    let focused = match ax.query_focused().await {
+    let focused = match ax.query_focused(QueryFocusedParams { pid }).await {
         Ok(el) => el,
         Err(e) => {
             // AX is momentarily unreachable (permission revoked mid-run, helper
@@ -146,6 +153,181 @@ mod tests {
             pid: 1,
             ..Default::default()
         }
+    }
+
+    // ── `check`'s plumbing: WHICH window the gate looks at ──────────────
+    //
+    // `evaluate` above is pure and thoroughly covered. What went wrong was one
+    // layer up: on the targeted rail the gate read the *system*-focused element,
+    // which belongs to the app in front of the user rather than to the process
+    // the keystrokes were being delivered into. Since the targeted rail is the
+    // default on macOS, the branch that ran almost every time was the one that
+    // skipped the gate entirely — password box included.
+
+    use aleph_desktop::traits::{
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{DesktopPlatform, Result as DResult};
+    use aleph_protocol::desktop_bridge::methods::ax::{
+        AxElement as WireElement, QueryByRoleParams, QueryListResult, QueryResult, QueryTreeParams,
+    };
+    use std::sync::Mutex;
+
+    /// An AX layer where each process has its own focused element — which is
+    /// what a real accessibility layer models and what the old call site could
+    /// not ask about.
+    struct PerAppAx {
+        /// `(pid, element)`; `pid: None` is the system-wide answer.
+        focus: Vec<(Option<i32>, WireElement)>,
+        asked: Mutex<Vec<Option<i32>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl aleph_desktop::AccessibilityCapability for PerAppAx {
+        async fn query_focused(
+            &self,
+            params: aleph_protocol::desktop_bridge::methods::ax::QueryFocusedParams,
+        ) -> DResult<Option<WireElement>> {
+            self.asked.lock().unwrap().push(params.pid);
+            Ok(self
+                .focus
+                .iter()
+                .find(|(pid, _)| *pid == params.pid)
+                .map(|(_, el)| el.clone()))
+        }
+        async fn query_tree(&self, _p: QueryTreeParams) -> DResult<QueryResult> {
+            Ok(QueryResult::default())
+        }
+        async fn query_by_role(&self, _p: QueryByRoleParams) -> DResult<QueryListResult> {
+            Ok(QueryListResult::default())
+        }
+    }
+
+    struct AxOnlyPlatform {
+        ax: PerAppAx,
+    }
+
+    impl DesktopPlatform for AxOnlyPlatform {
+        fn platform_name(&self) -> &str {
+            "ax-only-mock"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            None
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            None
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+        fn ax(&self) -> Option<&dyn aleph_desktop::AccessibilityCapability> {
+            Some(&self.ax)
+        }
+    }
+
+    fn secure_field(pid: i32) -> WireElement {
+        WireElement {
+            role: "AXTextField".into(),
+            pid,
+            secure: Some(true),
+            ..Default::default()
+        }
+    }
+
+    fn plain_field(pid: i32) -> WireElement {
+        WireElement {
+            role: "AXTextField".into(),
+            pid,
+            ..Default::default()
+        }
+    }
+
+    fn platform(focus: Vec<(Option<i32>, WireElement)>) -> Arc<dyn DesktopPlatform> {
+        Arc::new(AxOnlyPlatform {
+            ax: PerAppAx {
+                focus,
+                asked: Mutex::new(Vec::new()),
+            },
+        })
+    }
+
+    /// The regression this exists for: a password box in a **background** app,
+    /// while some innocuous field is system-focused. The old code read the
+    /// system answer, saw a different pid, and allowed the keystrokes.
+    #[tokio::test]
+    async fn a_password_box_in_the_target_app_is_refused_even_when_another_app_is_frontmost() {
+        let p = platform(vec![
+            (None, plain_field(11)),        // frontmost app: harmless
+            (Some(733), secure_field(733)), // the app we are typing into
+        ]);
+        let refusal = check(&p, Some(733), false)
+            .await
+            .expect("typing into a background app's password box must be refused");
+        assert!(
+            refusal.message.unwrap_or_default().contains("secure"),
+            "the refusal must name why"
+        );
+    }
+
+    /// And the gate must ask about the process it was given, not the desktop.
+    #[tokio::test]
+    async fn the_gate_asks_about_the_target_process() {
+        let concrete = Arc::new(AxOnlyPlatform {
+            ax: PerAppAx {
+                focus: vec![(Some(733), plain_field(733))],
+                asked: Mutex::new(Vec::new()),
+            },
+        });
+        let p: Arc<dyn DesktopPlatform> = concrete.clone();
+
+        assert!(check(&p, Some(733), false).await.is_none());
+        // The system-wide question has no answer in this fixture, which is the
+        // "nothing is focused" refusal — the point here is only that the second
+        // call asked a *different* question than the first.
+        assert!(check(&p, None, false).await.is_some());
+
+        assert_eq!(
+            *concrete.ax.asked.lock().unwrap(),
+            vec![Some(733), None],
+            "the gate must pass the rail's pid straight through — asking the system when it \
+             was given a process is how the password check came to inspect the wrong window"
+        );
+    }
+
+    /// The global rail still asks the system-wide question — that rail's
+    /// keystrokes really do go wherever the desktop's focus is.
+    #[tokio::test]
+    async fn the_global_rail_still_reads_the_system_focus() {
+        let p = platform(vec![(None, secure_field(11))]);
+        assert!(
+            check(&p, None, false).await.is_some(),
+            "the system-focused password box must still be refused"
+        );
+    }
+
+    /// An app that reports no focused element is not evidence of anything, and
+    /// the targeted rail is often pointed at exactly such an app. Refusing there
+    /// would take away the one input path that works.
+    #[tokio::test]
+    async fn an_unknown_focus_in_the_target_app_does_not_block_typing() {
+        let p = platform(vec![(None, plain_field(11))]);
+        assert!(
+            check(&p, Some(733), true).await.is_none(),
+            "force must still pass when the target reports no focus"
+        );
     }
 
     #[test]

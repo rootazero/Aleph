@@ -100,8 +100,8 @@ impl SystemTool {
 pub struct SystemArgs {
     /// Action to perform: "`launch_app`", "`quit_app`", "`restart_app`",
     /// "`open_path`" (alias "`open`"), "`list_running_apps`",
-    /// "`send_notification`", "`clipboard_read`", "`clipboard_write`",
-    /// "`system_info`", "`user_idle_time`".
+    /// "`list_installed_apps`", "`send_notification`", "`clipboard_read`",
+    /// "`clipboard_write`", "`system_info`", "`user_idle_time`".
     ///
     /// "`restart_app`" quits then relaunches `app_name`. "`user_idle_time`"
     /// returns `idle_seconds` — how long since the user last touched the
@@ -142,7 +142,8 @@ Actions:
 - quit_app: Quit a running application. Required: app_name
 - restart_app: Quit then relaunch an application. Required: app_name
 - open_path: Open a file or URL with the OS default app (like double-clicking it). Use this to show the user a file you created — e.g. an .html report opens in their browser. Required: path (absolute file path or URL)
-- list_running_apps: List currently running applications
+- list_running_apps: List currently running applications (name, bundle id, pid)
+- list_installed_apps: List applications installed on this machine, running or not. This is where the name or bundle id for launch_app comes from — list_running_apps only knows about what is already open.
 - send_notification: Send a system notification. Required: title, body
 - clipboard_read: Read current clipboard content
 - clipboard_write: Write text to clipboard. Required: body
@@ -156,6 +157,7 @@ Examples:
 {"action":"open_path","path":"/Users/me/output/report.html"}
 {"action":"open_path","path":"https://example.com"}
 {"action":"list_running_apps"}
+{"action":"list_installed_apps"}
 {"action":"send_notification","title":"Reminder","body":"Meeting in 5 minutes"}
 {"action":"clipboard_read"}
 {"action":"clipboard_write","body":"Hello, world!"}
@@ -332,6 +334,22 @@ Examples:
                     }),
                 }
             }
+
+            "list_installed_apps" => match sys.list_installed_apps().await {
+                Ok(apps) => Ok(SystemOutput {
+                    success: true,
+                    data: Some(serde_json::json!({
+                        "count": apps.len(),
+                        "apps": apps,
+                    })),
+                    message: None,
+                }),
+                Err(e) => Ok(SystemOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Failed to list installed apps: {e}")),
+                }),
+            },
 
             "list_running_apps" => match sys.list_running_apps().await {
                 Ok(apps) => Ok(SystemOutput {
