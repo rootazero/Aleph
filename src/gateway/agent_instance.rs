@@ -26,8 +26,6 @@ pub struct AgentInstanceConfig {
     pub workspace: PathBuf,
     /// Primary model to use
     pub model: String,
-    /// Fallback models if primary fails
-    pub fallback_models: Vec<String>,
     /// Maximum agent loop iterations
     pub max_loops: u32,
     /// Maximum total token usage per request (loop guard, None = use default)
@@ -57,7 +55,6 @@ impl Default for AgentInstanceConfig {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/workspaces/main"),
             model: "claude-sonnet-4-5".to_string(),
-            fallback_models: vec![],
             max_loops: 100,
             max_tokens: None,
             system_prompt: None,
@@ -101,7 +98,6 @@ impl AgentInstanceConfig {
             display_name: Some(agent.name.clone()),
             workspace: agent.workspace_path.clone(),
             model: agent.model.clone(),
-            fallback_models: vec![],
             max_loops: 100,
             max_tokens: None,
             system_prompt,

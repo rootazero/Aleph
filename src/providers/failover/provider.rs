@@ -967,6 +967,12 @@ impl FailoverProvider {
             let plan = self.candidates(true).await;
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
+            // The first endpoint this walk actually dials, for the route
+            // witness below. Attempted rather than succeeded: a primary that is
+            // down for the whole run has every *success* already on the
+            // fallback, and anchoring there would make the commonest migration
+            // of all read as "nothing deviated".
+            let mut first_attempt: Option<crate::providers::route_witness::Dialed> = None;
             // Records whether any candidate has already pushed content to the
             // caller's sink; see the note on `walk`.
             let emission = sink.map(EmissionGuard::new);
@@ -1143,6 +1149,16 @@ impl FailoverProvider {
                             .filter(|_| cand.name != super::NESTED_CHAIN_NODE)
                             .map(|l| l.begin(&cand.name));
                         let started = Instant::now();
+                        // Same sentinel exclusion the load guard makes: it is
+                        // not an endpoint, so it must not become the `original`
+                        // half of a fallback notice either.
+                        if first_attempt.is_none() && cand.name != super::NESTED_CHAIN_NODE {
+                            first_attempt = Some(crate::providers::route_witness::Dialed::new(
+                                &cand.name,
+                                // rust-doctor-disable-next-line excessive-clone
+                                model.clone(),
+                            ));
+                        }
                         let attempt_result = match &emission {
                             Some(guard) => cand.provider.execute_streaming_dyn(inner, guard).await,
                             None => cand.provider.process(inner).await,
@@ -1160,6 +1176,40 @@ impl FailoverProvider {
                                     }
                                 }
                                 self.mark_healthy(&cand.name).await;
+                                // Tell the gateway which endpoint actually
+                                // answered. The `ModelResolved` banner — the
+                                // only user-visible fallback signal there is —
+                                // used to be driven by a pre-request prediction
+                                // made by a health table nothing dialed from, so
+                                // a real migration lit nothing. The walk is the
+                                // only honest source, so the walk reports.
+                                //
+                                // The sentinel is excluded for the same reason
+                                // the load guard excludes it: it is not an
+                                // endpoint, and the chain nested behind it
+                                // records the real provider itself.
+                                if cand.name != super::NESTED_CHAIN_NODE {
+                                    // Same `metadata["session_id"]` the metering
+                                    // provider and the OpenAI prompt-cache key
+                                    // already read; absent on paths that build a
+                                    // payload without it, which simply go
+                                    // unrecorded.
+                                    if let Some(session) =
+                                        metadata.as_ref().and_then(|m| m.get("session_id"))
+                                    {
+                                        let served = crate::providers::route_witness::Dialed::new(
+                                            &cand.name,
+                                            // rust-doctor-disable-next-line excessive-clone
+                                            model.clone(),
+                                        );
+                                        crate::providers::route_witness::record_success(
+                                            session,
+                                            // rust-doctor-disable-next-line excessive-clone
+                                            first_attempt.clone().unwrap_or_else(|| served.clone()),
+                                            served,
+                                        );
+                                    }
+                                }
                                 // A completed call also retires any pacing
                                 // window parked on this provider: the window
                                 // exists to avoid re-triggering a throttle, and

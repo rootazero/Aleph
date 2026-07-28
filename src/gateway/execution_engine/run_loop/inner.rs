@@ -224,6 +224,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
+        // Start this session's route witness clean. A run that ends in an error
+        // never reaches the taker in `run_dispatch_and_drain_classified`, and an
+        // inherited record would make the *next* run in the same session
+        // announce a migration that belonged to the previous one.
+        crate::providers::route_witness::clear(&request.session_key.to_key_string());
+
         // Load conversation history from session (for multi-turn context)
         let before_compress = tokio::time::Instant::now();
         let history = if let Some(ref sc) = self.session_compactor {
@@ -577,19 +583,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     },
                 );
 
-            // Resolve model with health-aware fallback.
+            // The model this turn ASKS FOR, in the same precedence the harness
+            // binder applies: per-turn pick ▸ session `select_model` pick ▸ the
+            // agent's configured default. Nothing has been dialed yet, so this
+            // is a statement of intent and nothing more — `is_fallback` is
+            // therefore always false here.
             //
-            // When the chat-window model picker stamped a per-turn override,
-            // we short-circuit the fallback chain: `Qualified { provider,
-            // model }` pins both (matches openclaw's `chatModelOverrides`
-            // qualified branch); `Raw { model }` lets the registry pick the
-            // provider via its model-name heuristic and still skips fallback
-            // (user explicitly chose this model — silent failover would be
-            // surprising). When `model_override` is `None`, we fall back to
-            // the agent's configured default + its declared fallback chain.
-            let resolved = match request.model_override.as_ref() {
+            // It used to be a *prediction*: a health table on
+            // `MultiProviderRegistry` picked a candidate from its own failure
+            // record and stamped `is_fallback` from it. That table decided no
+            // dial (the walk in `FailoverProvider` does, from its own breaker,
+            // route mode, load ordering and rate windows), and the failures it
+            // recorded were filed against the predicted provider rather than the
+            // one that actually failed — so a real migration lit nothing while a
+            // table that had merely seen errors could announce a provider that
+            // was never tried. The table is gone. The honest half of the notice
+            // now arrives from the walk itself, as a correction emitted just
+            // before the terminal frame (`helpers::emit_route_correction`).
+            let (requested_provider, requested_model) = match request.model_override.as_ref() {
                 Some(override_) => {
-                    use crate::providers::health::ResolvedModel;
                     let provider_name = match override_.provider() {
                         Some(p) => p.to_string(),
                         None => self.provider_registry.get(override_.model()).map_or_else(
@@ -597,12 +609,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             |prov| prov.name().to_string(),
                         ),
                     };
-                    ResolvedModel {
-                        provider_name,
-                        model: override_.model().to_string(),
-                        is_fallback: false,
-                        original_model: override_.model().to_string(),
-                    }
+                    (provider_name, override_.model().to_string())
                 }
                 // A `select_model` pick recorded for this session outranks the
                 // agent's configured model at the binder, so the banner has to
@@ -612,49 +619,32 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 None => match crate::providers::session_model_handle::get_session_model(
                     &request.session_key.to_key_string(),
                 ) {
-                    Some(pref) => crate::providers::health::ResolvedModel {
-                        provider_name: pref.provider.unwrap_or_else(|| {
+                    Some(pref) => (
+                        pref.provider.unwrap_or_else(|| {
                             self.provider_registry.default_provider().name().to_string()
                         }),
-                        // rust-doctor-disable-next-line excessive-clone
-                        model: pref.model.clone(),
-                        is_fallback: false,
-                        original_model: pref.model,
-                    },
-                    None => self
-                        .provider_registry
-                        .resolve_with_fallback(
-                            &agent.config().model,
-                            &agent.config().fallback_models,
-                        )
-                        .map_err(|e| ExecutionError::Failed(e.to_string()))?,
+                        pref.model,
+                    ),
+                    None => {
+                        let model = agent.config().model.clone();
+                        let provider = self.provider_registry.get(&model).map_or_else(
+                            || self.provider_registry.default_provider().name().to_string(),
+                            |prov| prov.name().to_string(),
+                        );
+                        (provider, model)
+                    }
                 },
             };
 
-            if resolved.is_fallback {
-                info!(
-                    run_id = run_id,
-                    attempt = attempt,
-                    original = %resolved.original_model,
-                    fallback_provider = %resolved.provider_name,
-                    fallback_model = %resolved.model,
-                    "Using fallback model"
-                );
-            }
-
-            // Emit ModelResolved so the Panel can show fallback indicators
+            // Emit ModelResolved so the Panel can label the run while it streams.
             let _ = emitter
                 .emit(StreamEvent::ModelResolved {
                     run_id: run_id.to_string(),
                     model_info: crate::providers::health::ModelInfo {
-                        model: resolved.model.clone(),
-                        provider: resolved.provider_name.clone(),
-                        is_fallback: resolved.is_fallback,
-                        original_model: if resolved.is_fallback {
-                            Some(resolved.original_model.clone())
-                        } else {
-                            None
-                        },
+                        model: requested_model,
+                        provider: requested_provider,
+                        is_fallback: false,
+                        original_model: None,
                     },
                 })
                 .await;
@@ -1290,8 +1280,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             match dispatch_result {
                 Ok(response) => {
-                    self.provider_registry
-                        .report_outcome(&resolved.provider_name, Ok(()));
                     if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());
@@ -1316,12 +1304,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     provider: prov_name,
                     message,
                 }) if attempt < MAX_FALLBACK_ATTEMPTS => {
-                    self.provider_registry.report_outcome(
-                        &resolved.provider_name,
-                        Err(crate::providers::health::ProviderError::Transient(
-                            crate::providers::health::TransientError::ConnectionFailed,
-                        )),
-                    );
+                    // The provider that actually failed is `prov_name`, carried
+                    // on the failure itself and logged below. It used to *also*
+                    // be recorded against a health table — but against
+                    // `resolved.provider_name`, the pre-request prediction,
+                    // rather than `prov_name`. That table is gone; the circuit
+                    // breaker that does gate dialing lives in `FailoverProvider`
+                    // and is fed by the walk, which is the only layer that knows
+                    // which endpoint the failure came from.
                     // Reactive OAuth self-heal: a `token_expired` 401 means the
                     // Codex/ChatGPT access token lapsed mid-run. Refresh it and
                     // hot-swap the live provider so the retry below uses a fresh
@@ -1366,12 +1356,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     provider: prov_name,
                     message,
                 }) => {
-                    self.provider_registry.report_outcome(
-                        &resolved.provider_name,
-                        Err(crate::providers::health::ProviderError::Transient(
-                            crate::providers::health::TransientError::ConnectionFailed,
-                        )),
-                    );
                     if !media_blocks.is_empty() {
                         if let Some(mp) = self.media_processor.as_ref() {
                             mp.cleanup(&request.session_key.to_key_string());

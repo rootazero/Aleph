@@ -33,7 +33,7 @@ use crate::config::Config;
 use crate::gateway::handlers::oauth::{try_refresh, SharedOAuthState};
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::Arc;
-use crate::thinker::{MultiProviderRegistry, ProviderRegistry};
+use crate::thinker::MultiProviderRegistry;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -160,15 +160,15 @@ impl CodexTokenRefresher {
         match crate::providers::create_provider(PROVIDER_NAME, provider_config) {
             Ok(provider) => {
                 self.registry.register(PROVIDER_NAME.to_string(), provider);
-                // Clear any circuit-breaker / failure state recorded against
-                // the stale token so the renewed provider is tried immediately.
-                // Both maps: the registry's (which feeds the resolution badge)
-                // and the failover breaker's (which decides whether the request
-                // is dialed at all — an expired token trips it as a *permanent*
-                // failure, i.e. the full 10-minute cooldown, so skipping this
-                // reset would strand the freshly-renewed token behind the
-                // failure it just fixed).
-                self.registry.reset_health(PROVIDER_NAME);
+                // Clear the circuit-breaker state recorded against the stale
+                // token so the renewed provider is tried immediately. This is
+                // the breaker that decides whether the request is dialed at all
+                // — an expired token trips it as a *permanent* failure, i.e. the
+                // full 10-minute cooldown, so skipping this reset would strand
+                // the freshly-renewed token behind the failure it just fixed.
+                // (A second reset against the registry's own health map used to
+                // sit here; that map fed only the resolution badge and gated no
+                // dial, and is gone.)
                 if let Some(obs) = crate::providers::route_observe::global_route_observability() {
                     obs.health.reset(PROVIDER_NAME).await;
                 }

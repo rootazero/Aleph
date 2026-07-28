@@ -279,19 +279,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let provider_registry = build_multi_provider_registry(app_config, &shared_token_mgr, daemon);
     multi_reg = provider_registry.clone();
 
-    // Wire global fallback provider chain from config
-    if let Some(ref registry) = multi_reg {
-        let fallbacks = &app_config.general.fallback_providers;
-        if !fallbacks.is_empty() {
-            registry.set_fallbacks(fallbacks.clone());
-            tracing::info!(
-                chain = ?fallbacks,
-                "Fallback provider chain configured"
-            );
-            if !daemon {
-                println!("  Fallback chain: {fallbacks:?}");
-            }
-        }
+    // `[general] fallback_providers` used to be copied onto the registry here.
+    // Nothing routed off that copy — its only reader was the registry's own
+    // pre-request resolver, which named a badge and dialed nothing. The key is
+    // now read where the chain that actually gets walked is assembled
+    // (`deps_builder::provider_chain::assemble_fallbacks`, as the back-compat
+    // source when `[fallback_provider].chain` is empty), so it finally does what
+    // its doc comment has always claimed.
+    if !app_config.general.fallback_providers.is_empty() && !daemon {
+        println!(
+            "  Fallback chain: {:?}",
+            app_config.general.fallback_providers
+        );
     }
 
     // Shared cell for deferred CommandParser injection into chat.send handler.

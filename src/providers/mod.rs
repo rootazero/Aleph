@@ -91,6 +91,7 @@ pub mod retry;
 pub mod route_handle;
 pub mod route_observe;
 pub mod route_policy;
+pub mod route_witness;
 pub mod session_moa_handle;
 pub mod session_model_handle;
 pub mod think_level_provider;
@@ -106,7 +107,7 @@ pub use delta::{
 pub use failover::{
     FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown,
 };
-pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
+pub use health::{ModelInfo, ProviderError};
 pub use http_provider::HttpProvider;
 pub use load_stats::{InFlightGuard, LoadStats};
 pub use metering::MeteringProvider;

@@ -2133,3 +2133,160 @@ async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
     assert!(steps[0].primary);
     assert!(!steps[1].primary);
 }
+
+// =============================================================================
+// Route witness — the walk reporting which endpoint actually answered
+// =============================================================================
+//
+// These pin the seam that replaced the old parallel health table on
+// `MultiProviderRegistry`. That table *predicted* a candidate before the
+// request, the prediction never reached the wire, and it was the sole producer
+// of the `is_fallback` flag every user-visible fallback notice gates on — so a
+// real migration lit nothing. The walk is the only honest source; if this seam
+// breaks, the banner goes quiet again, silently. Hence tests, not trust.
+
+/// Session keys are namespaced per test: the witness map is process-global and
+/// these run concurrently with everything else in the binary.
+fn witness_payload<'a>(msgs: &'a [UnifiedMessage], session: &str) -> RequestPayload<'a> {
+    let mut meta = HashMap::new();
+    meta.insert("session_id".to_string(), session.to_string());
+    RequestPayload::new(msgs).with_metadata(Some(meta))
+}
+
+#[tokio::test]
+async fn a_run_served_entirely_by_the_fallback_still_reads_as_a_migration() {
+    let session = "agent:witness-test:provider-migration";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::err("primary", "HTTP 429 too many requests");
+    let fb = ScriptProvider::ok("fallback");
+    let fp = build(primary, vec![], vec![node("fallback", fb)]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+
+    let w = crate::providers::route_witness::take(session)
+        .expect("a successful dial must be witnessed");
+    // The commonest migration of all: the primary is down for the whole run, so
+    // every *success* is already on the fallback. `first` anchors on the first
+    // ATTEMPT, which is why this reads as a deviation instead of looking clean.
+    assert_eq!(w.first.provider, "primary");
+    assert_eq!(w.served.provider, "fallback");
+    assert!(
+        w.deviated(),
+        "a run served entirely by the fallback is the case the notice exists for"
+    );
+}
+
+#[tokio::test]
+async fn a_later_turn_falling_over_deviates_from_the_first_turn() {
+    // The shape the banner exists for: turn 1 is served by the primary, a later
+    // turn migrates. `first` is pinned at turn 1, `served` follows the latest.
+    let session = "agent:witness-test:later-turn";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::new(
+        "primary",
+        vec![Ok(()), Err("HTTP 429 too many requests".to_string())],
+    );
+    let fb = ScriptProvider::ok("fallback");
+    let fp = build(primary, vec![], vec![node("fallback", fb)]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let first = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(first.text_content(), "primary");
+    // rust-doctor-disable-next-line unwrap-in-production
+    let second = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(second.text_content(), "fallback");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(w.first.provider, "primary");
+    assert_eq!(w.served.provider, "fallback");
+    assert!(
+        w.deviated(),
+        "a run that ended elsewhere must read as deviated"
+    );
+}
+
+#[tokio::test]
+async fn the_witness_records_the_model_the_walk_actually_asked_for() {
+    // A model-level walk within one provider: the endpoint is unchanged but the
+    // user did not get the model the walk first chose, which still counts.
+    let session = "agent:witness-test:model-walk";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::new(
+        "primary",
+        vec![Ok(()), Err("HTTP 404 model not found".to_string()), Ok(())],
+    );
+    let fp = build(
+        primary,
+        vec![("primary", vec!["model-a", "model-b"])],
+        vec![],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(w.first.model.as_deref(), Some("model-a"));
+    assert_eq!(w.served.model.as_deref(), Some("model-b"));
+    assert!(
+        w.deviated(),
+        "a sibling-model migration is still a deviation"
+    );
+}
+
+#[tokio::test]
+async fn a_payload_without_a_session_id_is_simply_not_witnessed() {
+    // Non-gateway callers build payloads without metadata. They must not panic,
+    // and must not write under some invented key.
+    let primary = ScriptProvider::ok("primary");
+    let fp = build(primary, vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+}
+
+#[tokio::test]
+async fn the_nested_chain_sentinel_never_names_itself_as_the_endpoint() {
+    // A `provider_hint` override chain is `[pin, <the whole global chain>]`.
+    // The sentinel is not an endpoint; recording it would publish a provider
+    // name the operator never configured. The inner chain speaks for itself.
+    let session = "agent:witness-test:nested";
+    crate::providers::route_witness::clear(session);
+
+    let inner_primary = ScriptProvider::ok("global-primary");
+    let global = Arc::new(build(inner_primary, vec![], vec![]));
+
+    let pinned = ScriptProvider::err("pinned", "HTTP 429 too many requests");
+    let fp = build(
+        pinned,
+        vec![],
+        vec![node(
+            super::NESTED_CHAIN_NODE,
+            global as Arc<dyn AiProvider>,
+        )],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "global-primary");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.served.provider,
+        "global-primary",
+        "the real endpoint must be reported, never `{}`",
+        super::NESTED_CHAIN_NODE
+    );
+}
