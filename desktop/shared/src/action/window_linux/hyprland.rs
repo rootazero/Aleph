@@ -188,10 +188,20 @@ pub fn check_reply(stdout: &str) -> Result<()> {
 // ── Runtime ──────────────────────────────────────────────────────────────────
 
 fn run(args: Vec<String>) -> Result<String> {
-    let out = std::process::Command::new("hyprctl")
-        .args(&args)
-        .output()
-        .map_err(|e| DesktopError::WindowFailed(format!("Failed to run hyprctl: {e}")))?;
+    use crate::script_exec::{is_spawn_failure, output_capped_blocking, DESKTOP_QUERY_TIMEOUT};
+
+    let mut cmd = std::process::Command::new("hyprctl");
+    cmd.args(&args);
+    // Capped: same shape as the sway backend — `hyprctl` waits on Hyprland's IPC
+    // socket, and a wedged compositor has no timeout of its own.
+    let out =
+        output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Talking to Hyprland").map_err(|e| {
+            if is_spawn_failure(&e) {
+                DesktopError::WindowFailed(format!("Failed to run hyprctl: {e}"))
+            } else {
+                DesktopError::WindowFailed(e.to_string())
+            }
+        })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(DesktopError::WindowFailed(format!(

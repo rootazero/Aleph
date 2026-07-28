@@ -13,8 +13,9 @@
 //!   This is the correct path for dev servers / watchers / daemons that the
 //!   model wants running so it can then open a browser against them.
 
+use std::io::Read;
 use std::process::{Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 
@@ -109,95 +110,155 @@ pub async fn output_capped(mut cmd: Command, timeout: Duration) -> Result<Output
     }
 }
 
-/// How often [`output_capped_blocking`] asks whether the child has exited.
-const BLOCKING_POLL: Duration = Duration::from_millis(100);
+/// Deadline for a desktop *query* that shells out — a clipboard read, a
+/// compositor IPC round-trip, an idle-time probe, a notification hand-off.
+///
+/// These are all sub-second operations against a live desktop service. The cap
+/// exists for the case where that service is wedged, not for slow-but-working
+/// ones: `xclip -o` asks the **owning application** to hand the selection over,
+/// so a frozen Electron app blocks the read forever; `swaymsg` waits on the
+/// compositor's socket; `notify-send` waits for the notification daemon's D-Bus
+/// reply. Every one of those used to be able to hang an agent turn to the
+/// harness ceiling.
+pub const DESKTOP_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The blocking twin of [`output_capped`], for capture paths that already run
-/// inside `spawn_blocking` and hold a `std::process::Command`.
+/// How often [`output_capped_blocking`] checks whether the child has exited.
 ///
-/// The reason it is not simply `Command::output()` is the same one
-/// [`output_capped`] exists for, and it bites hardest on the capture paths: an
-/// `ffmpeg` `dshow` input **blocks forever** in the device-open call when
-/// another application already holds the microphone or camera. `-t 30` never
-/// gets a chance to end the run, so the tool hangs until the harness's per-turn
-/// ceiling and leaves the child holding the device.
+/// Only reached while the child is still running, and only on a thread that is
+/// already dedicated to waiting for it, so the cost is a timer wakeup — not a
+/// spin. Small enough that a fast command is not perceptibly delayed.
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Read a child pipe to EOF on a dedicated thread, so the child is never
+/// blocked writing while we are blocked waiting.
 ///
-/// stdout and stderr are drained by their own threads rather than read after the
-/// wait: a long `ffmpeg` run fills the 64 KiB pipe buffer with encoder progress
-/// and would otherwise deadlock against a poll loop that never reads.
+/// Exposed to the crate because any hand-rolled "spawn, wait, then read the
+/// pipe" loop has the same 64 KiB deadlock (see
+/// [`output_capped_blocking`]); the long-running recorder in
+/// `perception::screen_record` needs it for exactly that reason.
+pub(crate) fn drain_on_thread<R: Read + Send + 'static>(
+    pipe: Option<R>,
+) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+    pipe.map(|mut p| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = p.read_to_end(&mut buf);
+            buf
+        })
+    })
+}
+
+/// Run `cmd` to completion under a hard deadline, **synchronously**.
+///
+/// The blocking twin of [`output_capped`], for the capture and query paths that
+/// already run inside `spawn_blocking` (or in genuinely synchronous code) and so
+/// cannot await it. Before this existed those paths simply had no deadline at
+/// all, which is how a wedged desktop service could pin an agent turn until the
+/// harness's own ceiling and leak the child.
+///
+/// `what` names the operation in the timeout message: the model has to be able
+/// to tell "the clipboard owner is not answering" from "OCR is slow".
+///
+/// # Why the reader threads
+///
+/// A naive implementation sets the pipes up and then polls `try_wait`. That
+/// deadlocks the moment the child's output exceeds the pipe buffer (64 KiB on
+/// Linux): the child blocks writing, we block waiting, and the deadline fires on
+/// a command that was working perfectly. `tesseract`'s TSV for a full-screen
+/// capture is comfortably past that. So stdout/stderr are drained on their own
+/// threads for the whole life of the child, exactly as `Command::output` does.
 ///
 /// # Errors
 ///
-/// [`DesktopError::InputFailed`] when the binary cannot be launched, prefixed so
-/// [`is_spawn_failure`] classifies it, or when the deadline elapses.
-pub fn output_capped_blocking(mut cmd: std::process::Command, timeout: Duration) -> Result<Output> {
-    use std::io::Read as _;
+/// - [`DesktopError::InputFailed`] prefixed with [`SPAWN_FAILURE_PREFIX`] when
+///   the binary could not be launched — classify it with [`is_spawn_failure`].
+/// - [`DesktopError::InputFailed`] naming `what` and the cap when the deadline
+///   elapses; the child is killed and reaped before returning.
+pub fn output_capped_blocking(
+    cmd: std::process::Command,
+    timeout: Duration,
+    what: &str,
+) -> Result<Output> {
+    output_capped_blocking_with_stdin(cmd, None, timeout, what)
+}
+
+/// [`output_capped_blocking`], feeding `stdin_data` to the child's standard
+/// input and closing it.
+///
+/// The write happens on its own thread for the same reason the reads do: a child
+/// that stops consuming input (because it died, or because it is waiting on
+/// something else) would otherwise block the caller past any deadline.
+pub fn output_capped_blocking_with_stdin(
+    mut cmd: std::process::Command,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+    what: &str,
+) -> Result<Output> {
+    use std::io::Write as _;
+
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(if stdin_data.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
 
     let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| DesktopError::InputFailed(format!("{SPAWN_FAILURE_PREFIX}: {e}")))?;
 
-    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+    if let (Some(data), Some(mut pipe)) = (stdin_data, child.stdin.take()) {
+        let data = data.to_vec();
+        // Dropping `pipe` at the end of the thread closes the child's stdin,
+        // which is what tells a filter-shaped program (tesseract, wl-copy) that
+        // the input is complete.
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out_reader = drain(
-        child
-            .stdout
-            .take()
-            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
-    );
-    let err_reader = drain(
-        child
-            .stderr
-            .take()
-            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
-    );
+            let _ = pipe.write_all(&data);
+        });
+    }
 
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
+    let stdout_reader = drain_on_thread(child.stdout.take());
+    let stderr_reader = drain_on_thread(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let exited = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) => {}
             Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(DesktopError::InputFailed(format!(
-                    "failed to wait for process: {e}"
-                )))
+                    "{what}: failed to wait for the child process: {e}"
+                )));
             }
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+        if Instant::now() >= deadline {
             break None;
         }
-        std::thread::sleep(BLOCKING_POLL);
+        std::thread::sleep(POLL_INTERVAL);
     };
 
-    // Both pipes close when the child dies, so the readers always finish.
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
-
-    match status {
-        Some(status) => Ok(Output {
-            status,
-            stdout,
-            stderr,
-        }),
-        None => Err(DesktopError::InputFailed(format!(
-            "the capture did not finish within {}s and was terminated. A capture device held by \
-             another application (a video call, or a previous capture that has not released it) \
-             blocks the device-open call indefinitely — close it and retry.",
+    let Some(status) = exited else {
+        // Kill first, *then* join: the reader threads only finish once the pipes
+        // close, and the pipes only close once the child is gone.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(DesktopError::InputFailed(format!(
+            "{what} exceeded {}s and was terminated. The underlying desktop \
+             service did not respond — check that it is running, or retry.",
             timeout.as_secs()
-        ))),
-    }
+        )));
+    };
+
+    let join = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        h.map(|h| h.join().unwrap_or_default()).unwrap_or_default()
+    };
+    Ok(Output {
+        status,
+        stdout: join(stdout_reader),
+        stderr: join(stderr_reader),
+    })
 }
 
 /// Spawn `cmd` as a detached background process: stdin is `/dev/null`, stdout
@@ -266,6 +327,74 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("exceeded"), "got: {msg}");
         assert!(msg.contains("run_background"), "got: {msg}");
+    }
+
+    fn std_sh(script: &str) -> std::process::Command {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(script);
+        c
+    }
+
+    #[test]
+    fn blocking_capped_returns_output_for_fast_command() {
+        let out = output_capped_blocking(std_sh("echo hi"), Duration::from_secs(5), "test")
+            .expect("fast command should succeed");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"));
+        assert!(out.status.success());
+    }
+
+    #[test]
+    fn blocking_capped_kills_and_names_the_operation_on_timeout() {
+        let err = output_capped_blocking(
+            std_sh("sleep 5"),
+            Duration::from_millis(200),
+            "Reading the clipboard",
+        )
+        .expect_err("a command exceeding the cap must error");
+        let msg = err.to_string();
+        // The model has to be able to tell *which* desktop service hung.
+        assert!(msg.contains("Reading the clipboard"), "got: {msg}");
+        assert!(msg.contains("exceeded"), "got: {msg}");
+    }
+
+    #[test]
+    fn blocking_capped_survives_output_larger_than_a_pipe_buffer() {
+        // The whole reason the reader threads exist: a child writing more than
+        // the 64 KiB pipe buffer would block, and a try_wait-only loop would
+        // then time out a command that was working. tesseract's TSV for a
+        // full-screen capture is well past this.
+        let out = output_capped_blocking(
+            std_sh("yes 0123456789012345678901234567890123456789 | head -n 20000"),
+            Duration::from_secs(20),
+            "test",
+        )
+        .expect("a chatty command must not deadlock");
+        assert!(out.stdout.len() > 64 * 1024, "got {} bytes", out.stdout.len());
+    }
+
+    #[test]
+    fn blocking_capped_feeds_stdin_and_closes_it() {
+        // `cat` only exits once stdin reaches EOF, so this also proves the
+        // writer thread drops the pipe rather than leaving the child hanging.
+        let out = output_capped_blocking_with_stdin(
+            std_sh("cat"),
+            Some(b"payload"),
+            Duration::from_secs(5),
+            "test",
+        )
+        .expect("stdin-fed command should succeed");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "payload");
+    }
+
+    #[test]
+    fn blocking_capped_reports_a_missing_binary_as_a_spawn_failure() {
+        let err = output_capped_blocking(
+            std::process::Command::new("aleph-definitely-not-a-binary"),
+            Duration::from_secs(1),
+            "test",
+        )
+        .expect_err("a missing binary must error");
+        assert!(is_spawn_failure(&err), "got: {err}");
     }
 
     #[tokio::test]

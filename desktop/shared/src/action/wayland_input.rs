@@ -274,27 +274,96 @@ const fn ascii_char_keycode(ch: char) -> Option<u16> {
 
 /// Whether input should be routed through `ydotool` instead of `enigo`.
 ///
-/// True only on a Wayland session with the `ydotool` client on `PATH`. On X11
-/// (or when `ydotool` is absent) this is false and the caller keeps `enigo`.
+/// `Ok(true)` on a Wayland session with the `ydotool` client on `PATH`;
+/// `Ok(false)` on X11, where `enigo`/XTEST is the right rail.
+///
+/// # Why this returns a `Result`
+///
+/// The third case — **Wayland with no `ydotool`** — used to return `false`,
+/// which sent the caller down the `enigo` path. That path cannot work there:
+/// the compositor discards synthetic events from unprivileged clients, so
+/// `click` / `type_text` / `drag` / `hover` / `key_combo` / `mouse_button` /
+/// `key_button` all did nothing and **reported success**. (The `scroll` verb was
+/// noticed and fixed earlier for a different reason — it had no ydotool branch
+/// at all — but the missing-tool half of the same hole was left in place for
+/// every verb.)
+///
+/// A rail that cannot deliver has to say so. Refusing here costs a Wayland user
+/// without `ydotool` nothing they actually had, and it stops the model from
+/// building a plan on top of clicks that never landed.
 ///
 /// Both facts come from `crate::linux::session`, the single source of truth.
 /// This module used to carry its own copy of the session rules, which is how
 /// the clipboard and the permission layer ended up with three subtly different
 /// answers to "is this Wayland?".
+///
+/// # Errors
+///
+/// [`DesktopError::NotAvailable`] on a Wayland session with no `ydotool`.
 #[cfg(target_os = "linux")]
-pub(crate) fn should_use_ydotool() -> bool {
-    crate::linux::session().kind.is_wayland() && crate::linux::tools().has("ydotool")
+pub(crate) fn should_use_ydotool() -> Result<bool> {
+    pick_rail(
+        crate::linux::session().kind.is_wayland(),
+        crate::linux::tools().has("ydotool"),
+    )
 }
+
+/// The rail decision as a pure function, so the three-way matrix is testable on
+/// any host instead of only on whatever session the developer happens to be in.
+///
+/// # Errors
+///
+/// [`DesktopError::NotAvailable`] for Wayland-without-`ydotool`.
+pub(crate) fn pick_rail(is_wayland: bool, has_ydotool: bool) -> Result<bool> {
+    if !is_wayland {
+        return Ok(false);
+    }
+    if has_ydotool {
+        return Ok(true);
+    }
+    Err(DesktopError::NotAvailable(
+        "This is a Wayland session, where the compositor discards synthetic input from \
+         ordinary applications — the XTEST path silently does nothing. Install `ydotool` \
+         (it injects through the kernel's uinput device, below the display server): \
+         `sudo apt install ydotool && sudo systemctl enable --now ydotoold`, and make sure \
+         your user can reach the ydotool socket. Meanwhile screenshots, OCR, the \
+         accessibility tree and `ax_action` / `set_value` all still work — an AX action is \
+         often a better route to the same result than a synthetic click."
+            .into(),
+    ))
+}
+
+/// Cap for one `ydotool` invocation.
+///
+/// `ydotool` talks to `ydotoold` over a unix socket; a daemon that is present
+/// but wedged (a stale socket after a compositor restart is the common shape)
+/// leaves the client blocked with no timeout of its own.
+#[cfg(target_os = "linux")]
+const YDOTOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(target_os = "linux")]
 fn run_ydotool(args: &[String]) -> Result<()> {
-    let status = std::process::Command::new("ydotool")
-        .args(args)
-        .status()
-        .map_err(|e| DesktopError::InputFailed(format!("Failed to spawn ydotool: {e}")))?;
-    if !status.success() {
+    use crate::script_exec::{is_spawn_failure, output_capped_blocking};
+
+    let mut cmd = std::process::Command::new("ydotool");
+    cmd.args(args);
+    let output = output_capped_blocking(cmd, YDOTOOL_TIMEOUT, "ydotool input injection")
+        .map_err(|e| {
+            if is_spawn_failure(&e) {
+                DesktopError::InputFailed(format!("Failed to spawn ydotool: {e}"))
+            } else {
+                e
+            }
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(DesktopError::InputFailed(format!(
-            "ydotool exited with {status} (is the ydotoold daemon running and ~/.ydotool_socket accessible?)"
+            "ydotool exited with {} (is the ydotoold daemon running and ~/.ydotool_socket accessible?){}",
+            output.status,
+            match stderr.trim().lines().last() {
+                Some(line) if !line.is_empty() => format!(": {line}"),
+                _ => String::new(),
+            }
         )));
     }
     Ok(())
@@ -389,6 +458,29 @@ pub(crate) fn scroll(direction: &str, amount: i32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x11_keeps_the_enigo_rail() {
+        assert!(!pick_rail(false, false).unwrap());
+        assert!(!pick_rail(false, true).unwrap());
+    }
+
+    #[test]
+    fn wayland_with_ydotool_takes_the_uinput_rail() {
+        assert!(pick_rail(true, true).unwrap());
+    }
+
+    #[test]
+    fn wayland_without_ydotool_refuses_instead_of_silently_doing_nothing() {
+        // The bug this replaces: falling through to enigo/XTEST, which the
+        // compositor discards, and reporting the no-op as a success.
+        let err = pick_rail(true, false).expect_err("must not claim a rail it does not have");
+        let msg = err.to_string();
+        assert!(msg.contains("ydotool"), "must name the fix: {msg}");
+        assert!(msg.contains("ydotoold"), "the daemon is half the install: {msg}");
+        // And it must leave the model a route that still works today.
+        assert!(msg.contains("ax_action"), "must name a working alternative: {msg}");
+    }
 
     #[test]
     fn click_codes_match_ydotool_layout() {

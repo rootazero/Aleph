@@ -16,7 +16,8 @@ Linux 的桌面实现**跨两个 crate**，找错目录会以为功能不存在�
 | 剪贴板 | `desktop/shared/src/linux/clipboard.rs` |
 | 启动 / 退出应用、进程枚举 | `desktop/shared/src/linux/{app,proc}.rs` |
 | 鼠标键盘输入 | `desktop/shared/src/action/input.rs`（X11 走 enigo/XTEST）+ `wayland_input.rs`（Wayland 走 ydotool） |
-| 截图 / 录屏 / OCR | `desktop/shared/src/perception/`（xcap · ffmpeg · tesseract） |
+| 截图 / 录屏 / OCR | `desktop/shared/src/perception/`（xcap · ffmpeg x11grab · wf-recorder · tesseract） |
+| shell-out 死线（同步侧） | `desktop/shared/src/script_exec.rs::output_capped_blocking` |
 | **无障碍树 (AT-SPI2)** | `desktop/linux/src/ax/` |
 | 系统 / 权限 / 媒体 / 自动化 / PIM | `desktop/linux/src/` |
 
@@ -31,8 +32,8 @@ Linux 的桌面实现**跨两个 crate**，找错目录会以为功能不存在�
 | 截图（全屏 / 区域） | ✅ | ✅ | `xcap`；Wayland 经 xdg-desktop-portal，首次会弹授权对话框 |
 | 单窗口截图 `screenshot{window_id}` | ✅ | ❌ | `xcap::Window` 在 Wayland 无法枚举窗口，报"没有该 id 的窗口"而非误截全屏 |
 | OCR | ✅ | ✅ | 需 `tesseract`；缺失时报错点名要装的包 |
-| 录屏 | ✅ | ❌ | `ffmpeg -f x11grab` |
-| 鼠标 / 键盘 / 滚轮 | ✅ | ⚠️ 需 ydotool | Wayland 合成器屏蔽 XTEST；`ydotool` + `ydotoold` 走内核 uinput 绕过 |
+| 录屏 | ✅ | sway ✅ · Hyprland ✅ 需 `wf-recorder` · GNOME ❌ · KDE ❌ | 后端**按会话类型选，不按 `DISPLAY` 在不在**——几乎每个 Wayland 会话都为 XWayland 导出 `DISPLAY`，照那个判就会用 x11grab 录下一个空的 XWayland 根窗口（黑屏视频，报成功） |
+| 鼠标 / 键盘 / 滚轮 | ✅ | ⚠️ 需 ydotool | Wayland 合成器屏蔽 XTEST；`ydotool` + `ydotoold` 走内核 uinput 绕过。**没装 ydotool 时直接报错**，不再回落到必然无效的 XTEST 并报成功 |
 | 读取指针位置 | ✅ | ❌ | Wayland 协议不向应用暴露全局指针；显式报 `NotImplemented` 并指路 SOM/gui_locate |
 | 窗口枚举 / 聚焦 / 移动 / 缩放 / 关闭 | ✅ 原生 EWMH，**零外部依赖** | sway ✅ · Hyprland ✅ · GNOME ❌ · KDE ❌ | 见下节 |
 | 剪贴板（文本 + 图片） | ✅ 需 `xclip`/`xsel` | ✅ 需 `wl-clipboard` | 候选顺序按会话类型定；**写失败一律报错，绝不静默成功** |
@@ -77,9 +78,12 @@ sudo apt install xclip tesseract-ocr tesseract-ocr-chi-sim \
 ```sh
 sudo apt install wl-clipboard ydotool tesseract-ocr ffmpeg libnotify-bin at-spi2-core
 sudo systemctl enable --now ydotoold      # 输入注入需要这个守护进程
+sudo apt install wf-recorder             # 录屏（仅 sway / Hyprland 等 wlroots 系有效）
 ```
 
 外加合成器自带的 `swaymsg` / `hyprctl`（若在 sway / Hyprland 下）。
+
+> `wf-recorder` 走 wlroots 的 `wlr-screencopy` 协议，GNOME (Mutter) / KDE (KWin) **不实现**它——在那两个桌面上装了也没用，录屏会如实报不可用并指路"改用周期性截图"（截图走 portal，在那里是好的）。
 
 ### 打开无障碍层（AT-SPI2）
 
@@ -117,8 +121,14 @@ export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 3. 错误信息本身会说这两件事，不必猜。
 
 **"Wayland 上点击/打字没反应"**
-- `ydotool` 装了吗？`ydotoold` 跑着吗？用户在 `input` 组里吗？
+- 现在**不会**"没反应"了：Wayland 会话上没装 `ydotool` 时输入动作直接报错并给出装法。若拿到的是那条错误，照它做即可。
+- 报错说 `ydotool exited with …` ⇒ 客户端在但 `ydotoold` 没跑，或用户不在 `input` 组、够不到 socket。
 - 结果里的 `delivery` 字段说明实际走了哪条轨道，别信请求信结果。
+
+**"某个桌面操作报 `exceeded Ns and was terminated`"**
+- 所有桌面 shell-out 现在都带死线（查询类 5s、ydotool 10s、录屏 `duration + 30s`、录屏收尾 20s），超时**不是** Aleph 慢，而是它等的那个桌面服务卡住了——错误里点名了是哪一个。
+- 最常见的三个：剪贴板读（`xclip -o` 要等**当前持有选区的那个应用**交出内容，卡死的 Electron 应用永远不交）、`notify-send`（等通知守护进程的 D-Bus 回复）、`swaymsg`（等合成器 socket）。
+- 死线之前这些都会把整个 turn 挂到 harness 的 300s 上限并泄漏子进程。
 
 **"退出应用没生效 / 找不到进程"**
 - 匹配的是**可执行名**，精确匹配，永不匹配命令行（这是安全约束：`pkill -f` 曾能杀掉任何参数里提到该名字的进程，包括 agent 自己）。
@@ -134,5 +144,10 @@ export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 | 单窗口截图 | ✅ 端到端实测 |
 | AT-SPI 三查询 + 角色映射 + 动作名 | ✅ 端到端实测（20 应用、124 节点树） |
 | 会话探测 / 剪贴板选序 / `.desktop` 解析 / `/proc` 匹配 / ydotool argv | ✅ 纯函数单测 |
+| 输入轨道选择矩阵（X11 / Wayland±ydotool） | ✅ 纯函数单测 |
+| 录屏后端选择矩阵 + `wf-recorder` argv | ✅ 纯函数单测 |
+| 应用列表折叠（活动标记 / 代表 pid / 枚举序无关） | ✅ 纯函数单测 |
+| shell-out 死线（超时杀进程 / 大输出不死锁 / stdin 投喂） | ✅ 单测（真起子进程） |
 | **sway / Hyprland 后端** | ⚠️ **仅单测覆盖 argv 与 JSON 解析**——开发机是 X11，没有端到端验证 |
 | Wayland 输入 / 截图 / 剪贴板路径 | ⚠️ 同上 |
+| **`wf-recorder` 录屏** | ⚠️ 同上（argv + 后端选择有单测，真实录制未验；SIGINT 收尾逻辑无端到端覆盖） |
