@@ -29,13 +29,13 @@
 //! the harmless reading. Only "no clipboard tool is installed at all" is an
 //! error, and it names what to install.
 
-use std::io::Write as _;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use base64::{engine::general_purpose, Engine as _};
 
 use super::session::{missing_tool_error, session, tools, SessionKind, ToolBox};
 use crate::error::Result;
+use crate::script_exec::{output_capped_blocking, DESKTOP_QUERY_TIMEOUT};
 use crate::system_types::ClipboardContent;
 
 /// Clipboard tools in preference order for the given session.
@@ -121,6 +121,23 @@ pub fn read_typed_args(tool: &str, mime: &str) -> Vec<String> {
 
 // ── Runtime ──────────────────────────────────────────────────────────────────
 
+/// Run one clipboard **read** candidate under a deadline.
+///
+/// Reads need a cap in a way writes do not. Handing the selection over is the
+/// *owning application's* job: `xclip -o` sends a `SelectionRequest` to whatever
+/// app last copied something and then waits for the reply, and a frozen app —
+/// the single most common reason someone reaches for an agent in the first place
+/// — never sends one. `wl-paste` has the same shape against the compositor. So
+/// an uncapped read could pin the turn on a hang that has nothing to do with
+/// Aleph. A timeout is treated exactly like a non-zero exit: try the next tool,
+/// then fall through to "the clipboard is empty" (see the module doc for why
+/// that reading is the right one).
+fn read_capped(tool: &str, args: &[String]) -> Result<std::process::Output> {
+    let mut cmd = Command::new(tool);
+    cmd.args(args);
+    output_capped_blocking(cmd, DESKTOP_QUERY_TIMEOUT, "Reading the clipboard")
+}
+
 /// Read clipboard text.
 ///
 /// # Errors
@@ -139,7 +156,7 @@ fn read_text_with(kind: SessionKind, tb: &ToolBox) -> Result<String> {
             continue;
         }
         any_installed = true;
-        if let Ok(out) = Command::new(tool).args(read_args(tool)).output() {
+        if let Ok(out) = read_capped(tool, &read_args(tool)) {
             if out.status.success() {
                 return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
             }
@@ -194,27 +211,22 @@ fn write_text_with(kind: SessionKind, tb: &ToolBox, text: &str) -> Result<()> {
 /// Run one clipboard-write candidate to completion, feeding `data` on stdin.
 ///
 /// `xclip`, `xsel` and `wl-copy` all fork a background process to own the
-/// selection and then exit, so waiting here does not hang.
+/// selection and then exit, so the wait normally returns immediately — but
+/// "normally" is doing a lot of work there: the fork happens *after* the tool
+/// connects to the display server, and a tool pointed at the wrong one (a
+/// `wl-copy` on an X11 box, the very mismatch this module exists to catch) can
+/// sit in that connect. The deadline turns that into a named failure and lets
+/// the next candidate run, instead of stalling the turn on the first one.
 fn write_once(tool: &str, args: &[String], data: &[u8]) -> std::result::Result<(), String> {
-    let mut child = Command::new(tool)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn failed: {e}"))?;
-
-    // Take stdin so it is *dropped* (closed) before the wait: a tool that keeps
-    // reading until EOF would otherwise deadlock against our wait.
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(data)
-            .map_err(|e| format!("write to stdin failed: {e}"))?;
-    }
-
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("wait failed: {e}"))?;
+    let mut cmd = Command::new(tool);
+    cmd.args(args);
+    let out = crate::script_exec::output_capped_blocking_with_stdin(
+        cmd,
+        Some(data),
+        DESKTOP_QUERY_TIMEOUT,
+        "Writing the clipboard",
+    )
+    .map_err(|e| e.to_string())?;
     if out.status.success() {
         return Ok(());
     }
@@ -259,20 +271,14 @@ pub fn read_image_png_base64() -> Option<String> {
 }
 
 fn read_image_with(tool: &str) -> Option<String> {
-    let targets = Command::new(tool)
-        .args(list_targets_args(tool))
-        .output()
-        .ok()?;
+    let targets = read_capped(tool, &list_targets_args(tool)).ok()?;
     if !targets.status.success() {
         return None;
     }
     let listing = String::from_utf8_lossy(&targets.stdout);
     let mime = pick_image_target(&listing)?.to_string();
 
-    let out = Command::new(tool)
-        .args(read_typed_args(tool, &mime))
-        .output()
-        .ok()?;
+    let out = read_capped(tool, &read_typed_args(tool, &mime)).ok()?;
     if !out.status.success() || out.stdout.is_empty() {
         return None;
     }
