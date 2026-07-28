@@ -260,4 +260,4 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行（带 successor）** |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
-| 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）；主循环侧 `thinker/mod.rs::resolve_model_to_provider_and_model`。两者都用"前缀须命中已配置 provider 才剥离"的守卫，**别改成无守卫剥离** |
+| 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |

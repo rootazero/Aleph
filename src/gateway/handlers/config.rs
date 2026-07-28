@@ -172,7 +172,6 @@ pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) ->
                             "model": agent.model,
                             "max_loops": agent.max_loops,
                             "max_tokens": agent.max_tokens,
-                            "fallback_models": agent.fallback_models,
                         }),
                     )
                 })

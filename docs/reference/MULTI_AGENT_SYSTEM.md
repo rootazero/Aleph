@@ -731,11 +731,15 @@ events.
   run (a recognised *permanent* error — auth failed, model not found —
   retires on the first strike); a success resets the count, and the next run
   starts fresh, so recovery is automatic. It reuses
-  `providers::health`'s `ProviderError` + `From<&AlephError>` classifier but
-  **not** `ProviderHealth` itself: that state machine's `Degraded` cooldown
+  `providers::health`'s `ProviderError` + `From<&AlephError>` classifier —
+  which is now the *only* thing that module carries, and this is one of the two
+  consumers keeping it alive. It deliberately never reused the `ProviderHealth`
+  state machine that used to sit beside it: that machine's `Degraded` cooldown
   suppresses the very retry a strike counter needs, so a dead advisor would
   never trip — it would settle into probe / cool-down / probe, re-paying the
-  timeout every backoff window. Round-1's "no K-of-N racing" decision is
+  timeout every backoff window. `ProviderHealth` has since been deleted
+  outright (see FEATURE_LOCATOR §3.6 round-3: it gated no dial), so the
+  distinction is now structural rather than a rule to remember. Round-1's "no K-of-N racing" decision is
   untouched: that governs how one consultation completes, this governs
   whether a slot already proven dead this run is consulted at all.
 - **Retired slots keep their slot**: they render as
