@@ -12,7 +12,7 @@
 //! - [`AutomationCapability`] — AppleScript/JXA, Shortcuts
 //! - [`PermissionCapability`] — TCC permission detection and request
 //! - [`MediaCapability`] — camera / audio device capture
-//! - [`AccessibilityCapability`] — AX tree queries (macOS + Windows UIA)
+//! - [`AccessibilityCapability`] — AX tree queries (macOS AX, Windows UIA, Linux AT-SPI2)
 //! - [`PowerCapability`] — sleep inhibition (via the `power()` accessor)
 //!
 //! Real platform API calls never live here: each platform crate

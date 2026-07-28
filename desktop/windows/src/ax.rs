@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, AxLocator, PerformActionParams, QueryByRoleParams, QueryTreeParams,
+    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryTreeParams,
     SetValueParams,
 };
 
@@ -197,7 +197,6 @@ pub fn actions_for(has_press_pattern: bool, has_expand_collapse: bool) -> Vec<St
 // hand-copied versions of one ranking rule is how platforms start disagreeing
 // about which element a locator meant.
 pub use aleph_desktop::{rank_candidates, RankCandidate};
-
 /// UIA control patterns the AX write path can invoke, in fallback order.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,10 +312,14 @@ where
 #[cfg(windows)]
 mod imp {
     use super::{
-        ax_action_to_patterns, control_type_to_ax_role, rank_candidates, AxPattern, RankCandidate,
-        MAX_NODES, RESOLVE_DEPTH, ROLE_SCAN_DEPTH,
+        ax_action_to_patterns, control_type_to_ax_role, AxPattern, MAX_NODES, RESOLVE_DEPTH,
+        ROLE_SCAN_DEPTH,
     };
-    use aleph_desktop::{DesktopError, Result};
+    // The locator ranker lives in `aleph_desktop::ax_rank`: it is the contract
+    // the macOS Swift helper and the Linux AT-SPI limb also implement, and three
+    // hand-copied versions of one ranking rule is how platforms start
+    // disagreeing about which element a locator meant.
+    use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
     use aleph_protocol::desktop_bridge::methods::ax::{
         AxActionResult, AxElement, AxLocator, AxVerification,
     };
@@ -1015,15 +1018,6 @@ mod tests {
         assert_eq!(control_type_to_ax_role(50032), "AXWindow");
         assert_eq!(control_type_to_ax_role(50020), "AXStaticText");
         assert_eq!(control_type_to_ax_role(50004), "AXTextField");
-    }
-
-    fn loc(role: Option<&str>, title: Option<&str>, center: Option<[f64; 2]>) -> AxLocator {
-        AxLocator {
-            pid: None,
-            role: role.map(Into::into),
-            title: title.map(Into::into),
-            center,
-        }
     }
 
     #[test]

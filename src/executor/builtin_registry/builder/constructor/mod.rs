@@ -361,7 +361,8 @@ impl BuiltinToolRegistry {
             .with_allow_global_pointer(allow_global_pointer)
             .with_clipboard_enabled(clipboard_enabled);
 
-        // AX query tools (macOS + Windows UIA; degrade gracefully on Linux).
+        // AX query tools (macOS AX / Windows UIA / Linux AT-SPI2; degrade gracefully
+        // wherever the platform reports no accessibility layer).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_ax_query_tree_tool = crate::builtin_tools::DesktopAxQueryTree::new()

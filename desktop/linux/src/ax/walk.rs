@@ -233,7 +233,22 @@ async fn text_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<String> {
 /// `GetLocalizedName` is the one meant for display, which is not what this is.
 async fn actions_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<Vec<String>> {
     let action = p.action().await.ok()?;
-    let count = action.n_actions().await.ok()?;
+    let names = canonical_action_names(&action).await;
+    (!names.is_empty()).then_some(names)
+}
+
+/// The untranslated action names of one element, in index order.
+///
+/// Shared with `perform_action`, which must match against **the same strings a
+/// snapshot reported** — matching against `GetActions` there while reporting
+/// `GetName` here would mean the model is handed one vocabulary and understood
+/// in another, and only on localized desktops.
+pub(super) async fn canonical_action_names(
+    action: &atspi::proxy::action::ActionProxy<'_>,
+) -> Vec<String> {
+    let Ok(count) = action.n_actions().await else {
+        return Vec::new();
+    };
     let mut names = Vec::new();
     for index in 0..count.min(MAX_ACTIONS) {
         if let Ok(name) = action.get_name(index).await {
@@ -242,7 +257,7 @@ async fn actions_of(p: &atspi::proxy::proxy_ext::Proxies<'_>) -> Option<Vec<Stri
             }
         }
     }
-    (!names.is_empty()).then_some(names)
+    names
 }
 
 /// Cap on actions read per element — one D-Bus round trip each, and no real

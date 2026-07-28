@@ -30,5 +30,6 @@ pub mod proc;
 pub mod session;
 
 pub use session::{
-    missing_tool_error, session, tools, Compositor, LinuxSession, SessionEnv, SessionKind, ToolBox,
+    find_on_path, missing_tool_error, session, tools, Compositor, LinuxSession, SessionEnv,
+    SessionKind, ToolBox,
 };

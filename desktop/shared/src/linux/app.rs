@@ -278,7 +278,7 @@ pub fn launch(app_name: &str) -> Result<()> {
     }
 
     // 3. A plain executable on PATH.
-    if which(app_name).is_some() {
+    if super::session::find_on_path(app_name).is_some() {
         spawn_detached(app_name, &[])
             .map_err(|e| DesktopError::InputFailed(format!("Failed to start '{app_name}': {e}")))?;
         info!(app_name, "App launched from PATH");
@@ -320,29 +320,34 @@ fn open_with(tb: &ToolBox, target: &str) -> Result<()> {
 /// Start a process without waiting for it and without inheriting our stdio.
 ///
 /// A launched application outlives the tool call by definition, so waiting on
-/// it would hang the turn; and letting it inherit the daemon's stdout would
-/// route its chatter into Aleph's log.
+/// it inline would hang the turn; and letting it inherit the daemon's stdout
+/// would route the application's chatter into Aleph's log.
+///
+/// The child is still *reaped*, on a detached thread. Dropping a `Child`
+/// without waiting leaves a zombie for the lifetime of the daemon, and Aleph is
+/// a long-running process — "launch an app" is something a user does many times
+/// a session. The thread costs one stack and blocks until the application
+/// exits, which is exactly as long as the entry in the process table would have
+/// lived anyway.
 fn spawn_detached(program: &str, args: &[String]) -> std::io::Result<()> {
     use std::process::Stdio;
-    std::process::Command::new(program)
+    let child = std::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map(|_child| ())
-}
+        .spawn()?;
 
-/// Resolve an executable on `PATH`.
-fn which(name: &str) -> Option<PathBuf> {
-    // A name with a separator is a path, not a PATH lookup.
-    if name.contains('/') {
-        return None;
-    }
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
+    std::thread::Builder::new()
+        .name("aleph-launch-reaper".into())
+        .spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        })
+        // A reaper we could not start is not a reason to fail the launch: the
+        // application is already running. Worst case is one zombie.
+        .map(|_handle| ())
+        .or(Ok(()))
 }
 
 // ── Quit ─────────────────────────────────────────────────────────────────────

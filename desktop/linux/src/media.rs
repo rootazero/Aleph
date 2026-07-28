@@ -15,12 +15,13 @@
 //! inactive rather than erroring so the opt-in mic-level reporter degrades
 //! quietly on Linux.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aleph_desktop::media_types::{
     AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
     CameraSnapConfig, CameraSnapResult,
 };
+use aleph_desktop::script_exec::{is_spawn_failure, output_capped};
 use aleph_desktop::traits::media::{MediaCapability, MicMeterSample};
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -69,16 +70,42 @@ fn quality_to_qv(quality: f32) -> u32 {
     (1.0 - q).mul_add(29.0, 2.0).round() as u32
 }
 
-/// Run an ffmpeg invocation, mapping a missing binary / non-zero exit to a
-/// friendly [`DesktopError`].
-async fn run_ffmpeg(args: &[String]) -> Result<()> {
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| {
+/// Headroom over a capture's own duration before it is considered hung.
+///
+/// Covers device open, format negotiation and container finalisation, all of
+/// which happen outside the requested capture window.
+const FFMPEG_OVERHEAD: Duration = Duration::from_secs(20);
+
+/// Deadline for a capture that should take `capture_secs` of wall clock.
+fn ffmpeg_deadline(capture_secs: f64) -> Duration {
+    let secs = if capture_secs.is_finite() && capture_secs > 0.0 {
+        capture_secs
+    } else {
+        0.0
+    };
+    Duration::from_secs_f64(secs) + FFMPEG_OVERHEAD
+}
+
+/// Run an ffmpeg invocation under a deadline, mapping a missing binary,
+/// a timeout, or a non-zero exit to a friendly [`DesktopError`].
+///
+/// The deadline is the point: a V4L2 device that is already open by another
+/// process, or a PulseAudio server that never answers, leaves `ffmpeg` blocked
+/// forever. Without a cap that became the agent's problem — the turn hung until
+/// the harness's own 300s ceiling and the child was leaked. `output_capped`
+/// kills the child on elapse and is the same helper `automation.rs` already
+/// uses for scripts; this was the one capture path still running uncapped.
+async fn run_ffmpeg(args: &[String], deadline: Duration) -> Result<()> {
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(args);
+
+    let output = output_capped(cmd, deadline).await.map_err(|e| {
+        if is_spawn_failure(&e) {
             DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-        })?;
+        } else {
+            DesktopError::PlatformError(format!("ffmpeg: {e}"))
+        }
+    })?;
 
     if output.status.success() {
         Ok(())
@@ -116,7 +143,8 @@ impl MediaCapability for LinuxMedia {
             out_str.clone(),
         ];
 
-        run_ffmpeg(&args).await.map_err(|e| {
+        // A single frame: no capture window of its own, just the overhead budget.
+        run_ffmpeg(&args, ffmpeg_deadline(0.0)).await.map_err(|e| {
             DesktopError::PlatformError(format!("camera_snap from {device} failed: {e}"))
         })?;
 
@@ -167,9 +195,11 @@ impl MediaCapability for LinuxMedia {
             out_str.clone(),
         ]);
 
-        run_ffmpeg(&args).await.map_err(|e| {
-            DesktopError::PlatformError(format!("camera_clip from {device} failed: {e}"))
-        })?;
+        run_ffmpeg(&args, ffmpeg_deadline(config.duration_secs))
+            .await
+            .map_err(|e| {
+                DesktopError::PlatformError(format!("camera_clip from {device} failed: {e}"))
+            })?;
 
         Ok(CameraClipResult {
             file_path: out_str,
@@ -234,7 +264,8 @@ impl MediaCapability for LinuxMedia {
             out_str.clone(),
         ];
 
-        if run_ffmpeg(&pulse_args).await.is_err() {
+        let deadline = ffmpeg_deadline(config.duration_secs);
+        if run_ffmpeg(&pulse_args, deadline).await.is_err() {
             let alsa_args: Vec<String> = vec![
                 "-hide_banner".into(),
                 "-loglevel".into(),
@@ -248,7 +279,7 @@ impl MediaCapability for LinuxMedia {
                 "-y".into(),
                 out_str.clone(),
             ];
-            run_ffmpeg(&alsa_args)
+            run_ffmpeg(&alsa_args, deadline)
                 .await
                 .map_err(|e| DesktopError::PlatformError(format!("record_audio failed: {e}")))?;
         }
@@ -333,6 +364,25 @@ mod tests {
         std::env::set_var("ALEPH_CAMERA_DEVICE", "/dev/video9");
         assert_eq!(camera_device(), "/dev/video9");
         std::env::remove_var("ALEPH_CAMERA_DEVICE");
+    }
+
+    #[test]
+    fn a_captures_deadline_covers_its_duration_plus_overhead() {
+        // A 10s clip must not be killed at 10s: device open and container
+        // finalisation happen outside the capture window.
+        assert!(ffmpeg_deadline(10.0) > Duration::from_secs(10));
+        assert_eq!(ffmpeg_deadline(10.0), Duration::from_secs(30));
+        // A single frame still gets the overhead budget.
+        assert_eq!(ffmpeg_deadline(0.0), FFMPEG_OVERHEAD);
+    }
+
+    #[test]
+    fn a_nonsense_duration_still_yields_a_finite_deadline() {
+        // Duration::from_secs_f64 panics on NaN/inf/negative; the guard is what
+        // keeps a malformed request from taking the process down.
+        assert_eq!(ffmpeg_deadline(f64::NAN), FFMPEG_OVERHEAD);
+        assert_eq!(ffmpeg_deadline(f64::INFINITY), FFMPEG_OVERHEAD);
+        assert_eq!(ffmpeg_deadline(-5.0), FFMPEG_OVERHEAD);
     }
 
     #[test]

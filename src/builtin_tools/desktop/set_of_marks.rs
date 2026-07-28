@@ -348,8 +348,9 @@ impl AlephTool for DesktopSom {
          are guaranteed to be the same window. Every `center` stays in screen coordinates and is \
          ready to use as-is; pass the returned `app_pid` (or the same `window_id`) on the \
          follow-up `desktop` action and it is delivered without moving the user's cursor. \
-         Available on macOS (Accessibility + Screen Recording permission required) and Windows \
-         (UI Automation); unavailable on Linux — fall back to screenshot + gui_locate there.";
+         Available on macOS (Accessibility + Screen Recording permission required), Windows \
+         (UI Automation) and Linux (AT-SPI2, when the desktop has accessibility enabled); where \
+         no accessibility layer is available, fall back to screenshot + gui_locate.";
 
     type Args = DesktopSomArgs;
     type Output = DesktopOutput;

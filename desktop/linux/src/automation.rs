@@ -127,13 +127,27 @@ impl AutomationCapability for LinuxAutomation {
         spawn_background(cmd, log_path).await
     }
 
+    /// Linux has no Shortcuts equivalent, and saying so is not the same as
+    /// answering "you have none".
+    ///
+    /// An empty list reads as *"the feature works, this machine happens to have
+    /// no shortcuts"* — which invites the model to suggest creating one, or to
+    /// conclude the user deleted theirs. `NotImplemented` says the thing that is
+    /// actually true, and matches what [`Self::run_shortcut`] already said; the
+    /// two used to disagree about whether the capability exists at all.
     async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {
-        Ok(Vec::new())
+        Err(DesktopError::NotImplemented(
+            "Shortcuts are a macOS feature with no Linux equivalent. For scripted automation on \
+             Linux use automation run_script (shell), or a Skill."
+                .into(),
+        ))
     }
 
     async fn run_shortcut(&self, _name: &str, _input: Option<&str>) -> Result<String> {
         Err(DesktopError::NotImplemented(
-            "Shortcuts are not available on Linux".into(),
+            "Shortcuts are a macOS feature with no Linux equivalent. For scripted automation on \
+             Linux use automation run_script (shell), or a Skill."
+                .into(),
         ))
     }
 }
@@ -155,6 +169,21 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn shortcuts_report_absence_rather_than_emptiness() {
+        // An empty list would read as "the feature works, you just have none",
+        // which is a different (and false) claim.
+        let auto = LinuxAutomation::new();
+        assert!(matches!(
+            auto.list_shortcuts().await,
+            Err(DesktopError::NotImplemented(_))
+        ));
+        assert!(matches!(
+            auto.run_shortcut("Anything", None).await,
+            Err(DesktopError::NotImplemented(_))
+        ));
     }
 
     #[tokio::test]

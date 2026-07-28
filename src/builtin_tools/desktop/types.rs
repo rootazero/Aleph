@@ -34,7 +34,8 @@ pub struct DesktopArgs {
     /// "`type_text`", "`key_combo`", "`key_button`", "paste", "`clipboard_read`",
     /// "`clipboard_write`". Window/app: "`window_list`", "`focus_window`",
     /// "`move_window`", "`resize_window`", "`launch_app`", "`quit_app`",
-    /// "`restart_app`". Semantic (macOS + Windows UIA): "`set_value`",
+    /// "`restart_app`". Semantic (macOS AX / Windows UIA / Linux AT-SPI):
+    /// "`set_value`",
     /// "`ax_action`". Meta: "batch", "script".
     pub action: String,
 
@@ -274,7 +275,8 @@ pub struct DesktopBatchAction {
     /// "`type_text`", "`key_combo`", "`key_button`", "paste", "`clipboard_read`",
     /// "`clipboard_write`". Window/app: "`window_list`", "`focus_window`",
     /// "`move_window`", "`resize_window`", "`launch_app`", "`quit_app`",
-    /// "`restart_app`". Semantic (macOS + Windows UIA): "`set_value`",
+    /// "`restart_app`". Semantic (macOS AX / Windows UIA / Linux AT-SPI):
+    /// "`set_value`",
     /// "`ax_action`". Meta: "script".
     pub action: String,
 

@@ -61,6 +61,23 @@ fn shortcut_script(template: &str) -> String {
     template.replace("{{SUBPATH}}", START_MENU_SUBPATH)
 }
 
+/// Escape a value for safe interpolation into a PowerShell single-quoted
+/// string. Doubles embedded single quotes per PowerShell escaping rules,
+/// and escapes wildcard characters used by `-Filter`.
+///
+/// Its only caller is inside a `#[cfg(windows)]` block, so on a non-Windows
+/// build of this workspace member it looks dead. Gating the lint (rather than
+/// leaving a warning in every Linux `cargo check`) matches how the sibling
+/// `ax.rs` handles the same `cfg` artifact.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn ps_escape_sq(s: &str) -> String {
+    s.replace('\'', "''")
+        .replace('[', "`[")
+        .replace(']', "`]")
+        .replace('*', "`*")
+        .replace('?', "`?")
+}
+
 /// Build the `powershell.exe`/`cmd.exe` command for a script, without running
 /// it. Shared by the synchronous and background execution paths.
 fn build_script_cmd(language: ScriptLanguage, source: &str) -> Result<Command> {

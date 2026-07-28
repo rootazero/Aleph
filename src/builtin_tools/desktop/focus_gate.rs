@@ -15,7 +15,7 @@
 //! * **Mechanical.** It reads AX affordances (`secure`, `settable`, `role`) and
 //!   pure role names. It never inspects the text being typed, never scores
 //!   intent, never classifies the target semantically (R7/P8).
-//! * **Fail-open.** Unknown is not a veto. No AX layer (Linux), an AX query
+//! * **Fail-open.** Unknown is not a veto. No AX layer at all, an AX query
 //!   that errored (permission revoked, helper restarting), or an element whose
 //!   `settable` the helper did not report all mean *allow*: Electron, canvas
 //!   and terminal apps legitimately focus an `AXWebArea`/`AXGroup` that reports
@@ -107,8 +107,9 @@ pub(super) async fn check(
     platform: &Arc<dyn aleph_desktop::DesktopPlatform>,
     force: bool,
 ) -> Option<DesktopOutput> {
-    // No accessibility layer at all (Linux today, headless builds). type_text
-    // is the *only* input path there — a gate that cannot see must not block.
+    // No accessibility layer at all: a desktop with accessibility switched off, or a
+    // headless build. type_text is the *only* input path there — a gate that cannot see
+    // must not block.
     let ax = platform.ax()?;
 
     let focused = match ax.query_focused().await {

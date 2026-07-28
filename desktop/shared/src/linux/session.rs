@@ -257,6 +257,27 @@ impl ToolBox {
     }
 }
 
+/// Resolve an executable on `PATH`, applying the same "is it actually
+/// runnable" test [`ToolBox::probe`] uses.
+///
+/// Shared rather than re-implemented per caller: a lookup that checks only
+/// `is_file` happily "finds" a data file or a directory entry with no execute
+/// bit, and then the spawn fails for a reason the caller reports as something
+/// else entirely.
+///
+/// A name containing a separator is a path, not a `PATH` lookup, and returns
+/// `None` so callers cannot accidentally turn `./foo` into a search.
+#[must_use]
+pub fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
 /// `true` if `path` is a file the current user may execute.
 fn is_executable(path: &std::path::Path) -> bool {
     #[cfg(unix)]
@@ -430,6 +451,21 @@ mod tests {
         for name in &tb.present {
             assert!(KNOWN_TOOLS.contains(name), "unexpected tool {name}");
         }
+    }
+
+    #[test]
+    fn path_lookup_rejects_paths_and_empty_names() {
+        assert_eq!(find_on_path(""), None);
+        assert_eq!(find_on_path("./local"), None);
+        assert_eq!(find_on_path("/usr/bin/env"), None, "a path is not a lookup");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_lookup_finds_a_real_executable_and_not_a_plain_file() {
+        // `sh` exists and is executable on every unix host.
+        assert!(find_on_path("sh").is_some());
+        assert_eq!(find_on_path("definitely-not-a-binary-xyz"), None);
     }
 
     #[test]

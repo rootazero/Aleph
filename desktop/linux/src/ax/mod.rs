@@ -395,25 +395,23 @@ impl AccessibilityCapability for LinuxAccessibility {
             ))
         })?;
 
-        let available = action
-            .get_actions()
-            .await
-            .map_err(|e| DesktopError::PlatformError(format!("AT-SPI get_actions: {e}")))?;
+        // Canonical (untranslated) names — exactly the strings a snapshot
+        // reported, see `walk::canonical_action_names`. Matching against
+        // `GetActions` here would compare an English request against a localized
+        // label ("点击") and fail on every non-English desktop, while the
+        // snapshot the model read from said "click".
+        let available = walk::canonical_action_names(&action).await;
 
-        let index = pick_action(
-            &available.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
-            &params.action,
-        )
-        .ok_or_else(|| {
+        let index = pick_action(&available, &params.action).ok_or_else(|| {
             DesktopError::NotImplemented(format!(
                 "The matched {} does not support '{}'. It offers: {}. Pass one of those verbatim.",
                 matched.role,
                 params.action,
-                available
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                if available.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    available.join(", ")
+                }
             ))
         })?;
 
@@ -470,7 +468,11 @@ mod tests {
     fn an_elements_own_action_name_matches_verbatim() {
         let available = names(&["click", "press"]);
         assert_eq!(pick_action(&available, "click"), Some(0));
-        assert_eq!(pick_action(&available, "Click"), Some(1 - 1));
+        assert_eq!(
+            pick_action(&available, "Click"),
+            Some(0),
+            "case-insensitive"
+        );
         assert_eq!(pick_action(&available, "press"), Some(1));
     }
 
