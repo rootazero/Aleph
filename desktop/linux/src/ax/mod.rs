@@ -247,7 +247,9 @@ async fn resolve(
 
     // Re-read the matched element so the caller sees the element as it is now,
     // with its affordances — the ranking summary carries only role/title/center.
-    let mut walk = Walk::new(bus, pid, budget);
+    // One element at depth 0, so the node cap never binds; the constant stands
+    // in for the caller budget this path does not have.
+    let mut walk = Walk::new(bus, pid, budget, walk::MAX_NODES);
     let element = walk
         .element(&proxy, 0)
         .await
@@ -362,7 +364,8 @@ impl AccessibilityCapability for LinuxAccessibility {
         let cache = AppCache::fetch(&bus, &app.root).await;
         match find_focused(&bus, app.root, budget, cache.as_ref()).await {
             FocusScan::Found(proxy) => {
-                let mut walk = Walk::new(&bus, pid, budget);
+                // One element; `find_focused` above already bounded the search.
+                let mut walk = Walk::new(&bus, pid, budget, walk::MAX_NODES);
                 Ok(walk.element(&proxy, 0).await)
             }
             FocusScan::NothingFocused => Ok(None),
@@ -379,11 +382,12 @@ impl AccessibilityCapability for LinuxAccessibility {
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
-        // Caller-supplied `max_nodes` is clamped to the protocol range so the
-        // helper can log a malformed request; the walk itself hardens against
-        // [`walk::MAX_NODES`] inside, so this is a no-op on healthy input.
-        let _ = clamp_max_nodes(params.max_nodes);
-        let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
+        // The budget belongs to the request: clamped into the protocol range and
+        // handed to the walk, so raising it actually returns more of the tree.
+        let nodes = clamp_max_nodes(params.max_nodes) as usize;
+        let mut walk = Walk::new(&bus, pid, budget, nodes)
+            .prefetch(&app.root)
+            .await;
         let element = walk.tree(&app.root, params.max_depth).await;
         Ok(QueryResult {
             element,
@@ -397,7 +401,12 @@ impl AccessibilityCapability for LinuxAccessibility {
         let bus = Bus::open().await?;
         let app = app_or_err(&bus, params.pid).await?;
         let pid = app.pid;
-        let mut walk = Walk::new(&bus, pid, budget).prefetch(&app.root).await;
+        // Bounds the *search*, not the number of matches — see the protocol's
+        // `QueryByRoleParams::max_nodes`.
+        let nodes = clamp_max_nodes(params.max_nodes) as usize;
+        let mut walk = Walk::new(&bus, pid, budget, nodes)
+            .prefetch(&app.root)
+            .await;
         let Some(tree) = walk.tree(&app.root, SCAN_DEPTH).await else {
             return Ok(QueryListResult {
                 elements: Vec::new(),
@@ -798,7 +807,7 @@ mod tests {
             return; // bus is up but no application has registered
         };
 
-        let mut walk = Walk::new(&bus, app.pid, Budget::start())
+        let mut walk = Walk::new(&bus, app.pid, Budget::start(), walk::MAX_NODES)
             .prefetch(&app.root)
             .await;
         let Some(tree) = walk.tree(&app.root, 4).await else {
