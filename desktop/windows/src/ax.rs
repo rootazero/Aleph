@@ -33,8 +33,8 @@ use async_trait::async_trait;
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
 use aleph_protocol::desktop_bridge::methods::ax::{
-    AxActionResult, AxElement, PerformActionParams, QueryByRoleParams, QueryTreeParams,
-    SetValueParams,
+    clamp_max_nodes, AxActionResult, AxElement, PerformActionParams, QueryByRoleParams,
+    QueryFocusedParams, QueryListResult, QueryResult, QueryTreeParams, SetValueParams,
 };
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
@@ -234,22 +234,16 @@ const ROLE_SCAN_DEPTH: u32 = 12;
 #[cfg_attr(not(windows), allow(dead_code))]
 const RESOLVE_DEPTH: u32 = 12;
 
-/// Hard cap on the number of nodes any single walk will materialize. Bounds the
-/// response size and protects against pathological UI trees (P7 defensive
-/// design) — the same spirit as the macOS helper's depth limit.
-#[cfg_attr(not(windows), allow(dead_code))]
-const MAX_NODES: usize = 4_000;
-
 /// Wall-clock ceiling on one accessibility walk.
 ///
-/// `MAX_NODES` bounds how *much* a walk reads; it does not bound how *long* a
-/// single read takes. Every UI Automation property getter is a cross-process
+/// The node budget bounds how *much* a walk reads; it does not bound how *long*
+/// a single read takes. Every UI Automation property getter is a cross-process
 /// call into the target application's UI thread, and an application that is not
 /// pumping messages — mid-freeze, showing a modal on another thread, or being
 /// debugged — answers each one only when its per-call COM timeout expires. A
-/// tree of 4 000 nodes against such a provider blocks the worker thread far past
-/// anything the caller can use, so the walk stops at the budget and returns the
-/// subtree it did get. A partial tree the model can act on beats a stalled turn.
+/// full budget of nodes against such a provider blocks the worker thread far
+/// past anything the caller can use, so the walk stops and returns the subtree
+/// it did get. A partial tree the model can act on beats a stalled turn.
 #[cfg_attr(not(windows), allow(dead_code))]
 const WALK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -276,20 +270,30 @@ impl Default for WindowsAccessibility {
 
 #[async_trait]
 impl AccessibilityCapability for WindowsAccessibility {
-    async fn query_focused(&self) -> Result<Option<AxElement>> {
-        run_blocking(imp::query_focused).await
+    /// UI Automation answers "who has focus" for the desktop, not for a chosen
+    /// process, so the pid form of the question is satisfied by filtering. That
+    /// is not a downgrade: the contract says a `Some(pid)` answer must belong to
+    /// that process, and "the app you named is not the one holding focus" is
+    /// exactly `None`. There is no targeted input rail here anyway — Windows'
+    /// background path is the UIA write rail (`set_value` / `ax_action`).
+    async fn query_focused(&self, params: QueryFocusedParams) -> Result<Option<AxElement>> {
+        let want_pid = params.pid;
+        let found = run_blocking(imp::query_focused).await?;
+        Ok(found.filter(|el| want_pid.is_none_or(|p| el.pid == p)))
     }
 
-    async fn query_tree(&self, params: QueryTreeParams) -> Result<Option<AxElement>> {
+    async fn query_tree(&self, params: QueryTreeParams) -> Result<QueryResult> {
         let pid = params.pid;
         let depth = params.max_depth;
-        run_blocking(move || imp::query_tree(pid, depth)).await
+        let nodes = clamp_max_nodes(params.max_nodes);
+        run_blocking(move || imp::query_tree(pid, depth, nodes)).await
     }
 
-    async fn query_by_role(&self, params: QueryByRoleParams) -> Result<Vec<AxElement>> {
+    async fn query_by_role(&self, params: QueryByRoleParams) -> Result<QueryListResult> {
         let pid = params.pid;
         let role = params.role;
-        run_blocking(move || imp::query_by_role(&role, pid)).await
+        let nodes = clamp_max_nodes(params.max_nodes);
+        run_blocking(move || imp::query_by_role(&role, pid, nodes)).await
     }
 
     async fn set_value(&self, params: SetValueParams) -> Result<AxActionResult> {
@@ -365,7 +369,8 @@ mod imp {
     // disagreeing about which element a locator meant.
     use aleph_desktop::{rank_candidates, DesktopError, RankCandidate, Result};
     use aleph_protocol::desktop_bridge::methods::ax::{
-        AxActionResult, AxElement, AxLocator, AxVerification,
+        AxActionResult, AxElement, AxLocator, AxVerification, QueryListResult, QueryResult,
+        DEFAULT_MAX_NODES,
     };
     use aleph_protocol::desktop_bridge::methods::screen::Region;
     use windows::core::BSTR;
@@ -759,14 +764,20 @@ mod imp {
     /// adding the deadline a change in one place rather than four, and keeps
     /// "have we run out?" a single question every walker asks the same way.
     struct Budget {
+        allowance: usize,
         remaining: std::cell::Cell<usize>,
         deadline: Instant,
     }
 
     impl Budget {
-        fn new() -> Self {
+        /// `max_nodes` comes from the protocol (already clamped by the caller);
+        /// it used to be a private `MAX_NODES = 4_000` here, one of three
+        /// different per-platform answers to the same question.
+        fn new(max_nodes: u32) -> Self {
+            let allowance = max_nodes as usize;
             Self {
-                remaining: std::cell::Cell::new(MAX_NODES),
+                allowance,
+                remaining: std::cell::Cell::new(allowance),
                 deadline: Instant::now() + WALK_BUDGET,
             }
         }
@@ -779,6 +790,11 @@ mod imp {
 
         fn exhausted(&self) -> bool {
             self.remaining.get() == 0 || Instant::now() >= self.deadline
+        }
+
+        /// Nodes charged so far.
+        fn spent(&self) -> u32 {
+            u32::try_from(self.allowance.saturating_sub(self.remaining.get())).unwrap_or(u32::MAX)
         }
     }
 
@@ -839,7 +855,7 @@ mod imp {
         let walker = unsafe { uia.ControlViewWalker() }
             .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
         let mut cands: Vec<(RankCandidate, IUIAutomationElement)> = Vec::new();
-        let budget = Budget::new();
+        let budget = Budget::new(DEFAULT_MAX_NODES);
         collect_candidates(&walker, &cache, &root, RESOLVE_DEPTH, &budget, &mut cands);
 
         let summaries: Vec<RankCandidate> = cands.iter().map(|(c, _)| c.clone()).collect();
@@ -1058,7 +1074,11 @@ mod imp {
         })
     }
 
-    pub(super) fn query_tree(pid: Option<i32>, max_depth: u32) -> Result<Option<AxElement>> {
+    pub(super) fn query_tree(
+        pid: Option<i32>,
+        max_depth: u32,
+        max_nodes: u32,
+    ) -> Result<QueryResult> {
         let _com = ComGuard::new();
         let uia = automation()?;
         let hwnd = resolve_root_hwnd(pid)?;
@@ -1071,21 +1091,36 @@ mod imp {
         // traversal, matching the macOS AX tree's actionable framing.
         let walker = unsafe { uia.ControlViewWalker() }
             .map_err(|e| DesktopError::PlatformError(format!("ControlViewWalker failed: {e}")))?;
-        let budget = Budget::new();
-        Ok(Some(walk(&walker, &cache, &root, max_depth, &budget)))
+        let budget = Budget::new(max_nodes);
+        let element = walk(&walker, &cache, &root, max_depth, &budget);
+        Ok(QueryResult {
+            element: Some(element),
+            node_count: budget.spent(),
+            // Either bound ending the walk means the same thing to the caller:
+            // what came back is not all of it.
+            truncated: budget.exhausted(),
+        })
     }
 
-    pub(super) fn query_by_role(role: &str, pid: Option<i32>) -> Result<Vec<AxElement>> {
+    pub(super) fn query_by_role(
+        role: &str,
+        pid: Option<i32>,
+        max_nodes: u32,
+    ) -> Result<QueryListResult> {
         // Build a bounded tree, then collect nodes whose mapped AX role matches.
         // Walking + filtering (rather than a UIA property condition) reuses the
         // exact same role mapping the rest of the system sees, so results are
         // consistent with `query_tree` / `desktop_som`.
-        let Some(tree) = query_tree(pid, ROLE_SCAN_DEPTH)? else {
-            return Ok(Vec::new());
-        };
+        let tree = query_tree(pid, ROLE_SCAN_DEPTH, max_nodes)?;
         let mut out = Vec::new();
-        collect_role(&tree, role, &mut out);
-        Ok(out)
+        if let Some(root) = tree.element.as_ref() {
+            collect_role(root, role, &mut out);
+        }
+        Ok(QueryListResult {
+            elements: out,
+            node_count: tree.node_count,
+            truncated: tree.truncated,
+        })
     }
 
     /// Depth-first collection of every node whose role equals `role`. Matches
@@ -1127,10 +1162,18 @@ mod imp {
     pub(super) fn query_focused() -> Result<Option<AxElement>> {
         unavailable()
     }
-    pub(super) fn query_tree(_pid: Option<i32>, _max_depth: u32) -> Result<Option<AxElement>> {
+    pub(super) fn query_tree(
+        _pid: Option<i32>,
+        _max_depth: u32,
+        _max_nodes: u32,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::QueryResult> {
         unavailable()
     }
-    pub(super) fn query_by_role(_role: &str, _pid: Option<i32>) -> Result<Vec<AxElement>> {
+    pub(super) fn query_by_role(
+        _role: &str,
+        _pid: Option<i32>,
+        _max_nodes: u32,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::ax::QueryListResult> {
         unavailable()
     }
     pub(super) fn set_value(

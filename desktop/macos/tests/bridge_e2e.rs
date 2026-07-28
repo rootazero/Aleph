@@ -87,7 +87,9 @@ async fn ax_query_focused_returns_element_or_permission_error() {
 
     let bridge = SwiftBridge::new(path);
     let res: std::result::Result<QueryResult, _> =
-        bridge.call("ax.query_focused", QueryFocusedParams {}).await;
+        bridge
+            .call("ax.query_focused", QueryFocusedParams::default())
+            .await;
 
     match res {
         Ok(_) => {

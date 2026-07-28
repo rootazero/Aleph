@@ -23,8 +23,12 @@ use aleph_protocol::desktop_bridge::methods::screen::Region;
 use super::bus::Bus;
 use super::roles::{atspi_role_to_ax_role, has_readable_value, is_interactable, is_secure};
 
-/// Hard cap on how many nodes one walk will materialize.
-pub const MAX_NODES: usize = 1_500;
+/// Fallback node budget for a walk started without an explicit one.
+///
+/// The budget itself is the protocol's (`ax::DEFAULT_MAX_NODES`); this mirrors
+/// it for the internal scans that carry no caller-supplied number.
+pub const MAX_NODES: usize =
+    aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES as usize;
 
 /// Longest value string carried back for one element.
 const MAX_VALUE_CHARS: usize = 500;
@@ -38,17 +42,35 @@ type BoxFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 pub struct Walk<'a> {
     bus: &'a Bus,
     pid: i32,
+    allowance: usize,
     remaining: usize,
 }
 
 impl<'a> Walk<'a> {
     /// Start a walk over `pid`'s tree, materializing at most [`MAX_NODES`].
     pub const fn new(bus: &'a Bus, pid: i32) -> Self {
+        Self::with_budget(bus, pid, MAX_NODES)
+    }
+
+    /// Start a walk with an explicit node budget (the protocol's `max_nodes`).
+    pub const fn with_budget(bus: &'a Bus, pid: i32, max_nodes: usize) -> Self {
         Self {
             bus,
             pid,
-            remaining: MAX_NODES,
+            allowance: max_nodes,
+            remaining: max_nodes,
         }
+    }
+
+    /// Nodes materialized so far.
+    pub const fn spent(&self) -> u32 {
+        (self.allowance - self.remaining) as u32
+    }
+
+    /// Whether the walk stopped because the budget ran out — i.e. the tree that
+    /// came back is not all of it.
+    pub const fn exhausted(&self) -> bool {
+        self.remaining == 0
     }
 
     /// Build the element rooted at `proxy`, descending `depth` more levels.

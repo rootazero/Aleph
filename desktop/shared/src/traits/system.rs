@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::system_types::{AppInfo, ClipboardContent, SystemInfo};
+use crate::system_types::{AppInfo, ClipboardContent, InstalledApp, SystemInfo};
 use crate::Result;
 
 /// System-level operations: app lifecycle, clipboard, notifications, system info.
@@ -42,6 +42,23 @@ pub trait SystemCapability: Send + Sync {
 
     /// List currently running applications.
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>>;
+
+    /// List the applications *installed* on this machine, running or not.
+    ///
+    /// The companion `launch_app` needs a name or a bundle identifier, and until
+    /// this existed there was no way to obtain one: the only enumeration on
+    /// offer was of running processes, so anything not already open had to be
+    /// guessed at. `list_running_apps` returning nothing for an installed app is
+    /// not an error to recover from — it is a different question.
+    ///
+    /// Platforms without an application catalogue inherit this
+    /// `NotImplemented` default rather than returning an empty list, which
+    /// would read as "nothing is installed".
+    async fn list_installed_apps(&self) -> Result<Vec<InstalledApp>> {
+        Err(crate::DesktopError::NotImplemented(
+            "listing installed applications is not implemented on this platform".into(),
+        ))
+    }
 
     /// Send a system notification.
     async fn send_notification(&self, title: &str, body: &str) -> Result<()>;
