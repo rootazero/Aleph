@@ -389,38 +389,65 @@ fn assemble_fallbacks(
     };
     let primary_protocol = protocol_of(primary_provider_key);
 
-    let mut fallbacks: Vec<FailoverNode> = Vec::new();
-    if let Some(fb) = config.fallback_provider.as_ref() {
-        for name in fb.resolved_chain() {
-            if name.eq_ignore_ascii_case(primary_provider_key) {
-                tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
-                continue;
-            }
-            let Some(provider) = built.get(&name) else {
-                tracing::error!(
-                    provider = %name,
-                    "failover chain: '{name}' is not defined under [providers] (or failed to \
-                     build) — fix the [fallback_provider].chain entry; skipping it",
-                );
-                continue;
-            };
-            // Loud diagnostic for a cross-protocol fallback: it still runs (the
-            // operator configured it on purpose), but a protocol mismatch is the
-            // root of the request-conversion rejection class, so make it visible.
-            if let (Some(prim), Some(fbp)) = (&primary_protocol, protocol_of(&name)) {
-                if !fbp.eq_ignore_ascii_case(prim) {
-                    tracing::warn!(
-                        primary_protocol = %prim,
-                        fallback = %name,
-                        fallback_protocol = %fbp,
-                        "failover chain: fallback protocol differs from primary — cross-protocol \
-                         failover converts the request shape and some OpenAI-compatible endpoints \
-                         reject it (e.g. -10003); prefer a same-protocol fallback",
-                    );
-                }
-            }
-            fallbacks.push(node_for(&name, provider));
+    // Chain names, in precedence: the canonical `[fallback_provider].chain`,
+    // then the legacy `[general] fallback_providers`.
+    //
+    // The legacy key promises, in its own doc comment, that "when the default
+    // provider fails with a transient error these providers are tried in
+    // order" — and until this arm existed it did nothing of the sort. Its only
+    // consumer was `MultiProviderRegistry::set_fallbacks`, feeding a resolver
+    // that named a badge and dialed nothing, so an operator who set it got the
+    // auto-derived name-sorted chain instead of the order they asked for, with
+    // no diagnostic either way.
+    let canonical: Vec<String> = config
+        .fallback_provider
+        .as_ref()
+        .map(crate::config::types::FallbackProviderToml::resolved_chain)
+        .unwrap_or_default();
+    let chain_names: Vec<String> = if canonical.is_empty() {
+        let legacy = config.general.fallback_providers.clone();
+        if !legacy.is_empty() {
+            tracing::warn!(
+                chain = ?legacy,
+                "failover chain: taken from the legacy `[general] fallback_providers`; \
+                 prefer `[fallback_provider].chain`, which is the canonical key",
+            );
         }
+        legacy
+    } else {
+        canonical
+    };
+
+    let mut fallbacks: Vec<FailoverNode> = Vec::new();
+    for name in chain_names {
+        if name.eq_ignore_ascii_case(primary_provider_key) {
+            tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
+            continue;
+        }
+        let Some(provider) = built.get(&name) else {
+            tracing::error!(
+                provider = %name,
+                "failover chain: '{name}' is not defined under [providers] (or failed to \
+                 build) — fix the [fallback_provider].chain entry; skipping it",
+            );
+            continue;
+        };
+        // Loud diagnostic for a cross-protocol fallback: it still runs (the
+        // operator configured it on purpose), but a protocol mismatch is the
+        // root of the request-conversion rejection class, so make it visible.
+        if let (Some(prim), Some(fbp)) = (&primary_protocol, protocol_of(&name)) {
+            if !fbp.eq_ignore_ascii_case(prim) {
+                tracing::warn!(
+                    primary_protocol = %prim,
+                    fallback = %name,
+                    fallback_protocol = %fbp,
+                    "failover chain: fallback protocol differs from primary — cross-protocol \
+                     failover converts the request shape and some OpenAI-compatible endpoints \
+                     reject it (e.g. -10003); prefer a same-protocol fallback",
+                );
+            }
+        }
+        fallbacks.push(node_for(&name, provider));
     }
 
     // Self-heal: a primary with no usable configured fallback still gets one,
@@ -583,6 +610,58 @@ mod tests {
             !auto_derived,
             "explicit chain → honored static, not auto-derived"
         );
+        assert_eq!(fallback_names(&nodes), vec!["fb"]);
+    }
+
+    #[test]
+    fn assemble_fallbacks_falls_back_to_the_legacy_general_key() {
+        // `[general] fallback_providers` promises in its own doc comment that
+        // these providers are tried in order on a transient failure. Its only
+        // consumer used to be the registry's pre-request resolver, which named
+        // a badge and dialed nothing — so an operator who set it silently got
+        // the auto-derived name-sorted chain instead of the order they asked
+        // for. It now feeds the chain that is actually walked.
+        let mut cfg = cfg_with_fallback(
+            None,
+            vec![
+                ("primary", mock_provider_config()),
+                ("aaa", mock_provider_config()),
+                ("zzz", mock_provider_config()),
+            ],
+        );
+        cfg.general.fallback_providers = vec!["zzz".to_string(), "aaa".to_string()];
+
+        let built = built_map(&["aaa", "zzz"]);
+        let (nodes, auto_derived) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert!(
+            !auto_derived,
+            "the legacy key is operator intent, not a derived chain"
+        );
+        assert_eq!(
+            fallback_names(&nodes),
+            vec!["zzz", "aaa"],
+            "operator order must survive; auto-derivation would have name-sorted these"
+        );
+    }
+
+    #[test]
+    fn the_canonical_chain_outranks_the_legacy_general_key() {
+        let mut cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                chain: vec!["fb".to_string()],
+                provider: None,
+                max_retries: None,
+            }),
+            vec![
+                ("primary", mock_provider_config()),
+                ("fb", mock_provider_config()),
+                ("legacy", mock_provider_config()),
+            ],
+        );
+        cfg.general.fallback_providers = vec!["legacy".to_string()];
+
+        let built = built_map(&["fb", "legacy"]);
+        let (nodes, _) = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
         assert_eq!(fallback_names(&nodes), vec!["fb"]);
     }
 

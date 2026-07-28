@@ -43,10 +43,14 @@ pub use prompt_builder::{PromptBuilder, PromptConfig};
 pub use prompt_layer::{LayerInput, PromptLayer};
 pub use soul::{SoulManifest, SoulVoice};
 
-use crate::providers::health::{ProviderError, ProviderHealth, ResolvedModel};
 use crate::providers::AiProvider;
 
-/// Provider registry for model routing
+/// Provider registry for model routing.
+///
+/// Name → provider lookup and nothing more. It deliberately carries **no health
+/// state**: a second breaker used to live here, predicting a candidate before
+/// each request, and it decided no dial — the one that gates dialing is
+/// `FailoverProvider`'s, fed by the walk that actually reaches the wire.
 pub trait ProviderRegistry: Send + Sync {
     /// Get provider for a specific model
     fn get(&self, model: &str) -> Option<Arc<dyn AiProvider>>;
@@ -58,28 +62,6 @@ pub trait ProviderRegistry: Send + Sync {
     fn list_providers(&self) -> Vec<String> {
         vec![]
     }
-
-    /// Resolve model to a healthy (provider, model) pair along the fallback chain.
-    fn resolve_with_fallback(
-        &self,
-        model: &str,
-        _agent_fallbacks: &[String],
-    ) -> crate::error::Result<ResolvedModel> {
-        // Default: no health tracking, just resolve to default
-        let provider = self.get(model).unwrap_or_else(|| self.default_provider());
-        Ok(ResolvedModel {
-            provider_name: provider.name().to_string(),
-            model: model.to_string(),
-            is_fallback: false,
-            original_model: model.to_string(),
-        })
-    }
-
-    /// Report request outcome to update provider health
-    fn report_outcome(&self, _provider: &str, _result: Result<(), ProviderError>) {}
-
-    /// Reset a provider's health to Healthy
-    fn reset_health(&self, _provider: &str) {}
 }
 
 /// Simple provider registry with single provider
@@ -213,8 +195,6 @@ struct RegistryState {
     /// Insertion order of provider names, used for fallback when default is removed.
     provider_order: Vec<String>,
     default_name: String,
-    fallbacks: Vec<String>,
-    health: HashMap<String, ProviderHealth>,
 }
 
 /// Multi-provider registry: routes by provider name, supports runtime mutation and fallback.
@@ -226,15 +206,11 @@ impl MultiProviderRegistry {
     pub fn new(name: String, provider: Arc<dyn AiProvider>) -> Self {
         let mut providers = HashMap::new();
         providers.insert(name.clone(), provider);
-        let mut health = HashMap::new();
-        health.insert(name.clone(), ProviderHealth::default());
         Self {
             state: crate::sync_primitives::RwLock::new(RegistryState {
                 providers,
                 provider_order: vec![name.clone()],
                 default_name: name,
-                fallbacks: vec![],
-                health,
             }),
         }
     }
@@ -244,8 +220,7 @@ impl MultiProviderRegistry {
         if !state.providers.contains_key(&name) {
             state.provider_order.push(name.clone());
         }
-        state.providers.insert(name.clone(), provider);
-        state.health.entry(name).or_default();
+        state.providers.insert(name, provider);
     }
 
     pub fn remove(&self, name: &str) -> crate::error::Result<Option<Arc<dyn AiProvider>>> {
@@ -276,49 +251,12 @@ impl MultiProviderRegistry {
         Ok(())
     }
 
-    pub fn set_fallbacks(&self, chain: Vec<String>) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-        state.fallbacks = chain;
-    }
-
-    pub fn fallbacks(&self) -> Vec<String> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-        state.fallbacks.clone()
-    }
-
     /// List all registered provider names (inherent method for direct access)
     pub fn list_providers(&self) -> Vec<String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         let mut names: Vec<String> = state.providers.keys().cloned().collect();
         names.sort();
         names
-    }
-
-    /// Resolve model → provider name using slash syntax, prefix matching, or default.
-    /// Resolve a model string to (`provider_name`, `actual_model_name`).
-    ///
-    /// For "provider/model" syntax (e.g., "openai/gpt-4o"), strips the prefix
-    /// and returns ("openai", "gpt-4o") so native APIs receive the correct model name.
-    /// For bare model names (e.g., "claude-sonnet-4"), uses prefix-based resolution.
-    fn resolve_model_to_provider_and_model(state: &RegistryState, model: &str) -> (String, String) {
-        // 1. Try "provider/model" slash syntax — strip prefix for the actual model name
-        if let Some(slash_pos) = model.find('/') {
-            let provider_name = &model[..slash_pos];
-            if state.providers.contains_key(provider_name) {
-                let actual_model = &model[slash_pos + 1..];
-                return (provider_name.to_string(), actual_model.to_string());
-            }
-        }
-
-        // 2. Try prefix-based resolution (bare model name, no stripping needed)
-        if let Some(name) = crate::providers::resolve_provider_from_model(model) {
-            if state.providers.contains_key(&name) {
-                return (name, model.to_string());
-            }
-        }
-
-        // 3. Fall back to default provider
-        (state.default_name.clone(), model.to_string())
     }
 }
 
@@ -374,134 +312,6 @@ impl ProviderRegistry for MultiProviderRegistry {
         let mut names: Vec<String> = state.providers.keys().cloned().collect();
         names.sort();
         names
-    }
-
-    fn resolve_with_fallback(
-        &self,
-        model: &str,
-        agent_fallbacks: &[String],
-    ) -> crate::error::Result<ResolvedModel> {
-        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-
-        // Build candidate chain: (provider_name, model_name)
-        let mut candidates: Vec<(String, String)> = Vec::new();
-
-        // 1. Primary: resolve model → provider (strips "provider/" prefix if present)
-        let (primary_provider, primary_model) =
-            Self::resolve_model_to_provider_and_model(&state, model);
-        candidates.push((primary_provider, primary_model));
-
-        // 2. Agent-level fallbacks (also strip prefix)
-        for fb_model in agent_fallbacks {
-            let (provider, actual_model) =
-                Self::resolve_model_to_provider_and_model(&state, fb_model);
-            candidates.push((provider, actual_model));
-        }
-
-        // 3. Global fallbacks — model is empty string (sentinel for "use provider's configured default")
-        // When the caller sees an empty model, it should NOT set payload.model,
-        // letting the protocol adapter fall back to config.default_model().
-        //
-        // If fallback_providers is explicitly configured, use that order.
-        // Otherwise, auto-fallback: all registered providers except the primary become candidates.
-        let global_fallbacks: Vec<String> = if state.fallbacks.is_empty() {
-            // Auto-fallback: any registered provider that isn't already a candidate
-            let existing: std::collections::HashSet<&str> =
-                candidates.iter().map(|(p, _)| p.as_str()).collect();
-            state
-                .providers
-                .keys()
-                .filter(|name| !existing.contains(name.as_str()))
-                .cloned()
-                .collect()
-        } else {
-            state.fallbacks.clone()
-        };
-
-        let empty_model = String::new();
-        for fb_provider_name in global_fallbacks {
-            if state.providers.contains_key(&fb_provider_name) {
-                candidates.push((fb_provider_name, empty_model.clone()));
-            }
-        }
-
-        // Try each candidate in order, skipping unhealthy ones.
-        // Collect degraded candidates for the single-provider fallback.
-        let mut degraded_candidates: Vec<(String, String)> = Vec::new();
-        for (i, (provider_name, candidate_model)) in candidates.into_iter().enumerate() {
-            let health = state
-                .health
-                .get(&provider_name)
-                .cloned()
-                .unwrap_or_default();
-            if !health.is_usable() {
-                if matches!(health, ProviderHealth::Degraded { .. }) {
-                    degraded_candidates.push((provider_name, candidate_model));
-                }
-                continue;
-            }
-            if state.providers.contains_key(&provider_name) {
-                return Ok(ResolvedModel {
-                    provider_name,
-                    model: candidate_model,
-                    is_fallback: i > 0,
-                    original_model: model.to_string(),
-                });
-            }
-        }
-
-        // Last-resort fallback: if every usable provider is depleted and only
-        // one provider is registered, allow a degraded provider (cooldown still
-        // active) so a single-provider setup can retry within the same run
-        // instead of failing immediately with "no healthy provider". When there
-        // are multiple providers we keep the circuit breaker closed so a user
-        // with alternatives does not hammer a degraded one. Permanent
-        // `Unavailable` providers are always skipped — they require user
-        // intervention.
-        if state.providers.len() == 1 {
-            for (provider_name, candidate_model) in degraded_candidates.into_iter() {
-                let health = state
-                    .health
-                    .get(&provider_name)
-                    .cloned()
-                    .unwrap_or_default();
-                if matches!(health, ProviderHealth::Degraded { .. })
-                    && state.providers.contains_key(&provider_name)
-                {
-                    tracing::warn!(
-                        provider = %provider_name,
-                        "No healthy provider; retrying degraded provider as last resort"
-                    );
-                    return Ok(ResolvedModel {
-                        provider_name,
-                        model: candidate_model,
-                        is_fallback: true,
-                        original_model: model.to_string(),
-                    });
-                }
-            }
-        }
-
-        Err(crate::error::AlephError::provider(
-            "All providers unavailable — no healthy provider found in fallback chain",
-        ))
-    }
-
-    fn report_outcome(&self, provider_name: &str, result: Result<(), ProviderError>) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(health) = state.health.get_mut(provider_name) {
-            match result {
-                Ok(()) => health.record_success(),
-                Err(ref err) => health.record_failure(err),
-            }
-        }
-    }
-
-    fn reset_health(&self, provider_name: &str) {
-        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(health) = state.health.get_mut(provider_name) {
-            health.reset();
-        }
     }
 }
 
@@ -679,297 +489,5 @@ mod multi_registry_tests {
         let mut list = r.list_providers();
         list.sort();
         assert_eq!(list, vec!["anthropic", "openai"]);
-    }
-
-    // --- resolve_with_fallback tests ---
-
-    #[test]
-    fn resolve_returns_requested_model_when_healthy() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-
-        let resolved = r.resolve_with_fallback("claude-opus-4-6", &[]).unwrap();
-        assert_eq!(resolved.provider_name, "anthropic");
-        assert_eq!(resolved.model, "claude-opus-4-6");
-        assert!(!resolved.is_fallback);
-        assert_eq!(resolved.original_model, "claude-opus-4-6");
-    }
-
-    #[test]
-    fn resolve_uses_agent_fallback_when_primary_degraded() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-
-        // Degrade anthropic
-        r.report_outcome(
-            "anthropic",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-
-        let resolved = r
-            .resolve_with_fallback("claude-opus-4-6", &["gpt-4o".to_string()])
-            .unwrap();
-
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "gpt-4o");
-        assert!(resolved.is_fallback);
-        assert_eq!(resolved.original_model, "claude-opus-4-6");
-    }
-
-    #[test]
-    fn resolve_uses_global_fallback_when_agent_fallbacks_exhausted() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-        r.register("google".into(), p("google"));
-        r.set_fallbacks(vec!["google".into()]);
-
-        // Degrade both primary and agent fallback providers
-        r.report_outcome(
-            "anthropic",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-
-        let resolved = r
-            .resolve_with_fallback("claude-opus-4-6", &["gpt-4o".to_string()])
-            .unwrap();
-
-        assert_eq!(resolved.provider_name, "google");
-        assert!(resolved.is_fallback);
-        assert!(
-            resolved.model.is_empty(),
-            "global fallback model should be empty (use provider default)"
-        );
-        assert_eq!(resolved.original_model, "claude-opus-4-6");
-    }
-
-    #[test]
-    fn resolve_fails_when_all_unavailable() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-
-        // Make both unavailable (permanent error)
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Permanent(
-                crate::providers::health::PermanentError::AuthFailed,
-            )),
-        );
-        r.report_outcome(
-            "anthropic",
-            Err(ProviderError::Permanent(
-                crate::providers::health::PermanentError::AuthFailed,
-            )),
-        );
-
-        let result = r.resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn resolve_uses_provider_slash_model_syntax() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-
-        let resolved = r.resolve_with_fallback("openai/gpt-4o", &[]).unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(
-            resolved.model, "gpt-4o",
-            "provider prefix should be stripped for native API"
-        );
-        assert!(!resolved.is_fallback);
-    }
-
-    #[test]
-    fn report_success_resets_health() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-
-        // Degrade first
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-
-        // Should be in cooldown, but report success to reset
-        r.report_outcome("openai", Ok(()));
-
-        // Should be usable again as primary
-        let resolved = r.resolve_with_fallback("gpt-4o", &[]).unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert!(!resolved.is_fallback);
-    }
-
-    #[test]
-    fn resolve_unknown_model_uses_default_provider() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-
-        let resolved = r
-            .resolve_with_fallback("totally-unknown-model", &[])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "totally-unknown-model");
-        assert!(!resolved.is_fallback);
-    }
-
-    #[test]
-    fn resolve_retries_degraded_provider_when_its_the_only_one() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-
-        // A transient failure puts the only provider into cooldown.
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-
-        // Without a last-resort degraded fallback, this would error out.
-        let resolved = r.resolve_with_fallback("gpt-4o", &[]).unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "gpt-4o");
-    }
-
-    #[test]
-    fn full_fallback_chain_agent_then_global() {
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-        r.register("google".into(), p("google"));
-        r.set_fallbacks(vec!["google".into()]);
-
-        // Degrade openai (primary for gpt-4o)
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::ServerError { status: 500 },
-            )),
-        );
-
-        // Agent fallback "claude-opus-4-6" → anthropic (healthy) should be picked
-        let resolved = r
-            .resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()])
-            .unwrap();
-
-        assert_eq!(resolved.provider_name, "anthropic");
-        assert_eq!(resolved.model, "claude-opus-4-6");
-        assert!(resolved.is_fallback);
-        assert_eq!(resolved.original_model, "gpt-4o");
-
-        // Now degrade anthropic too — should fall to global fallback "google"
-        r.report_outcome(
-            "anthropic",
-            Err(ProviderError::Transient(
-                crate::providers::health::TransientError::Timeout,
-            )),
-        );
-
-        let resolved = r
-            .resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()])
-            .unwrap();
-
-        assert_eq!(resolved.provider_name, "google");
-        assert!(resolved.is_fallback);
-        assert_eq!(resolved.original_model, "gpt-4o");
-    }
-
-    #[test]
-    fn full_fallback_chain_all_layers() {
-        use crate::providers::health::{PermanentError, TransientError};
-
-        // Setup: 3 providers
-        let r = MultiProviderRegistry::new("claude".into(), p("claude"));
-        r.register("openai".into(), p("openai"));
-        r.register("deepseek".into(), p("deepseek"));
-        r.set_fallbacks(vec!["deepseek".into()]);
-
-        // Scenario 1: All healthy — primary wins
-        let resolved = r
-            .resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "claude");
-        assert!(!resolved.is_fallback);
-
-        // Scenario 2: Primary auth fails → agent fallback
-        r.report_outcome(
-            "claude",
-            Err(ProviderError::Permanent(PermanentError::AuthFailed)),
-        );
-        let resolved = r
-            .resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "gpt-4o");
-        assert!(resolved.is_fallback);
-
-        // Scenario 3: Primary + agent fallback both down → global fallback
-        r.report_outcome(
-            "openai",
-            Err(ProviderError::Transient(TransientError::Timeout)),
-        );
-        let resolved = r
-            .resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "deepseek");
-        assert!(resolved.is_fallback);
-        assert!(resolved.model.is_empty()); // global fallback = empty model sentinel
-
-        // Scenario 4: All down
-        r.report_outcome(
-            "deepseek",
-            Err(ProviderError::Permanent(PermanentError::AuthFailed)),
-        );
-        let result = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]);
-        assert!(result.is_err());
-
-        // Scenario 5: Reset claude → works again
-        r.reset_health("claude");
-        let resolved = r
-            .resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "claude");
-        assert!(!resolved.is_fallback);
-    }
-
-    #[test]
-    fn resolve_uses_degraded_provider_after_cooldown_expires() {
-        use crate::providers::health::ProviderHealth;
-        use std::time::{Duration, Instant};
-
-        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
-        r.register("anthropic".into(), p("anthropic"));
-
-        // Manually inject a Degraded state with an expired cooldown
-        {
-            let mut state = r.state.write().unwrap_or_else(|e| e.into_inner());
-            state.health.insert(
-                "openai".to_string(),
-                ProviderHealth::Degraded {
-                    since: Instant::now() - Duration::from_secs(120),
-                    cooldown_until: Instant::now() - Duration::from_secs(1), // expired
-                    consecutive_failures: 2,
-                },
-            );
-        }
-
-        // openai is Degraded but cooldown expired → should be selected (not fallback)
-        let resolved = r
-            .resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()])
-            .unwrap();
-        assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "gpt-4o");
-        assert!(
-            !resolved.is_fallback,
-            "degraded-past-cooldown provider should be primary, not fallback"
-        );
     }
 }

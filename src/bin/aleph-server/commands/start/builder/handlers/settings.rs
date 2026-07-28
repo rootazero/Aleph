@@ -360,24 +360,13 @@ pub(in crate::commands::start) fn register_config_handlers(
             event_bus
         );
     }
-    if let Some(ref registry) = multi_registry {
-        register_handler!(
-            server,
-            "providers.test",
-            providers::handle_test,
-            config,
-            shared_token_mgr,
-            registry
-        );
-    } else {
-        register_handler!(
-            server,
-            "providers.test",
-            providers::handle_test_no_registry,
-            config,
-            shared_token_mgr
-        );
-    }
+    register_handler!(
+        server,
+        "providers.test",
+        providers::handle_test,
+        config,
+        shared_token_mgr
+    );
     register_handler!(
         server,
         "providers.needsSetup",

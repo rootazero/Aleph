@@ -264,11 +264,22 @@ impl Default for GatewayServerConfig {
 pub struct AgentConfig {
     /// Workspace directory (supports ~ expansion)
     pub workspace: String,
-    /// Primary model
+    /// Primary model.
+    ///
+    /// Advisory: this does **not** decide which model is dialed. The binder's
+    /// directive chain does that (per-turn pick ▸ session `select_model` pick ▸
+    /// the agent definition's `model_hint` ▸ the flow's `BrainRef`), and the
+    /// endpoint's own `[providers.<name>].models` list drives the failover
+    /// walk. What this feeds is the run's vision-capability check and the
+    /// `ModelResolved` label.
+    ///
+    /// A sibling `fallback_models` used to sit here. It had no writer anywhere,
+    /// no documentation, and its only reader was a resolver that named a badge
+    /// and dialed nothing — while the failover walk already covers both fallback
+    /// axes (sibling models within a provider, then the provider chain itself).
+    /// Removed rather than wired: an agent is the wrong layer to declare model
+    /// fallback, which is a property of the endpoint.
     pub model: String,
-    /// Fallback models
-    #[serde(default)]
-    pub fallback_models: Vec<String>,
     /// Maximum loop iterations
     pub max_loops: u32,
     /// Maximum total token usage per request (loop guard)
@@ -289,7 +300,6 @@ impl Default for AgentConfig {
         Self {
             workspace: "~/.aleph/agents/main".to_string(),
             model: "claude-sonnet-4-5".to_string(),
-            fallback_models: vec![],
             max_loops: 100,
             max_tokens: None,
             system_prompt: None,
@@ -308,7 +318,6 @@ impl AgentConfig {
             display_name: None,
             workspace: expand_path(&self.workspace),
             model: self.model.clone(),
-            fallback_models: self.fallback_models.clone(),
             max_loops: self.max_loops,
             max_tokens: self.max_tokens,
             system_prompt: self.system_prompt.clone(),
