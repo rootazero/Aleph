@@ -72,6 +72,20 @@ pub struct RouteObservability {
     /// Live route handle (mode / strategy / pins / limits). `None` in tests —
     /// the snapshot then reports the safe defaults (auto / ordered / no pins).
     pub route: Option<Arc<RouteHandle>>,
+    /// The global chain itself, asked (read-only) for the order the next request
+    /// will walk. `None` in tests — the snapshot then omits `next_order`.
+    ///
+    /// Holding the chain rather than re-deriving the order here is the whole
+    /// point: the ordering is the product of the route mode, the pins, the
+    /// strategy, the breaker, the pacing windows and the rate ceilings, and a
+    /// second implementation of that composition would be wrong the first time
+    /// any one of them changed.
+    pub chain: Option<Arc<crate::providers::failover::FailoverProvider>>,
+    /// `[route]` settings that are set but cannot take effect
+    /// ([`route_problems`](crate::providers::route_policy::route_problems)),
+    /// computed at boot from the same provider/tier picture the chain was built
+    /// from. Empty on a clean config.
+    pub problems: Vec<crate::providers::route_policy::RouteProblem>,
 }
 
 const fn tier_str(tier: EndpointTier) -> &'static str {
@@ -249,6 +263,38 @@ impl RouteObservability {
             })
             .collect();
 
+        // The order the next request will actually walk, straight from the
+        // chain. This is the field that answers "why that provider" — the rest
+        // of the snapshot is the evidence, this is the verdict.
+        let next_order: Option<Vec<serde_json::Value>> = match &self.chain {
+            Some(chain) => Some(
+                chain
+                    .preview_order()
+                    .await
+                    .into_iter()
+                    .map(|step| {
+                        json!({
+                            "provider": step.provider,
+                            "tier": tier_str(step.tier),
+                            "slot": if step.primary { "primary" } else { "fallback" },
+                            "gate": match step.action {
+                                crate::providers::route_policy::CandidateAction::Allow => "allow",
+                                crate::providers::route_policy::CandidateAction::CrossTier {
+                                    requires_approval: true,
+                                } => "cross_tier_needs_approval",
+                                crate::providers::route_policy::CandidateAction::CrossTier {
+                                    requires_approval: false,
+                                } => "cross_tier_degrade",
+                                crate::providers::route_policy::CandidateAction::Skip => "skip",
+                            },
+                            "rate_sidelined": step.sidelined,
+                        })
+                    })
+                    .collect(),
+            ),
+            None => None,
+        };
+
         json!({
             "mode": mode_str(mode),
             "allow_cloud_escalation": allow_escalation,
@@ -272,12 +318,23 @@ impl RouteObservability {
                     })
                 })
                 .collect::<Vec<_>>(),
+            // Dial order for the next request, gates included. Absent (not
+            // empty) when no chain is attached, so a consumer can tell "nothing
+            // to walk" from "nobody asked the chain".
+            "next_order": next_order,
             "providers": providers,
             "cooling_models": cooling
                 .iter()
                 .map(|(p, m, s)| {
                     json!({ "provider": p, "model": m, "remaining_secs": s })
                 })
+                .collect::<Vec<_>>(),
+            // `[route]` settings that are set but inert. Empty on a clean
+            // config; a non-empty list is the answer to "why did my routing
+            // configuration do nothing".
+            "config_problems": self.problems
+                .iter()
+                .map(|p| json!({ "field": p.field, "detail": p.detail }))
                 .collect::<Vec<_>>(),
         })
     }
@@ -339,6 +396,8 @@ mod tests {
             provider_cooldown: ProviderCooldown::default(),
             load: Arc::new(LoadStats::new()),
             route: None,
+            chain: None,
+            problems: Vec::new(),
         }
     }
 

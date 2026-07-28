@@ -367,7 +367,10 @@ impl SelfConfigTool {
                 }
                 " Live provider health (circuit breakers, cooldowns, in-flight \
                  load, latency, rolling rpm/tpm usage) and the failover chain \
-                 are in data.runtime."
+                 are in data.runtime. data.runtime.next_order is the order the \
+                 NEXT request will dial, gates included — read it before \
+                 guessing why a provider was chosen. data.runtime.config_problems \
+                 lists [route] settings that are set but cannot take effect."
             }
             None => "",
         };

@@ -141,6 +141,7 @@ impl HarnessRunner for StubHarnessRunner {
         _transient_context: Option<String>,
         _think_level: Option<alephcore::agents::thinking::ThinkLevel>,
         _envelope: alephcore::thinker::TurnEnvelope,
+        _turn_model: Option<alephcore::providers::session_model_handle::SessionModelPref>,
     ) -> Result<FlowOutcome, FlowError> {
         let ctx = StubContext {
             session_key,
@@ -254,5 +255,6 @@ pub fn basic_request() -> FlowRequest {
         transient_context: None,
         think_level: None,
         envelope: alephcore::thinker::TurnEnvelope::none(),
+        model_directive: None,
     }
 }
