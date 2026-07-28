@@ -11,6 +11,24 @@ use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 
+/// The frontmost application's pid.
+///
+/// Two sources, in order — see `ax::bus::frontmost_pid`. Non-Linux builds of
+/// this crate have no AT-SPI module, so they get the window-layer answer only,
+/// which is what they had before.
+async fn frontmost_pid() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::ax_frontmost_pid().await.and_then(|p| u64::try_from(p).ok())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let active = aleph_desktop::action::window_linux::active_window().ok()??;
+        let windows = aleph_desktop::action::window_linux::window_list().ok()?;
+        windows.iter().find(|w| w.id == active).map(|w| w.pid)
+    }
+}
+
 pub struct LinuxSystem;
 
 impl LinuxSystem {
@@ -51,23 +69,30 @@ impl SystemCapability for LinuxSystem {
     }
 
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
-        tokio::task::spawn_blocking(|| {
+        // Resolved out here, not inside the blocking closure: on a session with
+        // no window-management IPC the answer comes from the AT-SPI bus, which
+        // is async.
+        //
+        // `is_active` is not cosmetic — `DesktopTool::check_blocked_app` finds
+        // the frontmost app with `apps.iter().find(|a| a.is_active)` to hard-
+        // block a password manager, and `observe`'s post-state reads the same
+        // flag. Derived from the window layer alone it was permanently `false`
+        // on GNOME and KDE under Wayland (neither exposes window management),
+        // so the block was dead there — the same way it was dead against
+        // multi-process apps until the 2026-07 fold fix.
+        let active_pid = frontmost_pid().await;
+
+        tokio::task::spawn_blocking(move || {
             // `/proc` instead of `ps -eo comm`: the kernel truncates `comm` to 15
             // bytes, so the old listing reported `gnome-calculator` as
             // `gnome-calculato` — a name nothing could then be launched or quit
             // by. `/proc/<pid>/exe` is the real binary.
             let procs = aleph_desktop::linux::proc::snapshot();
 
-            // Which processes own a window, and which one is in front. A GUI
-            // application is exactly one that has a window, so this replaces the
-            // old hand-maintained deny-list of daemon name prefixes — and it
-            // finally lets `is_active` be true for something.
+            // Which processes own a window. A GUI application is exactly one
+            // that has a window, so this replaces the old hand-maintained
+            // deny-list of daemon name prefixes.
             let windows = aleph_desktop::action::window_linux::window_list().unwrap_or_default();
-            let active_pid = aleph_desktop::action::window_linux::active_window()
-                .ok()
-                .flatten()
-                .and_then(|id| windows.iter().find(|w| w.id == id))
-                .map(|w| w.pid);
             let windowed: std::collections::HashSet<u64> = windows.iter().map(|w| w.pid).collect();
 
             Ok(fold_apps(&procs, active_pid, &windowed))
