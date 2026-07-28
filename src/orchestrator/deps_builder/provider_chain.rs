@@ -173,35 +173,36 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
-    // Capture the chain composition + shared-state handles for the read-only
-    // observability bundle before `fallbacks` moves into the provider. Each
-    // handle clone shares the same live `Arc` map the chains mutate, so a
-    // later snapshot always reads the current breaker/cooldown/load picture.
-    let observability = RouteObservability {
-        // rust-doctor-disable-next-line excessive-clone
-        primary: default_provider.clone(),
-        fallbacks: fallbacks
-            .iter()
-            .map(|n| ChainCandidate {
-                // rust-doctor-disable-next-line excessive-clone
-                name: n.name.clone(),
-                // rust-doctor-disable-next-line excessive-clone
-                models: n.models.clone(),
-                tier: n.tier,
-            })
-            .collect(),
-        auto_derived,
-        // rust-doctor-disable-next-line excessive-clone
-        health: health.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        model_cooldown: model_cooldown.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        provider_cooldown: provider_cooldown.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        load: load.clone(),
-        // rust-doctor-disable-next-line excessive-clone
-        route: route_handle.clone(),
-    };
+    // Chain composition for the read-only observability bundle, captured before
+    // `fallbacks` moves into the provider.
+    let chain_candidates: Vec<ChainCandidate> = fallbacks
+        .iter()
+        .map(|n| ChainCandidate {
+            // rust-doctor-disable-next-line excessive-clone
+            name: n.name.clone(),
+            // rust-doctor-disable-next-line excessive-clone
+            models: n.models.clone(),
+            tier: n.tier,
+        })
+        .collect();
+
+    // `[route]` settings that are set but cannot take effect, resolved once from
+    // the same provider/tier picture the chain is built from — so the diagnostic
+    // and the engine can never describe different provider sets. Logged loudly
+    // here (a silent no-op knob is the failure mode) and carried into
+    // `route_status` for the model.
+    let problems = crate::providers::route_policy::route_problems(&config.route, &tier_catalog);
+    for problem in &problems {
+        tracing::warn!(
+            field = %problem.field,
+            "[route] {}: {}", problem.field, problem.detail,
+        );
+    }
+
+    // The observability bundle reports the live primary slot; the chain consumes
+    // the handle itself.
+    // rust-doctor-disable-next-line excessive-clone
+    let default_provider_for_observability = default_provider.clone();
 
     let global_provider = FailoverProvider::new(
         default_provider,
@@ -239,9 +240,36 @@ pub fn build_failover_chain(
     } else {
         global_provider
     };
-    let global: Arc<dyn AiProvider> = Arc::new(global_provider);
+    // Kept as the concrete type as well: the observability bundle asks this very
+    // chain for the order the next request will walk, so `route_status` cannot
+    // report an ordering the walk would not produce.
+    let global_chain = Arc::new(global_provider);
+    // rust-doctor-disable-next-line excessive-clone
+    let global: Arc<dyn AiProvider> = global_chain.clone();
     // rust-doctor-disable-next-line excessive-clone
     let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
+
+    // Every handle here is a clone that shares the same live `Arc` state the
+    // chains mutate, so a later snapshot always reads the current
+    // breaker/cooldown/load picture.
+    let observability = RouteObservability {
+        // rust-doctor-disable-next-line excessive-clone
+        primary: default_provider_for_observability,
+        fallbacks: chain_candidates,
+        auto_derived,
+        // rust-doctor-disable-next-line excessive-clone
+        health: health.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        model_cooldown: model_cooldown.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        provider_cooldown: provider_cooldown.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        load: load.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        route: route_handle.clone(),
+        chain: Some(global_chain),
+        problems,
+    };
 
     // Per-`provider_hint` overrides: one FailoverProvider per non-primary
     // provider, pinning it as primary then falling through the global chain.

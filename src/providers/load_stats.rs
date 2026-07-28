@@ -200,6 +200,15 @@ impl LoadStats {
         self.round_robin.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// The rotation index the *next* request will use, without consuming it.
+    ///
+    /// For the read-only order preview in `route_status`: a diagnostic that
+    /// advanced the counter would rotate the very ordering it claims to be
+    /// reporting, so looking must not be a side effect.
+    pub fn peek_round_robin(&self) -> u64 {
+        self.round_robin.load(Ordering::Relaxed)
+    }
+
     /// Snapshot every tracked provider's metric as `(name, metric)`,
     /// name-sorted. Raw window counts only — the caller folds configured
     /// limits in, same contract as [`metric`](Self::metric). Diagnostic only —

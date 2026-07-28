@@ -56,6 +56,8 @@ where
             // Legacy `run_flow` helper resolves no tier / mode / workspace, so
             // the approval, usage-mode, and `cwd=` lines all stay absent.
             envelope: crate::thinker::TurnEnvelope::none(),
+            // No chat-window picker on the legacy helper path.
+            model_directive: None,
         };
 
         let handle = orchestrator

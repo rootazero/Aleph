@@ -463,6 +463,21 @@ pub struct FlowRequest {
     /// none of the three — their prompt stays byte-identical. See
     /// [`TurnEnvelope`] for the per-field contract.
     pub envelope: crate::thinker::TurnEnvelope,
+    /// This turn's explicit (provider, model) pick — the chat-window model
+    /// picker's `chat.send.model_override`, or the `[voice]` low-TTFT pin on a
+    /// voice turn. Highest-priority model directive: it outranks the session's
+    /// sticky `select_model` pick and the agent's own `model_hint`, because it
+    /// is the most recent deliberate choice.
+    ///
+    /// It has to travel as a request field. The binder resolves its directive
+    /// from `session_model_handle` (written only by the `select_model` tool)
+    /// and the agent registry — neither of which the picker touches — so before
+    /// this field existed the pick reached exactly two places: the vision
+    /// capability check, and the `ModelResolved` event that *told the user the
+    /// switch had happened*. The turn itself was served by the agent's
+    /// configured model. `None` = no per-turn pick (every non-gateway
+    /// dispatcher), leaving the directive chain byte-identical.
+    pub model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
 }
 
 impl std::fmt::Debug for FlowRequest {
@@ -569,6 +584,10 @@ pub trait HarnessRunner: Send + Sync {
         // working directory that anchors the runtime `cwd=` / `repo=` / `git=`
         // segments. `TurnEnvelope::none()` leaves all three lines absent.
         envelope: crate::thinker::TurnEnvelope,
+        // This turn's explicit model pick (chat-window picker / voice pin).
+        // Outranks the session's sticky `select_model` pick and the agent's
+        // `model_hint`; `None` leaves the directive chain untouched.
+        model_directive: Option<crate::providers::session_model_handle::SessionModelPref>,
     ) -> Result<FlowOutcome, FlowError>;
 
     /// The guardrail registry this runner installs on its own harness, if
@@ -823,6 +842,8 @@ impl Orchestrator {
         let think_level = req.think_level;
         // rust-doctor-disable-next-line excessive-clone
         let envelope = req.envelope.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let model_directive = req.model_directive.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -864,6 +885,7 @@ impl Orchestrator {
                         transient_context,
                         think_level,
                         envelope,
+                        model_directive,
                     ),
                 ),
             )

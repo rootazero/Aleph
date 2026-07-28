@@ -95,6 +95,62 @@ enum SlotKind {
     Fallback,
 }
 
+/// One request's resolved candidate chain plus the prompt-blind gate facts the
+/// walk needs about it.
+///
+/// The set travels *with* the chain because both are derived from one route
+/// snapshot: recomputing "is this provider over its ceiling" inside the walk
+/// would read a possibly-newer config generation than the one that ordered the
+/// chain, and the two disagreeing is how a candidate ends up sorted last for a
+/// reason the walk then declines to act on.
+struct CandidatePlan {
+    /// The chain to walk, in order, each entry with the route action it must
+    /// enforce and the slot that decides whose model list wins.
+    candidates: Vec<(FailoverNode, CandidateAction, SlotKind)>,
+    /// Providers at or over a configured `[route].rate_limits` ceiling right
+    /// now. Empty whenever no ceilings are configured (the default), so the
+    /// gate below is a no-op on an unconfigured deployment.
+    saturated: std::collections::HashSet<String>,
+}
+
+/// One step of the chain the next request would walk, as rendered by
+/// `route_status` ([`FailoverProvider::preview_order`]).
+#[derive(Debug, Clone)]
+pub struct RouteStep {
+    /// Provider name — the breaker / cooldown / load key.
+    pub provider: String,
+    /// Endpoint locality the route policy gated on.
+    pub tier: EndpointTier,
+    /// What the walk will enforce before dialing it.
+    pub action: CandidateAction,
+    /// Whether this is the primary slot (the only slot that honours an
+    /// explicitly pinned request model).
+    pub primary: bool,
+    /// Whether a configured rate ceiling currently sidelines it — deprioritised
+    /// within its tier and skipped while a healthier candidate remains.
+    pub sidelined: bool,
+}
+
+/// Why a chain came back empty, phrased for whoever has to read it.
+///
+/// An empty chain is always the route policy's doing — it is the only stage that
+/// removes candidates outright — so "all 0 failover candidates failed" was both
+/// true and useless: nothing was attempted, and the reason was a mode the
+/// operator set.
+fn empty_chain_error(mode: RouteMode) -> AlephError {
+    AlephError::provider(match mode {
+        RouteMode::AlwaysLocal => "route mode 'always_local' left no candidate: every configured \
+             provider resolves to a cloud endpoint and cloud escalation is off. Set \
+             [route] allow_cloud_escalation = true, configure a local provider, \
+             or switch [route] mode."
+            .to_string(),
+        RouteMode::AlwaysCloud => "route mode 'always_cloud' left no candidate: no configured \
+             provider resolves to a cloud endpoint."
+            .to_string(),
+        RouteMode::Auto => "no provider is configured to serve this request".to_string(),
+    })
+}
+
 /// Fallback chain **membership** for the next request, in order.
 ///
 /// The single description of "who is in the chain", shared by the walk
@@ -521,7 +577,11 @@ impl FailoverProvider {
     /// list is run through [`order_candidates`] for local-first ordering, pin
     /// promotion and tier gating. Each entry carries the [`CandidateAction`] the
     /// walk must enforce plus the [`SlotKind`] that decides whose model list wins.
-    async fn candidates(&self) -> Vec<(FailoverNode, CandidateAction, SlotKind)> {
+    ///
+    /// `advance_rotation` consumes a round-robin tick (what a real request
+    /// does); the read-only [`preview_order`](Self::preview_order) passes
+    /// `false` so looking at the order does not rotate it.
+    async fn candidates(&self, advance_rotation: bool) -> CandidatePlan {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -607,13 +667,34 @@ impl FailoverProvider {
         let sidelined = self
             .sidelined_providers(fallbacks.iter().map(|n| n.name.as_str()))
             .await;
+        // Rate-window saturation, folded ONCE per pass for every candidate the
+        // primary included. Two consumers read this single answer: the ordering
+        // below (deprioritise to the back of the tier) and the walk's gate
+        // (skip while a healthier candidate is still ahead) — so a provider
+        // cannot be sorted last for a ceiling the walk then ignores. Empty
+        // without `[route].rate_limits`, which is the default.
+        let saturated: std::collections::HashSet<String> = match &self.load {
+            Some(load) if !limits.is_empty() => std::iter::once(primary_name.as_str())
+                .chain(fallbacks.iter().map(|n| n.name.as_str()))
+                .filter(|name| {
+                    let m = load.metric(name);
+                    limits.assess(name, m.rpm_used, m.tpm_used).1
+                })
+                .map(ToString::to_string)
+                .collect(),
+            _ => std::collections::HashSet::new(),
+        };
         let needs_balance =
             strategy != LoadBalanceStrategy::Ordered || !limits.is_empty() || !sidelined.is_empty();
         let ordered = match &self.load {
             Some(load) if needs_balance => {
                 // One rotation tick per request drives RoundRobin; the sort
-                // strategies ignore it.
-                let rr_base = load.next_round_robin();
+                // strategies ignore it. A preview must not consume one.
+                let rr_base = if advance_rotation {
+                    load.next_round_robin()
+                } else {
+                    load.peek_round_robin()
+                };
                 // Provider → endpoint tier, captured before `fallbacks` is moved
                 // into the ordering call. Cost routing needs each candidate's
                 // tier to rank an *unpriced* model (free local vs unknown-cost
@@ -638,9 +719,8 @@ impl FailoverProvider {
                     // infrastructure) — it just sorts the scalars handed to it.
                     |name| {
                         let mut m = load.metric(name);
-                        let (util, over) = limits.assess(name, m.rpm_used, m.tpm_used);
-                        m.utilization_permille = util;
-                        m.over_limit = over;
+                        m.utilization_permille = limits.assess(name, m.rpm_used, m.tpm_used).0;
+                        m.over_limit = saturated.contains(name);
                         m.cooling = sidelined.contains(name);
                         // Price lookup only when it is the active sort key —
                         // every other strategy ignores `price_per_mtok`. The
@@ -672,7 +752,36 @@ impl FailoverProvider {
                 .into_iter()
                 .map(|(node, action)| (node, action, SlotKind::Fallback)),
         );
-        out
+        CandidatePlan {
+            candidates: out,
+            saturated,
+        }
+    }
+
+    /// The chain the *next* request would walk: `(provider, tier, action, slot)`
+    /// per candidate, in dial order.
+    ///
+    /// Read-only twin of [`candidates`](Self::candidates) — same function, same
+    /// route snapshot, same gates — so `route_status` cannot report an order the
+    /// walk would not produce. Answering "why did it pick that provider / why is
+    /// my pin not leading / did the strategy take effect" needs the *result* of
+    /// the ordering, not the raw signals that feed it; before this the operator
+    /// had to re-run the sort in their head.
+    ///
+    /// Observes without disturbing: it consumes no round-robin tick and performs
+    /// no `Open → HalfOpen` breaker transition (that belongs to a real dial).
+    pub async fn preview_order(&self) -> Vec<RouteStep> {
+        let plan = self.candidates(false).await;
+        plan.candidates
+            .into_iter()
+            .map(|(node, action, slot)| RouteStep {
+                sidelined: plan.saturated.contains(&node.name),
+                provider: node.name,
+                tier: node.tier,
+                action,
+                primary: slot == SlotKind::Primary,
+            })
+            .collect()
     }
 
     /// The subset of `names` the shared registries currently consider unhealthy:
@@ -855,14 +964,50 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let candidates = self.candidates().await;
-            let total = candidates.len();
+            let plan = self.candidates(true).await;
+            let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
             // Records whether any candidate has already pushed content to the
             // caller's sink; see the note on `walk`.
             let emission = sink.map(EmissionGuard::new);
 
-            for (idx, (cand, action, slot)) in candidates.into_iter().enumerate() {
+            for (idx, (cand, action, slot)) in plan.candidates.into_iter().enumerate() {
+                // The circuit breaker may skip a candidate only while a later
+                // one remains; the final candidate is always attempted so a
+                // transient outage cannot hard-fail every request behind an
+                // open circuit. `circuit_allows` still runs for its
+                // `Open → HalfOpen` bookkeeping.
+                //
+                // This runs BEFORE the escalation gate below: the gate can
+                // block on a user prompt, and asking someone to authorise
+                // spending on a cloud provider we are then going to skip for
+                // being dead is a prompt that buys nothing. Every cheap,
+                // local reason to pass over a candidate is settled first.
+                let circuit_ok = self.circuit_allows(&cand.name).await;
+                if !circuit_ok && idx + 1 < total {
+                    tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
+                    continue;
+                }
+
+                // Rate-ceiling gate, same shape as the breaker's: a provider at
+                // or over its configured `[route].rate_limits` window yields to
+                // a later candidate, and is still attempted when it is the last
+                // one (the chain must never starve).
+                //
+                // Without this the ceiling only ever *re-ordered* the fallback
+                // pool, and the primary slot — which is not part of that pool —
+                // ignored it completely: on a single-provider or primary-heavy
+                // deployment `[route].rate_limits` changed nothing at all
+                // except a number in `route_status`.
+                if plan.saturated.contains(&cand.name) && idx + 1 < total {
+                    tracing::debug!(
+                        provider = %cand.name,
+                        "failover: provider at its configured rate ceiling, deferring \
+                         to a later candidate",
+                    );
+                    continue;
+                }
+
                 // Route gate: an approval-gated cross-tier candidate (borrow
                 // cloud under AlwaysLocal) is skipped unless the user approves
                 // — fail-closed, exactly like an open circuit. Cloud→local
@@ -885,17 +1030,6 @@ impl FailoverProvider {
                         });
                         continue;
                     }
-                }
-
-                // The circuit breaker may skip a candidate only while a later
-                // one remains; the final candidate is always attempted so a
-                // transient outage cannot hard-fail every request behind an
-                // open circuit. `circuit_allows` still runs for its
-                // `Open → HalfOpen` bookkeeping.
-                let circuit_ok = self.circuit_allows(&cand.name).await;
-                if !circuit_ok && idx + 1 < total {
-                    tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
-                    continue;
                 }
 
                 // Model-list resolution, in precedence:
@@ -1026,6 +1160,23 @@ impl FailoverProvider {
                                     }
                                 }
                                 self.mark_healthy(&cand.name).await;
+                                // A completed call also retires any pacing
+                                // window parked on this provider: the window
+                                // exists to avoid re-triggering a throttle, and
+                                // we just went through it. Without this a
+                                // *model*-scoped 429 (which parks the provider
+                                // whole) kept the provider parked even though
+                                // the sibling-model migration it triggered
+                                // answered successfully — so the next turn
+                                // deferred a demonstrably working provider.
+                                if let Some(pc) = &self.provider_cooldown {
+                                    if pc.clear(&cand.name).await {
+                                        tracing::debug!(
+                                            provider = %cand.name,
+                                            "failover: request succeeded, clearing rate pacing",
+                                        );
+                                    }
+                                }
                                 return Ok(resp);
                             }
                             // Content already reached the caller's sink: the user
@@ -1155,7 +1306,13 @@ impl FailoverProvider {
             }
 
             Err(last_error.unwrap_or_else(|| {
-                AlephError::provider(format!("all {total} failover candidates failed"))
+                if total == 0 {
+                    // Nothing was attempted, so there is no provider error to
+                    // report — only the policy that emptied the chain.
+                    empty_chain_error(self.route_snapshot().mode)
+                } else {
+                    AlephError::provider(format!("all {total} failover candidates failed"))
+                }
             }))
         })
     }

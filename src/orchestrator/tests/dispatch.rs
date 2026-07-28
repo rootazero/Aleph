@@ -37,6 +37,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
+        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -135,6 +136,7 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -173,6 +175,7 @@ async fn dispatch_unknown_flow_id_returns_error() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         .unwrap_err();
@@ -205,6 +208,7 @@ async fn dispatch_unregistered_agent_routes_through_default_flow() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -241,6 +245,7 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         .unwrap_err();
@@ -289,6 +294,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _transient_context: Option<String>,
             _think_level: Option<crate::agents::thinking::ThinkLevel>,
             _envelope: crate::thinker::TurnEnvelope,
+            _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
@@ -325,6 +331,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         transient_context: None,
         think_level: None,
         envelope: crate::thinker::TurnEnvelope::none(),
+        model_directive: None,
     };
 
     // rust-doctor-disable-next-line unwrap-in-production
@@ -356,6 +363,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         transient_context: None,
         think_level: None,
         envelope: crate::thinker::TurnEnvelope::none(),
+        model_directive: None,
     };
 
     // First dispatch — await completion.
@@ -408,6 +416,7 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         _transient_context: Option<String>,
         _think_level: Option<crate::agents::thinking::ThinkLevel>,
         _envelope: crate::thinker::TurnEnvelope,
+        _turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         *self
             .received_tool_service
@@ -531,6 +540,7 @@ async fn dispatch_forwards_tool_service_override() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production
@@ -572,6 +582,7 @@ async fn dispatch_forwards_trace_sink() {
             transient_context: None,
             think_level: None,
             envelope: crate::thinker::TurnEnvelope::none(),
+            model_directive: None,
         })
         .await
         // rust-doctor-disable-next-line unwrap-in-production

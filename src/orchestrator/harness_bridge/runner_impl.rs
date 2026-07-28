@@ -80,6 +80,7 @@ impl HarnessRunner for AgentHarnessRunner {
         transient_context: Option<String>,
         think_level: Option<crate::agents::thinking::ThinkLevel>,
         envelope: crate::thinker::TurnEnvelope,
+        turn_model: Option<crate::providers::session_model_handle::SessionModelPref>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -101,6 +102,13 @@ impl HarnessRunner for AgentHarnessRunner {
         }
 
         // Step 3: brain pick. Effective model directive, in precedence order:
+        //   0. this turn's explicit pick — the chat-window model picker
+        //      (`chat.send.model_override`) or the `[voice]` low-TTFT pin. The
+        //      most recent deliberate choice, so it outranks everything below;
+        //      it is per-TURN, so nothing about it is remembered afterwards.
+        //      Until this arm existed the pick reached the vision-capability
+        //      check and the `ModelResolved` banner and stopped there — the
+        //      turn was served by (1)/(2)/(3) while the UI reported otherwise;
         //   1. a `select_model` pick recorded for this session (A layer, R8) —
         //      keyed by the canonical `SessionKey` the tool wrote under;
         //   2. the agent's own configured pin (`provider_hint` + `model_hint`)
@@ -124,14 +132,13 @@ impl HarnessRunner for AgentHarnessRunner {
         let session_pref_key = SessionKey::from_key_string(&session_key)
             // rust-doctor-disable-next-line excessive-clone
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
-        let model_directive: Option<(Option<String>, String)> =
-            crate::providers::session_model_handle::get_session_model(&session_pref_key)
-                .map(|p| (p.provider, p.model))
-                .or_else(|| {
-                    self.agent_registry
-                        .get(&spec.agent)
-                        .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)))
-                });
+        let model_directive: Option<(Option<String>, String)> = effective_model_directive(
+            turn_model,
+            crate::providers::session_model_handle::get_session_model(&session_pref_key),
+            self.agent_registry
+                .get(&spec.agent)
+                .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m))),
+        );
         // An unresolvable provider pin falls back to the default chain — but the
         // *attribution* must fall back with it. `select_model` now refuses an
         // unknown key outright, so this is reachable only via an agent's
@@ -1115,6 +1122,85 @@ fn store_calibration_carryover(
 ) {
     let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some((model.to_string(), factor));
+}
+
+/// The one place that says which model directive wins.
+///
+/// Three sources want to name the model for a run, and they are ranked by how
+/// recent and how deliberate the choice was:
+///
+/// 1. `turn` — this turn's explicit pick (chat-window picker / `[voice]` pin).
+///    A human just chose it for this message; nothing may outrank it;
+/// 2. `session` — the sticky `select_model` pick the model itself made earlier
+///    in this conversation (R8);
+/// 3. `agent_hint` — the agent's declared `provider_hint` + `model_hint`.
+///
+/// `None` from all three means "no directive": `pick_llm` resolves the flow's
+/// `BrainRef` and the failover primary walks its own catalog, exactly as it did
+/// before any of this existed.
+fn effective_model_directive(
+    turn: Option<crate::providers::session_model_handle::SessionModelPref>,
+    session: Option<crate::providers::session_model_handle::SessionModelPref>,
+    agent_hint: Option<(Option<String>, String)>,
+) -> Option<(Option<String>, String)> {
+    turn.or(session)
+        .map(|p| (p.provider, p.model))
+        .or(agent_hint)
+}
+
+#[cfg(test)]
+mod model_directive_tests {
+    use super::effective_model_directive;
+    use crate::providers::session_model_handle::SessionModelPref;
+
+    fn pref(provider: Option<&str>, model: &str) -> SessionModelPref {
+        SessionModelPref {
+            provider: provider.map(ToString::to_string),
+            model: model.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_turn_pick_outranks_the_session_pick_and_the_agent_hint() {
+        // The regression this ranking exists for: the chat-window picker's
+        // choice used to reach the vision check and the `ModelResolved` banner
+        // and stop there, so the turn ran on whatever (2)/(3) named while the
+        // UI announced the pick.
+        let out = effective_model_directive(
+            Some(pref(Some("openai"), "gpt-5")),
+            Some(pref(None, "claude-sonnet-5")),
+            Some((Some("kimi".into()), "kimi-k2".into())),
+        );
+        assert_eq!(out, Some((Some("openai".to_string()), "gpt-5".to_string())));
+    }
+
+    #[test]
+    fn the_session_pick_still_wins_when_no_turn_pick_is_present() {
+        let out = effective_model_directive(
+            None,
+            Some(pref(None, "claude-sonnet-5")),
+            Some((Some("kimi".into()), "kimi-k2".into())),
+        );
+        assert_eq!(out, Some((None, "claude-sonnet-5".to_string())));
+    }
+
+    #[test]
+    fn the_agent_hint_is_the_last_resort_and_absence_means_no_directive() {
+        assert_eq!(
+            effective_model_directive(None, None, Some((Some("kimi".into()), "kimi-k2".into()))),
+            Some((Some("kimi".to_string()), "kimi-k2".to_string()))
+        );
+        // Nothing declared → `pick_llm` / catalog walk, byte-identical to before.
+        assert_eq!(effective_model_directive(None, None, None), None);
+    }
+
+    #[test]
+    fn a_provider_less_turn_pick_pins_only_the_model() {
+        // `Raw { model }` from the picker: the model is stamped, the provider
+        // chain stands (breaker + route-mode gating preserved).
+        let out = effective_model_directive(Some(pref(None, "gpt-5")), None, None);
+        assert_eq!(out, Some((None, "gpt-5".to_string())));
+    }
 }
 
 #[cfg(test)]

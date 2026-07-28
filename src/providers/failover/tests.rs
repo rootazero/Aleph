@@ -1887,3 +1887,249 @@ async fn a_cooling_last_resort_is_still_waited_out() {
     assert_eq!(resp.text_content(), "solo");
     assert_eq!(primary.call_count(), 1);
 }
+
+// --- round-2: rate-ceiling gate, pacing clear, gate order, preview ------
+
+#[tokio::test]
+async fn a_saturated_primary_yields_to_a_healthy_fallback() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // `[route].rate_limits` used to shape only the *ordering* of the fallback
+    // pool — and the primary slot is not part of that pool, so a ceiling on
+    // the primary changed nothing at all. Here the primary would answer
+    // successfully; it must still yield because it is at its configured rpm.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb.clone(), EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+
+    // Consume the primary's whole rpm window for this minute.
+    drop(stats.begin("primary"));
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "a saturated primary must not be dialed"
+    );
+}
+
+#[tokio::test]
+async fn a_saturated_lone_candidate_is_still_attempted() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // The ceiling defers, it never starves: with nothing else in the chain the
+    // last candidate is always tried (same rule the breaker and the pacing
+    // window follow).
+    let primary = ScriptProvider::ok("primary");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        Arc::new(StaticDefault::new(primary)),
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+    drop(stats.begin("primary"));
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_successful_call_clears_the_provider_pacing_window() {
+    // A model-scoped 429 parks the whole provider. When a sibling model (or a
+    // later turn) then answers, the park is stale evidence: the request just
+    // went through the window it claims to be protecting. Before this, the
+    // provider stayed parked and the next turn deferred it.
+    //
+    // Time is paused so the walk's "last candidate waits out its window" sleep
+    // is free. The window itself is tracked on `std::time::Instant`, which
+    // tokio's clock does not touch — so it is still minutes from expiring when
+    // the assertion runs, and only the clear can explain its absence.
+    let primary = ScriptProvider::ok("primary");
+    let pacing = ProviderCooldown::default();
+    pacing
+        .cool("primary", std::time::Duration::from_secs(600))
+        .await;
+    assert!(pacing.remaining("primary").await.is_some());
+
+    let fp = FailoverProvider::new(
+        Arc::new(StaticDefault::new(primary)),
+        vec![],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_provider_cooldown(pacing.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+    assert!(
+        pacing.remaining("primary").await.is_none(),
+        "a completed call must retire the pacing window it just passed through"
+    );
+}
+
+#[tokio::test]
+async fn no_approval_is_requested_for_a_candidate_the_breaker_will_skip() {
+    // The escalation gate can block on a human. Asking someone to authorise
+    // spending on a cloud provider that the very next line skips for being
+    // dead is a prompt that buys nothing, so every cheap local reason to pass
+    // over a candidate is now settled before the gate is consulted.
+    let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+    let dead_cloud = ScriptProvider::err("dead_cloud", "HTTP 403 Forbidden: bad key");
+    let live_cloud = ScriptProvider::ok("live_cloud");
+    let approver = MockApprover::new(true);
+    let fp = build_routed(
+        primary,
+        vec![
+            tiered_node("dead_cloud", dead_cloud.clone(), EndpointTier::Cloud),
+            tiered_node("live_cloud", live_cloud, EndpointTier::Cloud),
+        ],
+        RouteMode::AlwaysLocal,
+        true,
+        // rust-doctor-disable-next-line excessive-clone
+        Some(approver.clone() as Arc<dyn ApprovalRequester>),
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // First request: both cloud borrows are authorised; dead_cloud answers with
+    // a dead credential, which opens its circuit on the first strike.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "live_cloud");
+    assert_eq!(approver.call_count(), 2, "both borrows were authorised");
+    assert!(fp.circuit_open("dead_cloud").await);
+    assert_eq!(dead_cloud.call_count(), 1);
+
+    // Second request: dead_cloud's circuit is open and a later candidate
+    // remains, so it is passed over *without* a prompt — exactly one approval
+    // (live_cloud) instead of two.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "live_cloud");
+    assert_eq!(
+        approver.call_count(),
+        3,
+        "a candidate the breaker skips must not cost a user approval prompt"
+    );
+    assert_eq!(dead_cloud.call_count(), 1, "and must not be dialed");
+}
+
+#[tokio::test]
+async fn an_empty_chain_names_the_policy_that_emptied_it() {
+    // `always_local` with only cloud candidates and no escalation drops every
+    // candidate. "all 0 failover candidates failed" was true and useless —
+    // nothing was attempted, and the reason is a mode the operator set.
+    let primary = ScriptProvider::ok("cloud_primary");
+    let fp = build_routed(primary, vec![], RouteMode::AlwaysLocal, false, None)
+        .with_primary_tier(EndpointTier::Cloud);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let err = fp
+        .process(RequestPayload::new(&msgs))
+        .await
+        .expect_err("every candidate was dropped");
+    let text = err.to_string();
+    assert!(text.contains("always_local"), "got: {text}");
+    assert!(text.contains("allow_cloud_escalation"), "got: {text}");
+}
+
+#[tokio::test]
+async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
+    use crate::config::types::ModelRouteConfig;
+    // The preview exists so `route_status` can answer "why that provider"
+    // with the walk's own answer. Two guarantees: it reports the order the
+    // walk would produce, and looking does not rotate it (a diagnostic that
+    // advanced the round-robin tick would perturb what it reports).
+    let primary = ScriptProvider::ok("primary");
+    let fb_a = ScriptProvider::ok("fb_a");
+    let fb_b = ScriptProvider::ok("fb_b");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        load_balance: LoadBalanceStrategy::RoundRobin,
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        Arc::new(StaticDefault::new(primary)),
+        vec![
+            tiered_node("fb_a", fb_a, EndpointTier::Cloud),
+            tiered_node("fb_b", fb_b, EndpointTier::Cloud),
+        ],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+
+    let tick_before = stats.peek_round_robin();
+    let first: Vec<String> = fp
+        .preview_order()
+        .await
+        .into_iter()
+        .map(|s| s.provider)
+        .collect();
+    let second: Vec<String> = fp
+        .preview_order()
+        .await
+        .into_iter()
+        .map(|s| s.provider)
+        .collect();
+    assert_eq!(first, second, "previewing must not change the order");
+    assert_eq!(
+        stats.peek_round_robin(),
+        tick_before,
+        "a preview must not consume a rotation tick"
+    );
+    // The primary leads its own chain and is tagged as such.
+    assert_eq!(first[0], "primary");
+    let steps = fp.preview_order().await;
+    assert!(steps[0].primary);
+    assert!(!steps[1].primary);
+}
