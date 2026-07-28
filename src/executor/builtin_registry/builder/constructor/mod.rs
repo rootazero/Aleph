@@ -13,7 +13,7 @@ use crate::error::AlephError;
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
@@ -1131,13 +1131,6 @@ impl BuiltinToolRegistry {
             // ClarificationManager is always injected via deferred wiring at
             // boot (created alongside channels) — start the cell empty.
             clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
-            clawhub_tool: match crate::builtin_tools::clawhub::ClawHubTool::new() {
-                Ok(tool) => Some(tool),
-                Err(e) => {
-                    warn!("ClawHubTool disabled: {}", e);
-                    None
-                }
-            },
             // Wire the LLM-facing routing query tool from the SAME live config
             // the inbound gateway snapshots (`subsystems.rs::with_route_bindings`).
             // Previously `::default()` gave it empty bindings + default session

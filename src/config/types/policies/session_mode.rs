@@ -89,7 +89,6 @@ const CHAT_DEFER_FAMILIES: &[&str] = &[
     "workflow",
     "google_meet",
     "hub",
-    "clawhub",
     "skill_install",
     "skill_manage",
     "a2a",

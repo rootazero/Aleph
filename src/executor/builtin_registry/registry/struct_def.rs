@@ -219,8 +219,6 @@ pub struct BuiltinToolRegistry {
     /// A2A outbound tools (optional - require the A2A subsystem enabled)
     pub(crate) a2a_delegate_tool: Option<crate::builtin_tools::a2a_tools::A2ADelegateTool>,
     pub(crate) a2a_agents_tool: Option<crate::builtin_tools::a2a_tools::A2AAgentsTool>,
-    /// `ClawHub` tool instance
-    pub(crate) clawhub_tool: Option<crate::builtin_tools::clawhub::ClawHubTool>,
     pub(crate) gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool,
     /// Task coordination tools (optional — require `CoordTaskStore`)
     pub(crate) task_create_tool: Option<crate::builtin_tools::task_manage::TaskCreateTool>,

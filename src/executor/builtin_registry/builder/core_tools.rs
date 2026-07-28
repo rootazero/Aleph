@@ -240,12 +240,6 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
-            "clawhub",
-            crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
-            schema::<crate::builtin_tools::clawhub::ClawHubArgs>("clawhub"),
-        );
-        reg(
-            tools,
             "media_send",
             crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
             schema::<crate::builtin_tools::media_send::MediaSendArgs>("media_send"),
