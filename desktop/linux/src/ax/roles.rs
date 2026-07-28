@@ -14,7 +14,7 @@
 //! * [`Role::PasswordText`] → `"AXSecureTextField"`. That single line is what
 //!   turns on the `type_text` password refusal on Linux, because the gate
 //!   recognises a password box by exactly that role (and by the `secure`
-//!   affordance, which [`is_secure`] sets from the same source).
+//!   affordance, which [`is_secure_role`] sets from the same source).
 //! * Containers map onto their non-interactable AX equivalents deliberately.
 //!   They show up in a full tree dump but never get a clickable mark, which is
 //!   what keeps a snapshot a short list of things a user can act on rather than
@@ -90,13 +90,49 @@ pub fn atspi_role_to_ax_role(role: Role) -> &'static str {
     }
 }
 
-/// `true` for a role whose content is masked — a password box.
+/// `true` for a role AT-SPI itself declares to be masked — a password box.
 ///
-/// Feeds `AxElement.secure`, which is one of the two signals the `type_text`
-/// gate refuses on (the other is the role string this same module produces).
+/// This is the **native** signal, and the strong one. It is not the only one:
+/// Electron, Qt custom editors and some web engines expose a masked field as an
+/// ordinary [`Role::Entry`], so [`is_text_entry`] + the shared
+/// [`aleph_desktop::is_password_like`] label heuristic supplies the second.
+/// Together they feed `AxElement.secure`, which the `type_text` gate refuses on
+/// with no `force` override.
 #[must_use]
-pub const fn is_secure(role: Role) -> bool {
+pub const fn is_secure_role(role: Role) -> bool {
     matches!(role, Role::PasswordText)
+}
+
+/// `true` for a role that accepts typed text — the only roles the label
+/// heuristic is allowed to judge.
+///
+/// Deliberately narrow, for the reason spelled out in
+/// [`aleph_desktop::ax_secure`]: `secure` is a hard block, so judging a
+/// checkbox labelled "Show password" would take typing away wholesale. It is
+/// also what keeps the heuristic cheap — the two extra D-Bus property reads it
+/// needs happen only on text entries, never on the containers that make up most
+/// of a tree.
+#[must_use]
+pub const fn is_text_entry(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Entry | Role::PasswordText | Role::Text | Role::Editbar | Role::Autocomplete
+    )
+}
+
+/// `true` for a role whose value is a **number** on the AT-SPI `Value`
+/// interface rather than text on the `Text` one.
+///
+/// A slider has no textual content at all: asking `Text` for it returns nothing,
+/// which is why sliders and spin buttons used to report no value whatsoever even
+/// though [`is_interactable`] advertises them as targets. `ax.set_value` writes
+/// through the same interface.
+#[must_use]
+pub const fn has_numeric_value(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Slider | Role::SpinButton | Role::Dial | Role::ProgressBar | Role::ScrollBar
+    )
 }
 
 /// `true` for a role whose textual value is worth reading.
@@ -221,9 +257,49 @@ mod tests {
             atspi_role_to_ax_role(Role::PasswordText),
             "AXSecureTextField"
         );
-        assert!(is_secure(Role::PasswordText));
-        assert!(!is_secure(Role::Entry));
-        assert!(!is_secure(Role::Text));
+        assert!(is_secure_role(Role::PasswordText));
+        assert!(!is_secure_role(Role::Entry));
+        assert!(!is_secure_role(Role::Text));
+    }
+
+    #[test]
+    fn the_label_heuristic_only_sees_roles_that_take_typed_text() {
+        // Cheap *and* safe for the same reason: containers are the bulk of a
+        // tree (so the two extra property reads never happen on them) and a
+        // container labelled "Password Manager" must not disable typing.
+        for role in [
+            Role::Entry,
+            Role::PasswordText,
+            Role::Text,
+            Role::Editbar,
+            Role::Autocomplete,
+        ] {
+            assert!(is_text_entry(role), "{role:?} takes typed text");
+        }
+        for role in [
+            Role::Button,
+            Role::CheckBox,
+            Role::Frame,
+            Role::Panel,
+            Role::DocumentWeb,
+        ] {
+            assert!(!is_text_entry(role), "{role:?} must not be judged by label");
+        }
+    }
+
+    #[test]
+    fn value_bearing_controls_are_numeric_not_textual() {
+        // These are advertised as interactable, so refusing to report or write
+        // their value was advertised-but-disabled.
+        for role in [Role::Slider, Role::SpinButton, Role::Dial, Role::ScrollBar] {
+            assert!(has_numeric_value(role), "{role:?} carries a number");
+            assert!(
+                !has_readable_value(role),
+                "{role:?} has no textual content to read"
+            );
+        }
+        assert!(!has_numeric_value(Role::Entry));
+        assert!(!has_numeric_value(Role::Button));
     }
 
     #[test]

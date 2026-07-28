@@ -18,7 +18,7 @@ Linux 的桌面实现**跨两个 crate**，找错目录会以为功能不存在�
 | 鼠标键盘输入 | `desktop/shared/src/action/input.rs`（X11 走 enigo/XTEST）+ `wayland_input.rs`（Wayland 走 ydotool） |
 | 截图 / 录屏 / OCR | `desktop/shared/src/perception/`（xcap · ffmpeg x11grab · wf-recorder · tesseract） |
 | shell-out 死线（同步侧） | `desktop/shared/src/script_exec.rs::output_capped_blocking` |
-| **无障碍树 (AT-SPI2)** | `desktop/linux/src/ax/` |
+| **无障碍树 (AT-SPI2)** | `desktop/linux/src/ax/`（`cache.rs` 批量预取 · `budget.rs` 墙钟预算 · `bus.rs` 共享连接） |
 | 系统 / 权限 / 媒体 / 自动化 / PIM | `desktop/linux/src/` |
 
 依赖方向是 `desktop/linux → desktop/shared`，所以任何两边都要用的东西（会话类型、剪贴板、启动器）**必须落在 shared**。
@@ -39,7 +39,8 @@ Linux 的桌面实现**跨两个 crate**，找错目录会以为功能不存在�
 | 剪贴板（文本 + 图片） | ✅ 需 `xclip`/`xsel` | ✅ 需 `wl-clipboard` | 候选顺序按会话类型定；**写失败一律报错，绝不静默成功** |
 | 通知 | ✅ | ✅ | `notify-send` |
 | 空闲时长 | ✅ 需 `xprintidle` | ⚠️ 仅 GNOME | Wayland 侧走 Mutter `IdleMonitor`（`gdbus`） |
-| **无障碍树 / SOM / 密码框硬拒** | ✅ | ✅ | AT-SPI2 与显示服务器无关，取决于应用是否加载了 a11y 桥 |
+| **无障碍树 / SOM / 密码框硬拒** | ✅ | ✅ | AT-SPI2 与显示服务器无关，取决于应用是否加载了 a11y 桥。**前台应用**在没有窗口管理 IPC 的会话（GNOME/KDE Wayland）由 AT-SPI 的 `State::Active` 顶层 frame 回答，不再依赖合成器 |
+| 前台应用识别（密码管理器硬阻断的输入） | ✅ EWMH | sway/Hyprland ✅ · GNOME/KDE ✅ 经 AT-SPI | 见上一行；此前在 GNOME/KDE Wayland 恒 `false`，硬阻断等于没有 |
 | 摄像头 / 录音 | ✅ | ✅ | `ffmpeg` + V4L2 / PulseAudio·PipeWire |
 | 防休眠 | ✅ | ✅ | `systemd-inhibit` / `gnome-session-inhibit` |
 | Escape 中止 | ⚠️ 文件哨兵 | ⚠️ 文件哨兵 | Linux 无可移植全局热键；`touch ~/.aleph/desktop-abort` 中止 |
@@ -84,6 +85,20 @@ sudo apt install wf-recorder             # 录屏（仅 sway / Hyprland 等 wlro
 外加合成器自带的 `swaymsg` / `hyprctl`（若在 sway / Hyprland 下）。
 
 > `wf-recorder` 走 wlroots 的 `wlr-screencopy` 协议，GNOME (Mutter) / KDE (KWin) **不实现**它——在那两个桌面上装了也没用，录屏会如实报不可用并指路"改用周期性截图"（截图走 portal，在那里是好的）。
+
+### 无障碍层的开销（供容量判断）
+
+AT-SPI 每次调用的成本由**往返次数**决定，不由 CPU 决定。本机 XFCE/X11 实测：
+
+| | 之前 | 现在 |
+|---|---|---|
+| 连接（每次调用） | 424 ms（每次新建） | 付一次（次调 45 ms vs 首调 1.90 s） |
+| ~70 节点窗口全深度快照 | 1.88 s | **0.32 s** |
+| 边际成本 | ~27 ms/节点 | **~4.6 ms/节点** |
+
+来源是三件事：`Cache.GetItems` 一次拿回整棵树（role/name/states/interfaces/parent）、剩余的几何与动作名并发发出（32 路）、总线连接共享。**墙钟预算 5s** (`ax/budget.rs`) 仍在，用来对付「卡死的应用永远不回 D-Bus」——超时返回**已读到的部分**而不是报错。
+
+不提供缓存的应用（老 Qt、桥只加载了一半）自动回落逐属性读：**慢，但不会空**。
 
 ### 打开无障碍层（AT-SPI2）
 
@@ -148,6 +163,11 @@ export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 | 录屏后端选择矩阵 + `wf-recorder` argv | ✅ 纯函数单测 |
 | 应用列表折叠（活动标记 / 代表 pid / 枚举序无关） | ✅ 纯函数单测 |
 | shell-out 死线（超时杀进程 / 大输出不死锁 / stdin 投喂） | ✅ 单测（真起子进程） |
+| AT-SPI 批量缓存 / 并发富化 / 共享连接 | ✅ 本机端到端实测（含缓存值与实时属性逐字段一致性断言、墙钟上限断言） |
+| 密码词表启发式 / `set_value` 回读脱敏 / 拖拽插值 / `/dev/video` 择位 / inhibitor 存活判定 | ✅ 纯函数单测 |
 | **sway / Hyprland 后端** | ⚠️ **仅单测覆盖 argv 与 JSON 解析**——开发机是 X11，没有端到端验证 |
+| **AT-SPI `Value` 接口写路径（滑块/微调框）** | ⚠️ 无端到端验证——本机没有暴露该接口的应用在跑 |
+| **GNOME/KDE Wayland 的 `State::Active` 前台回落** | ⚠️ 同上（开发机是 X11） |
+| **摄像头（预热丢帧 / `/dev/video` 探测）** | ⚠️ 本机无摄像头，`/sys/class/video4linux` 不存在；选择逻辑有纯函数单测 |
 | Wayland 输入 / 截图 / 剪贴板路径 | ⚠️ 同上 |
 | **`wf-recorder` 录屏** | ⚠️ 同上（argv + 后端选择有单测，真实录制未验；SIGINT 收尾逻辑无端到端覆盖） |

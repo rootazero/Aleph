@@ -425,10 +425,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // ask the live provider chain which model it would actually serve
             // (`serving_model_hint`) before giving up. The lookup is a static
             // table read, never a judgement about the message (R7).
-            let configured_model = request
-                .model_override
-                .as_ref()
-                .map_or(agent.config().model.as_str(), |o| o.model());
+            // Same precedence the binder applies (per-turn pick ▸ session
+            // `select_model` pick ▸ agent default). Asking a *different* model
+            // whether it accepts inline images than the one that will serve the
+            // turn is how a vision-capable pick still gets a text description of
+            // the attachment — or worse, how a text-only one gets a raw image
+            // block it cannot read.
+            let session_pick = crate::providers::session_model_handle::get_session_model(
+                &request.session_key.to_key_string(),
+            );
+            let configured_model = request.model_override.as_ref().map_or_else(
+                || {
+                    session_pick
+                        .as_ref()
+                        .map_or(agent.config().model.as_str(), |p| p.model.as_str())
+                },
+                |o| o.model(),
+            );
             let serving_hint: Option<String> =
                 if crate::providers::capabilities_for(configured_model).is_some() {
                     None
@@ -540,6 +553,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         loop {
             attempt += 1;
 
+            // This turn's explicit model pick, in the shape the harness binder
+            // consumes. `Qualified { provider, model }` pins both; `Raw
+            // { model }` pins only the model and lets the provider chain stand
+            // (the failover chain's own primary is a better answer than a
+            // name-prefix guess, and it keeps breaker/route-mode gating).
+            //
+            // This is the field that makes the pick REAL: everything below
+            // (and the `ModelResolved` event) only ever described it.
+            //
+            // A blank model is dropped rather than pinned: the field is now
+            // load-bearing, and stamping `""` onto the chain would turn a
+            // malformed client payload into a provider error. (The `[voice]`
+            // path already guards this in `ModelOverride::from_voice`.)
+            let turn_model = request
+                .model_override
+                .as_ref()
+                .filter(|o| !o.model().trim().is_empty())
+                .map(
+                    |o| crate::providers::session_model_handle::SessionModelPref {
+                        provider: o.provider().map(ToString::to_string),
+                        model: o.model().trim().to_string(),
+                    },
+                );
+
             // Resolve model with health-aware fallback.
             //
             // When the chat-window model picker stamped a per-turn override,
@@ -567,10 +604,31 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         original_model: override_.model().to_string(),
                     }
                 }
-                None => self
-                    .provider_registry
-                    .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
-                    .map_err(|e| ExecutionError::Failed(e.to_string()))?,
+                // A `select_model` pick recorded for this session outranks the
+                // agent's configured model at the binder, so the banner has to
+                // say so too — otherwise the run the user is watching is
+                // announced under the model it replaced. Same global, same
+                // canonical key the binder reads.
+                None => match crate::providers::session_model_handle::get_session_model(
+                    &request.session_key.to_key_string(),
+                ) {
+                    Some(pref) => crate::providers::health::ResolvedModel {
+                        provider_name: pref.provider.unwrap_or_else(|| {
+                            self.provider_registry.default_provider().name().to_string()
+                        }),
+                        // rust-doctor-disable-next-line excessive-clone
+                        model: pref.model.clone(),
+                        is_fallback: false,
+                        original_model: pref.model,
+                    },
+                    None => self
+                        .provider_registry
+                        .resolve_with_fallback(
+                            &agent.config().model,
+                            &agent.config().fallback_models,
+                        )
+                        .map_err(|e| ExecutionError::Failed(e.to_string()))?,
+                },
             };
 
             if resolved.is_fallback {
@@ -1192,6 +1250,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // rust-doctor-disable-next-line excessive-clone
                     cwd: Some(effective_workspace.clone()),
                 },
+                // This turn's explicit model pick. Cloned because the request is
+                // rebuilt on each retry iteration of the enclosing loop.
+                // rust-doctor-disable-next-line excessive-clone
+                model_directive: turn_model.clone(),
             };
 
             // Dispatch via the orchestrator

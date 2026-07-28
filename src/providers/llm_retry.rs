@@ -27,6 +27,46 @@ pub enum RetryVerdict {
     Fallback { reason: String },
 }
 
+/// Whether `msg` mentions HTTP status `code` as a *status*, not as a fragment of
+/// some longer number.
+///
+/// Every classifier below keys on three-digit codes, and a bare
+/// `msg.contains("429")` also fires on any digit run that happens to contain
+/// them — which provider error bodies are full of: token counts (`"Limit
+/// 40000, Used 40123"` contains `401`), request ids (`req_4045…` contains
+/// `404`), byte sizes, epoch timestamps. The consequences are not cosmetic:
+/// a `401` read out of a token count tags the failure
+/// [`Permanent`](crate::providers::failover) and opens the circuit breaker on
+/// the FIRST strike with the full ten-minute cooldown; a `404` read out of a
+/// request id is classified "model not found" and quietly burns the provider's
+/// whole model list. Same defect shape as the `Retry-After` HTTP-date that was
+/// read as a day-of-month: the digits were right there, nobody checked what
+/// they were attached to.
+///
+/// The test is deliberately narrow — the neighbouring characters must not be
+/// ASCII digits. Everything a real message puts around a status code (spaces,
+/// `(`, `:`, `=`, `,`, `/`, end of string) still matches, so no genuine
+/// classification is lost.
+#[must_use]
+pub fn has_status_code(msg: &str, code: u16) -> bool {
+    let needle = code.to_string();
+    let bytes = msg.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = msg[from..].find(&needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        let left_ok = start == 0 || !bytes[start - 1].is_ascii_digit();
+        let right_ok = end == bytes.len() || !bytes[end].is_ascii_digit();
+        if left_ok && right_ok {
+            return true;
+        }
+        // Overlapping matches are impossible for a fixed-width numeric needle,
+        // but advancing by one keeps the scan correct for any future needle.
+        from = start + 1;
+    }
+    false
+}
+
 /// Extract token gap from "prompt is too long: X tokens > Y maximum" error messages.
 #[must_use]
 pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
@@ -87,32 +127,32 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
     // the local backoff didn't help, so a sibling provider is the next bet.
     let account_patterns = ["account", "organization", "billing", "quota exceeded"];
     let is_account_scoped = account_patterns.iter().any(|p| msg.contains(p));
-    if !is_account_scoped && (msg.contains("overloaded") || msg.contains("529")) {
+    if !is_account_scoped && (msg.contains("overloaded") || has_status_code(&msg, 529)) {
         return RetryVerdict::Fallback {
             reason: format!("provider overloaded after retries: {raw}"),
         };
     }
 
     // 429 rate limit → classify as model-specific (Fallback) vs account-wide (Fatal).
-    if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
+    if has_status_code(&msg, 429) || msg.contains("rate limit") || msg.contains("rate_limit") {
         return classify_rate_limit(raw);
     }
 
     // 400 → Fatal (request is malformed, fallback won't help)
-    if msg.contains("400") && (msg.contains("bad request") || msg.contains("invalid")) {
+    if has_status_code(&msg, 400) && (msg.contains("bad request") || msg.contains("invalid")) {
         return RetryVerdict::Fatal;
     }
 
     // 404 model not found → Fallback
-    if msg.contains("404") || msg.contains("not found") {
+    if has_status_code(&msg, 404) || msg.contains("not found") {
         return RetryVerdict::Fallback {
             reason: "model not found".into(),
         };
     }
 
     // 401/403 auth errors → Fallback (but caller should notify user)
-    if msg.contains("401")
-        || msg.contains("403")
+    if has_status_code(&msg, 401)
+        || has_status_code(&msg, 403)
         || msg.contains("unauthorized")
         || msg.contains("forbidden")
     {
@@ -224,7 +264,7 @@ fn classify_rate_limit(raw: &str) -> RetryVerdict {
 #[must_use]
 pub fn is_transient_overload(msg_lower: &str) -> bool {
     msg_lower.contains("overloaded")
-        || msg_lower.contains("529")
+        || has_status_code(msg_lower, 529)
         || msg_lower.contains("please wait a moment")
         || msg_lower.contains("receiving too many requests at the moment")
 }
@@ -248,8 +288,8 @@ pub fn is_permanent_failure(raw: &str) -> bool {
     if is_transient_overload(&msg) {
         return false;
     }
-    msg.contains("401")
-        || msg.contains("403")
+    has_status_code(&msg, 401)
+        || has_status_code(&msg, 403)
         || msg.contains("unauthorized")
         || msg.contains("forbidden")
 }
@@ -269,12 +309,20 @@ pub fn is_permanent_failure(raw: &str) -> bool {
 /// "too large" or "token limit" would hijack an OpenAI TPM rate-limit into a
 /// pointless compact-and-retry against a provider that is throttling us, not
 /// out of context.
+/// The one status code in this set is tested with [`has_status_code`] rather
+/// than as a substring — see the `413` note on [`CONTEXT_OVERFLOW_PATTERNS`].
+const CONTEXT_OVERFLOW_STATUS: u16 = 413;
+
 const CONTEXT_OVERFLOW_PATTERNS: &[&str] = &[
-    // Anthropic: HTTP 413, `prompt_too_long`, `request_too_large`.
+    // Anthropic: `prompt_too_long`, `request_too_large`.
     // `model_context_window_exceeded` is the same overflow surfaced as a *stop
     // reason* — the harness synthesizes an error carrying that marker to route
     // a context-exhausted stream into this same rescue.
-    "413",
+    //
+    // HTTP 413 belongs here too but is matched by [`CONTEXT_OVERFLOW_STATUS`]
+    // instead: as a bare substring it also fires on `"4130 tokens"`, and this
+    // check runs FIRST, so a false hit hijacks an unrelated failure into a
+    // pointless compact-and-retry.
     "prompt is too long",
     "prompt_too_long",
     "request_too_large",
@@ -308,7 +356,9 @@ pub fn classify(raw: &str) -> RetryVerdict {
     // Context overflow → compact and retry (not a transient retry). Must stay
     // ahead of the 429/quota arms below; see [`CONTEXT_OVERFLOW_PATTERNS`] for
     // why the patterns are deliberately narrow.
-    if CONTEXT_OVERFLOW_PATTERNS.iter().any(|p| msg.contains(p)) {
+    if has_status_code(&msg, CONTEXT_OVERFLOW_STATUS)
+        || CONTEXT_OVERFLOW_PATTERNS.iter().any(|p| msg.contains(p))
+    {
         return RetryVerdict::CompactAndRetry {
             token_gap: parse_token_gap_str(raw),
         };
@@ -332,7 +382,7 @@ pub fn classify(raw: &str) -> RetryVerdict {
     // Rate-limit (429) → classify as model-specific vs account-wide.
     // Model-specific limits benefit from switching providers (Fallback);
     // account-wide limits propagate immediately (Fatal).
-    if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
+    if has_status_code(&msg, 429) || msg.contains("rate limit") || msg.contains("rate_limit") {
         return classify_rate_limit(raw);
     }
 
@@ -361,6 +411,61 @@ pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Durat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_code_matches_every_shape_a_real_message_uses() {
+        for msg in [
+            "http 429 too many requests",
+            "anthropic api rate limited (429): ...",
+            "status=429, body=...",
+            "{\"code\":429}",
+            "upstream returned 429",
+            "429",
+        ] {
+            assert!(has_status_code(msg, 429), "should match in {msg:?}");
+        }
+    }
+
+    #[test]
+    fn status_code_ignores_digits_borrowed_from_a_longer_number() {
+        // The bug this predicate exists for: every one of these is a real
+        // shape of provider error text, and every one of them used to be
+        // classified by the digits it merely *contains*.
+        assert!(
+            !has_status_code("rate limit reached: limit 40000, used 40123", 401),
+            "a token count must not read as an auth failure"
+        );
+        assert!(
+            !has_status_code("request id req_40450 failed", 404),
+            "a request id must not read as model-not-found"
+        );
+        assert!(
+            !has_status_code("prompt used 14290 tokens", 429),
+            "a token count must not read as a rate limit"
+        );
+        assert!(
+            !has_status_code("context is 4130 tokens over", 413),
+            "a token count must not read as a context-overflow status"
+        );
+        // A later, genuine occurrence still wins over an earlier false one.
+        assert!(has_status_code(
+            "used 40123 tokens; http 401 unauthorized",
+            401
+        ));
+    }
+
+    #[test]
+    fn a_token_count_no_longer_sheds_a_healthy_provider() {
+        // End-to-end on the predicate's most expensive consumer: `Permanent`
+        // opens the circuit breaker on the first strike with the full
+        // ten-minute cooldown, so a false positive here takes a working
+        // provider out of the chain for ten minutes.
+        assert!(!is_permanent_failure(
+            "HTTP 500 internal error (request consumed 40123 tokens)"
+        ));
+        assert!(is_permanent_failure("HTTP 401 Unauthorized"));
+        assert!(is_permanent_failure("HTTP 403 Forbidden: invalid api key"));
+    }
 
     #[test]
     fn test_classify_rate_limit_model_specific_fallback() {
