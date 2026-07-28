@@ -11,6 +11,14 @@ use tracing::info;
 
 use crate::error::{DesktopError, Result};
 
+/// How long to watch `xdg-open` for an immediate failure before concluding a
+/// handler took the target and letting it run unattended.
+///
+/// Long enough for the "nothing is registered for this type" exit (which is
+/// immediate), short enough that it is not felt as latency.
+#[cfg(target_os = "linux")]
+const XDG_OPEN_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Open a filesystem path or URL with the system's default application.
 ///
 /// `target` may be an absolute filesystem path (`/Users/me/report.html`) or a
@@ -52,14 +60,58 @@ pub fn open(target: &str) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("xdg-open")
+        use std::time::Instant;
+
+        // `xdg-open` usually hands the target to a desktop-specific opener
+        // (`exo-open`, `gio`, `kde-open`) and exits immediately. But its generic
+        // fallback path runs the handler in the *foreground*, so on a desktop it
+        // does not recognise it does not return until the user closes the opened
+        // application. Waiting on that unbounded pins the `spawn_blocking`
+        // thread — and the agent turn — for as long as the document stays open.
+        //
+        // So watch it only long enough to catch the failures that are reported
+        // immediately (no handler registered is exit code 3, handler failed is
+        // 4), and read "still running past the settle window" as success:
+        // something evidently took the target.
+        //
+        // Deliberately **not** `output_capped_blocking`: that kills the child on
+        // timeout, and in the foreground-exec case this pid *is* the application
+        // the caller just asked to open.
+        let mut child = std::process::Command::new("xdg-open")
             .arg(target)
-            .status()
+            .spawn()
             .map_err(|e| DesktopError::InputFailed(format!("open: failed to run xdg-open: {e}")))?;
-        if !status.success() {
-            return Err(DesktopError::InputFailed(format!(
-                "open: 'xdg-open {target}' exited with {status}"
-            )));
+
+        let deadline = Instant::now() + XDG_OPEN_SETTLE;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break,
+                Ok(Some(status)) => {
+                    return Err(DesktopError::InputFailed(format!(
+                        "open: 'xdg-open {target}' exited with {status}"
+                    )));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(DesktopError::InputFailed(format!(
+                        "open: failed to wait for xdg-open: {e}"
+                    )));
+                }
+            }
+            if Instant::now() >= deadline {
+                // Left running on purpose. Reaped on a detached thread so a
+                // long-lived daemon does not accumulate zombies for every
+                // document it opens.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                info!(
+                    target,
+                    "xdg-open still running after the settle window; treating as launched (Linux)"
+                );
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
         info!(target, "Opened with default handler (Linux)");
         Ok(())

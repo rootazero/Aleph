@@ -597,58 +597,194 @@ fn build_x11grab_args(
     args
 }
 
-/// Record the primary display (or a region) to MP4 via `ffmpeg -f x11grab`.
+/// Build the `wf-recorder` argument vector for a wlroots Wayland recording.
 ///
-/// Linux desktop capture is fragmented by display server:
-/// - **X11 / XWayland** (`DISPLAY` set): handled here via ffmpeg x11grab — the
-///   single most broadly-available mechanism, reusing the same `ffmpeg` binary
-///   `media.rs` already shells out to (no new crate dependency, R3).
-/// - **pure Wayland** (no X server): returns [`DesktopError::NotImplemented`]
-///   with a hint, since x11grab cannot read native Wayland surfaces. Mirrors the
-///   graceful X11/Wayland degradation in `LinuxSystem::user_idle_seconds`.
+/// Pure (no I/O) so the argv can be unit-tested on any host — which is the only
+/// coverage this backend can honestly claim, since the development machine is
+/// X11 (the same caveat the `sway` / `hyprland` window backends carry).
+///
+/// `wf-recorder` has no `-t/--duration`: it records until it is interrupted, so
+/// the duration lives in the caller's stop logic, not here.
+#[cfg(any(target_os = "linux", test))]
+fn build_wf_recorder_args(
+    config: &crate::screen_types::ScreenRecordConfig,
+    output: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-f".into(),
+        output.to_string(),
+        // Same codec/pixel-format pair as the x11grab and gdigrab paths, so a
+        // recording is playable in the same set of players regardless of which
+        // backend produced it.
+        "-c".into(),
+        "libx264".into(),
+        "-x".into(),
+        "yuv420p".into(),
+        "-r".into(),
+        config.fps.to_string(),
+    ];
+    if let Some(r) = &config.region {
+        // wf-recorder geometry is one token: "x,y WxH".
+        args.push("-g".into());
+        args.push(format!("{},{} {}x{}", r.x, r.y, r.width, r.height));
+    }
+    if config.with_audio {
+        // Bare `--audio` takes the default PulseAudio/PipeWire source, matching
+        // the `-f pulse -i default` the ffmpeg paths use.
+        args.push("--audio".into());
+    }
+    args
+}
+
+/// Which recorder can serve this Linux session.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordBackend {
+    /// `ffmpeg -f x11grab` against a real X server.
+    X11Grab,
+    /// `wf-recorder`, which speaks the `wlr-screencopy` protocol.
+    WfRecorder,
+}
+
+/// Choose a recording backend, or explain why this session has none.
+///
+/// Pure, and the reason this is a function rather than a chain of `if`s inline:
+/// the matrix is four-way and every wrong branch is silent. In particular, a
+/// **Wayland session that also exports `DISPLAY`** (i.e. one running XWayland,
+/// which is nearly all of them) used to satisfy the old `DISPLAY`-is-set test
+/// and go straight to x11grab — which sees only the XWayland root window, so the
+/// recording came back black or showing a single legacy app, reported as a
+/// success. The session type, not the presence of `DISPLAY`, is what decides.
+#[cfg(any(target_os = "linux", test))]
+fn pick_record_backend(
+    session: crate::linux::LinuxSession,
+    tb: &crate::linux::ToolBox,
+    has_display: bool,
+) -> Result<RecordBackend> {
+    use crate::linux::Compositor;
+
+    if session.kind.is_wayland() {
+        // wf-recorder needs `wlr-screencopy`, which is a wlroots protocol: sway
+        // and Hyprland have it, GNOME's Mutter and KDE's KWin do not.
+        let wlroots = matches!(session.compositor, Compositor::Sway | Compositor::Hyprland);
+        return match (wlroots, tb.has("wf-recorder")) {
+            (true, true) => Ok(RecordBackend::WfRecorder),
+            (true, false) => Err(DesktopError::NotAvailable(
+                "Screen recording on this Wayland compositor goes through `wf-recorder`, \
+                 which is not installed. Install it (`sudo apt install wf-recorder`) and \
+                 retry. Still working meanwhile: screenshots, OCR and the accessibility tree."
+                    .into(),
+            )),
+            (false, _) => Err(DesktopError::NotImplemented(
+                "This Wayland compositor exposes no screen-recording interface Aleph can \
+                 drive: `wf-recorder` needs the wlroots `wlr-screencopy` protocol (sway, \
+                 Hyprland), and GNOME/KDE route capture through xdg-desktop-portal's \
+                 ScreenCast API, which requires an interactive picker per session. \
+                 Take periodic screenshots instead — those go through the portal and work here."
+                    .into(),
+            )),
+        };
+    }
+
+    // X11, or a session we could not classify but which still has an X server.
+    if has_display {
+        return Ok(RecordBackend::X11Grab);
+    }
+    Err(DesktopError::NotImplemented(
+        "Screen recording needs a display server. No X server is reachable (DISPLAY is \
+         unset) and this is not a Wayland session — a daemon started outside a desktop \
+         session sees exactly this."
+            .into(),
+    ))
+}
+
+/// Grace period for a recorder to finalise its container after being asked to
+/// stop. A truncated MP4 is unplayable, so this is not optional.
+#[cfg(target_os = "linux")]
+const RECORDER_FINALISE_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Headroom over the requested duration before `ffmpeg` is considered hung.
+///
+/// `ffmpeg -t` stops itself, so exceeding this means it never got going —
+/// typically an X server that stopped answering, or a display gone with a
+/// suspended machine. Without the cap that hung the agent turn until the
+/// harness's own ceiling and leaked the child; `media.rs` learned this first,
+/// and this was the last capture path still running uncapped.
+#[cfg(target_os = "linux")]
+const FFMPEG_RECORD_OVERHEAD: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Record the primary display (or a region) to MP4.
+///
+/// Linux desktop capture is fragmented by display server, so the backend is
+/// chosen by [`pick_record_backend`]:
+/// - **X11 / XWayland-as-X11**: `ffmpeg -f x11grab` — the single most broadly
+///   available mechanism, reusing the same `ffmpeg` binary `media.rs` already
+///   shells out to (no new crate dependency, R3).
+/// - **wlroots Wayland** (sway / Hyprland): `wf-recorder`, mirroring the way
+///   window management already picks a per-compositor backend.
+/// - **GNOME / KDE Wayland**: an honest [`DesktopError::NotImplemented`] that
+///   names the working alternative, rather than an x11grab recording of an empty
+///   XWayland root.
 #[cfg(target_os = "linux")]
 pub fn screen_record(
     config: &crate::screen_types::ScreenRecordConfig,
 ) -> Result<crate::screen_types::ScreenRecordResult> {
-    use std::process::Command;
-
     let config = config.clone().clamped();
 
-    let display = match std::env::var("DISPLAY") {
-        Ok(d) if !d.is_empty() => d,
-        _ => {
-            return Err(DesktopError::NotImplemented(
-                "Screen recording needs an X server (X11 or XWayland; DISPLAY is unset). \
-                 On pure Wayland use a compositor-native recorder such as wf-recorder \
-                 (wlroots) or the xdg-desktop-portal ScreenCast API."
-                    .into(),
-            ));
-        }
-    };
+    let display = std::env::var("DISPLAY").ok().filter(|d| !d.is_empty());
+    let backend = pick_record_backend(
+        crate::linux::session(),
+        crate::linux::tools(),
+        display.is_some(),
+    )?;
 
     let output_path = screen_record_output_path()?;
     let output_str = output_path.to_string_lossy().into_owned();
-    let args = build_x11grab_args(&display, &config, &output_str);
 
-    let output = Command::new("ffmpeg").args(&args).output().map_err(|e| {
-        DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-    })?;
+    match backend {
+        RecordBackend::X11Grab => {
+            // `display.is_some()` is what got us this backend.
+            let display = display.unwrap_or_default();
+            let args = build_x11grab_args(&display, &config, &output_str);
+            let deadline = std::time::Duration::from_secs_f64(config.duration_secs)
+                + FFMPEG_RECORD_OVERHEAD;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DesktopError::ScreenCapture(format!(
-            "ffmpeg x11grab recording failed: {}",
-            stderr.trim()
-        )));
+            let mut cmd = crate::script_exec::hidden_std_command("ffmpeg");
+            cmd.args(&args);
+            let output = crate::script_exec::output_capped_blocking(
+                cmd,
+                deadline,
+                "Screen recording (ffmpeg x11grab)",
+            )
+            .map_err(|e| {
+                if crate::script_exec::is_spawn_failure(&e) {
+                    DesktopError::ScreenCapture(format!(
+                        "Failed to run ffmpeg (install ffmpeg): {e}"
+                    ))
+                } else {
+                    DesktopError::ScreenCapture(e.to_string())
+                }
+            })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(DesktopError::ScreenCapture(format!(
+                    "ffmpeg x11grab recording failed: {}",
+                    stderr.trim()
+                )));
+            }
+        }
+        RecordBackend::WfRecorder => wf_recorder_record(&config, &output_str)?,
     }
+
     if !output_path.exists() {
         return Err(DesktopError::ScreenCapture(
-            "ffmpeg completed but the output file was not created".into(),
+            "the recorder completed but the output file was not created".into(),
         ));
     }
 
     debug!(
-        "Screen recording (ffmpeg x11grab) complete: {}",
+        "Screen recording ({backend:?}) complete: {}",
         output_path.display()
     );
 
@@ -657,6 +793,103 @@ pub fn screen_record(
         duration_secs: config.duration_secs,
         has_audio: config.with_audio,
     })
+}
+
+/// Run `wf-recorder` for `config.duration_secs`, then stop it cleanly.
+///
+/// `wf-recorder` has no duration flag — it records until interrupted — so the
+/// stop is ours to perform, and it has to be `SIGINT`: that is the signal
+/// wf-recorder handles to flush and close the container. `SIGKILL` leaves a
+/// header-less file that no player will open, which is why the escalation below
+/// only reaches for it after the finalise grace has elapsed (at which point
+/// there is nothing to salvage anyway).
+#[cfg(target_os = "linux")]
+fn wf_recorder_record(
+    config: &crate::screen_types::ScreenRecordConfig,
+    output_str: &str,
+) -> Result<()> {
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let args = build_wf_recorder_args(config, output_str);
+    let mut child = crate::script_exec::hidden_std_command("wf-recorder")
+        .args(&args)
+        // stdin null: wf-recorder asks "file exists, overwrite?" on a terminal,
+        // and a recorder that blocks forever on a prompt nobody can see is the
+        // worst of both worlds. (The path is freshly generated, so the prompt
+        // should never appear — this makes sure it cannot hang if it does.)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            DesktopError::ScreenCapture(format!(
+                "Failed to run wf-recorder (install wf-recorder): {e}"
+            ))
+        })?;
+
+    // Drain stderr for the whole life of the recorder, not just after it exits.
+    // wf-recorder runs for up to a minute here, and a child that fills the
+    // 64 KiB pipe buffer blocks on the write — at which point it never gets to
+    // handle our SIGINT, the finalise grace expires, and a recording that was
+    // working gets killed and discarded. Same trap `output_capped_blocking`
+    // documents; this path cannot use that helper because the stop is timed
+    // rather than waited for.
+    let stderr_reader = crate::script_exec::drain_on_thread(child.stderr.take());
+    let read_stderr = move || {
+        let bytes = stderr_reader
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+
+    // `clamped()` has already coerced the duration into [0.25, 60.0], so this
+    // cannot panic on a non-finite value.
+    std::thread::sleep(std::time::Duration::from_secs_f64(config.duration_secs));
+
+    // SAFETY: `child.id()` is the pid of a child of this very process, still
+    // owned by the `Child` handle (so it cannot have been reaped and its pid
+    // reused). `SIGINT` to it is wf-recorder's documented stop path.
+    #[allow(clippy::cast_possible_wrap)]
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+
+    let deadline = Instant::now() + RECORDER_FINALISE_GRACE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                // The child is gone, so the pipe is closed and the reader thread
+                // has finished — joining here cannot block.
+                let stderr = read_stderr();
+                return Err(DesktopError::ScreenCapture(format!(
+                    "wf-recorder exited with {status}: {}",
+                    stderr.trim().lines().last().unwrap_or("no detail")
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(DesktopError::ScreenCapture(format!(
+                    "wf-recorder: failed to wait for the recorder: {e}"
+                )));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(DesktopError::ScreenCapture(format!(
+                "wf-recorder did not finish writing the file within {}s of being asked to \
+                 stop, so the recording is incomplete and was discarded.",
+                RECORDER_FINALISE_GRACE.as_secs()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// Build the `ffmpeg` argument vector for a `gdigrab` screen recording (Windows).
@@ -790,6 +1023,111 @@ mod tests {
     use super::*;
     use crate::screen_types::ScreenRecordConfig;
     use crate::ScreenRegion;
+
+    #[test]
+    fn wf_recorder_argv_carries_codec_fps_and_output() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 5.0,
+            fps: 24,
+            with_audio: false,
+            region: None,
+        };
+        let args = build_wf_recorder_args(&cfg, "/tmp/out.mp4");
+        assert!(args.windows(2).any(|w| w == ["-f", "/tmp/out.mp4"]));
+        assert!(args.windows(2).any(|w| w == ["-c", "libx264"]));
+        assert!(args.windows(2).any(|w| w == ["-r", "24"]));
+        // No duration flag exists; the caller owns the stop.
+        assert!(!args.iter().any(|a| a == "-t"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--audio"));
+    }
+
+    #[test]
+    fn wf_recorder_region_is_one_geometry_token() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 5.0,
+            fps: 30,
+            with_audio: true,
+            region: Some(ScreenRegion {
+                x: 10,
+                y: 20,
+                width: 640,
+                height: 480,
+            }),
+        };
+        let args = build_wf_recorder_args(&cfg, "/tmp/out.mp4");
+        let g = args.iter().position(|a| a == "-g").expect("geometry flag");
+        assert_eq!(args[g + 1], "10,20 640x480");
+        assert!(args.iter().any(|a| a == "--audio"));
+    }
+
+    // ── Backend selection ────────────────────────────────────────────────
+
+    fn session(kind: crate::linux::SessionKind, c: crate::linux::Compositor) -> crate::linux::LinuxSession {
+        crate::linux::LinuxSession {
+            kind,
+            compositor: c,
+        }
+    }
+
+    #[test]
+    fn x11_records_through_x11grab() {
+        use crate::linux::{Compositor, SessionKind, ToolBox};
+        let tb = ToolBox::from_names(&[]);
+        assert_eq!(
+            pick_record_backend(session(SessionKind::X11, Compositor::Other), &tb, true).unwrap(),
+            RecordBackend::X11Grab
+        );
+    }
+
+    #[test]
+    fn a_wayland_session_never_falls_back_to_x11grab_via_xwayland() {
+        // The regression this guards: nearly every Wayland session also exports
+        // DISPLAY for XWayland, so the old `if DISPLAY is set` test recorded the
+        // XWayland root — a black or single-app video, reported as a success.
+        use crate::linux::{Compositor, SessionKind, ToolBox};
+        let tb = ToolBox::from_names(&["wf-recorder"]);
+        let picked = pick_record_backend(
+            session(SessionKind::Wayland, Compositor::Sway),
+            &tb,
+            /* has_display */ true,
+        )
+        .unwrap();
+        assert_eq!(picked, RecordBackend::WfRecorder);
+    }
+
+    #[test]
+    fn wlroots_without_wf_recorder_names_the_binary_to_install() {
+        use crate::linux::{Compositor, SessionKind, ToolBox};
+        let tb = ToolBox::from_names(&[]);
+        for compositor in [Compositor::Sway, Compositor::Hyprland] {
+            let err = pick_record_backend(session(SessionKind::Wayland, compositor), &tb, false)
+                .unwrap_err();
+            assert!(err.to_string().contains("wf-recorder"), "{compositor:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn gnome_and_kde_wayland_explain_themselves_and_name_a_working_route() {
+        use crate::linux::{Compositor, SessionKind, ToolBox};
+        // Even with wf-recorder installed: it needs wlr-screencopy, which these
+        // compositors do not implement, so having the binary changes nothing.
+        let tb = ToolBox::from_names(&["wf-recorder"]);
+        for compositor in [Compositor::Gnome, Compositor::Kde, Compositor::Other] {
+            let err = pick_record_backend(session(SessionKind::Wayland, compositor), &tb, true)
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("screenshot"), "{compositor:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn no_display_server_at_all_is_an_honest_refusal() {
+        use crate::linux::{Compositor, SessionKind, ToolBox};
+        let tb = ToolBox::from_names(&["wf-recorder"]);
+        let err = pick_record_backend(session(SessionKind::Unknown, Compositor::Other), &tb, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("DISPLAY"), "{err}");
+    }
 
     #[test]
     fn x11grab_fullscreen_omits_video_size() {

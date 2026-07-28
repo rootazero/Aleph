@@ -210,6 +210,9 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "tesseract",
     "ffmpeg",
     "pactl",
+    // Screen recording on wlroots compositors (sway / Hyprland): x11grab can
+    // only see an XWayland root, so a Wayland session needs its own recorder.
+    "wf-recorder",
 ];
 
 /// Which of [`KNOWN_TOOLS`] exist on `PATH`.

@@ -76,6 +76,13 @@ fn quality_to_qv(quality: f32) -> u32 {
 /// which happen outside the requested capture window.
 const FFMPEG_OVERHEAD: Duration = Duration::from_secs(20);
 
+/// Deadline for a `pactl` query.
+///
+/// Device enumeration is a sub-second round-trip to the sound server; the cap is
+/// for the case where that server is wedged, which is why it is far tighter than
+/// [`FFMPEG_OVERHEAD`] (that one has to cover an actual capture).
+const PACTL_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Deadline for a capture that should take `capture_secs` of wall clock.
 fn ffmpeg_deadline(capture_secs: f64) -> Duration {
     let secs = if capture_secs.is_finite() && capture_secs > 0.0 {
@@ -211,15 +218,20 @@ impl MediaCapability for LinuxMedia {
     async fn list_audio_devices(&self) -> Result<Vec<AudioDeviceInfo>> {
         // `pactl` ships with both PulseAudio and PipeWire's pulse shim, so a
         // single tool covers the vast majority of modern Linux desktops.
-        let output = tokio::process::Command::new("pactl")
-            .args(["list", "short", "sources"])
-            .output()
-            .await
-            .map_err(|e| {
+        // Capped: `pactl` waits on the sound server, and a wedged
+        // PulseAudio/PipeWire daemon leaves it blocked with no timeout of its
+        // own — the same failure mode the clipboard and compositor probes have.
+        let mut cmd = tokio::process::Command::new("pactl");
+        cmd.args(["list", "short", "sources"]);
+        let output = output_capped(cmd, PACTL_TIMEOUT).await.map_err(|e| {
+            if is_spawn_failure(&e) {
                 DesktopError::PlatformError(format!(
                     "Failed to list audio devices (install pulseaudio-utils / pipewire-pulse): {e}"
                 ))
-            })?;
+            } else {
+                DesktopError::PlatformError(e.to_string())
+            }
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -231,9 +243,9 @@ impl MediaCapability for LinuxMedia {
 
         // The default source name, used to flag `is_default`. Best-effort:
         // a failure here just means nothing is marked default.
-        let default_name = tokio::process::Command::new("pactl")
-            .args(["get-default-source"])
-            .output()
+        let mut cmd = tokio::process::Command::new("pactl");
+        cmd.args(["get-default-source"]);
+        let default_name = output_capped(cmd, PACTL_TIMEOUT)
             .await
             .ok()
             .filter(|o| o.status.success())

@@ -24,7 +24,7 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
     let iy = validate_coordinate(y, "y")?;
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::click(ix, iy, button);
     }
 
@@ -52,7 +52,7 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
 ///   text typing operation fails.
 pub fn type_text(text: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::type_text(text);
     }
 
@@ -85,7 +85,7 @@ pub fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::key_combo(modifiers, key);
     }
 
@@ -165,7 +165,7 @@ pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::key_button(keys, action);
     }
 
@@ -227,14 +227,10 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
     // Linux enigo backend cannot be asked to emit billions of click events.
     let amount = amount.clamp(-MAX_SCROLL_CLICKS, MAX_SCROLL_CLICKS);
 
-    // Every other input verb already had this branch; scroll did not, so on a
-    // Wayland session it fell through to enigo/XTEST — which the compositor
-    // blocks — and reported the resulting no-op as a success.
-    #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
-        return super::wayland_input::scroll(direction, amount);
-    }
-
+    // Validate the vocabulary *before* choosing a rail. An unknown direction is
+    // the caller's mistake on every platform, and answering it with "install
+    // ydotool" would send the model off to fix the wrong thing.
+    //
     // `amount` is documented as positive, but negating `i32::MIN` would overflow
     // (panic in debug). `saturating_neg` is identical for all valid positive
     // inputs and keeps the helper panic-free at the boundary (P7).
@@ -249,6 +245,14 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
             )));
         }
     };
+
+    // Every other input verb already had this branch; scroll did not, so on a
+    // Wayland session it fell through to enigo/XTEST — which the compositor
+    // blocks — and reported the resulting no-op as a success.
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool()? {
+        return super::wayland_input::scroll(direction, amount);
+    }
 
     let mut enigo = new_enigo()?;
 
@@ -266,7 +270,7 @@ pub fn double_click(x: f64, y: f64, button: MouseButton) -> Result<()> {
     let iy = validate_coordinate(y, "y")?;
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::double_click(ix, iy, button);
     }
 
@@ -301,7 +305,7 @@ pub fn drag(
     let ey = validate_coordinate(end_y, "end_y")?;
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         let _ = duration_ms; // ydotool mousemove is instantaneous; drag is atomic.
         return super::wayland_input::drag(sx, sy, ex, ey);
     }
@@ -368,7 +372,7 @@ pub fn hover(x: f64, y: f64) -> Result<()> {
     let iy = validate_coordinate(y, "y")?;
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::hover(ix, iy);
     }
 
@@ -414,7 +418,7 @@ pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAct
     let iy = validate_coordinate(y, "y")?;
 
     #[cfg(target_os = "linux")]
-    if super::wayland_input::should_use_ydotool() {
+    if super::wayland_input::should_use_ydotool()? {
         return super::wayland_input::mouse_button(ix, iy, button, action);
     }
 
