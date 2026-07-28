@@ -200,7 +200,10 @@ mod tests {
 
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("game"), "error should name the bad mode: {err}");
+        assert!(
+            err.contains("game"),
+            "error should name the bad mode: {err}"
+        );
     }
 
     /// A team run re-stamps its mode onto every turn, so a member that "set"

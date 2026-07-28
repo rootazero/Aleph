@@ -546,7 +546,12 @@ impl VirtualFsSandbox {
 /// 127=cmd not found, 137=OOM/SIGKILL) are raised as errors;
 /// unknown non-zero codes pass through so the caller logs a warning
 /// and returns the tool's partial output.
-fn check_docker_exit_code(exit_code: i32, stderr: &str, bin: &str, image: &str) -> anyhow::Result<()> {
+fn check_docker_exit_code(
+    exit_code: i32,
+    stderr: &str,
+    bin: &str,
+    image: &str,
+) -> anyhow::Result<()> {
     match exit_code {
         125 => anyhow::bail!("Docker runtime error (container failed to start): {stderr}"),
         126 => anyhow::bail!("Command cannot be executed in container: {stderr}"),

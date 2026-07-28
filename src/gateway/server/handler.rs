@@ -417,8 +417,7 @@ async fn handle_connection(
     // `rejectSlowNodeSocket`. Non-node connections never have their channel pulled
     // from the NodeRegistry, so their `call()` never runs and this never fires.
     let rpc_close = Arc::new(Notify::new());
-    let rpc_channel =
-        crate::cluster::ReverseRpcChannel::with_close(rpc_out_tx, rpc_close.clone());
+    let rpc_channel = crate::cluster::ReverseRpcChannel::with_close(rpc_out_tx, rpc_close.clone());
     let rpc_pending = rpc_channel.pending();
     // The channel reaches the outside world exactly one way: a node-shaped
     // connect (params carrying `commands`/`tags`) stores this clone inside its

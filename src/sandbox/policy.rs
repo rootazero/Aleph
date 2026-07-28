@@ -26,7 +26,10 @@ pub enum FsPolicy {
     /// Both read and write paths specified — preserved as separate lists so
     /// platform drivers can apply the right primitive to each (e.g. bwrap
     /// `--ro-bind` vs `--bind`, Windows `read=` vs `write=`).
-    ReadWritePaths { read: Vec<PathBuf>, write: Vec<PathBuf> },
+    ReadWritePaths {
+        read: Vec<PathBuf>,
+        write: Vec<PathBuf>,
+    },
     /// Full read access with optional exclusions.
     FullRead { exclude: Vec<PathBuf> },
     /// Full write access with optional exclusions.
@@ -83,10 +86,7 @@ impl Default for SandboxPolicy {
 
 impl From<&SandboxCapabilities> for SandboxPolicy {
     fn from(caps: &SandboxCapabilities) -> Self {
-        let filesystem = match (
-            caps.fs_read.is_empty(),
-            caps.fs_write.is_empty(),
-        ) {
+        let filesystem = match (caps.fs_read.is_empty(), caps.fs_write.is_empty()) {
             (true, true) => FsPolicy::WorkspaceOnly,
             (false, true) => {
                 // rust-doctor-disable-next-line excessive-clone

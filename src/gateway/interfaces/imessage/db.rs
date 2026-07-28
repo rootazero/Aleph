@@ -590,7 +590,10 @@ mod tests {
         // message (the `p:0/` part prefix stripped down to the bare GUID).
         assert_eq!(msgs[1].text, "Reacted with: ❤️");
         assert_eq!(msgs[1].id.as_str(), "g-love");
-        assert_eq!(msgs[1].reply_to.as_ref().map(|r| r.as_str()), Some("g-normal"));
+        assert_eq!(
+            msgs[1].reply_to.as_ref().map(|r| r.as_str()),
+            Some("g-normal")
+        );
         assert!(matches!(
             msgs[1].metadata.as_slice(),
             [MessageMeta::Reaction { .. }]
@@ -606,8 +609,14 @@ mod tests {
 
     #[test]
     fn reaction_target_guid_strips_part_prefix() {
-        assert_eq!(reaction_target_guid("p:0/ABC-123"), Some("ABC-123".to_string()));
-        assert_eq!(reaction_target_guid("bp:ABC-123"), Some("ABC-123".to_string()));
+        assert_eq!(
+            reaction_target_guid("p:0/ABC-123"),
+            Some("ABC-123".to_string())
+        );
+        assert_eq!(
+            reaction_target_guid("bp:ABC-123"),
+            Some("ABC-123".to_string())
+        );
         assert_eq!(reaction_target_guid("ABC-123"), Some("ABC-123".to_string()));
         assert_eq!(reaction_target_guid(""), None);
     }

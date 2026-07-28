@@ -198,7 +198,6 @@ impl DiscordChannel {
             .map(SerenityMessageId::new)
             .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {e}")))
     }
-
 }
 
 /// Map an approval `callback_data` to a styled Discord button.
@@ -244,7 +243,9 @@ impl Handler {
         if component.guild_id.is_none() && !self.config.dm_allowed {
             return;
         }
-        if component.guild_id.is_some() && !self.config.is_channel_allowed(component.channel_id.get()) {
+        if component.guild_id.is_some()
+            && !self.config.is_channel_allowed(component.channel_id.get())
+        {
             return;
         }
 
@@ -1036,7 +1037,8 @@ mod tests {
         // custom_id (== callback_data) must survive verbatim for the round-trip.
         // We assert via the serialized component JSON since CreateButton exposes
         // no getters.
-        let approve = serde_json::to_value(button_style_for("approve:abc:once", "Approve")).unwrap();
+        let approve =
+            serde_json::to_value(button_style_for("approve:abc:once", "Approve")).unwrap();
         assert_eq!(approve["style"], 3); // ButtonStyle::Success
         assert_eq!(approve["custom_id"], "approve:abc:once");
         assert_eq!(approve["label"], "Approve");

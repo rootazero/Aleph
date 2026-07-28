@@ -14,9 +14,8 @@ use async_trait::async_trait;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
+    ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
 };
 
 use api::FeishuApi;

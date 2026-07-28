@@ -48,7 +48,6 @@ impl TeammateManager {
                 }),
         }
     }
-
 }
 
 #[cfg(test)]
@@ -78,5 +77,4 @@ mod tests {
         let id2 = mgr.ensure_team("analysis", "parent-agent").await.unwrap();
         assert_eq!(id1, id2);
     }
-
 }

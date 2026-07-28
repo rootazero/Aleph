@@ -125,8 +125,8 @@ where
         // Check if we've reached the stop point. When `current` has been
         // canonicalized but `stop.canonicalize()` failed, fall back to the
         // raw (non-canonicalized) stop path for the comparison.
-        if stop.as_ref().map_or(false, |sp| &current == sp)
-            || stop_raw.as_ref().map_or(false, |sr| &current == sr)
+        if stop.as_ref().is_some_and(|sp| &current == sp)
+            || stop_raw.as_ref().is_some_and(|sr| &current == sr)
         {
             break;
         }

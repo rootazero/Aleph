@@ -182,8 +182,8 @@ impl AlephClient {
                 if let Some(req) = maybe_req {
                     let result = if let Some(error) = response.error {
                         Err(error)
-                    } else if response.result.is_some() {
-                        Ok(response.result.unwrap())
+                    } else if let Some(value) = response.result {
+                        Ok(value)
                     } else {
                         Err(JsonRpcError {
                             code: -32600,
@@ -447,8 +447,10 @@ mod tests {
             req
         });
 
-        let mut config = CliConfig::default();
-        config.device_name = "test-device".to_string();
+        let config = CliConfig {
+            device_name: "test-device".to_string(),
+            ..CliConfig::default()
+        };
         let (client, _events) = AlephClient::connect(&format!("ws://{addr}"), &config)
             .await
             .unwrap();

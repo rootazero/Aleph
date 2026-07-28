@@ -243,12 +243,11 @@ impl WorktreeSandbox {
         // Only the non-negotiable catastrophic floor — no tunable command policy
         // is configured on this path. Mirrors the `hardline_only()` hook that
         // `factory::build_sandbox` installs when the tunable policy is disabled.
-        let hooks =
-            crate::sandbox::hooks::SandboxHooks::new().with_before(std::sync::Arc::new(
-                crate::sandbox::command_policy::CommandPolicyHook::new(
-                    crate::sandbox::command_policy::CommandPolicy::hardline_only(),
-                ),
-            ));
+        let hooks = crate::sandbox::hooks::SandboxHooks::new().with_before(std::sync::Arc::new(
+            crate::sandbox::command_policy::CommandPolicyHook::new(
+                crate::sandbox::command_policy::CommandPolicy::hardline_only(),
+            ),
+        ));
         Self {
             worktree_path,
             hooks,
@@ -321,10 +320,9 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             if let Some(mut child_stdin) = child.stdin.take() {
                 if let Some(data) = command.stdin.as_deref() {
-                    child_stdin
-                        .write_all(data)
-                        .await
-                        .map_err(|e| crate::sandbox::SandboxError::Io(format!("stdin write failed: {e}")))?;
+                    child_stdin.write_all(data).await.map_err(|e| {
+                        crate::sandbox::SandboxError::Io(format!("stdin write failed: {e}"))
+                    })?;
                 }
                 drop(child_stdin);
             }

@@ -235,4 +235,3 @@ mod agent_id_unification_tests {
         assert_eq!(DEFAULT_AGENT_ID, "main");
     }
 }
-

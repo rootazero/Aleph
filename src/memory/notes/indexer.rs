@@ -268,8 +268,15 @@ impl<S: NoteStore> NoteIndexer<S> {
         self.store.index_note(&reparsed, agent_id, category).await?;
 
         self.notify_orientation(agent_id, category, safe_title);
-        self.finalize_side_effects(agent_id, category, safe_title, content, &reparsed.aliases, true)
-            .await;
+        self.finalize_side_effects(
+            agent_id,
+            category,
+            safe_title,
+            content,
+            &reparsed.aliases,
+            true,
+        )
+        .await;
         Ok(())
     }
 
@@ -700,8 +707,15 @@ impl<S: NoteStore> NoteIndexer<S> {
         // already-embedded note (e.g. NoteWeave orphan-linking) skips the
         // embedding call so the zero-cost structural weave stays cost-free.
         let reembed = !existed || !new_facts.is_empty();
-        self.finalize_side_effects(agent_id, &safe_cat, &safe_title, &md, &note.aliases, reembed)
-            .await;
+        self.finalize_side_effects(
+            agent_id,
+            &safe_cat,
+            &safe_title,
+            &md,
+            &note.aliases,
+            reembed,
+        )
+        .await;
         Ok(())
     }
 

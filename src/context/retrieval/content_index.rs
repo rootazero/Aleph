@@ -354,8 +354,8 @@ impl ContentIndex {
     /// compare against the removed dir names.
     pub fn list_sessions(&self) -> Result<Vec<String>, IndexError> {
         let conn = self.lock();
-        let mut stmt = conn
-            .prepare("SELECT session_id FROM chunks UNION SELECT session_id FROM chunks_tri")?;
+        let mut stmt =
+            conn.prepare("SELECT session_id FROM chunks UNION SELECT session_id FROM chunks_tri")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1295,15 +1295,26 @@ mod tests {
 
         let both = ["agent:a:main:s1", "agent:a:main"];
         assert!(
-            !idx.search_sessions(&both, "epochalpha", 5).unwrap().is_empty(),
+            !idx.search_sessions(&both, "epochalpha", 5)
+                .unwrap()
+                .is_empty(),
             "parent-epoch rows must be visible to the widened scope"
         );
-        assert!(!idx.search_sessions(&both, "epochbeta", 5).unwrap().is_empty());
+        assert!(!idx
+            .search_sessions(&both, "epochbeta", 5)
+            .unwrap()
+            .is_empty());
         assert_eq!(idx.len_sessions(&both).unwrap(), 2);
         // A single-key search stays scoped (no cross-epoch bleed by default).
-        assert!(idx.search("agent:a:main:s1", "epochalpha", 5).unwrap().is_empty());
+        assert!(idx
+            .search("agent:a:main:s1", "epochalpha", 5)
+            .unwrap()
+            .is_empty());
         // An empty set matches nothing — never an unscoped scan.
-        assert!(idx.search_sessions(&[], "epochalpha", 5).unwrap().is_empty());
+        assert!(idx
+            .search_sessions(&[], "epochalpha", 5)
+            .unwrap()
+            .is_empty());
         assert_eq!(idx.len_sessions(&[]).unwrap(), 0);
     }
 

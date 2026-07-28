@@ -437,7 +437,10 @@ mod tests {
         let _ = stage.execute(ctx).await.unwrap();
 
         // Row evicted from the pending queue rather than looping forever.
-        let pending = store.list_pending_review("default", i64::MAX).await.unwrap();
+        let pending = store
+            .list_pending_review("default", i64::MAX)
+            .await
+            .unwrap();
         assert!(
             !pending.iter().any(|r| r.id == id),
             "row must be evicted after max_retries unparseable verdicts"

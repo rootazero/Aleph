@@ -233,10 +233,7 @@ pub(crate) async fn render_command_help(
 
     let mut out = String::from("Available commands:");
     for t in &curated {
-        let invocation = t
-            .usage
-            .clone()
-            .unwrap_or_else(|| format!("/{}", t.name));
+        let invocation = t.usage.clone().unwrap_or_else(|| format!("/{}", t.name));
         let aliases = if t.aliases.is_empty() {
             String::new()
         } else {
@@ -251,9 +248,9 @@ pub(crate) async fn render_command_help(
     let namespaces: Vec<String> = TOOL_NAMESPACES
         .iter()
         .filter(|ns| {
-            tools.iter().any(|t| {
-                t.name.starts_with(*ns) && t.name.get(ns.len()..=ns.len()) == Some("_")
-            })
+            tools
+                .iter()
+                .any(|t| t.name.starts_with(*ns) && t.name.get(ns.len()..=ns.len()) == Some("_"))
         })
         .map(|ns| format!("/{ns}"))
         .collect();
@@ -1195,6 +1192,9 @@ mod tests {
             "bare no-usage no-alias tool must be omitted:\n{help}"
         );
         // The namespace fold line, not a raw per-tool dump.
-        assert!(help.contains("namespace"), "fold hint line missing:\n{help}");
+        assert!(
+            help.contains("namespace"),
+            "fold hint line missing:\n{help}"
+        );
     }
 }

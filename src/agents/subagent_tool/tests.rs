@@ -215,9 +215,8 @@ fn test_parse_args_name_on_run_is_rejected() {
 /// trip the addressable-teammates rejection.
 #[test]
 fn test_parse_args_null_name_team_name_read_as_absent() {
-    let action =
-        parse_args(&json!({ "task": "build feature", "name": null, "team_name": null }))
-            .expect("null name/team_name must parse as absent");
+    let action = parse_args(&json!({ "task": "build feature", "name": null, "team_name": null }))
+        .expect("null name/team_name must parse as absent");
     assert!(matches!(action, SubagentAction::Run(_)));
 }
 
@@ -1657,11 +1656,7 @@ async fn wiring_proof_guard_terminates_bridge_on_unwind() {
         );
 
         harness.cancel();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            watcher,
-        )
-        .await;
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), watcher).await;
     }
 
     // ─── Arm 2: WITH guard → watcher must exit ───────────────────────
@@ -1689,12 +1684,9 @@ async fn wiring_proof_guard_terminates_bridge_on_unwind() {
         .await;
         assert!(result.is_err(), "arm2: scope must have panicked");
 
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            watcher,
-        )
-        .await
-        .expect("arm2: watcher must exit well before the timeout");
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), watcher)
+            .await
+            .expect("arm2: watcher must exit well before the timeout");
         assert!(
             probe.is_cancelled(),
             "arm2: guard must have cancelled the bridge token on unwind"

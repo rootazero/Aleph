@@ -54,7 +54,10 @@ mod tests {
     #[test]
     fn default_is_disabled_opt_in() {
         let c = PresenceConfig::default();
-        assert!(!c.enabled, "presence must default to disabled to avoid PII leak");
+        assert!(
+            !c.enabled,
+            "presence must default to disabled to avoid PII leak"
+        );
         assert_eq!(c.interval_secs, 30);
         assert_eq!(c.effective_interval_secs(), 30);
     }

@@ -356,7 +356,9 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                     reason: format!("Denied by default policy for {action}"),
                 },
                 DefaultDecision::Ask => ApprovalDecision::Ask {
-                    prompt: format!("Action {action} on target '{prompt_target}' requires approval"),
+                    prompt: format!(
+                        "Action {action} on target '{prompt_target}' requires approval"
+                    ),
                 },
             };
         }
@@ -401,9 +403,9 @@ mod tests {
     use tracing::field::Visit;
     use tracing::{Event, Subscriber};
     use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
     use tracing_subscriber::registry::LookupSpan;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
     use tracing_subscriber::EnvFilter;
 
     #[test]
@@ -496,7 +498,8 @@ mod tests {
                 .push((field.name().to_string(), format!("{value:?}")));
         }
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.pairs.push((field.name().to_string(), value.to_string()));
+            self.pairs
+                .push((field.name().to_string(), value.to_string()));
         }
         fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
             self.pairs
@@ -608,9 +611,7 @@ mod tests {
             .with(layer)
             .set_default();
 
-        policy
-            .record(&req, &ApprovalDecision::Allow)
-            .await;
+        policy.record(&req, &ApprovalDecision::Allow).await;
 
         drop(_guard);
         let captured = sink.lock().unwrap();

@@ -54,7 +54,11 @@ impl PhoneRule {
         if start > 0 && bytes[start - 1] == b'.' {
             return true;
         }
-        if end < bytes.len() && bytes[end] == b'.' && end + 1 < bytes.len() && bytes[end + 1].is_ascii_digit() {
+        if end < bytes.len()
+            && bytes[end] == b'.'
+            && end + 1 < bytes.len()
+            && bytes[end + 1].is_ascii_digit()
+        {
             return true;
         }
         false
@@ -197,7 +201,11 @@ mod tests {
     #[test]
     fn test_no_match_trailing_dot_decimal() {
         let matches = rule().detect("amount 13812345678.5");
-        assert_eq!(matches.len(), 0, ".digit must be treated as decimal continuation");
+        assert_eq!(
+            matches.len(),
+            0,
+            ".digit must be treated as decimal continuation"
+        );
     }
 
     #[test]

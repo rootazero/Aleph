@@ -612,11 +612,18 @@ mod tests {
         assert_eq!(status_active, "active");
 
         // Idempotent: second run is a no-op and must not re-flip statuses.
-        conn.execute("UPDATE notes_links SET status = 'tombstone' WHERE to_note = 'rust'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE notes_links SET status = 'tombstone' WHERE to_note = 'rust'",
+            [],
+        )
+        .unwrap();
         migrations::migrate_notes_links_lifecycle(&conn).unwrap();
         let s: String = conn
-            .query_row("SELECT status FROM notes_links WHERE to_note = 'rust'", [], |r| r.get(0))
+            .query_row(
+                "SELECT status FROM notes_links WHERE to_note = 'rust'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(s, "tombstone", "re-run must not re-backfill");
     }

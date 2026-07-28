@@ -115,9 +115,7 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
 
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
     let allowlisted = is_allowlisted(host, &policy.allowed_hosts);
-    if !allowlisted
-        && matches!(url.host(), Some(url::Host::Domain(_)))
-    {
+    if !allowlisted && matches!(url.host(), Some(url::Host::Domain(_))) {
         return Err(SsrfError::RequiresDnsResolution(host.to_string()));
     }
     Ok(url)
@@ -497,10 +495,9 @@ mod tests {
             vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
         );
         let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
-        let (url, pinned) =
-            validate_url_with_pinned("https://8.8.8.8/path", &policy)
-                .await
-                .expect("public IP literal must validate");
+        let (url, pinned) = validate_url_with_pinned("https://8.8.8.8/path", &policy)
+            .await
+            .expect("public IP literal must validate");
         assert_eq!(url.host_str(), Some("8.8.8.8"));
         assert!(
             pinned.is_none(),
@@ -517,10 +514,9 @@ mod tests {
             vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()],
         );
         let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
-        let (url, pinned) =
-            validate_url_with_pinned("https://api.example.com/v1/data", &policy)
-                .await
-                .expect("public hostname must validate");
+        let (url, pinned) = validate_url_with_pinned("https://api.example.com/v1/data", &policy)
+            .await
+            .expect("public hostname must validate");
         assert_eq!(url.host_str(), Some("api.example.com"));
         let addr = pinned.expect("hostname must produce a pinned SocketAddr");
         assert_eq!(addr.ip(), "8.8.8.8".parse::<std::net::IpAddr>().unwrap());
@@ -552,10 +548,9 @@ mod tests {
             vec!["127.0.0.1".parse::<std::net::IpAddr>().unwrap()],
         );
         let _scope = crate::security::ssrf::dns::test_hook::ResolverScope::install(map);
-        let (url, pinned) =
-            validate_url_with_pinned("http://anything.example/", &policy)
-                .await
-                .expect("disabled policy bypasses validation");
+        let (url, pinned) = validate_url_with_pinned("http://anything.example/", &policy)
+            .await
+            .expect("disabled policy bypasses validation");
         assert_eq!(url.host_str(), Some("anything.example"));
         assert!(
             pinned.is_none(),

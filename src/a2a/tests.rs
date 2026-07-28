@@ -881,4 +881,3 @@ REASON: Financial analyst can help with market data analysis";
         decision.confidence
     );
 }
-

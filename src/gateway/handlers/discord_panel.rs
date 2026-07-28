@@ -389,5 +389,4 @@ mod tests {
         assert!(res.is_error());
         assert!(res.error.unwrap().message.contains("guild_id"));
     }
-
 }

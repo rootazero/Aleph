@@ -407,10 +407,7 @@ pub trait NoteStore: Send + Sync {
     /// `note_graph_query` schema-introspection op so the model can discover the
     /// graph's de-facto edge taxonomy before querying. Default impl returns
     /// empty so non-SQLite stores and test mocks compile unchanged.
-    async fn relation_type_counts(
-        &self,
-        agent_id: &str,
-    ) -> Result<Vec<(String, i64)>, AlephError> {
+    async fn relation_type_counts(&self, agent_id: &str) -> Result<Vec<(String, i64)>, AlephError> {
         let _ = agent_id;
         Ok(vec![])
     }

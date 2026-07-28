@@ -166,8 +166,8 @@ fn synthetic_payload(event: &str) -> String {
     use alephcore::extension::hooks::{event_payload_json, HookContext};
     use alephcore::extension::HookEvent;
 
-    let parsed: HookEvent = serde_json::from_str(&format!("\"{event}\""))
-        .unwrap_or(HookEvent::BeforeToolCall);
+    let parsed: HookEvent =
+        serde_json::from_str(&format!("\"{event}\"")).unwrap_or(HookEvent::BeforeToolCall);
     let ctx = HookContext::new("hooks-cli-test")
         .with_tool_name("ExampleTool")
         .with_tool_input(r#"{"example":true}"#)

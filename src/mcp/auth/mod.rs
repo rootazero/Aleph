@@ -94,7 +94,5 @@ pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<Strin
 fn oauth_storage_singleton() -> Arc<OAuthStorage> {
     use std::sync::OnceLock;
     static STORAGE: OnceLock<Arc<OAuthStorage>> = OnceLock::new();
-    Arc::clone(STORAGE.get_or_init(|| {
-        Arc::new(OAuthStorage::new(OAuthStorage::default_path()))
-    }))
+    Arc::clone(STORAGE.get_or_init(|| Arc::new(OAuthStorage::new(OAuthStorage::default_path()))))
 }

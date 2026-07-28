@@ -180,11 +180,27 @@ pub const fn default_shell_timeout() -> u64 {
 /// at it, and its schema is a single string field.
 pub fn default_core_tools() -> Vec<String> {
     [
-        "ask_user", "subagent", "bash", "code_exec", "code_check",
-        "file_read", "file_write", "file_edit", "file_ops",
-        "search", "web_fetch", "memory_search", "remember",
-        "skill_read", "skill_list", "scratchpad", "note_manage",
-        "system", "get_tool_schema", "moa", "session_set_mode",
+        "ask_user",
+        "subagent",
+        "bash",
+        "code_exec",
+        "code_check",
+        "file_read",
+        "file_write",
+        "file_edit",
+        "file_ops",
+        "search",
+        "web_fetch",
+        "memory_search",
+        "remember",
+        "skill_read",
+        "skill_list",
+        "scratchpad",
+        "note_manage",
+        "system",
+        "get_tool_schema",
+        "moa",
+        "session_set_mode",
         // MCP native discovery+read mechanism — all four kept core (never
         // schema-collapsed) so discovery and read are each one step, mirroring
         // `skill_list`+`skill_read` above. There is deliberately NO
@@ -198,8 +214,10 @@ pub fn default_core_tools() -> Vec<String> {
         // URIs/prompt-names exist, so collapsing it behind a `get_tool_schema`
         // round-trip is exactly the friction that pushes the model toward
         // `cat`-ing `file://` paths. No-op when no MCP server is connected.
-        "mcp_read_resource", "mcp_get_prompt",
-        "mcp_list_resources", "mcp_list_prompts",
+        "mcp_read_resource",
+        "mcp_get_prompt",
+        "mcp_list_resources",
+        "mcp_list_prompts",
         // Resource *templates* discovery (parameterized URIs). Kept core for
         // the same reason as `mcp_list_resources`: for a server exposing only
         // templates it is the sole way to learn what can be read.
@@ -753,7 +771,10 @@ mod core_tools_tests {
     #[test]
     fn defer_mcp_tools_defaults_off() {
         let cfg = ToolsConfig::default();
-        assert!(!cfg.defer_mcp_tools, "deferred tier must default OFF (escape-hatch)");
+        assert!(
+            !cfg.defer_mcp_tools,
+            "deferred tier must default OFF (escape-hatch)"
+        );
     }
 
     #[test]

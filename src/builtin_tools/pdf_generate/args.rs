@@ -88,10 +88,7 @@ impl ContentFormat {
             }
             // Ordered list items: 1. item
             if trimmed.len() > 2
-                && trimmed
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_digit)
+                && trimmed.as_bytes().first().is_some_and(u8::is_ascii_digit)
                 && trimmed.contains(". ")
             {
                 score += 1;

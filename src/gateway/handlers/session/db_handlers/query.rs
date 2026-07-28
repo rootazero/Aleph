@@ -244,9 +244,7 @@ fn session_usage_cost(
     match est.status {
         crate::pricing::CostStatus::Unknown => (None, "unknown"),
         crate::pricing::CostStatus::Complete => (Some(est.usd), "complete"),
-        crate::pricing::CostStatus::PartialMissingPrice => {
-            (Some(est.usd), "partial_missing_price")
-        }
+        crate::pricing::CostStatus::PartialMissingPrice => (Some(est.usd), "partial_missing_price"),
     }
 }
 
@@ -419,7 +417,9 @@ pub async fn handle_preview_db(
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost, SessionInfo};
+    use super::{
+        clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost, SessionInfo,
+    };
     use crate::gateway::protocol::JsonRpcRequest;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionPatch};
@@ -580,8 +580,12 @@ mod tests {
 
     #[test]
     fn session_usage_cost_prices_known_model() {
-        let (usd, status) =
-            session_usage_cost(Some("anthropic"), Some("claude-sonnet-4-6"), 1_000_000, 1_000_000);
+        let (usd, status) = session_usage_cost(
+            Some("anthropic"),
+            Some("claude-sonnet-4-6"),
+            1_000_000,
+            1_000_000,
+        );
         assert_eq!(status, "complete");
         assert!(usd.unwrap() > 0.0);
     }

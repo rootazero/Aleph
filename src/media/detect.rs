@@ -78,7 +78,10 @@ fn detect_document_extension(ext: &str) -> Option<MediaType> {
         "html" | "htm" => DocFormat::Html,
         _ => return None,
     };
-    Some(MediaType::Document { format, pages: None })
+    Some(MediaType::Document {
+        format,
+        pages: None,
+    })
 }
 
 /// Detect media type from file magic bytes (first 16 bytes).
@@ -234,12 +237,10 @@ pub async fn detect_from_path(path: &std::path::Path) -> Result<MediaType, Media
     if let Ok(mut f) = tokio::fs::File::open(path).await {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 16];
-        if f.read_exact(&mut buf).await.is_ok() {
-            if buf.len() >= 4 {
-                let magic_result = detect_by_magic(&buf);
-                if magic_result != MediaType::Unknown {
-                    return Ok(magic_result);
-                }
+        if f.read_exact(&mut buf).await.is_ok() && buf.len() >= 4 {
+            let magic_result = detect_by_magic(&buf);
+            if magic_result != MediaType::Unknown {
+                return Ok(magic_result);
             }
         }
     }

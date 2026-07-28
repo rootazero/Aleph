@@ -438,12 +438,11 @@ impl SessionManager {
                 // Identifiers were validated above; quote table/column names to avoid
                 // keyword collisions. `def` is a validated column definition.
                 let sql = format!(r#"ALTER TABLE "{table}" ADD COLUMN "{column}" {def}"#);
-                conn.execute(&sql, [])
-                    .map_err(|e| {
-                        SessionManagerError::DatabaseError(format!(
-                            "Failed to add column {column} to {table}: {e}"
-                        ))
-                    })?;
+                conn.execute(&sql, []).map_err(|e| {
+                    SessionManagerError::DatabaseError(format!(
+                        "Failed to add column {column} to {table}: {e}"
+                    ))
+                })?;
                 tracing::info!(table = %table, column = %column, "Migrated database schema");
             }
         }

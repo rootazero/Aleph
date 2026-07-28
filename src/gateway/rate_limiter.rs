@@ -439,10 +439,9 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // mutations in the same risk class as sessions.delete / session.compact,
         // so they get the strict write window too.
         "config.patch" | "memory.delete" | "session.compact" | "sessions.delete"
-        | "sessions.reset" | "session.truncate" | "plugins.install"
-        | "plugins.uninstall" | "skills.install" | "skills.remove" | "bundled.sync"
-        | "moa.savePreset" | "moa.deletePreset" | "moa.setDefault"
-        | "moa.setSaveTraces" => RateLimitScope::RpcWrite,
+        | "sessions.reset" | "session.truncate" | "plugins.install" | "plugins.uninstall"
+        | "skills.install" | "skills.remove" | "bundled.sync" | "moa.savePreset"
+        | "moa.deletePreset" | "moa.setDefault" | "moa.setSaveTraces" => RateLimitScope::RpcWrite,
 
         // Resource-intensive operations. `session.export_html` reads the whole
         // transcript plus every inlinable artifact byte and renders a document

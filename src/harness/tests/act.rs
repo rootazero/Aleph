@@ -1418,8 +1418,15 @@ struct DelayByArgTools;
 
 #[async_trait]
 impl ToolService for DelayByArgTools {
-    async fn execute(&self, _name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let ms = input.get("delay_ms").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    async fn execute(
+        &self,
+        _name: &str,
+        input: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let ms = input
+            .get("delay_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         if ms > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         }

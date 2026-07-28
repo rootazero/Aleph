@@ -438,8 +438,7 @@ impl SessionsSendTool {
                     Some(content) => {
                         // Check if the sub-agent's response was truncated (contains truncation marker)
                         // If so, automatically send a continuation request once
-                        let content = if content.contains("[output truncated")
-                        {
+                        let content = if content.contains("[output truncated") {
                             info!(
                                 run_id = %run_id,
                                 target = %target_key_str,

@@ -63,9 +63,11 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
                 println!("No agent identities yet — none has taken a recorded action.");
                 return Ok(());
             }
+            // "STATE" is inlined rather than passed as an argument: its column is
+            // unpadded in the row below too, so there is no width to keep in sync.
             println!(
-                "{:<24} {:<18} {:>8}  {:<20} {}",
-                "AGENT", "FINGERPRINT", "RECORDS", "CREATED", "STATE"
+                "{:<24} {:<18} {:>8}  {:<20} STATE",
+                "AGENT", "FINGERPRINT", "RECORDS", "CREATED"
             );
             for r in rows {
                 println!(

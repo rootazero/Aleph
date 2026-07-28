@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult, UserId,
 };
 
 /// CLI channel configuration

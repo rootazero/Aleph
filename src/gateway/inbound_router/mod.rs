@@ -40,7 +40,9 @@ use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
 
-use command_handler::{classify_special_slash, parse_clarify_index, strip_bot_mention, SpecialSlash};
+use command_handler::{
+    classify_special_slash, parse_clarify_index, strip_bot_mention, SpecialSlash,
+};
 use dedup::InboundDedupTracker;
 use types::check_link_access;
 
@@ -1494,10 +1496,7 @@ mod tests {
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
-        .with_hitl(
-            Arc::new(ExecApprovalManager::new()),
-            clarification.clone(),
-        );
+        .with_hitl(Arc::new(ExecApprovalManager::new()), clarification.clone());
 
         let make_ctx = |text: &str| {
             let msg = InboundMessage {
@@ -1519,7 +1518,13 @@ mod tests {
             InboundContext::new(msg, reply_route, session_key.clone())
         };
 
-        for bad_text in ["clarify:abc", "clarify:", "clarify:0", "clarify:  ", "clarify:-1"] {
+        for bad_text in [
+            "clarify:abc",
+            "clarify:",
+            "clarify:0",
+            "clarify:  ",
+            "clarify:-1",
+        ] {
             assert!(
                 !router.try_intercept_hitl(&make_ctx(bad_text)).await,
                 "{bad_text:?} must NOT be consumed as a clarification callback"

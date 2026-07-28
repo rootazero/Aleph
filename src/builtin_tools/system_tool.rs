@@ -675,7 +675,9 @@ mod tests {
         }
     }
 
-    fn build_system_tool(enabled: bool) -> (SystemTool, Arc<Mutex<usize>>, Arc<Mutex<Vec<String>>>) {
+    fn build_system_tool(
+        enabled: bool,
+    ) -> (SystemTool, Arc<Mutex<usize>>, Arc<Mutex<Vec<String>>>) {
         let reads = Arc::new(Mutex::new(0));
         let writes = Arc::new(Mutex::new(Vec::new()));
         let platform = Arc::new(CountingPlatform {
@@ -711,7 +713,11 @@ mod tests {
             msg.contains("disabled") || msg.contains("clipboard"),
             "refusal must explain the master switch: {msg}"
         );
-        assert_eq!(*reads.lock().unwrap(), 0, "system clipboard_read must not be called");
+        assert_eq!(
+            *reads.lock().unwrap(),
+            0,
+            "system clipboard_read must not be called"
+        );
     }
 
     #[tokio::test]

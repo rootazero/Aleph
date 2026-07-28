@@ -288,9 +288,9 @@ impl SqliteMemoryBackend {
             out
         };
 
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("prune_routing_experiences transaction: {e}")))?;
+        let tx = conn.unchecked_transaction().map_err(|e| {
+            AlephError::config(format!("prune_routing_experiences transaction: {e}"))
+        })?;
         for id in drop_ids {
             let rowid: Option<i64> = tx
                 .query_row(

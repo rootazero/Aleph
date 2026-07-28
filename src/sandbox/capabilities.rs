@@ -152,8 +152,8 @@ fn path_starts_with_normalized(child: &std::path::Path, baseline: &std::path::Pa
     // a parent-chain walk that verifies each existing ancestor is inside
     // `baseline` and not itself a symlink that escapes.
     let child_canon = std::fs::canonicalize(&child_norm).ok();
-    let baseline_canon = std::fs::canonicalize(&baseline_norm)
-        .unwrap_or_else(|_| baseline_norm.clone());
+    let baseline_canon =
+        std::fs::canonicalize(&baseline_norm).unwrap_or_else(|_| baseline_norm.clone());
 
     if let Some(cc) = &child_canon {
         return cc.starts_with(&baseline_canon);

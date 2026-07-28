@@ -454,11 +454,9 @@ impl InboundMessageRouter {
             return Ok(());
         };
 
-        let text = crate::gateway::handlers::commands::render_command_help(
-            parser.tool_registry(),
-            None,
-        )
-        .await;
+        let text =
+            crate::gateway::handlers::commands::render_command_help(parser.tool_registry(), None)
+                .await;
 
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {

@@ -343,11 +343,13 @@ pub fn resolve_for_removal(
     let parent = expanded.parent().unwrap_or_else(|| Path::new("/"));
     let canon_parent = safe_normalize(parent)
         .map_err(|e| ToolError::Execution(format!("Failed to resolve parent: {e}")))?;
-    let canon_parent = match crate::tools::fs_scope::current().and_then(|s| s.rebase_path(&canon_parent)) {
-        Some(rebased) => safe_normalize(&rebased)
-            .map_err(|e| ToolError::Execution(format!("Failed to normalize rebased parent: {e}")))?,
-        None => canon_parent,
-    };
+    let canon_parent =
+        match crate::tools::fs_scope::current().and_then(|s| s.rebase_path(&canon_parent)) {
+            Some(rebased) => safe_normalize(&rebased).map_err(|e| {
+                ToolError::Execution(format!("Failed to normalize rebased parent: {e}"))
+            })?,
+            None => canon_parent,
+        };
     let link_path = canon_parent.join(file_name);
     if path_is_denied(&link_path, denied_paths) {
         return Err(ToolError::InvalidArgs(format!(

@@ -146,4 +146,3 @@ mod tests {
         assert_eq!(rows[0].namespace, "owner");
     }
 }
-

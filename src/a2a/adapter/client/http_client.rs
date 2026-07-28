@@ -5,9 +5,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::a2a::domain::{
-    A2AError, A2AMessage, A2ATask, AgentCard, UpdateEvent,
-};
+use crate::a2a::domain::{A2AError, A2AMessage, A2ATask, AgentCard, UpdateEvent};
 use crate::a2a::port::A2AResult;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -480,9 +478,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/a2a"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"jsonrpc":"1.0","id":1,"result":{"ok":true}}"#.to_string(),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    r#"{"jsonrpc":"1.0","id":1,"result":{"ok":true}}"#.to_string(),
+                ),
+            )
             .mount(&server)
             .await;
 

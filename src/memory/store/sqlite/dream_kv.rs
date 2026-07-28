@@ -310,10 +310,16 @@ mod tests {
         // Empty store returns empty.
         assert!(fps(&backend, "main").is_empty());
 
-        backend.record_distill_reject("main", &fp_record("fp_a")).unwrap();
-        backend.record_distill_reject("main", &fp_record("fp_b")).unwrap();
+        backend
+            .record_distill_reject("main", &fp_record("fp_a"))
+            .unwrap();
+        backend
+            .record_distill_reject("main", &fp_record("fp_b"))
+            .unwrap();
         // Duplicate is a no-op.
-        backend.record_distill_reject("main", &fp_record("fp_a")).unwrap();
+        backend
+            .record_distill_reject("main", &fp_record("fp_a"))
+            .unwrap();
         assert_eq!(
             fps(&backend, "main"),
             vec!["fp_a".to_string(), "fp_b".to_string()]
@@ -342,7 +348,10 @@ mod tests {
         let records = backend.distill_reject_records("main").unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].fingerprint, "legacy_a");
-        assert!(records[0].summary.is_empty(), "legacy rows carry no context");
+        assert!(
+            records[0].summary.is_empty(),
+            "legacy rows carry no context"
+        );
         assert_eq!(
             fps(&backend, "main"),
             vec!["legacy_a".to_string(), "legacy_b".to_string()]

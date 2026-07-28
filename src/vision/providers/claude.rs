@@ -13,7 +13,7 @@ use crate::providers::anthropic::{
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
 use crate::vision::types::{
-    ImageFormat, ImageInput, MAX_IMAGE_FILE_SIZE, OcrResult, VisionCapabilities, VisionResult,
+    ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult, MAX_IMAGE_FILE_SIZE,
 };
 
 const API_TIMEOUT: Duration = Duration::from_secs(60);

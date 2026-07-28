@@ -547,4 +547,3 @@ fn quote_arg(arg: &str) -> String {
     out.push('"');
     out
 }
-

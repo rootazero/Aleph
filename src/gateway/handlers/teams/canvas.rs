@@ -436,7 +436,11 @@ pub async fn handle_chat_cancel(
     };
     debug!(run_id = %params.run_id, "Handling teams.chat.cancel request");
     if params.run_id.trim().is_empty() {
-        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "run_id is required".to_string());
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "run_id is required".to_string(),
+        );
     }
 
     let tracker = crate::agents::background_tracker::BackgroundAgentTracker::global();

@@ -37,9 +37,11 @@ pub fn publish_plugin_subagents(agents: Vec<AgentDef>) {
 /// Snapshot the currently-published plugin sub-agent definitions.
 #[must_use]
 pub fn plugin_subagents() -> Arc<[AgentDef]> {
-    Arc::clone(&plugin_subagents_lock()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner))
+    Arc::clone(
+        &plugin_subagents_lock()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Registry for managing agent definitions

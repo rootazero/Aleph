@@ -328,11 +328,8 @@ mod tests {
         assert_eq!(live, "You are Aleph, calm and precise.");
 
         // identity.get now returns it.
-        let get_resp = handle_get(
-            JsonRpcRequest::with_id("identity.get", None, json!(2)),
-            ctx,
-        )
-        .await;
+        let get_resp =
+            handle_get(JsonRpcRequest::with_id("identity.get", None, json!(2)), ctx).await;
         let r = get_resp.result.unwrap();
         assert_eq!(r["soul_md"], "You are Aleph, calm and precise.");
         assert_eq!(r["has_custom_identity"], true);
@@ -354,13 +351,10 @@ mod tests {
         )
         .await;
 
-        let r = handle_get(
-            JsonRpcRequest::with_id("identity.get", None, json!(2)),
-            ctx,
-        )
-        .await
-        .result
-        .unwrap();
+        let r = handle_get(JsonRpcRequest::with_id("identity.get", None, json!(2)), ctx)
+            .await
+            .result
+            .unwrap();
         assert_eq!(r["parsed"]["identity"], "I am a test soul");
         assert_eq!(r["parsed"]["relationship"], "peer");
     }
@@ -369,11 +363,7 @@ mod tests {
     async fn set_missing_content_is_invalid() {
         let tmp = TempDir::new().unwrap();
         let ctx = ctx_with_agent(tmp.path(), "main");
-        let resp = handle_set(
-            JsonRpcRequest::with_id("identity.set", None, json!(1)),
-            ctx,
-        )
-        .await;
+        let resp = handle_set(JsonRpcRequest::with_id("identity.set", None, json!(1)), ctx).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }

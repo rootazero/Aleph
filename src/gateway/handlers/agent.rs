@@ -759,7 +759,6 @@ pub async fn handle_list(request: JsonRpcRequest, router: Arc<AgentRouter>) -> J
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1272,7 +1271,10 @@ mod tests {
         let err = build_run_request("run-bad-mode".to_string(), &session_key, params, None)
             .await
             .expect_err("an unknown mode must not silently fall back");
-        assert!(err.contains("game"), "error should name the bad mode: {err}");
+        assert!(
+            err.contains("game"),
+            "error should name the bad mode: {err}"
+        );
     }
 
     #[tokio::test]

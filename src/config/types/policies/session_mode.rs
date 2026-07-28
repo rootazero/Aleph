@@ -43,13 +43,7 @@ pub const MODE_SESSION_KEY: &str = "session_mode";
 /// here — chat *defers* it entirely, see `CHAT_DEFER_FAMILIES`, so a core
 /// subtraction would be dead.) `subagent` and `get_tool_schema` are never
 /// subtracted — see `default_core_tools`'s snapshot-exemption invariant.
-const CHAT_CORE_SUBTRACT: &[&str] = &[
-    "bash",
-    "code_exec",
-    "file_write",
-    "file_edit",
-    "file_ops",
-];
+const CHAT_CORE_SUBTRACT: &[&str] = &["bash", "code_exec", "file_write", "file_edit", "file_ops"];
 
 /// Dev tools *added* to the schema-resident core set in Code mode (on top of
 /// whatever `[tools] core` configures).
@@ -458,7 +452,7 @@ mod tests {
             "file_read",
             "session_send",
             "skill_read",
-            "bash", // collapsed out of core, but still listed
+            "bash",             // collapsed out of core, but still listed
             "media_understand", // users paste images into chat — carve-out
             // Handing the user a finished document is a conversational outcome
             // as much as a working one ("write this up as a report"), and the

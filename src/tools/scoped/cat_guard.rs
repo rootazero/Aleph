@@ -186,15 +186,14 @@ fn classify_against_roots(
 /// `strip_prefix`-match a plainly-built skill root. Best-effort by design
 /// (symlinks are not resolved): this feeds an advisory, not a security check.
 fn resolve_candidate(raw: &str) -> Option<PathBuf> {
-    let expanded: PathBuf = if let Some(rest) =
-        raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
-    {
-        crate::utils::paths::get_home_dir().ok()?.join(rest)
-    } else if raw == "~" {
-        crate::utils::paths::get_home_dir().ok()?
-    } else {
-        PathBuf::from(raw)
-    };
+    let expanded: PathBuf =
+        if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+            crate::utils::paths::get_home_dir().ok()?.join(rest)
+        } else if raw == "~" {
+            crate::utils::paths::get_home_dir().ok()?
+        } else {
+            PathBuf::from(raw)
+        };
     let abs = if expanded.is_absolute() {
         expanded
     } else {
@@ -396,9 +395,7 @@ mod tests {
         // file_read with a non-skill path → no steer (pre-filter short-circuits).
         assert!(skill_read_steer("file_read", &json!({"path": "/etc/hosts"})).is_none());
         // A shell command with no read verb → no steer.
-        assert!(
-            skill_read_steer("bash", &json!({"cmd": "ls ~/.aleph/skills"})).is_none()
-        );
+        assert!(skill_read_steer("bash", &json!({"cmd": "ls ~/.aleph/skills"})).is_none());
         // A search verb on a non-skill file → no steer (deterministic: the
         // operand fails `plausibly_skill_path` before any FS classification).
         assert!(skill_read_steer("bash", &json!({"cmd": "grep foo /etc/passwd"})).is_none());

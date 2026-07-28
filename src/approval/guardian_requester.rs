@@ -538,8 +538,12 @@ mod tests {
         }
         assert_eq!(b.state, BreakerState::Open);
         // Force the cooldown to have elapsed by back-dating `opened_at`.
-        b.opened_at = Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
-        assert!(b.allows(), "cooldown elapsed ⇒ one probe allowed (half-open)");
+        b.opened_at =
+            Instant::now().checked_sub(GUARDIAN_BREAKER_COOLDOWN + Duration::from_secs(1));
+        assert!(
+            b.allows(),
+            "cooldown elapsed ⇒ one probe allowed (half-open)"
+        );
         assert_eq!(b.state, BreakerState::HalfOpen);
         // A failed probe immediately reopens (no threshold on half-open).
         b.record_failure();
@@ -556,7 +560,12 @@ mod tests {
             &self,
             _payload: RequestPayload<'_>,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>,
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
         > {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Err(crate::error::AlephError::provider("mock provider down")) })
@@ -624,7 +633,12 @@ mod tests {
             &self,
             payload: RequestPayload<'_>,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>,
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
         > {
             *self.seen.lock().unwrap() = payload.system_prompt.map(str::to_string);
             Box::pin(async {

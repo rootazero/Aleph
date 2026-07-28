@@ -417,7 +417,9 @@ impl From<&crate::gateway::interfaces::telegram::TelegramConfigV2> for ChannelCo
         };
 
         let account = cfg.accounts.first();
-        let dm_policy = account.and_then(|a| a.dm_policy.clone()).unwrap_or_default();
+        let dm_policy = account
+            .and_then(|a| a.dm_policy.clone())
+            .unwrap_or_default();
         let group_policy = account
             .and_then(|a| a.group_policy.clone())
             .unwrap_or_default();

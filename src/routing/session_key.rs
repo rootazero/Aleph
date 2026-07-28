@@ -275,8 +275,12 @@ impl SessionKey {
     pub fn with_epoch(&self, epoch: u32) -> Self {
         let mut cloned = self.clone();
         match cloned {
-            Self::Main { epoch: ref mut e, .. } => *e = epoch,
-            Self::DirectMessage { epoch: ref mut e, .. } => *e = epoch,
+            Self::Main {
+                epoch: ref mut e, ..
+            } => *e = epoch,
+            Self::DirectMessage {
+                epoch: ref mut e, ..
+            } => *e = epoch,
             _ => {}
         }
         cloned

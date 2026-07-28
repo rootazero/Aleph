@@ -1204,11 +1204,8 @@ impl NoteStore for SqliteMemoryBackend {
         for t in vec::ALL_NOTES_VEC_TABLES {
             // Table name comes from an internal static allowlist (`ALL_NOTES_VEC_TABLES`).
             // rust-doctor-disable-next-line sql-injection-risk
-            conn.execute(
-                &format!("DELETE FROM {t} WHERE rowid = ?1"),
-                params![rowid],
-            )
-            .map_err(|e| AlephError::config(format!("upsert_embedding delete vec {t}: {e}")))?;
+            conn.execute(&format!("DELETE FROM {t} WHERE rowid = ?1"), params![rowid])
+                .map_err(|e| AlephError::config(format!("upsert_embedding delete vec {t}: {e}")))?;
         }
 
         // Insert new embedding
@@ -1952,10 +1949,7 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(out)
     }
 
-    async fn relation_type_counts(
-        &self,
-        agent_id: &str,
-    ) -> Result<Vec<(String, i64)>, AlephError> {
+    async fn relation_type_counts(&self, agent_id: &str) -> Result<Vec<(String, i64)>, AlephError> {
         let conn = lock_conn!(self)?;
         let mut stmt = conn
             .prepare(
@@ -1973,7 +1967,9 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("relation_type_counts query: {e}")))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("relation_type_counts row: {e}")))?);
+            out.push(
+                row.map_err(|e| AlephError::config(format!("relation_type_counts row: {e}")))?,
+            );
         }
         Ok(out)
     }

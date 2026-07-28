@@ -210,13 +210,12 @@ impl A2ARequestProcessor {
             }
             match serde_json::from_value::<InlinePushConfig>(push_params) {
                 Ok(inline) => {
-                    let push_config =
-                        crate::a2a::service::notification::PushNotificationConfig {
-                            task_id: task_id.clone(),
-                            url: inline.url,
-                            token: inline.token,
-                            events: inline.events,
-                        };
+                    let push_config = crate::a2a::service::notification::PushNotificationConfig {
+                        task_id: task_id.clone(),
+                        url: inline.url,
+                        token: inline.token,
+                        events: inline.events,
+                    };
                     if let Err(e) = self.state.notification.set_config(push_config).await {
                         return JsonRpcResponse::from_a2a_error(request.id, &e);
                     }
@@ -994,8 +993,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn message_send_generates_task_id_registers_push_config_under_generated_id()
-         {
+        async fn message_send_generates_task_id_registers_push_config_under_generated_id() {
             let state = make_state();
             let processor = A2ARequestProcessor::new(Arc::clone(&state));
             let request = JsonRpcRequest {

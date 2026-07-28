@@ -42,7 +42,6 @@ pub mod config_audit;
 pub mod config_guide;
 pub mod crawl4ai;
 pub mod cron_manage;
-pub mod hooks_manage;
 pub mod ctx_search;
 pub mod desktop;
 pub mod doctor;
@@ -55,6 +54,7 @@ pub mod goal;
 pub mod google_meet;
 pub mod governance_metrics;
 pub mod heartbeat_manage;
+pub mod hooks_manage;
 pub mod hub;
 pub mod list_models;
 pub mod loop_graph_manage;
@@ -123,38 +123,37 @@ pub use acp_tools::{
 pub use agent_identity::{AgentIdentityArgs, AgentIdentityTool};
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
-    AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs,
-    AgentListInfo, AgentListOutput, AgentListTool, AgentSwitchArgs, AgentSwitchOutput,
-    AgentSwitchTool, SessionContext, SessionContextHandle,
+    AgentDeleteTool, AgentInfoArgs, AgentInfoOutput, AgentInfoTool, AgentListArgs, AgentListInfo,
+    AgentListOutput, AgentListTool, AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool,
+    SessionContext, SessionContextHandle,
 };
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use browser_tools::{
     BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserConsoleArgs,
     BrowserConsoleOutput, BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput,
-    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool,
-    BrowserDragArgs, BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs,
-    BrowserEmulateOutput, BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput,
-    BrowserEvaluateTool, BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool,
-    BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool, BrowserNavigateArgs,
-    BrowserNavigateOutput, BrowserNavigateTool, BrowserNetworkArgs, BrowserNetworkOutput,
-    BrowserNetworkTool, BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool,
-    BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool, BrowserPressKeyArgs,
-    BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs, BrowserProfileOutput,
-    BrowserProfileTool, BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool,
-    BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs,
-    BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput,
-    BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool,
-    BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs,
-    BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput,
-    BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
+    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs,
+    BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput,
+    BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool,
+    BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool, BrowserHoverArgs,
+    BrowserHoverOutput, BrowserHoverTool, BrowserNavigateArgs, BrowserNavigateOutput,
+    BrowserNavigateTool, BrowserNetworkArgs, BrowserNetworkOutput, BrowserNetworkTool,
+    BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput,
+    BrowserPdfTool, BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool,
+    BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool, BrowserResizeArgs,
+    BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput,
+    BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool,
+    BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs,
+    BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput,
+    BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs,
+    BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool,
     BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool,
-};
-pub use channel_manage::{
-    ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
 };
 pub use channel_directory::{
     ChannelDirectoryArgs, ChannelDirectoryEntry, ChannelDirectoryOutput, ChannelDirectoryTool,
+};
+pub use channel_manage::{
+    ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
 };
 pub use channel_message::{
     ChannelMessageAction, ChannelMessageArgs, ChannelMessageOutput, ChannelMessageTool,
@@ -166,7 +165,6 @@ pub use config_guide::{
     GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool,
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
-pub use hooks_manage::{HooksAction, HooksManageArgs, HooksManageOutput, HooksManageTool};
 pub use ctx_search::{CtxSearchArgs, CtxSearchOutput, CtxSearchTool};
 pub use desktop::{
     DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
@@ -201,6 +199,7 @@ pub use heartbeat_manage::{
     HeartbeatReportTool, HeartbeatToggleArgs, HeartbeatToggleOutput, HeartbeatToggleTool,
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
+pub use hooks_manage::{HooksAction, HooksManageArgs, HooksManageOutput, HooksManageTool};
 pub use hub::*;
 pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use loop_graph_manage::{LoopGraphAction, LoopGraphArgs, LoopGraphOutput, LoopGraphTool};
@@ -259,9 +258,7 @@ pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,
     VoiceModeSetTool,
 };
-pub use web_fetch::{
-    ExtractMode, Extractor, WebFetchArgs, WebFetchResult, WebFetchTool,
-};
+pub use web_fetch::{ExtractMode, Extractor, WebFetchArgs, WebFetchResult, WebFetchTool};
 
 // ============================================================================
 // Tool Progress Callback System

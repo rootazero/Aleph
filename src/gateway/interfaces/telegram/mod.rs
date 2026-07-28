@@ -40,9 +40,9 @@ pub use config_v2::TelegramConfigV2;
 pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
-    ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    MessageMeta, OutboundMessage, SendResult, UserId,
 };
 use crate::sync_primitives::{Arc, Ordering};
 use access::AccessDecision;

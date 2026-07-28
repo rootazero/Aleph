@@ -91,8 +91,7 @@ pub(super) async fn get_task_journal(
             let next_raw: String = row.get(5)?;
             let confidence_i: Option<i64> = row.get(6)?;
             let decisions = decode_journal_field(task_id, "decisions", &decisions_raw);
-            let artifacts_ref =
-                decode_journal_field(task_id, "artifacts_ref", &artifacts_raw);
+            let artifacts_ref = decode_journal_field(task_id, "artifacts_ref", &artifacts_raw);
             let next_steps = decode_journal_field(task_id, "next_steps", &next_raw);
             Ok(crate::agents::swarm::tasks::TaskExitJournal {
                 task_id: row.get(0)?,
@@ -135,8 +134,7 @@ pub(super) async fn list_team_journals(
             let confidence_i: Option<i64> = row.get(6)?;
             let row_task_id: String = row.get(0)?;
             let decisions = decode_journal_field(&row_task_id, "decisions", &decisions_raw);
-            let artifacts_ref =
-                decode_journal_field(&row_task_id, "artifacts_ref", &artifacts_raw);
+            let artifacts_ref = decode_journal_field(&row_task_id, "artifacts_ref", &artifacts_raw);
             let next_steps = decode_journal_field(&row_task_id, "next_steps", &next_raw);
             Ok(crate::agents::swarm::tasks::TaskExitJournal {
                 task_id: row_task_id,

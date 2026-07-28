@@ -130,11 +130,7 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
         ToolSource::Custom { .. } => CommandContext::Custom {
             system_prompt: tool.routing_system_prompt.clone(),
             provider: None, // Provider is resolved at routing time
-            pattern: tool
-                .routing_regex
-                .as_ref()
-                .unwrap_or(&tool.name)
-                .clone(),
+            pattern: tool.routing_regex.as_ref().unwrap_or(&tool.name).clone(),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {
             // Plugin tools live in the tool registry under their namespaced id

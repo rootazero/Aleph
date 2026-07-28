@@ -422,8 +422,8 @@ mod delegation_tests {
         let dec = g.evaluate_tool_call("bash_exec", &args).await;
         match dec {
             GuardrailDecision::Sanitize(rep) => {
-                let parsed: Value = serde_json::from_str(&rep.text)
-                    .expect("sanitized args must reparse as JSON");
+                let parsed: Value =
+                    serde_json::from_str(&rep.text).expect("sanitized args must reparse as JSON");
                 assert_eq!(
                     parsed["command"].as_str(),
                     Some(format!("echo {SPECIAL_SECRET}").as_str()),

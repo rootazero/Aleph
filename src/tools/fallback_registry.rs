@@ -229,7 +229,9 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
     match (family, kind) {
         (
             ToolFamily::Network,
-            ToolErrorKind::Unauthorized | ToolErrorKind::RateLimited | ToolErrorKind::BlockedByPolicy,
+            ToolErrorKind::Unauthorized
+            | ToolErrorKind::RateLimited
+            | ToolErrorKind::BlockedByPolicy,
         ) => vec![
             S::new("search", "find a different source via search"),
             S::new("web_fetch", "fetch an alternate canonical URL directly"),
@@ -244,13 +246,12 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
             "approach the goal from a different source",
         )],
 
-        (
-            ToolFamily::File,
-            ToolErrorKind::UpstreamNotFound | ToolErrorKind::Execution,
-        ) => vec![S::new(
-            "file_ops",
-            "stat / list the directory to confirm the path",
-        )],
+        (ToolFamily::File, ToolErrorKind::UpstreamNotFound | ToolErrorKind::Execution) => {
+            vec![S::new(
+                "file_ops",
+                "stat / list the directory to confirm the path",
+            )]
+        }
         (ToolFamily::File, _) => Vec::new(),
 
         (ToolFamily::Exec, ToolErrorKind::Timeout) => vec![S::new(

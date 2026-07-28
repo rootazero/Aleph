@@ -336,8 +336,7 @@ impl KnowledgeNote {
                 if !body.is_empty() && !body.ends_with('\n') {
                     body.push('\n');
                 }
-                let link_strs: Vec<String> =
-                    missing.iter().map(|l| format!("[[{l}]]")).collect();
+                let link_strs: Vec<String> = missing.iter().map(|l| format!("[[{l}]]")).collect();
                 body.push('\n');
                 body.push_str(&format!("Related: {}\n", link_strs.join(" ")));
             }

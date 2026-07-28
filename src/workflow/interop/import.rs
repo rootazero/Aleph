@@ -166,6 +166,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                 }
             }
             ScanEvent::Agent(call) => {
+                let call = *call;
                 let i = steps.len();
                 // An explicit `phase:` opt on the agent() call wins over the
                 // active `phase()` marker: the engineering format gives per-agent
@@ -680,14 +681,14 @@ fn resolve_schema_ref(opts: &mut AgentOpts, raw: &str, consts: &ConstTable) {
         }
         // The name resolves, but not to an object/array — not a usable schema.
         Some(_) => {
-            opts.schema_dropped =
-                Some(format!("const '{raw}' is not an object/array schema — not imported"));
+            opts.schema_dropped = Some(format!(
+                "const '{raw}' is not an object/array schema — not imported"
+            ));
         }
         // A bare non-object literal (`schema: 42` / `true` / `null`) versus a
         // genuine unknown identifier — distinct diagnostics either way (P7).
         None => {
-            let is_literal =
-                raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
+            let is_literal = raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
             opts.schema_dropped = Some(if is_literal {
                 format!("non-object schema literal '{raw}' not imported")
             } else {
@@ -809,7 +810,9 @@ enum ScanEvent {
     /// A `phase("title")` marker — the title of its string-literal argument.
     Phase(String),
     /// An `agent("prompt", { opts })` call — the prompt plus any recovered opts.
-    Agent(AgentCall),
+    /// Boxed because `AgentOpts` dwarfs every other variant, and the whole
+    /// `Vec<ScanEvent>` would otherwise be padded up to its width.
+    Agent(Box<AgentCall>),
     /// A `clarify("question", ["a", "b"])` call (an Aleph extension to the
     /// `.workflow.js` vocabulary) — the question plus any literal choices.
     Clarify(ClarifyCall),
@@ -907,7 +910,7 @@ fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
                         "agent" => {
                             if let Some((prompt, end)) = read_agent_prompt(after, 0) {
                                 let opts = read_agent_opts(after, end, consts);
-                                events.push(ScanEvent::Agent(AgentCall { prompt, opts }));
+                                events.push(ScanEvent::Agent(Box::new(AgentCall { prompt, opts })));
                             } else {
                                 // A non-literal prompt (`agent(promptVar)`,
                                 // `buildPrompt(u)`, a `.map` expression) is

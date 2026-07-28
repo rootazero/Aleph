@@ -162,7 +162,10 @@ mod tests {
         let out = crate::builtin_tools::browser_tools::process_evaluate_result(&manager, raw);
         let s = unwrap_string(&out);
         assert!(!s.contains("sk-ant-api03"), "raw key must be gone: {s}");
-        assert!(!s.contains("AKIAIOSFODNN7EXAMPLE"), "nested AWS key must be gone: {s}");
+        assert!(
+            !s.contains("AKIAIOSFODNN7EXAMPLE"),
+            "nested AWS key must be gone: {s}"
+        );
         assert!(s.contains("[REDACTED:api_key]"));
         assert_eq!(s.matches("[REDACTED:").count(), 2);
         assert!(s.starts_with("<<<EXTERNAL_UNTRUSTED_CONTENT"));
@@ -217,8 +220,10 @@ mod tests {
     #[test]
     fn process_evaluate_result_wraps_non_json_text() {
         let manager = fresh_manager();
-        let out =
-            crate::builtin_tools::browser_tools::process_evaluate_result(&manager, "not json at all");
+        let out = crate::builtin_tools::browser_tools::process_evaluate_result(
+            &manager,
+            "not json at all",
+        );
         let s = unwrap_string(&out);
         assert!(s.contains("<<<EXTERNAL_UNTRUSTED_CONTENT"));
         assert!(s.contains("not json at all"));

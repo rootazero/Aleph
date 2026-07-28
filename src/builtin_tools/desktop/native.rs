@@ -1054,7 +1054,9 @@ impl super::DesktopTool {
                 }
                 let (modifiers, main_key) = keys.split_at(keys.len() - 1);
                 let modifiers: Vec<String> = modifiers.to_vec();
-                let key = main_key.first().expect("invariant: main_key has exactly one element after split");
+                let key = main_key
+                    .first()
+                    .expect("invariant: main_key has exactly one element after split");
                 let result = match rail {
                     Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, key).await,
                     Rail::Global => screen.key_combo(&modifiers, key).await,

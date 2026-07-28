@@ -770,4 +770,50 @@ mod tests {
             RetryVerdict::CompactAndRetry { .. }
         ));
     }
+#[tokio::test]
+    async fn test_retry_exhausted_rate_limit() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+
+        let c = counter.clone();
+        let result: anyhow::Result<i32> = retry_async(
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(anyhow::anyhow!("429 rate limit exceeded"))
+                }
+            },
+            &cancel,
+            2,
+        )
+        .await;
+
+        assert!(result.is_err());
+        // 429 is now Fallback — not retried by retry_async, only 1 attempt
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhausted_account_rate_limit() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+
+        let c = counter.clone();
+        let result: anyhow::Result<i32> = retry_async(
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(anyhow::anyhow!("429 account quota exceeded"))
+                }
+            },
+            &cancel,
+            2,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
 }

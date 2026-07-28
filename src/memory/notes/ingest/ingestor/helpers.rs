@@ -369,7 +369,10 @@ mod tests {
             evidence_source_ids: vec!["raw-1".into()],
         };
         let c = candidate_from_pageop("default", &op).expect("Contradict must be gated");
-        assert!(c.contradicts_existing, "must route to the gate's Defer path");
+        assert!(
+            c.contradicts_existing,
+            "must route to the gate's Defer path"
+        );
         assert_eq!(c.note.category, "reference");
         assert_eq!(c.note.facts, vec!["tokio is not single-threaded"]);
         let replay = c.replay_op.expect("must carry the original op for replay");

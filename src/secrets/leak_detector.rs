@@ -256,9 +256,7 @@ impl LeakDetector {
         for (label, pattern) in LEAK_PATTERNS.iter() {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
-                redacted = pattern
-                    .replace_all(&redacted, REDACTED_LEAK)
-                    .to_string();
+                redacted = pattern.replace_all(&redacted, REDACTED_LEAK).to_string();
             }
         }
 
@@ -317,8 +315,10 @@ impl LeakDetector {
         // Check hash-based detection for content fragments
         for word in content.split_whitespace() {
             if word.len() >= 8 {
-                let mut hasher =
-                    siphasher::sip::SipHasher::new_with_keys(INJECTED_HASH_KEY0, INJECTED_HASH_KEY1);
+                let mut hasher = siphasher::sip::SipHasher::new_with_keys(
+                    INJECTED_HASH_KEY0,
+                    INJECTED_HASH_KEY1,
+                );
                 word.hash(&mut hasher);
                 let hash = hasher.finish();
                 if self.injected_hashes.contains(&hash) {
@@ -469,7 +469,11 @@ mod tests {
             .iter()
             .find(|(_, re)| re.is_match(b"-----BEGIN PRIVATE KEY-----"))
             .map(|(name, _)| *name);
-        assert_eq!(matched, Some("private_key"), "bare PKCS#8 header must match");
+        assert_eq!(
+            matched,
+            Some("private_key"),
+            "bare PKCS#8 header must match"
+        );
         assert!(is_block_class_secret("private_key"));
         // Algorithm-tagged variants must still match — no regression.
         assert!(default_patterns_bytes()

@@ -308,7 +308,11 @@ impl BashExecTool {
             // `execute` directly, bypassing the clamp in `AlephTool::call`.
             let result = crate::approval::with_call_identity(identity, async move {
                 match sid {
-                    Some(sid) => SESSION_ID.scope(sid, inner.call_unclamped(code_exec_args)).await,
+                    Some(sid) => {
+                        SESSION_ID
+                            .scope(sid, inner.call_unclamped(code_exec_args))
+                            .await
+                    }
                     None => inner.call_unclamped(code_exec_args).await,
                 }
             })

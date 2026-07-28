@@ -139,10 +139,7 @@ mod tests {
         let manager = temp_manager();
         let mut registry = HandlerRegistry::empty();
         register_handlers(&mut registry, manager);
-        for m in [
-            "exec.approval.resolve",
-            "exec.approvals.pending",
-        ] {
+        for m in ["exec.approval.resolve", "exec.approvals.pending"] {
             assert!(registry.has_method(m), "method {m} not registered");
         }
     }

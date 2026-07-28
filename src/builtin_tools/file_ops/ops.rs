@@ -274,12 +274,7 @@ pub async fn execute_copy(
         // symlink whose canonical target is a protected credential store is
         // skipped rather than followed and copied out.
         let mut visited = std::collections::HashSet::new();
-        copy_dir_recursive(
-            &from_canonical,
-            &to_canonical,
-            denied_paths,
-            &mut visited,
-        )?
+        copy_dir_recursive(&from_canonical, &to_canonical, denied_paths, &mut visited)?
     };
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
@@ -395,9 +390,9 @@ pub async fn execute_delete(
     // `symlink_metadata` (lstat) never follows the final component, so a
     // dangling or dir-pointing symlink is still detected as present and as a
     // symlink.
-    let lmeta = canonical.symlink_metadata().map_err(|_| {
-        ToolError::Execution(format!("Path not found: {}", path.display()))
-    })?;
+    let lmeta = canonical
+        .symlink_metadata()
+        .map_err(|_| ToolError::Execution(format!("Path not found: {}", path.display())))?;
     let is_symlink = lmeta.file_type().is_symlink();
     let is_dir = !is_symlink && lmeta.is_dir();
     let items_deleted = if is_symlink {

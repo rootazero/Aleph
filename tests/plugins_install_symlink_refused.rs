@@ -26,11 +26,7 @@ fn plugins_install_rejects_symlinked_destination() {
 
     let bin = env!("CARGO_BIN_EXE_aleph-server");
     let out = Command::new(bin)
-        .args([
-            "plugins",
-            "install",
-            "https://example.invalid/repo.git",
-        ])
+        .args(["plugins", "install", "https://example.invalid/repo.git"])
         .env("HOME", &home)
         .env("ALEPH_HOME", home.join(".aleph"))
         .stdout(Stdio::piped())

@@ -914,10 +914,7 @@ impl BackgroundAgentTracker {
             .get(request_id)
             .map(|c| {
                 let start = c.progress_tail.len().saturating_sub(limit);
-                c.progress_tail
-                    .get(start..)
-                    .unwrap_or_default()
-                    .to_vec()
+                c.progress_tail.get(start..).unwrap_or_default().to_vec()
             })
             .unwrap_or_default()
     }
@@ -1036,14 +1033,28 @@ mod tests {
         let tracker = Arc::new(BackgroundAgentTracker::new());
         let leader = "agent:leader:main";
         let _r1 = RunningRegistration::register(
-            Arc::clone(&tracker), "run-A".to_string(), CancellationToken::new(),
+            Arc::clone(&tracker),
+            "run-A".to_string(),
+            CancellationToken::new(),
             "member A".to_string(),
-            SpawnMeta { parent_id: None, depth: 1, root_session: leader.to_string(), model: None },
+            SpawnMeta {
+                parent_id: None,
+                depth: 1,
+                root_session: leader.to_string(),
+                model: None,
+            },
         );
         let _r2 = RunningRegistration::register(
-            Arc::clone(&tracker), "run-B".to_string(), CancellationToken::new(),
+            Arc::clone(&tracker),
+            "run-B".to_string(),
+            CancellationToken::new(),
             "unrelated".to_string(),
-            SpawnMeta { parent_id: None, depth: 1, root_session: "agent:other:main".to_string(), model: None },
+            SpawnMeta {
+                parent_id: None,
+                depth: 1,
+                root_session: "agent:other:main".to_string(),
+                model: None,
+            },
         );
         let mut ids = tracker.running_runs_of_session(leader);
         ids.sort();

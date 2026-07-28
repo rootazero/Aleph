@@ -247,10 +247,19 @@ mod tests {
         let resp = handle_list_insights(req, db).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         let v = resp.result.expect("result payload");
-        let runs = v.get("runs").and_then(|r| r.as_array()).expect("runs array");
-        let run = runs.iter().find(|r| r["id"] == "d1").expect("the inserted run");
+        let runs = v
+            .get("runs")
+            .and_then(|r| r.as_array())
+            .expect("runs array");
+        let run = runs
+            .iter()
+            .find(|r| r["id"] == "d1")
+            .expect("the inserted run");
         let evo = &run["evolution"];
-        assert!(evo.is_object(), "evolution must parse back to an object: {run}");
+        assert!(
+            evo.is_object(),
+            "evolution must parse back to an object: {run}"
+        );
         assert_eq!(evo["outcome"], "accept_new_best");
         assert_eq!(evo["candidate"], 0.72);
     }

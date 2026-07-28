@@ -299,10 +299,8 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 // Canonicalize at the queue boundary so add_link's
                 // append_to_note (which re-splits with sanitize-only) writes the
                 // link on the canonical note instead of a phantom plural one.
-                self.pending_links.push((
-                    canonicalize_note_path(from),
-                    canonicalize_note_path(to),
-                ));
+                self.pending_links
+                    .push((canonicalize_note_path(from), canonicalize_note_path(to)));
             }
             PageOp::Supersede { old_path, new_path } => {
                 // Canonicalize both so the read (old) and the embedded
@@ -668,7 +666,10 @@ mod tests {
         assert_eq!(canonicalize_note_path("projects/foo"), "project/foo");
         assert_eq!(canonicalize_note_path("project/foo"), "project/foo");
         // Filename is untouched (even if it contains no further slash logic).
-        assert_eq!(canonicalize_note_path("entities/my-thing"), "entity/my-thing");
+        assert_eq!(
+            canonicalize_note_path("entities/my-thing"),
+            "entity/my-thing"
+        );
         // Pathological / prefix-less inputs pass through unchanged.
         assert_eq!(canonicalize_note_path("noslash"), "noslash");
     }

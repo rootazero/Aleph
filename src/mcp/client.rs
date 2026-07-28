@@ -293,8 +293,7 @@ impl McpClient {
         let mut best: Option<&Arc<McpServerConnection>> = None;
         for (id, conn) in servers {
             let prefix = format!("{id}:");
-            if name.starts_with(&prefix)
-                && best.as_ref().is_none_or(|b| b.name().len() < id.len())
+            if name.starts_with(&prefix) && best.as_ref().is_none_or(|b| b.name().len() < id.len())
             {
                 best = Some(conn);
             }
@@ -491,7 +490,11 @@ impl McpClient {
         // handshake. Lenient: only an unambiguous HTML response is rejected.
         crate::mcp::preflight_remote_url(&config.url, &config.headers).await?;
 
-        let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_REMOTE_TIMEOUT_SECS));
+        let timeout = Duration::from_secs(
+            config
+                .timeout_seconds
+                .unwrap_or(DEFAULT_REMOTE_TIMEOUT_SECS),
+        );
 
         let transport: Arc<dyn McpTransport> = match config.transport {
             TransportPreference::Http => {

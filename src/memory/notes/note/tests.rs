@@ -831,7 +831,8 @@ tags: []
 
     #[test]
     fn legacy_day_granular_dates_still_parse() {
-        let md = "---\ncategory: skill\ncreated: \"2026-04-29\"\nupdated: \"2026-04-29\"\n---\n\n- f\n";
+        let md =
+            "---\ncategory: skill\ncreated: \"2026-04-29\"\nupdated: \"2026-04-29\"\n---\n\n- f\n";
         let n = KnowledgeNote::from_markdown("legacy-dates", md).unwrap();
         assert!(n.created_at > 0);
         assert_eq!(n.created_at, n.updated_at);

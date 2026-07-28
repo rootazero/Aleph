@@ -260,8 +260,8 @@ impl BrowserSsrfGuard {
         &self,
         url_str: &str,
     ) -> Result<Option<String>, PolicyViolation> {
-        let url = url::Url::parse(url_str)
-            .map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
+        let url =
+            url::Url::parse(url_str).map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
 
         // Scheme floor (same policy as check_url): non-http/https schemes must
         // not produce a MAP rule even if the host would pass.
@@ -278,10 +278,7 @@ impl BrowserSsrfGuard {
         };
 
         // IP literal → no hostname to MAP.
-        if matches!(
-            url.host(),
-            Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))
-        ) {
+        if matches!(url.host(), Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))) {
             return Ok(None);
         }
 
@@ -425,7 +422,10 @@ mod tests {
 
         // Subdomain match
         assert!(
-            policy.check_url("https://payload.malware.com/x").await.is_err(),
+            policy
+                .check_url("https://payload.malware.com/x")
+                .await
+                .is_err(),
             "subdomain of blocked wildcard should be blocked"
         );
         // Bare domain match for wildcard
@@ -635,7 +635,10 @@ mod tests {
     #[tokio::test]
     async fn check_url_blocks_hostname_resolving_to_loopback() {
         let _lock = serial_test_lock();
-        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved(
+            "evil.example",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_url("http://evil.example/admin").await;
         assert!(
@@ -685,7 +688,9 @@ mod tests {
         let _lock = serial_test_lock();
         let _scope = install_resolved("aws.example", "169.254.169.254".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
-        let result = policy.check_url("http://aws.example/latest/meta-data/").await;
+        let result = policy
+            .check_url("http://aws.example/latest/meta-data/")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "cloud-metadata (169.254.169.254) resolution must be blocked — got {result:?}"
@@ -712,10 +717,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "mixed.example".to_string(),
-            vec![
-                "8.8.8.8".parse().unwrap(),
-                "127.0.0.1".parse().unwrap(),
-            ],
+            vec!["8.8.8.8".parse().unwrap(), "127.0.0.1".parse().unwrap()],
         );
         let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
@@ -741,7 +743,10 @@ mod tests {
     #[tokio::test]
     async fn check_navigation_blocks_hostname_resolving_to_loopback() {
         let _lock = serial_test_lock();
-        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved(
+            "evil.example",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
         let policy = BrowserSsrfGuard::default();
         let result = policy.check_navigation("https://evil.example/admin").await;
         assert!(
@@ -755,7 +760,10 @@ mod tests {
         // When block_private=false and no allow/blocklists, the policy is
         // disabled entirely — DNS validation is skipped (loopback reachable).
         let _lock = serial_test_lock();
-        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved(
+            "evil.example",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
@@ -812,9 +820,14 @@ mod tests {
         // Same DNS rejection floor as check_url: hostname → 127.0.0.1 is refused
         // before any MAP rule is built.
         let _lock = serial_test_lock();
-        let _scope = install_resolved("evil.example", std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let _scope = install_resolved(
+            "evil.example",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
         let policy = BrowserSsrfGuard::default();
-        let result = policy.pin_host_resolver_args("http://evil.example/admin").await;
+        let result = policy
+            .pin_host_resolver_args("http://evil.example/admin")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "hostname resolving to 127.0.0.1 must be blocked — got {result:?}"
@@ -826,7 +839,9 @@ mod tests {
         let _lock = serial_test_lock();
         let _scope = install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
-        let result = policy.pin_host_resolver_args("http://internal.corp/api").await;
+        let result = policy
+            .pin_host_resolver_args("http://internal.corp/api")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "RFC1918 10.0.0.0/8 resolution must be blocked — got {result:?}"
@@ -838,7 +853,9 @@ mod tests {
         let _lock = serial_test_lock();
         let _scope = install_resolved("aws.example", "169.254.169.254".parse().unwrap());
         let policy = BrowserSsrfGuard::default();
-        let result = policy.pin_host_resolver_args("http://aws.example/latest/meta-data/").await;
+        let result = policy
+            .pin_host_resolver_args("http://aws.example/latest/meta-data/")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "cloud-metadata resolution must be blocked — got {result:?}"
@@ -855,10 +872,7 @@ mod tests {
             .await
             .expect("public hostname must produce a MAP arg");
         let arg = result.expect("hostname should produce MAP arg");
-        assert!(
-            arg.starts_with("--host-resolver-rules="),
-            "arg = {arg}"
-        );
+        assert!(arg.starts_with("--host-resolver-rules="), "arg = {arg}");
         assert!(arg.contains("MAP good.example"), "arg = {arg}");
         assert!(arg.contains("8.8.8.8"), "arg = {arg}");
     }
@@ -872,10 +886,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "multi.example".to_string(),
-            vec![
-                "8.8.8.8".parse().unwrap(),
-                "1.1.1.1".parse().unwrap(),
-            ],
+            vec!["8.8.8.8".parse().unwrap(), "1.1.1.1".parse().unwrap()],
         );
         let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
@@ -896,7 +907,9 @@ mod tests {
     async fn pin_host_resolver_args_rejects_non_http_scheme() {
         // Scheme floor mirrors check_url: gopher:// must not produce a MAP.
         let policy = BrowserSsrfGuard::default();
-        let result = policy.pin_host_resolver_args("gopher://internal:6379/x").await;
+        let result = policy
+            .pin_host_resolver_args("gopher://internal:6379/x")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::InvalidUrl(_))),
             "non-http scheme must be rejected — got {result:?}"
@@ -915,14 +928,13 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "rebinding.example".to_string(),
-            vec![
-                "127.0.0.1".parse().unwrap(),
-                "127.0.0.2".parse().unwrap(),
-            ],
+            vec!["127.0.0.1".parse().unwrap(), "127.0.0.2".parse().unwrap()],
         );
         let _scope = install_resolved_multi(map);
         let policy = BrowserSsrfGuard::default();
-        let result = policy.pin_host_resolver_args("http://rebinding.example/").await;
+        let result = policy
+            .pin_host_resolver_args("http://rebinding.example/")
+            .await;
         assert!(
             matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
             "all-loopback rebinding must surface as PrivateNetwork — got {result:?}"

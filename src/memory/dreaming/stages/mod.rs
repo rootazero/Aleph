@@ -237,7 +237,10 @@ pub(crate) fn charge_distill_budget(
     if budget.try_spend(bytes) {
         None
     } else {
-        tracing::info!(stage, "edit budget exhausted; deferring destructive supersede");
+        tracing::info!(
+            stage,
+            "edit budget exhausted; deferring destructive supersede"
+        );
         Some(DistillActionRecord::from_action(
             stage,
             action,

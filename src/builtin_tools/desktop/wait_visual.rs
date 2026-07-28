@@ -100,7 +100,7 @@ pub async fn run_wait_visual(
         // pixels produce different bytes on each poll and `matched` stays
         // false even for a fully static UI. The caller's `timeout_ms` is
         // the safety net in that case. Subpixel jitter (animated cursor,
-// blinking caret) shows up as a diff and correctly prevents
+        // blinking caret) shows up as a diff and correctly prevents
         // false-positive stability on deterministic formats.
         let matched = match last_b64.as_ref() {
             Some(prev) => *prev == shot.image_base64,

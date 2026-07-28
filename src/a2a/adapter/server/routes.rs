@@ -180,18 +180,14 @@ async fn stream_message_send(
         }
         match serde_json::from_value::<InlinePushConfig>(push_params) {
             Ok(inline) => {
-                let push_config =
-                    crate::a2a::service::notification::PushNotificationConfig {
-                        task_id: task_id.clone(),
-                        url: inline.url,
-                        token: inline.token,
-                        events: inline.events,
-                    };
+                let push_config = crate::a2a::service::notification::PushNotificationConfig {
+                    task_id: task_id.clone(),
+                    url: inline.url,
+                    token: inline.token,
+                    events: inline.events,
+                };
                 if let Err(e) = state.notification.set_config(push_config).await {
-                    return sse_error(JsonRpcResponse::from_a2a_error(
-                        request.id.clone(),
-                        &e,
-                    ));
+                    return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
                 }
             }
             Err(e) => {
@@ -355,16 +351,16 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 
 /// Extract credentials from HTTP headers
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
-if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-            // RFC 7235: auth-scheme is case-insensitive
-            if let Some(prefix) = auth.get(..7) {
-                if prefix.eq_ignore_ascii_case("bearer ") {
-                    if let Some(token) = auth.get(7..) {
-                        return Credentials::BearerToken(token.to_string());
-                    }
+    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        // RFC 7235: auth-scheme is case-insensitive
+        if let Some(prefix) = auth.get(..7) {
+            if prefix.eq_ignore_ascii_case("bearer ") {
+                if let Some(token) = auth.get(7..) {
+                    return Credentials::BearerToken(token.to_string());
                 }
             }
         }
+    }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         return Credentials::ApiKey(key.to_string());
     }
@@ -594,9 +590,7 @@ mod tests {
 
     use crate::a2a::adapter::server::request_processor::A2AServerState;
     use crate::a2a::domain::security::TrustLevel;
-    use crate::a2a::domain::{
-        A2AMessage, ListTasksParams, ListTasksResult, SecurityScheme,
-    };
+    use crate::a2a::domain::{A2AMessage, ListTasksParams, ListTasksResult, SecurityScheme};
     use crate::a2a::port::authenticator::{
         A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
     };
@@ -609,10 +603,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl A2AAuthenticator for AllowAllAuth {
-        async fn authenticate(
-            &self,
-            _context: &A2AAuthContext,
-        ) -> A2AResult<A2AAuthPrincipal> {
+        async fn authenticate(&self, _context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
             Ok(A2AAuthPrincipal {
                 agent_id: None,
                 trust_level: TrustLevel::Local,
@@ -662,17 +653,11 @@ mod tests {
             Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
         }
 
-        async fn cancel_task(
-            &self,
-            task_id: &str,
-        ) -> A2AResult<crate::a2a::domain::A2ATask> {
+        async fn cancel_task(&self, task_id: &str) -> A2AResult<crate::a2a::domain::A2ATask> {
             Ok(crate::a2a::domain::A2ATask::new(task_id, "ctx-default"))
         }
 
-        async fn list_tasks(
-            &self,
-            _params: ListTasksParams,
-        ) -> A2AResult<ListTasksResult> {
+        async fn list_tasks(&self, _params: ListTasksParams) -> A2AResult<ListTasksResult> {
             Ok(ListTasksResult {
                 tasks: vec![],
                 next_cursor: None,
@@ -702,9 +687,8 @@ mod tests {
             _task_id: &str,
             _message: A2AMessage,
             _session_id: Option<&str>,
-        ) -> A2AResult<
-            Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>,
-        > {
+        ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>>
+        {
             Ok(Box::pin(futures::stream::empty()))
         }
     }
@@ -716,9 +700,8 @@ mod tests {
         async fn subscribe_all(
             &self,
             _task_id: &str,
-        ) -> A2AResult<
-            Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>,
-        > {
+        ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<crate::a2a::domain::UpdateEvent>> + Send>>>
+        {
             Ok(Box::pin(futures::stream::empty()))
         }
 

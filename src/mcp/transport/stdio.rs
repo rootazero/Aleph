@@ -821,7 +821,9 @@ mod tests {
         let _ = transport.close().await;
         std::env::remove_var("ALEPH_TEST_STDIO_API_KEY");
 
-        let contents = tokio::fs::read_to_string(tmp.path()).await.expect("read report");
+        let contents = tokio::fs::read_to_string(tmp.path())
+            .await
+            .expect("read report");
         assert_eq!(
             contents.trim(),
             "STRIPPED",
@@ -840,9 +842,8 @@ mod tests {
 
         std::env::set_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC", "passthrough_value");
 
-        let script = format!(
-            "printf '%s' \"${{ALEPH_TEST_STDIO_PASSTHROUGH_ABC-(unset)}}\" > {path}"
-        );
+        let script =
+            format!("printf '%s' \"${{ALEPH_TEST_STDIO_PASSTHROUGH_ABC-(unset)}}\" > {path}");
 
         let transport = StdioTransport::spawn(
             "test-passthrough",
@@ -866,7 +867,9 @@ mod tests {
         let _ = transport.close().await;
         std::env::remove_var("ALEPH_TEST_STDIO_PASSTHROUGH_ABC");
 
-        let contents = tokio::fs::read_to_string(tmp.path()).await.expect("read report");
+        let contents = tokio::fs::read_to_string(tmp.path())
+            .await
+            .expect("read report");
         assert_eq!(
             contents, "passthrough_value",
             "non-secret inherited env must pass through; got: {contents}"

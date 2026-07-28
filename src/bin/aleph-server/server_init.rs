@@ -85,9 +85,7 @@ fn spawn_queued_run<P, R>(
                     "{label} dropped: an explicit stop abandoned it while it was queued");
                 Some(alephcore::gateway::execution_engine::ExecutionError::Cancelled)
             }
-            DeliveryOutcome::Rejected | DeliveryOutcome::TimedOut => {
-                outcome.user_error(&agent_id)
-            }
+            DeliveryOutcome::Rejected | DeliveryOutcome::TimedOut => outcome.user_error(&agent_id),
         };
 
         let Some(e) = pending_error else {

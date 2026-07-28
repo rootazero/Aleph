@@ -21,6 +21,19 @@ use tracing::{debug, error, info, warn};
 /// The comparison deliberately resolves the home directory *without*
 /// `ALEPH_HOME`: an isolated test legitimately writes `$ALEPH_HOME/config.toml`
 /// in its own tempdir, and only the real file is off limits.
+///
+/// **Scope — this covers the lib-test target only.** `#[cfg(test)]` is set when
+/// the lib is compiled as its own test harness (`cargo test --lib`, which is
+/// also all CI runs). The integration binaries under `tests/` link a lib built
+/// *without* `cfg(test)`, so the guard is absent there — and
+/// [`crate::utils::paths::AlephHomeEnvGuard`] is itself `#[cfg(test)]
+/// pub(crate)`, so they could not reach it anyway. Today no `tests/*.rs` calls
+/// a persist branch in-process; the probes that do persist (`compactor_e2e_probe`,
+/// `provider_rpc_probe`) spawn a real `aleph-server` child and isolate it from
+/// the outside with `--config` / `ALEPH_HOME`, which is out of this guard's
+/// reach by construction. The first in-process one must isolate itself by
+/// setting `ALEPH_HOME` to a tempdir before the call (see
+/// `tests/config_effective_path.rs`); nothing below will catch it if it forgets.
 #[cfg(test)]
 fn reject_real_home_config(path: &Path, caller: &str) {
     let Ok(home) = crate::utils::paths::get_home_dir() else {

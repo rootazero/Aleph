@@ -161,7 +161,8 @@ impl MediaCache {
         }
 
         if let Some(content_length) = response.headers.get(reqwest::header::CONTENT_LENGTH) {
-            if let Some(content_length) = content_length.to_str().ok().and_then(|s| s.parse().ok()) {
+            if let Some(content_length) = content_length.to_str().ok().and_then(|s| s.parse().ok())
+            {
                 if content_length > MAX_FILE_SIZE {
                     return Err(CacheError::TooLarge {
                         size: content_length,
@@ -269,11 +270,12 @@ impl MediaCache {
                     id: id.clone(),
                     // rust-doctor-disable-next-line excessive-clone
                     mime_type: decoded_mime.unwrap_or_else(|| mime.clone()),
-                    filename: item
-                        .filename
-                        .as_deref()
-                        .map(|s| s.to_string())
-.or_else(|| Some(format!("{}.bin", id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)))),
+                    filename: item.filename.as_deref().map(|s| s.to_string()).or_else(|| {
+                        Some(format!(
+                            "{}.bin",
+                            id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)
+                        ))
+                    }),
                     size: Some(bytes.len() as u64),
                     url: None,
                     path: None,
@@ -324,11 +326,12 @@ impl MediaCache {
                 id: id.clone(),
                 // rust-doctor-disable-next-line excessive-clone
                 mime_type: mime.clone(),
-                filename: item
-                    .filename
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .or_else(|| Some(format!("{}.bin", id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)))),
+                filename: item.filename.as_deref().map(|s| s.to_string()).or_else(|| {
+                    Some(format!(
+                        "{}.bin",
+                        id.get(..FALLBACK_FILENAME_PREFIX_LEN).unwrap_or(&id)
+                    ))
+                }),
                 size: None,
                 // rust-doctor-disable-next-line excessive-clone
                 url: Some(item.url.clone()),

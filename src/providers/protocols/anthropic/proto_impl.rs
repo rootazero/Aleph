@@ -28,7 +28,9 @@ impl AnthropicProtocol {
         Self {
             client,
             name_map: Arc::new(RwLock::new(HashMap::new())),
-            stream_idle_timeout_secs: Arc::new(crate::sync_primitives::AtomicU64::new(crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS)),
+            stream_idle_timeout_secs: Arc::new(crate::sync_primitives::AtomicU64::new(
+                crate::providers::protocols::stream_idle::DEFAULT_STREAM_IDLE_SECS,
+            )),
         }
     }
 

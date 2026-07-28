@@ -38,10 +38,10 @@ pub mod web_fetch;
 pub use exec_tier::{
     builtin_tiers, effective_permission, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
-pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;
+pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use tool_permissions::ToolPermissionsConfig;
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 

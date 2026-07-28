@@ -144,24 +144,17 @@ impl NotificationService {
             reqwest::header::HeaderValue::from_static("application/json"),
         );
         if let Some(ref token) = config.token {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-            {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")) {
                 headers.insert(reqwest::header::AUTHORIZATION, value);
             }
         }
 
-        let fetch_request = crate::security::ssrf::SafeFetchRequest::post(
-            body,
-            std::time::Duration::from_secs(10),
-        )
-        .with_headers(headers);
+        let fetch_request =
+            crate::security::ssrf::SafeFetchRequest::post(body, std::time::Duration::from_secs(10))
+                .with_headers(headers);
 
-        match crate::security::ssrf::safe_fetch(
-            &config.url,
-            &SsrfPolicy::default(),
-            fetch_request,
-        )
-        .await
+        match crate::security::ssrf::safe_fetch(&config.url, &SsrfPolicy::default(), fetch_request)
+            .await
         {
             Ok(resp) if resp.status.is_success() => {
                 tracing::debug!(
@@ -440,10 +433,7 @@ mod tests {
     async fn set_config_rejects_url_with_credentials() {
         let svc = NotificationService::new();
         let err = svc
-            .set_config(config_with_url(
-                "t1",
-                "https://user:pass@example.com/hook",
-            ))
+            .set_config(config_with_url("t1", "https://user:pass@example.com/hook"))
             .await
             .expect_err("URL with embedded credentials must be rejected");
         assert!(matches!(

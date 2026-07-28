@@ -467,7 +467,9 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert!(
-            entries.iter().any(|n| n.starts_with("atomic_job-") && n.ends_with(".json")),
+            entries
+                .iter()
+                .any(|n| n.starts_with("atomic_job-") && n.ends_with(".json")),
             "expected atomic_job-<hash>.json in {entries:?}"
         );
         assert!(

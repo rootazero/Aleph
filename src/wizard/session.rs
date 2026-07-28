@@ -225,9 +225,7 @@ impl WizardSession {
                     }
                     // Channel closed while still Running — flow task
                     // terminated unexpectedly (likely panicked).
-                    _ => {
-                        WizardNextResult::error("Wizard flow terminated unexpectedly".to_string())
-                    }
+                    _ => WizardNextResult::error("Wizard flow terminated unexpectedly".to_string()),
                 }
             }
         }

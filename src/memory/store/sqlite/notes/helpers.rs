@@ -40,9 +40,8 @@ pub(crate) fn build_resolve_context(
     conn: &rusqlite::Connection,
     agent_id: &str,
 ) -> rusqlite::Result<crate::memory::notes::links::LinkResolveContext> {
-    let mut stmt = conn.prepare(
-        "SELECT path, filename, aliases_json FROM notes_index WHERE agent_id = ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT path, filename, aliases_json FROM notes_index WHERE agent_id = ?1")?;
     let entries = stmt
         .query_map(rusqlite::params![agent_id], |r| {
             Ok((
@@ -60,7 +59,9 @@ pub(crate) fn build_resolve_context(
             (path, filename, aliases)
         })
         .collect();
-    Ok(crate::memory::notes::links::LinkResolveContext::new(entries))
+    Ok(crate::memory::notes::links::LinkResolveContext::new(
+        entries,
+    ))
 }
 
 /// SHA-256 hex digest of a note's body text — used to gate `notes_fts` rewrites.

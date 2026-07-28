@@ -1113,7 +1113,10 @@ mod tests {
         let tool = ApplyPatchTool::new();
         let normal = Hunk {
             header: None,
-            lines: vec![HunkLine::Remove("keep".into()), HunkLine::Add("kept".into())],
+            lines: vec![
+                HunkLine::Remove("keep".into()),
+                HunkLine::Add("kept".into()),
+            ],
             eof_anchor: false,
         };
         let pure_add = Hunk {

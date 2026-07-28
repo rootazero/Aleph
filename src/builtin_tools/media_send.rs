@@ -80,14 +80,11 @@ impl AlephTool for MediaSendTool {
         let ssrf_policy = SsrfPolicy::default();
         for item in &args.items {
             if is_remote_fetch_url(&item.url) {
-                match validate_url_async(&item.url, &ssrf_policy).await {
-                    Err(e) => {
-                        return Err(crate::error::AlephError::tool(format!(
-                            "SSRF blocked for URL '{}': {}",
-                            item.url, e
-                        )));
-                    }
-                    Ok(_) => {}
+                if let Err(e) = validate_url_async(&item.url, &ssrf_policy).await {
+                    return Err(crate::error::AlephError::tool(format!(
+                        "SSRF blocked for URL '{}': {}",
+                        item.url, e
+                    )));
                 }
             }
         }

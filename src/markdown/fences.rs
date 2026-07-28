@@ -196,8 +196,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
         // `str::lines()` strips `\n`/`\r\n`, so re-check the original bytes
         // to keep `offset` aligned with the source text byte positions.
         let bytes = text.as_bytes();
-        offset = if bytes.get(line_end) == Some(&b'\r') && bytes.get(line_end + 1) == Some(&b'\n')
-        {
+        offset = if bytes.get(line_end) == Some(&b'\r') && bytes.get(line_end + 1) == Some(&b'\n') {
             line_end + 2
         } else if line_end < text.len() {
             line_end + 1

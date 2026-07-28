@@ -203,9 +203,7 @@ impl AgentDef {
     #[must_use]
     pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
         self.allowed_tool_sets = sets;
-        if self.allowed_tools.len() == 1
-            && self.allowed_tools.first().is_some_and(|s| s == "*")
-        {
+        if self.allowed_tools.len() == 1 && self.allowed_tools.first().is_some_and(|s| s == "*") {
             self.allowed_tools = vec![];
         }
         self

@@ -509,8 +509,7 @@ mod tests {
         let args: McpListResourcesArgs = serde_json::from_value(json!({})).unwrap();
         assert!(args.server.is_none());
         // Explicit filter round-trips.
-        let args: McpListResourcesArgs =
-            serde_json::from_value(json!({"server": "docs"})).unwrap();
+        let args: McpListResourcesArgs = serde_json::from_value(json!({"server": "docs"})).unwrap();
         assert_eq!(args.server.as_deref(), Some("docs"));
         // Schema advertises the optional field.
         let schema = serde_json::to_string(&schemars::schema_for!(McpListResourcesArgs)).unwrap();

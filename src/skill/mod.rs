@@ -496,10 +496,7 @@ impl SkillSystem {
         drop(config);
 
         let spec = if let Some(spec_id) = spec_id {
-            install_specs
-                .iter()
-                .find(|s| s.id == spec_id)
-                .cloned()
+            install_specs.iter().find(|s| s.id == spec_id).cloned()
         } else {
             select_best_install(&install_specs, &prefs).cloned()
         };

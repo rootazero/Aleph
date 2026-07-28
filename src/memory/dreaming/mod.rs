@@ -1902,7 +1902,8 @@ mod tests {
             updated_at: now,
             content_hash: "h".into(),
         };
-        let notes: Vec<NoteIndexEntry> = (0..10).map(|i| note(&format!("reference/n{i}"))).collect();
+        let notes: Vec<NoteIndexEntry> =
+            (0..10).map(|i| note(&format!("reference/n{i}"))).collect();
 
         // No prior report → rot rates read a structural zero (self-evolution's
         // pre-fix behaviour) and the selector's stability gate is wide open.
@@ -1921,7 +1922,8 @@ mod tests {
             notes_marked_stale: 2,
             ..Default::default()
         };
-        let with = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, Some(&prior)).await;
+        let with =
+            compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, Some(&prior)).await;
         assert!((with.contradiction_rate - 0.4).abs() < 1e-9);
         assert!((with.duplication_rate - 0.5).abs() < 1e-9);
         assert!((with.staleness_rate - 0.2).abs() < 1e-9);
@@ -2006,4 +2008,3 @@ mod tests {
         assert!(report.stages_executed.is_empty());
     }
 }
-

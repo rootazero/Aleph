@@ -72,20 +72,21 @@ impl Config {
         })?;
 
         // Check if migration is needed
-        let needs_migration = if let Some(mem) = value.get_mut("memory").and_then(|m| m.as_table_mut()) {
-            if let Some(toml::Value::String(v)) = mem.get_mut("vector_db") {
-                if v == "lancedb" {
-                    *v = "sqlite-vec".to_string();
-                    true
+        let needs_migration =
+            if let Some(mem) = value.get_mut("memory").and_then(|m| m.as_table_mut()) {
+                if let Some(toml::Value::String(v)) = mem.get_mut("vector_db") {
+                    if v == "lancedb" {
+                        *v = "sqlite-vec".to_string();
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
             } else {
                 false
-            }
-        } else {
-            false
-        };
+            };
 
         if !needs_migration {
             return Ok(contents.to_string());

@@ -165,9 +165,10 @@ impl ReadSkillTool {
                         continue;
                     }
                     if let Some(slug) = slug_from_skill_md(&path) {
-                        if slug == skill_id && seen_canonical.insert(
-                            fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
-                        ) {
+                        if slug == skill_id
+                            && seen_canonical
+                                .insert(fs::canonicalize(&path).unwrap_or_else(|_| path.clone()))
+                        {
                             hits.push(path);
                         }
                     }

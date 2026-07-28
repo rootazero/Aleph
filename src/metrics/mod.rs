@@ -57,13 +57,12 @@ static METRICS_RUNTIME: OnceLock<MetricsRuntime> = OnceLock::new();
 /// the compiled defaults. Idempotent: a later call (e.g. a config reload) is
 /// ignored, matching the write-once semantics of `defaults_override`.
 pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
-    let warning_multiplier = if policy.warning_multiplier.is_finite()
-        && policy.warning_multiplier >= 0.0
-    {
-        policy.warning_multiplier
-    } else {
-        DEFAULT_WARNING_MULTIPLIER
-    };
+    let warning_multiplier =
+        if policy.warning_multiplier.is_finite() && policy.warning_multiplier >= 0.0 {
+            policy.warning_multiplier
+        } else {
+            DEFAULT_WARNING_MULTIPLIER
+        };
     if METRICS_RUNTIME
         .set(MetricsRuntime {
             warning_multiplier,

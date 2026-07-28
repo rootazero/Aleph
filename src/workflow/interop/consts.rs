@@ -320,8 +320,9 @@ mod tests {
     #[test]
     fn normalises_js_object_literal_to_json() {
         // Bare keys, single quotes, trailing comma — the reference schema shape.
-        let v = parse("{ type: 'object', additionalProperties: false, required: ['lens', 'gaps'], }")
-            .expect("pure-data JS literal normalises");
+        let v =
+            parse("{ type: 'object', additionalProperties: false, required: ['lens', 'gaps'], }")
+                .expect("pure-data JS literal normalises");
         assert_eq!(v["type"], "object");
         assert_eq!(v["additionalProperties"], false);
         assert_eq!(v["required"], serde_json::json!(["lens", "gaps"]));
@@ -392,7 +393,10 @@ const buildPrompt = (u) => 'p ' + u
         let src = "const REAL = { a: 1 }\nawait agent('const FAKE = { b: 2 } in a prompt')";
         let table = collect_consts(src);
         assert!(table.contains_key("REAL"));
-        assert!(!table.contains_key("FAKE"), "a const inside a prompt is not a declaration");
+        assert!(
+            !table.contains_key("FAKE"),
+            "a const inside a prompt is not a declaration"
+        );
     }
 
     #[test]
@@ -408,7 +412,10 @@ const buildPrompt = (u) => 'p ' + u
         let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
         assert!(parse(&deep).is_none(), "over-deep nesting abstains");
         // A shallow literal still parses.
-        assert!(parse("[[[[[1]]]]]").is_some(), "shallow nesting still parses");
+        assert!(
+            parse("[[[[[1]]]]]").is_some(),
+            "shallow nesting still parses"
+        );
     }
 
     #[test]

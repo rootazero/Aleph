@@ -298,7 +298,7 @@ impl TicketGuard {
                     "session lane not found; failing open"
                 );
                 true
-            },
+            }
         }
     }
 

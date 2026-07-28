@@ -109,8 +109,9 @@ impl ConfigManager {
         let content = tokio::fs::read_to_string(path).await?;
 
         let parsed = match path.extension().and_then(|e| e.to_str()) {
-            Some("toml") => toml::from_str(&content)
-                .map_err(|e| ExtensionError::config_parse(path, format!("TOML parse error: {e}")))?,
+            Some("toml") => toml::from_str(&content).map_err(|e| {
+                ExtensionError::config_parse(path, format!("TOML parse error: {e}"))
+            })?,
             _ => parse_jsonc(&content, path)?,
         };
 

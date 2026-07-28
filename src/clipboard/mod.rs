@@ -77,8 +77,7 @@ impl ImageData {
         if input_byte_len > MAX_IMAGE_SIZE_BYTES * 2 {
             return Err(AlephError::other(format!(
                 "Image data URI too large: {} bytes (decoded image max is {} bytes)",
-                input_byte_len,
-                MAX_IMAGE_SIZE_BYTES
+                input_byte_len, MAX_IMAGE_SIZE_BYTES
             )));
         }
 

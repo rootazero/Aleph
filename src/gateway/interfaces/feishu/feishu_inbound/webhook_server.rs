@@ -127,7 +127,9 @@ fn resolve_payload(
             ) else {
                 return Err(StatusCode::UNAUTHORIZED);
             };
-            if !timestamp_is_fresh(&ts) || !crypto::verify_signature(key, &ts, &nonce, body_str, &sig) {
+            if !timestamp_is_fresh(&ts)
+                || !crypto::verify_signature(key, &ts, &nonce, body_str, &sig)
+            {
                 tracing::warn!("Feishu webhook signature mismatch; rejecting request");
                 return Err(StatusCode::UNAUTHORIZED);
             }

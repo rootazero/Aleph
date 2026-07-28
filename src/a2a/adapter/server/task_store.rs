@@ -89,7 +89,8 @@ impl A2ATaskManager for TaskStore {
         if let Some(limit) = history_length {
             if task.history.len() > limit {
                 let start = task.history.len() - limit;
-                task.history = task.history
+                task.history = task
+                    .history
                     .get(start..)
                     .expect("invariant: start < history.len() by check above")
                     .to_vec();

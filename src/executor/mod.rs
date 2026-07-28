@@ -33,4 +33,6 @@ pub use builtin_registry::{
     BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
 };
 pub use tool_registry::ToolRegistry;
-pub use types::{ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord};
+pub use types::{
+    ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
+};

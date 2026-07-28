@@ -187,7 +187,9 @@ impl DreamStage for FeedbackDistillStage {
         // fingerprints drive the O(1) drop in `gate_action_evidence`; the full
         // records replay as negative feedback in the prompt so the LLM stops
         // re-proposing losing edits (SkillOpt's rejected-edit buffer).
-        let reject_records = store.distill_reject_records(&ctx.agent_id).unwrap_or_default();
+        let reject_records = store
+            .distill_reject_records(&ctx.agent_id)
+            .unwrap_or_default();
         let rejected_fingerprints: Vec<String> = reject_records
             .iter()
             .map(|r| r.fingerprint.clone())
@@ -413,7 +415,7 @@ pub fn build_feedback_distill_prompt(
             RawMemorySource::Correction {
                 severity,
                 suggested_rule,
-            // rust-doctor-disable-next-line excessive-clone
+                // rust-doctor-disable-next-line excessive-clone
             } => (severity.clone(), suggested_rule.clone()),
             _ => ("low".into(), None),
         };
