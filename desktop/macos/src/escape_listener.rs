@@ -35,14 +35,28 @@ const ESCAPE_KEY_CODE: u16 = 53;
 // Send+Sync wrapper for monitor handles
 // ---------------------------------------------------------------------------
 
+/// Serialises every `NSEvent` monitor install/remove in this process.
+///
+/// AppKit's event-monitor registry is *process-global*: both
+/// `+[NSEvent addGlobalMonitorForEventsMatchingMask:handler:]` and
+/// `+[NSEvent removeMonitor:]` end up in HIToolbox's `SyncEventMonitorMask()`,
+/// which rebuilds one shared CF table and is not thread-safe. Each listener's
+/// own `monitors` mutex guards only *its* handles, so two listeners dropped on
+/// two threads raced inside `SyncEventMonitorMask()` and over-released a CF
+/// object — `EXC_BREAKPOINT` in `CFRelease`, reproducible at roughly 1 run in 6
+/// of the desktop test module. The lock has to span the whole process because
+/// that is the scope of the table being mutated.
+static MONITOR_REGISTRY: Mutex<()> = Mutex::new(());
+
 /// Wrapper around `Retained<AnyObject>` that implements `Send + Sync`.
 ///
 /// # Safety
 ///
-/// `NSEvent` monitor handles are reference-counted `ObjC` objects. They are only
-/// accessed through our `Mutex`-guarded `Vec`, and `NSEvent::removeMonitor`
-/// is safe to call from any thread. The `Retained` smart pointer handles
-/// the actual retain/release, which is thread-safe for `ObjC` objects.
+/// `NSEvent` monitor handles are reference-counted `ObjC` objects, and
+/// `Retained`'s retain/release is itself thread-safe. Handing one to
+/// `NSEvent::removeMonitor` is *not* thread-safe, so every such call is
+/// serialised through [`MONITOR_REGISTRY`]; the handles themselves are only
+/// ever reached through our `Mutex`-guarded `Vec`.
 struct MonitorHandle(Retained<AnyObject>);
 
 // SAFETY: NSEvent monitor handles are reference-counted ObjC objects whose
@@ -138,6 +152,13 @@ impl EscapeAbort for EscapeListener {
 
         let mask = NSEventMask::KeyDown;
 
+        // Installing a monitor rewrites the process-global HIToolbox table;
+        // see [`MONITOR_REGISTRY`]. Always taken *after* `self.monitors` so the
+        // two locks keep one order everywhere and cannot deadlock.
+        let _registry = MONITOR_REGISTRY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         // Global monitor (app not focused).
         let global_block = Self::build_global_block(&self.abort_flag);
         if let Some(monitor) =
@@ -167,6 +188,10 @@ impl EscapeAbort for EscapeListener {
     fn stop(&self) {
         let mut monitors = self
             .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Same process-global table as `start`, same lock order.
+        let _registry = MONITOR_REGISTRY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for handle in monitors.drain(..) {
@@ -208,6 +233,36 @@ mod tests {
         assert!(listener.is_aborted());
         listener.reset();
         assert!(!listener.is_aborted());
+    }
+
+    /// Two listeners installing/removing monitors on two threads used to corrupt
+    /// AppKit's process-global monitor table — an over-release inside
+    /// `SyncEventMonitorMask()`, surfacing as `EXC_BREAKPOINT` in `CFRelease`
+    /// and killing the whole test binary. [`MONITOR_REGISTRY`] is what makes
+    /// this safe: with it removed this aborted 10 runs out of 30 (SIGABRT /
+    /// SIGTRAP / SIGSEGV), and with it 0 out of 40.
+    ///
+    /// Without a window server (headless CI) no monitor ever installs, so the
+    /// loop is a cheap no-op there and proves nothing — it only bites on a real
+    /// desktop session, which is exactly where the crash lived.
+    #[test]
+    fn concurrent_start_stop_across_threads_does_not_corrupt_the_monitor_table() {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..25 {
+                        let listener = EscapeListener::new();
+                        let _ = listener.start();
+                        listener.stop();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker
+                .join()
+                .expect("no thread may die installing or removing event monitors");
+        }
     }
 
     #[test]

@@ -245,7 +245,11 @@ impl ScreenCapability for NativeScreen {
     /// full-screen capture — a caller that asked for one window and received the
     /// whole desktop would map its coordinates through the wrong origin.
     #[cfg(windows)]
-    async fn screenshot_window(&self, window_id: u64, show_cursor: bool) -> Result<crate::WindowShot> {
+    async fn screenshot_window(
+        &self,
+        window_id: u64,
+        show_cursor: bool,
+    ) -> Result<crate::WindowShot> {
         tokio::task::spawn_blocking(move || perception::capture_window(window_id, show_cursor))
             .await
             .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?

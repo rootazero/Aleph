@@ -8,7 +8,7 @@ use crate::extension::types::PluginKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 // V2 field types from toml_types module
 use super::toml_types::{
@@ -381,7 +381,16 @@ impl PluginManifest {
     /// or escapes the root directory.
     pub fn entry_path(&self) -> Result<PathBuf, ExtensionError> {
         let entry_str = self.entry.to_string_lossy();
-        if self.entry.is_absolute() || entry_str.contains("..") {
+        // `is_absolute()` is false on Windows for a rooted `/x` and for a
+        // drive-relative `C:x`, yet `PathBuf::join` resolves both *outside*
+        // `root_dir` — a rooted or prefixed component discards what came before
+        // it. Test the components directly so the guard means the same thing on
+        // every platform.
+        let escapes_root = self
+            .entry
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir));
+        if escapes_root || entry_str.contains("..") {
             return Err(ExtensionError::Runtime(format!(
                 "Path traversal not allowed in plugin entry: {entry_str}"
             )));

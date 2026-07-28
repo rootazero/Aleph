@@ -19,7 +19,8 @@ fn test_xmpp_properties() {
 
     assert_eq!(channel.channel_type(), "xmpp");
     assert!(channel.capabilities().typing_indicator);
-    assert!(channel.capabilities().read_receipts);
+    // The adapter implements no read-receipt method, so the bit stays false.
+    assert!(!channel.capabilities().read_receipts);
     assert!(!channel.capabilities().attachments);
     assert_eq!(channel.capabilities().max_message_length, 65535);
 }

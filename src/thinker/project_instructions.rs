@@ -88,7 +88,16 @@ pub struct ProjectInstructionFile {
 /// (`CLAUDE.md`, `.claude/rules/a.md`), else the absolute path (ancestor files).
 fn relative_label(path: &Path, workspace: &Path) -> String {
     path.strip_prefix(workspace)
-        .map(|rel| rel.display().to_string())
+        .map(|rel| {
+            // Always label with `/`. This is a display string for the model's
+            // prompt, not a path the OS consumes (`path` carries that), so a
+            // separator that changed with the host would make the same project
+            // produce a different prompt on Windows.
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
         .unwrap_or_else(|_| path.display().to_string())
 }
 

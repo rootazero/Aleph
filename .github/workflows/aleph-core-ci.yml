@@ -86,18 +86,16 @@ jobs:
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 
-      # `--features test-helpers` gates `providers::recording_mock`, which two
-      # of these need. Without it cargo silently skips them (they declare
-      # `required-features`), which is how they stayed unrun for months.
+      # `--tests` runs every binary in tests/, rather than a hand-kept list of
+      # names. The list is what let 6 of the 132 targets run while the other 126
+      # silently did not: a new tests/ file joined CI only if someone remembered
+      # to name it here, and nothing failed when they forgot.
+      #
+      # `--features test-helpers` gates `providers::recording_mock`, which three
+      # targets declare through `required-features`. Without it cargo *skips*
+      # them rather than failing, which is the same silence in a second costume.
       - name: Run integration tests
-        run: >
-          cargo test -p alephcore --features test-helpers
-          --test sandbox_capability_approval
-          --test memory_modes_integration
-          --test note_governance_gate
-          --test memory_extensions_integration
-          --test memory_compound_ingest
-          --test memory_reflect_integration
+        run: cargo test -p alephcore --features test-helpers --tests
 
   lint:
     name: Lint

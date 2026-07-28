@@ -290,6 +290,12 @@ impl MediaCache {
         } else if item.url.starts_with('/')
             || item.url.starts_with("./")
             || item.url.starts_with("~/")
+            // A Windows local path (`C:\…`, `\\server\share\…`) matches none of
+            // the prefixes above, so every legitimate local file on that platform
+            // fell through to the URL-only branch and was never attached. A real
+            // URL (`http://…`) is not an absolute path on any platform, so this
+            // cannot swallow one.
+            || std::path::Path::new(&item.url).is_absolute()
         {
             // Local file path. A `media_send` path is model-supplied and
             // untrusted: only accept one that resolves inside the OS temp dir —

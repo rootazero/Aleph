@@ -393,8 +393,22 @@ mod tests {
         assert!(matches!(result, BootstrapResult::UnknownCapability { .. }));
     }
 
+    /// `PATH` is process-global but libtest runs these on separate threads, so
+    /// a test that reads it, calls something, and reads it again can have
+    /// another test's mutation land in between. That is exactly how
+    /// `test_enrich_path_for_via_parent_unknown_is_noop` failed intermittently
+    /// against `test_enrich_path_for_reprobe_is_idempotent`. Every test that
+    /// reads or writes `PATH` takes this first, so the lock's scope matches the
+    /// resource's.
+    static PATH_ENV: Mutex<()> = Mutex::new(());
+
+    fn lock_path_env() -> std::sync::MutexGuard<'static, ()> {
+        PATH_ENV.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn test_prepend_existing_dirs_skips_missing() {
+        let _guard = lock_path_env();
         // A non-existent dir must be skipped — it must not be prepended to PATH.
         // We assert the specific dir is absent rather than comparing the whole
         // PATH before/after: PATH is a process-global env var, so an equality
@@ -413,6 +427,7 @@ mod tests {
     async fn test_enrich_path_for_via_parent_unknown_is_noop() {
         // Unknown parents short-circuit before invoking any external command,
         // so this is deterministic regardless of whether fnm is installed.
+        let _guard = lock_path_env();
         let before = std::env::var_os("PATH").unwrap_or_default();
         enrich_path_for_via_parent("totally-unknown-parent").await;
         let after = std::env::var_os("PATH").unwrap_or_default();
@@ -423,6 +438,7 @@ mod tests {
     async fn test_enrich_path_for_reprobe_is_idempotent() {
         // Capture PATH before and after two consecutive calls — the second
         // call must be a no-op (no duplicate entries).
+        let _guard = lock_path_env();
         let before = std::env::var_os("PATH").unwrap_or_default();
         enrich_path_for_reprobe();
         let after_first = std::env::var_os("PATH").unwrap_or_default();

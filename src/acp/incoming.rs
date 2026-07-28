@@ -325,11 +325,31 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 /// normalized and absolute — `confine` guarantees that.
 fn canonicalize_within_root(root: &Path, path: &Path) -> std::io::Result<PathBuf> {
     let canonical_root = std::fs::canonicalize(root)?;
-    let mut current: PathBuf = PathBuf::new();
 
-    for comp in path.components() {
+    // Walk the requested path *against the canonical root* rather than
+    // rebuilding it from its own literal prefix. Windows' `canonicalize` always
+    // prepends the `\\?\` verbatim prefix, so a literal `C:\ws\f.txt` never
+    // `starts_with` a canonical `\\?\C:\ws`: the containment check below
+    // rejected every in-workspace path and ACP filesystem access was dead on
+    // that platform. `confine` has already proven `path` is under `root`.
+    let relative = path.strip_prefix(root).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "path resolves outside workspace",
+        )
+    })?;
+    let mut current: PathBuf = canonical_root.clone();
+
+    for comp in relative.components() {
         match comp {
-            Component::Prefix(_) | Component::RootDir => current.push(comp.as_os_str()),
+            // `strip_prefix` yields a relative remainder, so neither can appear.
+            // Refuse rather than silently re-rooting if that ever changes.
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "path resolves outside workspace",
+                ))
+            }
             Component::CurDir => {}
             Component::ParentDir => {
                 if current.parent().is_some() {

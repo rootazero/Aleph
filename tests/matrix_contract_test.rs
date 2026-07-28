@@ -24,7 +24,8 @@ fn test_matrix_properties() {
     assert!(channel.capabilities().rich_text);
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);
-    assert!(channel.capabilities().read_receipts);
+    // The adapter implements no read-receipt method, so the bit stays false.
+    assert!(!channel.capabilities().read_receipts);
     assert_eq!(channel.capabilities().max_message_length, 65535);
     assert_eq!(
         channel.capabilities().max_attachment_size,
