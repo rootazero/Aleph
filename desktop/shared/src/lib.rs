@@ -12,7 +12,7 @@
 //! - [`AutomationCapability`] — AppleScript/JXA, Shortcuts
 //! - [`PermissionCapability`] — TCC permission detection and request
 //! - [`MediaCapability`] — camera / audio device capture
-//! - [`AccessibilityCapability`] — AX tree queries (macOS + Windows UIA)
+//! - [`AccessibilityCapability`] — AX tree queries (macOS AX, Windows UIA, Linux AT-SPI2)
 //! - [`PowerCapability`] — sleep inhibition (via the `power()` accessor)
 //!
 //! Real platform API calls never live here: each platform crate
@@ -22,9 +22,15 @@
 
 pub mod action;
 pub mod automation_types;
+pub mod ax_rank;
 pub mod bridge;
 pub mod coord;
 pub mod error;
+// Linux session/tool detection plus the Linux-only clipboard and app-launch
+// implementations. Compiled everywhere so its pure logic stays host-testable;
+// its consumers are all Linux-gated.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub mod linux;
 pub mod media_types;
 pub mod native_screen;
 pub mod perception;
@@ -35,10 +41,19 @@ pub mod screen_types;
 pub mod script_exec;
 pub mod system_types;
 pub mod traits;
+pub mod win_dpi;
+#[cfg(windows)]
+pub mod win_registry;
+#[cfg(windows)]
+pub mod win_window;
 
+pub use ax_rank::{rank_candidates, RankCandidate};
 pub use coord::{CoordinateSpace, Point};
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;
+// Re-exported at the root because it is the return type of
+// `ensure_process_dpi_aware`, which the Windows platform crate calls by path.
+pub use win_dpi::{ensure_process_dpi_aware, DpiAwareness};
 
 // Re-export the long-lived Swift helper RPC client at crate root so callers
 // can write `aleph_desktop::SwiftBridge` without reaching into the submodule.
@@ -55,8 +70,15 @@ use serde::{Deserialize, Serialize};
 
 // ── Types ────────────────────────────────────────────────────────
 
-/// A rectangular region on the screen, in physical pixels.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// A rectangular region on the screen, in physical pixels of the **global**
+/// screen space (the space clicks are issued in), top-left origin.
+///
+/// The fields are unsigned, so a display placed left of or above the primary one
+/// — which has negative global coordinates — cannot be addressed by a region.
+/// That is a known limitation of this shape, not a silent remapping: a region is
+/// captured from the display it overlaps, never re-interpreted as an offset into
+/// a different one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenRegion {
     pub x: u32,
     pub y: u32,

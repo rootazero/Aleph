@@ -1,14 +1,20 @@
 //! Window listing and focus management (platform-specific).
 
+// Only the macOS and Windows arms log inline; the Linux arms delegate to
+// `crate::linux::app` / `crate::action::window_linux`, which own their own logging.
+#[cfg(not(target_os = "linux"))]
 use tracing::info;
 
-use crate::error::{DesktopError, Result};
+#[cfg(not(target_os = "linux"))]
+use crate::error::DesktopError;
+use crate::error::Result;
 use crate::WindowInfo;
 
 /// List all visible on-screen windows.
 ///
 /// - **macOS**: CoreGraphics `CGWindowListCopyWindowInfo` (on-screen only).
-/// - **Linux**: `wmctrl -l -p -G`.
+/// - **Linux**: native EWMH `_NET_CLIENT_LIST` on X11, or the compositor IPC on
+///   sway / Hyprland — see [`super::window_linux`].
 /// - **Windows**: `EnumWindows` over visible top-level windows; `WindowInfo.id`
 ///   carries the `HWND` so [`focus_window`] can round-trip it.
 ///
@@ -30,7 +36,7 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
     #[cfg(target_os = "linux")]
     {
-        linux_window_list()
+        super::window_linux::window_list()
     }
 
     #[cfg(target_os = "windows")]
@@ -49,7 +55,8 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 /// Bring the specified window to the foreground.
 ///
 /// - **macOS**: Activates the owning app via `NSRunningApplication`.
-/// - **Linux**: Uses `wmctrl -i -a <hex_id>` to activate the window.
+/// - **Linux**: EWMH `_NET_ACTIVE_WINDOW` on X11, or the compositor IPC — see
+///   [`super::window_linux`].
 /// - **Windows**: Resolves `window_id` as an `HWND`, un-minimizes it if needed,
 ///   then calls `SetForegroundWindow`.
 ///
@@ -66,7 +73,7 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        linux_focus_window(window_id)
+        super::window_linux::focus_window(window_id)
     }
 
     #[cfg(target_os = "windows")]
@@ -87,7 +94,8 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 ///
 /// - **macOS**: `System Events` Accessibility API via `osascript` (requires
 ///   the Accessibility TCC permission, same as input automation).
-/// - **Linux**: `wmctrl -i -r <id> -e 0,x,y,-1,-1` (preserves size).
+/// - **Linux**: EWMH `_NET_MOVERESIZE_WINDOW` on X11, or the compositor IPC — see
+///   [`super::window_linux`] (preserves size).
 /// - **Windows**: `SetWindowPos` with `SWP_NOSIZE` (resolves `window_id` as an
 ///   `HWND`; preserves the current size).
 ///
@@ -104,7 +112,7 @@ pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        linux_move_window(window_id, x, y)
+        super::window_linux::move_window(window_id, x, y)
     }
 
     #[cfg(target_os = "windows")]
@@ -125,7 +133,8 @@ pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
 ///
 /// - **macOS**: `System Events` Accessibility API via `osascript` (requires
 ///   the Accessibility TCC permission, same as input automation).
-/// - **Linux**: `wmctrl -i -r <id> -e 0,-1,-1,w,h` (preserves position).
+/// - **Linux**: EWMH `_NET_MOVERESIZE_WINDOW` on X11, or the compositor IPC — see
+///   [`super::window_linux`] (preserves position).
 /// - **Windows**: `SetWindowPos` with `SWP_NOMOVE` (resolves `window_id` as an
 ///   `HWND`; preserves the current top-left position).
 ///
@@ -142,7 +151,7 @@ pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        linux_resize_window(window_id, width, height)
+        super::window_linux::resize_window(window_id, width, height)
     }
 
     #[cfg(target_os = "windows")]
@@ -161,96 +170,89 @@ pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
 
 // ── Windows window management helpers ─────────────────────────────
 
+/// Windows window list, projected from the shared enumeration in
+/// [`crate::win_window`].
+///
+/// The enumeration rules — visibility, DWM cloaking, tool windows, and the
+/// visible-frame bounds — live there because the running-app list and the UI
+/// Automation root resolver need exactly the same answers, and three private
+/// copies of `EnumWindows` is how they came to disagree.
+///
+/// `owner` is filled from the owning process's executable, which is a handle a
+/// caller can pass back as `app:`. A window title is not one: File Explorer
+/// titles itself after the open folder, so `app: "explorer"` never matched.
 #[cfg(target_os = "windows")]
 fn windows_window_list() -> Result<Vec<WindowInfo>> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-        IsWindowVisible,
-    };
+    use std::collections::HashMap;
 
-    use crate::BoundingBox;
+    // One version-resource read per *process*, not per window.
+    let mut owners: HashMap<u32, String> = HashMap::new();
 
-    struct EnumState {
-        windows: Vec<WindowInfo>,
-    }
-
-    extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        // SAFETY: `EnumWindows` guarantees `hwnd` is valid for this callback,
-        // and `lparam` carries the `&mut EnumState` pointer passed below, which
-        // outlives the synchronous enumeration.
-        unsafe {
-            if IsWindowVisible(hwnd).as_bool() {
-                let mut buf = [0u16; 512];
-                let len = GetWindowTextW(hwnd, &mut buf);
-                if len > 0 {
-                    let title = String::from_utf16_lossy(&buf[..len as usize]);
-                    let mut pid: u32 = 0;
-                    GetWindowThreadProcessId(hwnd, Some(&mut pid));
-
-                    // A minimized window keeps WS_VISIBLE, so `IsWindowVisible`
-                    // alone would report it as on screen; `IsIconic` is the only
-                    // thing that says otherwise. Windows also parks a minimized
-                    // window's rect at (-32000, -32000) — a sentinel, not a
-                    // position — so its geometry is reported as unknown rather
-                    // than as somewhere nothing can be clicked.
-                    let iconic = IsIconic(hwnd).as_bool();
-                    let mut rect = RECT::default();
-                    let bounds = if iconic {
-                        None
-                    } else {
-                        // Screen coordinates, top-left origin — the same space
-                        // clicks are issued in.
-                        GetWindowRect(hwnd, &mut rect).ok().map(|()| BoundingBox {
-                            x: f64::from(rect.left),
-                            y: f64::from(rect.top),
-                            w: f64::from(rect.right - rect.left),
-                            h: f64::from(rect.bottom - rect.top),
-                        })
-                    };
-
-                    let state = &mut *(lparam.0 as *mut EnumState);
-                    state.windows.push(WindowInfo {
-                        id: hwnd.0 as usize as u64,
-                        title,
-                        owner: String::new(),
-                        pid: u64::from(pid),
-                        bounds,
-                        on_screen: Some(!iconic),
-                        // Windows has no window-level concept comparable to
-                        // macOS' `kCGWindowLayer`: not told, not zero.
-                        ..Default::default()
-                    });
-                }
+    let windows: Vec<WindowInfo> = crate::win_window::enumerate_top_level()
+        .into_iter()
+        // An untitled window cannot be named or chosen from a list; the
+        // enumeration keeps them because the pid→window resolver needs them.
+        .filter(|w| !w.title.is_empty())
+        .map(|w| {
+            let owner = owners
+                .entry(w.pid)
+                .or_insert_with(|| {
+                    crate::win_window::process_image_path(w.pid)
+                        .map(|exe| crate::win_window::friendly_app_name(&exe))
+                        .unwrap_or_default()
+                })
+                .clone();
+            WindowInfo {
+                id: w.id,
+                title: w.title,
+                owner,
+                pid: u64::from(w.pid),
+                bounds: w.bounds,
+                on_screen: Some(!w.minimized),
+                // Windows has no window-level concept comparable to macOS'
+                // `kCGWindowLayer`: not told, not zero.
+                ..Default::default()
             }
-        }
-        BOOL(1) // continue enumeration
-    }
+        })
+        .collect();
 
-    let mut state = EnumState {
-        windows: Vec::new(),
-    };
-    // SAFETY: `enum_proc` matches the `WNDENUMPROC` signature; `state` lives
-    // until `EnumWindows` returns.
-    unsafe {
-        let _ = EnumWindows(
-            Some(enum_proc),
-            LPARAM(std::ptr::addr_of_mut!(state) as isize),
-        );
-    }
-
-    info!(
-        count = state.windows.len(),
-        "Window list retrieved (Windows)"
-    );
-    Ok(state.windows)
+    info!(count = windows.len(), "Window list retrieved (Windows)");
+    Ok(windows)
 }
 
+/// How long to wait for the window server to actually make a window foreground.
+///
+/// `SetForegroundWindow` is asynchronous *and* refusable: Windows' foreground
+/// lock denies the change outright when the calling process did not receive the
+/// last input, and the API still returns without saying so usefully. Polling
+/// `GetForegroundWindow` for the real outcome is the only way to know; orca's
+/// Windows runtime lands on the same 500 ms ceiling (`Wait-OrcaWindowFocused`).
+#[cfg(target_os = "windows")]
+const FOREGROUND_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(target_os = "windows")]
+const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Raise a window and report whether it actually reached the foreground.
+///
+/// This used to fire `SetForegroundWindow` and discard the result — the comment
+/// said a refusal "is not a hard failure", so the tool answered `focused: true`
+/// for a window Windows had merely flashed in the taskbar. The model then aimed
+/// its next keystroke at an app that was never in front.
+///
+/// **The refusal is not worked around on purpose.** The documented escalation
+/// (`AttachThreadInput` onto the foreground thread, then set, then detach) does
+/// force the change, and it is exactly the "steal the focus the user is holding"
+/// move R5 rules out — the foreground lock is Windows protecting the person
+/// typing. Every background use-case that used to need focus now has a path that
+/// does not: `set_value` / `ax_action` address an element inside any process via
+/// UI Automation, and `screenshot_window` captures an occluded window through
+/// `PrintWindow`. So the honest failure costs the model nothing but a redirect.
 #[cfg(target_os = "windows")]
 fn windows_focus_window(window_id: u64) -> Result<()> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        SW_SHOW,
     };
 
     let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
@@ -263,16 +265,39 @@ fn windows_focus_window(window_id: u64) -> Result<()> {
                 "No window found with id {window_id}"
             )));
         }
+        // Restoring is what makes a minimized window focusable at all; a
+        // non-minimized one still needs `SW_SHOW` if it was hidden.
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
         }
-        // `SetForegroundWindow` may return false under Windows' foreground-lock
-        // rules even when the window is raised; that is not a hard failure.
         let _ = SetForegroundWindow(hwnd);
+
+        // Poll for the outcome rather than assume it. Reporting success for a
+        // focus change the foreground lock refused is how a model ends up
+        // typing into the app the user was working in — the exact failure the
+        // type_text focus gate exists to catch, arriving one call earlier.
+        let deadline = std::time::Instant::now() + FOREGROUND_WAIT;
+        loop {
+            if GetForegroundWindow() == hwnd {
+                info!(window_id, "Window focused (Windows)");
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(FOREGROUND_POLL);
+        }
     }
 
-    info!(window_id, "Window focused (Windows)");
-    Ok(())
+    Err(DesktopError::WindowFailed(format!(
+        "window {window_id} was restored but Windows did not make it foreground within {} ms. \
+         The foreground lock blocks a background process from stealing focus while the user is \
+         typing elsewhere. Retry after the user interacts with the desktop, or address the app \
+         directly with set_value / ax_action, which need no focus.",
+        FOREGROUND_WAIT.as_millis()
+    )))
 }
 
 /// Reposition and/or resize a window via Win32 `SetWindowPos`.
@@ -630,245 +655,4 @@ end run"#
 
     info!(window_id, pid, "Window bounds updated (macOS)");
     Ok(())
-}
-
-// ── Linux window management helpers ──────────────────────────────
-
-#[cfg(target_os = "linux")]
-fn linux_window_list() -> Result<Vec<WindowInfo>> {
-    // `-G` adds the geometry columns; without them nothing can crop a capture
-    // to a window or map its pixels back to click coordinates.
-    let output = std::process::Command::new("wmctrl")
-        .args(["-l", "-p", "-G"])
-        .output()
-        .map_err(|e| {
-            DesktopError::WindowFailed(format!(
-                "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
-            ))
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DesktopError::WindowFailed(format!(
-            "wmctrl failed: {}",
-            stderr.trim()
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let windows: Vec<WindowInfo> = stdout.lines().filter_map(parse_wmctrl_line).collect();
-
-    info!(count = windows.len(), "Window list retrieved (Linux)");
-    Ok(windows)
-}
-
-/// Parse one line of `wmctrl -l -p -G`.
-///
-/// ```text
-/// <XID> <desktop> <PID> <x> <y> <w> <h> <machine> <title…>
-/// 0x04000007  0 12345 100  50   800  600  hostname Window Title Here
-/// ```
-///
-/// wmctrl pads the numeric columns, so fields are separated by *runs* of
-/// whitespace, and the title — everything after the machine name — may itself
-/// contain spaces, so it is taken as the untouched remainder of the line.
-///
-/// Geometry that fails to parse yields `bounds: None` rather than dropping the
-/// window: an unlistable window is worse than one whose rectangle is unknown.
-#[cfg(target_os = "linux")]
-fn parse_wmctrl_line(line: &str) -> Option<WindowInfo> {
-    use crate::BoundingBox;
-
-    // XID, desktop, PID, x, y, w, h, machine.
-    let mut fields = [""; 8];
-    let mut rest = line;
-    for slot in &mut fields {
-        let start = rest.trim_start();
-        let end = start.find(char::is_whitespace).unwrap_or(start.len());
-        *slot = &start[..end];
-        rest = &start[end..];
-    }
-    if fields.iter().any(|f| f.is_empty()) {
-        return None;
-    }
-
-    let id_str = fields[0].trim_start_matches("0x").trim_start_matches("0X");
-    let id = u64::from_str_radix(id_str, 16).ok()?;
-    let pid: u64 = fields[2].parse().unwrap_or(0);
-
-    // X11 geometry is in device pixels with a top-left origin — the same space
-    // clicks are issued in. All four columns or none: half a rectangle is not a
-    // rectangle.
-    let bounds = match (
-        fields[3].parse::<f64>(),
-        fields[4].parse::<f64>(),
-        fields[5].parse::<f64>(),
-        fields[6].parse::<f64>(),
-    ) {
-        (Ok(x), Ok(y), Ok(w), Ok(h)) => Some(BoundingBox { x, y, w, h }),
-        _ => None,
-    };
-
-    Some(WindowInfo {
-        id,
-        title: rest.trim().to_string(),
-        owner: String::new(),
-        pid,
-        bounds,
-        // wmctrl reports neither a stacking level nor whether the window is
-        // iconified: not told, not zero/false.
-        ..Default::default()
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn linux_focus_window(window_id: u64) -> Result<()> {
-    // Variable-width hex: a fixed 8-digit width would silently truncate a 64-bit
-    // XID parsed by `window_list` (u64::from_str_radix), focusing the wrong window.
-    let id_hex = format!("0x{window_id:x}");
-    let output = std::process::Command::new("wmctrl")
-        .args(["-i", "-a", &id_hex])
-        .output()
-        .map_err(|e| {
-            DesktopError::WindowFailed(format!(
-                "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
-            ))
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DesktopError::WindowFailed(format!(
-            "Failed to focus window {}: {}",
-            id_hex,
-            stderr.trim()
-        )));
-    }
-
-    info!(window_id, "Window focused (Linux)");
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn linux_move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
-    // `wmctrl -e <gravity>,<x>,<y>,<w>,<h>`; -1 leaves a dimension unchanged.
-    let mvarg = format!("0,{x},{y},-1,-1");
-    linux_wmctrl_geometry(window_id, &mvarg)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
-    let szarg = format!("0,-1,-1,{width},{height}");
-    linux_wmctrl_geometry(window_id, &szarg)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_wmctrl_geometry(window_id: u64, geometry: &str) -> Result<()> {
-    // Variable-width hex so a 64-bit XID is not truncated (see linux_focus_window).
-    let id_hex = format!("0x{window_id:x}");
-    let output = std::process::Command::new("wmctrl")
-        .args(["-i", "-r", &id_hex, "-e", geometry])
-        .output()
-        .map_err(|e| {
-            DesktopError::WindowFailed(format!(
-                "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
-            ))
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DesktopError::WindowFailed(format!(
-            "Failed to set geometry for window {id_hex}: {}",
-            stderr.trim()
-        )));
-    }
-
-    info!(window_id, geometry, "Window geometry updated (Linux)");
-    Ok(())
-}
-
-// ── Linux window-list parsing tests ──────────────────────────────
-//
-// `parse_wmctrl_line` is the only place the Linux arm can lose geometry or
-// mangle a title, and it needs no wmctrl to exercise.
-#[cfg(all(test, target_os = "linux"))]
-mod linux_tests {
-    use super::*;
-
-    #[test]
-    fn parses_padded_columns_and_a_title_with_spaces() {
-        // wmctrl right-aligns the desktop column and left-pads the geometry
-        // columns, so fields are separated by runs of spaces.
-        let line = "0x04000007  0 12345 100  50   800  600  hostname My Window Title";
-        let w = parse_wmctrl_line(line).expect("line parses");
-        assert_eq!(w.id, 0x0400_0007);
-        assert_eq!(w.pid, 12345);
-        assert_eq!(w.title, "My Window Title");
-        let b = w.bounds.expect("geometry");
-        assert_eq!((b.x, b.y, b.w, b.h), (100.0, 50.0, 800.0, 600.0));
-        // wmctrl reports neither of these.
-        assert!(w.layer.is_none());
-        assert!(w.on_screen.is_none());
-    }
-
-    #[test]
-    fn keeps_the_window_when_geometry_is_unparseable() {
-        // Unknown geometry must not delete the window from the list.
-        let line = "0x0400000a  0 999 x y w h hostname Odd";
-        let w = parse_wmctrl_line(line).expect("line parses");
-        assert_eq!(w.id, 0x0400_000a);
-        assert_eq!(w.title, "Odd");
-        assert!(w.bounds.is_none());
-    }
-
-    #[test]
-    fn negative_coordinates_survive() {
-        // A window on a display left of the primary one has a negative origin.
-        let line = "0x1 0 7 -1920 -100 640 480 host Left";
-        let b = parse_wmctrl_line(line)
-            .expect("line parses")
-            .bounds
-            .expect("geometry");
-        assert_eq!((b.x, b.y), (-1920.0, -100.0));
-    }
-
-    #[test]
-    fn rejects_a_truncated_line() {
-        assert!(parse_wmctrl_line("0x1 0 7 hostname Title").is_none());
-        assert!(parse_wmctrl_line("").is_none());
-    }
-}
-
-// ── Windows window-management tests ──────────────────────────────
-//
-// These exercise the real Win32 entry points, so they only compile and run on
-// Windows. They assert graceful failure on a bogus handle and on out-of-range
-// dimensions — both must surface `WindowFailed` rather than panic or wrap.
-#[cfg(all(test, target_os = "windows"))]
-mod windows_tests {
-    use super::*;
-
-    #[test]
-    fn move_window_invalid_id_errors() {
-        // HWND 1 is never a valid top-level window handle.
-        let err = move_window(1, 0, 0).unwrap_err();
-        assert!(matches!(err, DesktopError::WindowFailed(_)));
-    }
-
-    #[test]
-    fn resize_window_invalid_id_errors() {
-        let err = resize_window(1, 800, 600).unwrap_err();
-        assert!(matches!(err, DesktopError::WindowFailed(_)));
-    }
-
-    #[test]
-    fn resize_window_dimension_overflow_errors() {
-        // u32 values past i32::MAX must be rejected, not wrapped to a negative.
-        let err = resize_window(1, u32::MAX, 600).unwrap_err();
-        match err {
-            DesktopError::WindowFailed(msg) => {
-                assert!(msg.contains("exceeds i32 range"), "got: {msg}");
-            }
-            other => panic!("expected WindowFailed, got {other:?}"),
-        }
-    }
 }

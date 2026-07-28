@@ -72,6 +72,19 @@ fn temp_path(ext: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("aleph-media-{}-{nanos}.{ext}", std::process::id()))
 }
 
+/// A capture's requested length as a [`Duration`](std::time::Duration).
+///
+/// The config values are already clamped to a sane range by `clamped()`;
+/// `from_secs_f64` panics on a negative or non-finite input, so the guard here
+/// is about never letting a malformed value reach it (P7).
+fn duration_of(secs: f64) -> std::time::Duration {
+    if secs.is_finite() && secs > 0.0 {
+        std::time::Duration::from_secs_f64(secs)
+    } else {
+        std::time::Duration::ZERO
+    }
+}
+
 /// Map a 0.05–1.0 quality knob to an ffmpeg mjpeg `-q:v` value (2 = best,
 /// 31 = worst).
 fn quality_to_qv(quality: f32) -> u32 {
@@ -80,16 +93,45 @@ fn quality_to_qv(quality: f32) -> u32 {
     (1.0 - q).mul_add(29.0, 2.0).round() as u32
 }
 
-/// Run an ffmpeg invocation, mapping a missing binary / non-zero exit to a
-/// friendly [`DesktopError`].
-async fn run_ffmpeg(args: &[String]) -> Result<()> {
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| {
-            DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-        })?;
+/// Headroom over a capture's own duration before it is considered wedged.
+///
+/// `ffmpeg -f dshow -i video=…` blocks in the device-open call when another
+/// application (a video call, say) already holds the camera or microphone, and
+/// it blocks *indefinitely* — there is no DirectShow open timeout. Without a cap
+/// the tool call hangs until the harness's per-turn ceiling and leaks the ffmpeg
+/// child behind it. The margin covers device negotiation and the final mux,
+/// which are slow on some webcams but not minutes-slow.
+const FFMPEG_MARGIN: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Run an ffmpeg invocation under a deadline, mapping a missing binary, a
+/// timeout, or a non-zero exit to a friendly [`DesktopError`].
+///
+/// `expected` is how long the capture itself should take (zero for a single
+/// frame or a device probe); the deadline is that plus [`FFMPEG_MARGIN`].
+async fn run_ffmpeg(args: &[String], expected: std::time::Duration) -> Result<()> {
+    let mut cmd = aleph_desktop::script_exec::hidden_command("ffmpeg");
+    cmd.args(args);
+    // Without `kill_on_drop` the child outlives the timed-out future as an
+    // orphan still holding the capture device.
+    cmd.kill_on_drop(true);
+
+    let deadline = expected + FFMPEG_MARGIN;
+    let output = match tokio::time::timeout(deadline, cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            return Err(DesktopError::PlatformError(format!(
+                "Failed to run ffmpeg (install ffmpeg): {e}"
+            )))
+        }
+        Err(_elapsed) => {
+            return Err(DesktopError::PlatformError(format!(
+                "ffmpeg did not finish within {}s and was terminated. The capture device is \
+                 usually held by another application (a video call, or a previous capture that \
+                 has not released it) — close it and retry.",
+                deadline.as_secs()
+            )))
+        }
+    };
 
     if output.status.success() {
         Ok(())
@@ -108,21 +150,35 @@ async fn run_ffmpeg(args: &[String]) -> Result<()> {
 /// stderr and exits non-zero (the `dummy` pseudo-device can't be opened); that
 /// non-zero exit is expected, so the stderr is parsed regardless of status.
 async fn list_dshow_devices() -> Result<Vec<DshowDevice>> {
-    let output = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-list_devices",
-            "true",
-            "-f",
-            "dshow",
-            "-i",
-            "dummy",
-        ])
-        .output()
-        .await
-        .map_err(|e| {
-            DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
-        })?;
+    let mut cmd = aleph_desktop::script_exec::hidden_command("ffmpeg");
+    cmd.args([
+        "-hide_banner",
+        "-list_devices",
+        "true",
+        "-f",
+        "dshow",
+        "-i",
+        "dummy",
+    ]);
+    cmd.kill_on_drop(true);
+
+    // Enumeration walks every registered DirectShow filter, and a wedged driver
+    // can stall that walk; the same margin the capture paths use bounds it.
+    let output = match tokio::time::timeout(FFMPEG_MARGIN, cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            return Err(DesktopError::PlatformError(format!(
+                "Failed to run ffmpeg (install ffmpeg): {e}"
+            )))
+        }
+        Err(_elapsed) => {
+            return Err(DesktopError::PlatformError(format!(
+                "listing DirectShow devices did not finish within {}s; a capture driver is not \
+                 responding.",
+                FFMPEG_MARGIN.as_secs()
+            )))
+        }
+    };
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     Ok(parse_dshow_devices(&stderr))
@@ -281,9 +337,12 @@ impl MediaCapability for WindowsMedia {
             out_str.clone(),
         ];
 
-        run_ffmpeg(&args).await.map_err(|e| {
-            DesktopError::PlatformError(format!("camera_snap from {device} failed: {e}"))
-        })?;
+        // A single frame: the whole cost is opening the device.
+        run_ffmpeg(&args, std::time::Duration::ZERO)
+            .await
+            .map_err(|e| {
+                DesktopError::PlatformError(format!("camera_snap from {device} failed: {e}"))
+            })?;
 
         let bytes = tokio::task::spawn_blocking(move || std::fs::read(&out))
             .await
@@ -337,9 +396,11 @@ impl MediaCapability for WindowsMedia {
             out_str.clone(),
         ]);
 
-        run_ffmpeg(&args).await.map_err(|e| {
-            DesktopError::PlatformError(format!("camera_clip from {device} failed: {e}"))
-        })?;
+        run_ffmpeg(&args, duration_of(config.duration_secs))
+            .await
+            .map_err(|e| {
+                DesktopError::PlatformError(format!("camera_clip from {device} failed: {e}"))
+            })?;
 
         Ok(CameraClipResult {
             file_path: out_str,
@@ -373,7 +434,7 @@ impl MediaCapability for WindowsMedia {
             out_str.clone(),
         ];
 
-        run_ffmpeg(&args)
+        run_ffmpeg(&args, duration_of(config.duration_secs))
             .await
             .map_err(|e| DesktopError::PlatformError(format!("record_audio failed: {e}")))?;
 

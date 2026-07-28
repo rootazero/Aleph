@@ -594,11 +594,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Extract text and structured data from documents",
         requires_config: true, // Requires media_pipeline
     },
-    BuiltinToolDefinition {
-        name: "clawhub",
-        description: "Search, browse, install, and update skills from ClawHub registry",
-        requires_config: false,
-    },
     // Store tools — require CatalogCache + marketplace configs
     BuiltinToolDefinition {
         name: "hub_catalog_sync",
@@ -1047,9 +1042,6 @@ pub fn create_tool_boxed(
                     Arc::clone(pipeline),
                 )) as Box<dyn AlephToolDyn>
             }),
-        "clawhub" => crate::builtin_tools::clawhub::ClawHubTool::new()
-            .ok()
-            .map(|tool| Box::new(tool) as Box<dyn AlephToolDyn>),
         "media_send" => Some(Box::new(
             crate::builtin_tools::media_send::MediaSendTool::new(),
         )),

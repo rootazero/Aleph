@@ -239,7 +239,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "automation",
         name: "自动化",
-        tools: &["cron_manage", "clawhub"],
+        tools: &["cron_manage"],
     },
     ToolCategory {
         id: "extensions_store",

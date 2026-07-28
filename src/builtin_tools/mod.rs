@@ -34,7 +34,6 @@ pub mod browser_tools;
 pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;
-pub mod clawhub;
 pub mod code_check;
 pub mod code_exec;
 pub mod command_canonicalize;
@@ -159,7 +158,6 @@ pub use channel_manage::{
 pub use channel_message::{
     ChannelMessageAction, ChannelMessageArgs, ChannelMessageOutput, ChannelMessageTool,
 };
-pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use code_check::{CodeCheckArgs, CodeCheckOutput, CodeCheckTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
 pub use config_audit::{ConfigAuditArgs, ConfigAuditOutput, ConfigAuditTool};

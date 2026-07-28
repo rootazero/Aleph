@@ -1,5 +1,9 @@
+// AT-SPI2 accessibility. Linux-only: the `atspi` dependency is target-gated, so
+// the module cannot compile elsewhere — and `ax()` reports `None` there, which
+// is what every non-Linux build of this crate already did.
 mod automation;
-mod clipboard;
+#[cfg(target_os = "linux")]
+mod ax;
 mod escape_listener;
 mod media;
 mod permission;
@@ -8,6 +12,8 @@ mod sleep_inhibitor;
 mod system;
 
 pub use automation::LinuxAutomation;
+#[cfg(target_os = "linux")]
+pub use ax::LinuxAccessibility;
 pub use escape_listener::LinuxEscapeListener;
 pub use media::LinuxMedia;
 pub use permission::LinuxPermission;
@@ -16,14 +22,19 @@ pub use sleep_inhibitor::LinuxPower;
 pub use system::LinuxSystem;
 
 use aleph_desktop::traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
-    ScreenCapability, SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
 
 pub struct LinuxPlatform {
     screen: NativeScreen,
+    /// `None` when no accessibility bus is reachable — see
+    /// [`ax::LinuxAccessibility::probe`] for why an absent capability beats one
+    /// that fails on every call.
+    #[cfg(target_os = "linux")]
+    ax: Option<LinuxAccessibility>,
     power: LinuxPower,
     system: LinuxSystem,
     automation: LinuxAutomation,
@@ -38,6 +49,8 @@ impl LinuxPlatform {
     pub fn new() -> Self {
         Self {
             screen: NativeScreen::new(),
+            #[cfg(target_os = "linux")]
+            ax: LinuxAccessibility::probe(),
             power: LinuxPower::new(),
             system: LinuxSystem::new(),
             automation: LinuxAutomation::new(),
@@ -90,6 +103,19 @@ impl DesktopPlatform for LinuxPlatform {
 
     fn escape_listener(&self) -> Option<&dyn aleph_desktop::platform::EscapeAbort> {
         Some(&self.escape)
+    }
+
+    /// AT-SPI2 accessibility, when this session has an accessibility bus.
+    ///
+    /// Returning `None` on a desktop with accessibility switched off is
+    /// deliberate: `type_text`'s focus gate treats an AX error as fail-open but
+    /// logs a warning, so a capability that always fails is noisier and no more
+    /// useful than an honest absence.
+    #[cfg(target_os = "linux")]
+    fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+        self.ax
+            .as_ref()
+            .map(|ax| ax as &dyn AccessibilityCapability)
     }
 }
 

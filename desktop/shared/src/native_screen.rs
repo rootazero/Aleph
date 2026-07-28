@@ -208,8 +208,45 @@ impl ScreenCapability for NativeScreen {
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
+    /// Single-window capture, wired on Linux.
+    ///
+    /// `xcap` can enumerate and capture windows on Windows too, but the arm
+    /// stays Linux-only until it is exercised on a Windows host: the trait
+    /// default is an explicit `NotImplemented`, and turning that into a wrong
+    /// capture would be worse than leaving it unimplemented. Widening the `cfg`
+    /// is the whole change when someone can verify it there.
+    ///
+    /// `show_cursor` is ignored: `xcap`'s window capture never includes the
+    /// pointer, so honouring `true` is not something this backend can do — and
+    /// a cursor-free shot of the right window is the useful half anyway.
+    #[cfg(target_os = "linux")]
+    async fn screenshot_window(
+        &self,
+        window_id: u64,
+        _show_cursor: bool,
+    ) -> Result<crate::WindowShot> {
+        tokio::task::spawn_blocking(move || perception::take_screenshot_window(window_id))
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
+    }
+
     async fn display_list(&self) -> Result<Vec<DisplayInfo>> {
         tokio::task::spawn_blocking(perception::list_displays)
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
+    }
+
+    /// Capture one window, cropped to its visible frame.
+    ///
+    /// Windows renders the window itself (`PrintWindow`), so an occluded or
+    /// background window comes back intact and the user's foreground app is
+    /// never raised or disturbed. Platforms without an implementation keep the
+    /// trait's `NotImplemented` default rather than silently degrading to a
+    /// full-screen capture — a caller that asked for one window and received the
+    /// whole desktop would map its coordinates through the wrong origin.
+    #[cfg(windows)]
+    async fn screenshot_window(&self, window_id: u64, show_cursor: bool) -> Result<crate::WindowShot> {
+        tokio::task::spawn_blocking(move || perception::capture_window(window_id, show_cursor))
             .await
             .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
     }

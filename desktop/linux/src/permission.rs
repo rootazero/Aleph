@@ -56,37 +56,14 @@ impl Default for LinuxPermission {
 // ---------------------------------------------------------------------------
 // Session detection
 // ---------------------------------------------------------------------------
+//
+// The session type comes from `aleph_desktop::linux::session` — the single
+// source of truth shared with the input, clipboard and window layers. This
+// module used to carry its own `SessionType` enum and its own environment
+// rules, which is how three subtly different answers to "is this Wayland?"
+// ended up in the tree at once.
 
-/// The active display-server session, which decides whether screen capture and
-/// input injection are freely available (X11) or compositor-gated (Wayland).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionType {
-    X11,
-    Wayland,
-    Unknown,
-}
-
-/// Detect the session type from standard freedesktop environment variables.
-///
-/// Pure modulo environment reads (which are safe and meaningful on any host);
-/// the mapping it feeds, [`ungated_status`], is fully pure and unit-tested.
-fn detect_session() -> SessionType {
-    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
-        if t.eq_ignore_ascii_case("wayland") {
-            return SessionType::Wayland;
-        }
-        if t.eq_ignore_ascii_case("x11") {
-            return SessionType::X11;
-        }
-    }
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return SessionType::Wayland;
-    }
-    if std::env::var_os("DISPLAY").is_some() {
-        return SessionType::X11;
-    }
-    SessionType::Unknown
-}
+use aleph_desktop::linux::SessionKind;
 
 // ---------------------------------------------------------------------------
 // Pure mapping helpers (platform-independent, unit-tested)
@@ -96,22 +73,22 @@ fn detect_session() -> SessionType {
 /// on the display server (or not at all). Camera/Microphone are resolved by the
 /// device probes before this is reached; they are listed here so the match
 /// stays exhaustive and a newly added kind fails the compile.
-const fn ungated_status(kind: PermissionKind, session: SessionType) -> PermissionStatus {
+const fn ungated_status(kind: PermissionKind, session: SessionKind) -> PermissionStatus {
     match kind {
         // D-Bus desktop notifications work regardless of display server.
         PermissionKind::Notifications => PermissionStatus::Granted,
 
         // Screen capture: free under X11; portal/request-time under Wayland.
         PermissionKind::ScreenRecording => match session {
-            SessionType::X11 => PermissionStatus::Granted,
-            SessionType::Wayland | SessionType::Unknown => PermissionStatus::Unknown,
+            SessionKind::X11 => PermissionStatus::Granted,
+            SessionKind::Wayland | SessionKind::Unknown => PermissionStatus::Unknown,
         },
 
         // Synthetic input (XTEST) is free under X11; Wayland denies global
         // input grabs to ordinary clients.
         PermissionKind::Accessibility | PermissionKind::InputMonitoring => match session {
-            SessionType::X11 => PermissionStatus::Granted,
-            SessionType::Wayland | SessionType::Unknown => PermissionStatus::Unknown,
+            SessionKind::X11 => PermissionStatus::Granted,
+            SessionKind::Wayland | SessionKind::Unknown => PermissionStatus::Unknown,
         },
 
         // Device-gated kinds are handled by `status_for` before reaching here.
@@ -182,7 +159,7 @@ const fn rationale(kind: PermissionKind) -> &'static str {
 }
 
 /// Step-by-step guidance for granting a kind on Linux.
-fn steps(kind: PermissionKind, session: SessionType) -> Vec<String> {
+fn steps(kind: PermissionKind, session: SessionKind) -> Vec<String> {
     match kind {
         PermissionKind::Camera => vec![
             "Add your user to the `video` group: `sudo usermod -aG video $USER`.".to_string(),
@@ -197,7 +174,7 @@ fn steps(kind: PermissionKind, session: SessionType) -> Vec<String> {
             "Return to Aleph and retry.".to_string(),
         ],
         PermissionKind::ScreenRecording => match session {
-            SessionType::Wayland => vec![
+            SessionKind::Wayland => vec![
                 "Wayland routes screen capture through xdg-desktop-portal.".to_string(),
                 "When Aleph first captures the screen, approve the portal dialog.".to_string(),
                 "Ensure `xdg-desktop-portal` and a backend (e.g. \
@@ -207,7 +184,7 @@ fn steps(kind: PermissionKind, session: SessionType) -> Vec<String> {
             _ => vec!["Screen capture is available without a prompt on X11.".to_string()],
         },
         PermissionKind::Accessibility | PermissionKind::InputMonitoring => match session {
-            SessionType::Wayland => vec![
+            SessionKind::Wayland => vec![
                 "Wayland denies global input injection to ordinary clients.".to_string(),
                 "Use an X11/XWayland session for full pointer/keyboard control.".to_string(),
             ],
@@ -287,7 +264,7 @@ async fn in_group(group: &str) -> bool {
 
 /// Resolve the status for any kind: device-gated kinds probe the device tree +
 /// groups, everything else uses the session-aware [`ungated_status`] mapping.
-async fn status_for(kind: PermissionKind, session: SessionType) -> PermissionStatus {
+async fn status_for(kind: PermissionKind, session: SessionKind) -> PermissionStatus {
     match kind {
         PermissionKind::Camera => classify_camera(camera_present(), in_group("video").await),
         PermissionKind::Microphone => classify_microphone(microphone_present()),
@@ -295,21 +272,39 @@ async fn status_for(kind: PermissionKind, session: SessionType) -> PermissionSta
     }
 }
 
-/// Try to open a desktop settings/privacy panel. Best-effort: tries GNOME then
-/// KDE control centers. Returns whether a launch was dispatched.
+/// Try to open a desktop settings/privacy panel. Best-effort across the major
+/// desktops; returns whether a launch was dispatched.
+///
+/// **Spawned, never waited on.** This used to call `.status()`, which blocks
+/// until the settings *window is closed* — so `permission(request)` and
+/// `permission(open_settings)` hung the entire agent turn until the user
+/// noticed and closed a window they may not have seen open. A settings panel
+/// outlives the tool call by definition.
+///
+/// "Dispatched" is therefore the honest claim: we know the binary started, not
+/// that the user did anything with it.
 async fn open_settings_panel() -> bool {
     #[cfg(target_os = "linux")]
     {
+        use std::process::Stdio;
         use tokio::process::Command;
         for (bin, args) in [
             ("gnome-control-center", &["privacy"][..]),
-            ("systemsettings5", &[][..]),
             ("systemsettings", &[][..]),
+            ("systemsettings5", &[][..]),
+            ("xfce4-settings-manager", &[][..]),
+            ("cinnamon-settings", &[][..]),
+            ("mate-control-center", &[][..]),
         ] {
-            if let Ok(status) = Command::new(bin).args(args).status().await {
-                if status.success() {
-                    return true;
-                }
+            if Command::new(bin)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok()
+            {
+                return true;
             }
         }
         false
@@ -327,7 +322,7 @@ async fn open_settings_panel() -> bool {
 #[async_trait]
 impl PermissionCapability for LinuxPermission {
     async fn check(&self, permission: PermissionKind) -> Result<PermissionInfo> {
-        let session = detect_session();
+        let session = aleph_desktop::linux::session().kind;
         Ok(build_info(
             permission,
             status_for(permission, session).await,
@@ -335,7 +330,7 @@ impl PermissionCapability for LinuxPermission {
     }
 
     async fn check_all(&self) -> Result<Vec<PermissionInfo>> {
-        let session = detect_session();
+        let session = aleph_desktop::linux::session().kind;
         let mut infos = Vec::with_capacity(TCC_MANAGED.len());
         for &kind in TCC_MANAGED {
             infos.push(build_info(kind, status_for(kind, session).await));
@@ -347,7 +342,7 @@ impl PermissionCapability for LinuxPermission {
         // Linux access is granted by group membership / session type, not by a
         // programmatic prompt. The helpful analogue is to open the settings
         // panel so the user can review access; then report current status.
-        let session = detect_session();
+        let session = aleph_desktop::linux::session().kind;
         let status = status_for(permission, session).await;
         if !matches!(status, PermissionStatus::Granted) {
             let _ = open_settings_panel().await;
@@ -356,7 +351,7 @@ impl PermissionCapability for LinuxPermission {
     }
 
     async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus> {
-        let session = detect_session();
+        let session = aleph_desktop::linux::session().kind;
         let status = status_for(kind, session).await;
         Ok(ProtocolPermissionStatus {
             kind,
@@ -368,7 +363,7 @@ impl PermissionCapability for LinuxPermission {
     }
 
     async fn guide_permission(&self, kind: PermissionKind) -> Result<PermissionGuide> {
-        let session = detect_session();
+        let session = aleph_desktop::linux::session().kind;
         let status = self.check_permission(kind).await?;
         Ok(PermissionGuide {
             kind,
@@ -400,7 +395,7 @@ mod tests {
 
     #[test]
     fn notifications_always_granted() {
-        for session in [SessionType::X11, SessionType::Wayland, SessionType::Unknown] {
+        for session in [SessionKind::X11, SessionKind::Wayland, SessionKind::Unknown] {
             assert_eq!(
                 ungated_status(PermissionKind::Notifications, session),
                 PermissionStatus::Granted
@@ -416,17 +411,17 @@ mod tests {
             PermissionKind::InputMonitoring,
         ] {
             assert_eq!(
-                ungated_status(kind, SessionType::X11),
+                ungated_status(kind, SessionKind::X11),
                 PermissionStatus::Granted,
                 "{kind:?} should be Granted on X11"
             );
             assert_eq!(
-                ungated_status(kind, SessionType::Wayland),
+                ungated_status(kind, SessionKind::Wayland),
                 PermissionStatus::Unknown,
                 "{kind:?} should be Unknown on Wayland"
             );
             assert_eq!(
-                ungated_status(kind, SessionType::Unknown),
+                ungated_status(kind, SessionKind::Unknown),
                 PermissionStatus::Unknown
             );
         }
@@ -445,7 +440,7 @@ mod tests {
             PermissionKind::Location,
         ] {
             assert_eq!(
-                ungated_status(kind, SessionType::X11),
+                ungated_status(kind, SessionKind::X11),
                 PermissionStatus::Unknown
             );
         }
@@ -489,13 +484,13 @@ mod tests {
 
     #[test]
     fn steps_are_actionable() {
-        assert!(!steps(PermissionKind::Camera, SessionType::X11).is_empty());
-        assert!(!steps(PermissionKind::Microphone, SessionType::Wayland).is_empty());
+        assert!(!steps(PermissionKind::Camera, SessionKind::X11).is_empty());
+        assert!(!steps(PermissionKind::Microphone, SessionKind::Wayland).is_empty());
         // Wayland screen-record guidance mentions the portal.
-        let sr = steps(PermissionKind::ScreenRecording, SessionType::Wayland);
+        let sr = steps(PermissionKind::ScreenRecording, SessionKind::Wayland);
         assert!(sr.iter().any(|s| s.contains("portal")));
         // X11 screen-record guidance is the no-prompt path.
-        let sr_x11 = steps(PermissionKind::ScreenRecording, SessionType::X11);
+        let sr_x11 = steps(PermissionKind::ScreenRecording, SessionKind::X11);
         assert!(sr_x11.iter().any(|s| s.contains("X11")));
     }
 

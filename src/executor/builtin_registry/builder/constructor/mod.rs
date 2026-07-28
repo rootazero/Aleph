@@ -13,7 +13,7 @@ use crate::error::AlephError;
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
@@ -361,7 +361,8 @@ impl BuiltinToolRegistry {
             .with_allow_global_pointer(allow_global_pointer)
             .with_clipboard_enabled(clipboard_enabled);
 
-        // AX query tools (macOS + Windows UIA; degrade gracefully on Linux).
+        // AX query tools (macOS AX / Windows UIA / Linux AT-SPI2; degrade gracefully
+        // wherever the platform reports no accessibility layer).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()
             .with_platform(Arc::clone(&desktop_platform));
         let desktop_ax_query_tree_tool = crate::builtin_tools::DesktopAxQueryTree::new()
@@ -1131,13 +1132,6 @@ impl BuiltinToolRegistry {
             // ClarificationManager is always injected via deferred wiring at
             // boot (created alongside channels) — start the cell empty.
             clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
-            clawhub_tool: match crate::builtin_tools::clawhub::ClawHubTool::new() {
-                Ok(tool) => Some(tool),
-                Err(e) => {
-                    warn!("ClawHubTool disabled: {}", e);
-                    None
-                }
-            },
             // Wire the LLM-facing routing query tool from the SAME live config
             // the inbound gateway snapshots (`subsystems.rs::with_route_bindings`).
             // Previously `::default()` gave it empty bindings + default session

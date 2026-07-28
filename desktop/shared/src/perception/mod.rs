@@ -16,11 +16,16 @@ mod ocr_linux;
 mod ocr_windows;
 mod screen_record;
 mod screenshot;
+#[cfg(windows)]
+mod window_capture;
 
 pub use screenshot::{
     capture_screen_png, is_degenerate, list_displays, process_screenshot, take_screenshot,
-    take_screenshot_display, DEFAULT_SCREENSHOT_MAX_BYTES,
+    take_screenshot_display, take_screenshot_window, DEFAULT_SCREENSHOT_MAX_BYTES,
 };
+
+#[cfg(windows)]
+pub use window_capture::capture_window;
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use screen_record::screen_record;
@@ -40,8 +45,10 @@ use crate::OcrResult;
 ///
 /// # Errors
 ///
-/// - [`DesktopError::NotImplemented`] on non-Windows platforms.
-/// - [`DesktopError::OcrFailed`] if the Windows OCR engine fails.
+/// - [`DesktopError::NotImplemented`] on platforms with no OCR backend
+///   (macOS reaches its own through the Swift helper, not through here).
+/// - [`DesktopError::OcrFailed`] if the platform OCR engine fails — on Linux
+///   that includes `tesseract` not being installed, and the message says so.
 pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
     #[cfg(target_os = "windows")]
     {
@@ -68,10 +75,15 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
 mod tests {
     use super::*;
 
-    /// On non-Windows platforms, `perform_ocr` should return `NotImplemented`.
-    #[cfg(not(target_os = "windows"))]
+    /// On a platform with no OCR backend compiled in, `perform_ocr` says so.
+    ///
+    /// Linux is excluded because it *does* have one (the Tesseract CLI); it is
+    /// covered by [`ocr_reports_a_missing_tesseract_as_such`] instead. This
+    /// test used to run on Linux and passed only while the Linux arm did not
+    /// exist — after it was added it asserted a contract the code no longer had.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     #[test]
-    fn test_ocr_not_implemented_on_non_windows() {
+    fn test_ocr_not_implemented_on_platforms_without_a_backend() {
         let dummy_png = b"fake png data";
         let result = perform_ocr(dummy_png);
         assert!(result.is_err());
@@ -83,6 +95,23 @@ mod tests {
                 );
             }
             other => panic!("Expected NotImplemented, got: {other:?}"),
+        }
+    }
+
+    /// Linux OCR is real, so the honest failure for a host without the
+    /// `tesseract` binary is `OcrFailed` naming the package — not
+    /// `NotImplemented`, and never a silent empty result.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ocr_reports_a_missing_tesseract_as_such() {
+        match perform_ocr(b"fake png data") {
+            // tesseract present: it rejects the bogus PNG.
+            Ok(result) => assert!(result.full_text.is_empty()),
+            Err(DesktopError::OcrFailed(msg)) => assert!(
+                msg.contains("tesseract") || msg.contains("Tesseract"),
+                "the error must name the missing package: {msg}"
+            ),
+            Err(other) => panic!("Expected OcrFailed, got: {other:?}"),
         }
     }
 

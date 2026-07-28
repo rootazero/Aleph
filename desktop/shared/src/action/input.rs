@@ -227,6 +227,14 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
     // Linux enigo backend cannot be asked to emit billions of click events.
     let amount = amount.clamp(-MAX_SCROLL_CLICKS, MAX_SCROLL_CLICKS);
 
+    // Every other input verb already had this branch; scroll did not, so on a
+    // Wayland session it fell through to enigo/XTEST — which the compositor
+    // blocks — and reported the resulting no-op as a success.
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::scroll(direction, amount);
+    }
+
     // `amount` is documented as positive, but negating `i32::MIN` would overflow
     // (panic in debug). `saturating_neg` is identical for all valid positive
     // inputs and keeps the helper panic-free at the boundary (P7).
@@ -374,6 +382,20 @@ pub fn hover(x: f64, y: f64) -> Result<()> {
 
 /// Get current mouse cursor position.
 pub fn cursor_position() -> Result<(f64, f64)> {
+    // Wayland has no pointer-position query for ordinary clients (the protocol
+    // deliberately withholds the global cursor), and ydotool is write-only. The
+    // enigo path would fail here with an opaque construction error, so say what
+    // is actually true and what to do instead.
+    #[cfg(target_os = "linux")]
+    if crate::linux::session().kind.is_wayland() {
+        return Err(DesktopError::NotImplemented(
+            "Wayland does not expose the pointer position to applications. Aleph's input actions \
+             take explicit coordinates, so locate the target with a screenshot (desktop_som / \
+             gui_locate) and click that point instead of reading the cursor."
+                .into(),
+        ));
+    }
+
     let enigo = new_enigo()?;
     let (x, y) = enigo
         .location()
@@ -434,20 +456,10 @@ pub fn clipboard_read() -> Result<String> {
 
     #[cfg(target_os = "linux")]
     {
-        let output = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard", "-o"])
-            .output()
-            .or_else(|_| {
-                std::process::Command::new("xsel")
-                    .args(["--clipboard", "--output"])
-                    .output()
-            })
-            .map_err(|e| {
-                DesktopError::InputFailed(format!(
-                    "Failed to read clipboard (install xclip or xsel): {e}"
-                ))
-            })?;
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        // One Linux clipboard implementation, session-aware and exit-status
+        // checked — see `crate::linux::clipboard`. This arm used to be a second,
+        // X11-only copy that reported failures as an empty clipboard.
+        crate::linux::clipboard::read_text()
     }
 
     #[cfg(target_os = "windows")]
@@ -486,30 +498,7 @@ pub fn clipboard_write(text: &str) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        use std::io::Write;
-        let mut child = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .or_else(|_| {
-                std::process::Command::new("xsel")
-                    .args(["--clipboard", "--input"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-            })
-            .map_err(|e| {
-                DesktopError::InputFailed(format!(
-                    "Failed to write clipboard (install xclip or xsel): {e}"
-                ))
-            })?;
-        if let Some(ref mut stdin) = child.stdin {
-            stdin.write_all(text.as_bytes()).map_err(|e| {
-                DesktopError::InputFailed(format!("Failed to write to clipboard: {e}"))
-            })?;
-        }
-        child
-            .wait()
-            .map_err(|e| DesktopError::InputFailed(format!("Clipboard process failed: {e}")))?;
+        crate::linux::clipboard::write_text(text)?;
         info!("Clipboard write performed");
         Ok(())
     }

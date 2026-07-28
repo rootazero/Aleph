@@ -42,6 +42,11 @@ image = { workspace = true }
 # Input automation
 enigo = { version = "0.3", features = ["serde"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native X11/EWMH window management. Pure-Rust connection (no libxcb needed);
+# already in the dependency graph via xcap's Linux backend.
+x11rb = "0.13"
+
 [target.'cfg(unix)'.dependencies]
 # setpgid on helper spawn so signals propagate when aleph-server exits.
 libc = "0.2"
@@ -64,6 +69,25 @@ windows = { version = "0.58", features = [
     # UI Automation (AX tree)
     "Win32_UI_Accessibility",
     "Win32_System_Com",
+    # Process DPI awareness — decides whether window/AX geometry is reported in
+    # physical pixels or virtualized (see `win_dpi`).
+    "Win32_UI_HiDpi",
+    # DWM window attributes: cloak detection + the true visible frame bounds
+    # (GetWindowRect includes the invisible resize border on composited windows).
+    "Win32_Graphics_Dwm",
+    # BitBlt / DIB backing for window-scoped capture. `PrintWindow` itself lives
+    # under Storage_Xps in the Win32 metadata, oddly enough.
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    # Executable name + frontmost-process resolution for the running-app list.
+    "Win32_System_ProcessStatus",
+    # ConsentStore permission reads without shelling out to PowerShell.
+    "Win32_System_Registry",
+    # Real OS build number for system_info.
+    "Win32_System_SystemInformation",
+    # Version-resource read: an executable's FileDescription is the friendly app
+    # name a person (and a model) uses — "Google Chrome", not "chrome.exe".
+    "Win32_Storage_FileSystem",
 ] }
 
 # Clipboard read/write (Unicode text) — same crate already used by desktop/windows.

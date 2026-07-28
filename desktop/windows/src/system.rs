@@ -5,6 +5,73 @@ use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 
+/// Where Windows records its own build identity.
+#[cfg_attr(not(windows), allow(dead_code))]
+const CURRENT_VERSION_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+/// Assemble a human-meaningful OS version string, e.g.
+/// `"Windows 11 Pro 24H2 (build 26100.2894)"`.
+///
+/// The previous implementation returned `std::env::var("OS")`, which is the
+/// literal string `"Windows_NT"` on every Windows machine ever shipped — the
+/// same seven characters for Windows 7 and Windows 11, carrying no version at
+/// all. `system_info` is what a model reads before deciding whether a feature
+/// exists on this machine, so a constant there is worse than an empty string.
+///
+/// Read from the registry rather than `GetVersionExW`, which lies to
+/// unmanifested processes by design (it reports 6.2 unless the executable
+/// declares Windows 10 compatibility in its manifest — and a Rust binary ships
+/// no manifest). Each field degrades independently: an unreadable value is
+/// dropped from the string, never guessed at.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_version() -> String {
+    #[cfg(windows)]
+    {
+        use aleph_desktop::win_registry::{read_string, read_u32, Hive};
+
+        let get = |name: &str| read_string(Hive::LocalMachine, CURRENT_VERSION_KEY, name);
+
+        // `CurrentBuild` is a REG_SZ, not a DWORD — the only DWORDs in this key
+        // are `UBR` and the `Current{Major,Minor}VersionNumber` pair.
+        let build_number: Option<u32> = get("CurrentBuild").and_then(|b| b.parse().ok());
+
+        // Microsoft froze `ProductName` at "Windows 10 …" on Windows 11 machines;
+        // the build number is the field that actually tells them apart (11 ships
+        // 22000+). Reporting "Windows 10" on a Windows 11 box would send a model
+        // looking for the wrong UI.
+        let product = get("ProductName").map(|p| match build_number {
+            Some(build) if build >= 22_000 => p.replace("Windows 10", "Windows 11"),
+            _ => p,
+        });
+        // `DisplayVersion` ("24H2") replaced `ReleaseId` ("2009") in 20H2.
+        let release = get("DisplayVersion").or_else(|| get("ReleaseId"));
+        // `UBR` is the update-revision suffix: 26100 + 2894 → "build 26100.2894",
+        // which is the form Winver and every support page use.
+        let build =
+            build_number.map(
+                |b| match read_u32(Hive::LocalMachine, CURRENT_VERSION_KEY, "UBR") {
+                    Some(ubr) => format!("build {b}.{ubr}"),
+                    None => format!("build {b}"),
+                },
+            );
+
+        let mut parts: Vec<String> = Vec::new();
+        parts.extend(product);
+        parts.extend(release);
+        let head = parts.join(" ");
+        match (head.is_empty(), build) {
+            (true, Some(b)) => b,
+            (true, None) => "Windows".to_string(),
+            (false, Some(b)) => format!("{head} ({b})"),
+            (false, None) => head,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        "Windows".to_string()
+    }
+}
+
 pub struct WindowsSystem {
     _private: (),
 }
@@ -81,57 +148,37 @@ impl SystemCapability for WindowsSystem {
             .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
     }
 
+    /// One entry per **process** that owns a visible top-level window.
+    ///
+    /// This used to enumerate *windows* and report each window's title as an app
+    /// name, which broke three separate things that all read this list:
+    ///
+    /// * `app:` targeting matched titles, so `app: "explorer"` missed (File
+    ///   Explorer titles itself after the open folder) while two browser windows
+    ///   made `app: "chrome"` ambiguous and the tool refused rather than
+    ///   resolving the one process behind both.
+    /// * `is_active` was hard-coded `false`, so the frontmost-app lookup that
+    ///   arms the credential-manager hard block (`check_blocked_app`) never found
+    ///   a target and the block was inert on Windows.
+    /// * `observe`'s post-action state reported no frontmost app at all.
+    ///
+    /// `name` is now the executable's `FileDescription` ("Google Chrome") with
+    /// the file stem as fallback, and `bundle_id` is the full executable path —
+    /// Windows' closest analogue to a bundle id, and what makes `app:
+    /// "chrome.exe"` resolvable. See [`aleph_desktop::win_window`].
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>> {
         #[cfg(windows)]
         {
             tokio::task::spawn_blocking(|| {
-                use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-                };
-
-                struct EnumState {
-                    apps: Vec<AppInfo>,
-                }
-
-                // SAFETY: EnumWindows callback follows documented signature.
-                extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                    // SAFETY: `lparam` carries the `&mut EnumState` we pass to
-                    // `EnumWindows`, which outlives this synchronous enumeration;
-                    // remaining calls are documented Win32 APIs.
-                    unsafe {
-                        if IsWindowVisible(hwnd).as_bool() {
-                            let mut buf = [0u16; 512];
-                            let len = GetWindowTextW(hwnd, &mut buf);
-                            if len > 0 {
-                                let title = String::from_utf16_lossy(&buf[..len as usize]);
-                                let mut pid: u32 = 0;
-                                GetWindowThreadProcessId(hwnd, Some(std::ptr::addr_of_mut!(pid)));
-
-                                let state = &mut *(lparam.0 as *mut EnumState);
-                                state.apps.push(AppInfo {
-                                    name: title,
-                                    bundle_id: String::new(),
-                                    pid: Some(u64::from(pid)),
-                                    is_active: false,
-                                });
-                            }
-                        }
-                        BOOL(1)
-                    }
-                }
-
-                let mut state = EnumState { apps: Vec::new() };
-                // SAFETY: `enum_proc` matches `WNDENUMPROC`; `state` outlives the
-                // synchronous enumeration.
-                unsafe {
-                    let _ = EnumWindows(
-                        Some(enum_proc),
-                        LPARAM(std::ptr::addr_of_mut!(state) as isize),
-                    );
-                }
-
-                Ok(state.apps)
+                Ok(aleph_desktop::win_window::running_apps()
+                    .into_iter()
+                    .map(|app| AppInfo {
+                        name: app.name,
+                        bundle_id: app.executable,
+                        pid: Some(u64::from(app.pid)),
+                        is_active: app.is_active,
+                    })
+                    .collect())
             })
             .await
             .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
@@ -144,42 +191,57 @@ impl SystemCapability for WindowsSystem {
         }
     }
 
+    /// Post a toast via the WinRT notification manager, driven from PowerShell.
+    ///
+    /// Title and body travel as **environment variables**, so the script text is
+    /// a constant. Interpolating them doubled `'` and nothing else, which left
+    /// every other PowerShell metacharacter — and, more commonly, the newlines
+    /// an R5 summary is full of — free to break the string literal and fail the
+    /// whole notification. (The same class of bug was fixed on the macOS
+    /// AppleScript path in 2026-07; the Windows path was not.)
     async fn send_notification(&self, title: &str, body: &str) -> Result<()> {
         #[cfg(windows)]
         {
+            /// Constant script: reads both values from the environment, so
+            /// nothing the caller controls is parsed as PowerShell.
+            const TOAST_SCRIPT: &str = r"
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
+$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$nodes = $template.GetElementsByTagName('text')
+$null = $nodes.Item(0).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_TITLE))
+$null = $nodes.Item(1).AppendChild($template.CreateTextNode($env:ALEPH_TOAST_BODY))
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Aleph').Show([Windows.UI.Notifications.ToastNotification]::new($template))
+";
+
             let title = title.to_string();
             let body = body.to_string();
-            tokio::task::spawn_blocking(move || {
-                // Use PowerShell to show a toast notification via WinRT APIs.
-                let script = format!(
-                    r#"Add-Type -AssemblyName System.Runtime.WindowsRuntime;
-$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];
-$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);
-$template.GetElementsByTagName('text').Item(0).AppendChild($template.CreateTextNode('{}')) | Out-Null;
-$template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextNode('{}')) | Out-Null;
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Aleph').Show([Windows.UI.Notifications.ToastNotification]::new($template));"#,
-                    title.replace('\'', "''"),
-                    body.replace('\'', "''")
-                );
-
-                match std::process::Command::new("powershell.exe")
-                    .args(["-NoProfile", "-Command", &script])
+            // `hidden_std_command`: a console child spawned by the windowless
+            // daemon pops a black window on the user's screen — for a
+            // *notification*, which is the one thing that must not startle.
+            let output = tokio::task::spawn_blocking(move || {
+                aleph_desktop::script_exec::hidden_std_command("powershell.exe")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", TOAST_SCRIPT])
+                    .env("ALEPH_TOAST_TITLE", title)
+                    .env("ALEPH_TOAST_BODY", body)
                     .output()
-                {
-                    Ok(output) if output.status.success() => Ok(()),
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(DesktopError::PlatformError(format!(
-                            "toast notification failed: {stderr}"
-                        )))
-                    }
-                    Err(e) => Err(DesktopError::PlatformError(format!(
-                        "failed to spawn powershell for notification: {e}"
-                    ))),
-                }
             })
             .await
-            .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
+            .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?;
+
+            match output {
+                Ok(out) if out.status.success() => Ok(()),
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    Err(DesktopError::PlatformError(format!(
+                        "toast notification failed: {}",
+                        stderr.trim()
+                    )))
+                }
+                Err(e) => Err(DesktopError::PlatformError(format!(
+                    "failed to spawn powershell for notification: {e}"
+                ))),
+            }
         }
         #[cfg(not(windows))]
         {
@@ -276,7 +338,7 @@ $template.GetElementsByTagName('text').Item(1).AppendChild($template.CreateTextN
 
                 Ok(SystemInfo {
                     os_name: "Windows".to_string(),
-                    os_version: std::env::var("OS").unwrap_or_else(|_| "Windows NT".to_string()),
+                    os_version: windows_version(),
                     hostname,
                     arch: std::env::consts::ARCH.to_string(),
                     username,

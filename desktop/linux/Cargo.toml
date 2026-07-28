@@ -22,3 +22,10 @@ serde_json = { workspace = true }
 # already compiled for desktop/shared + desktop/macos — no new external crate).
 base64 = { workspace = true }
 image = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# AT-SPI2 accessibility over D-Bus — the Linux counterpart to macOS AX and
+# Windows UI Automation. Runs on zbus, which is already in the dependency
+# graph (xcap / tauri plugins), so this adds a protocol layer, not a stack.
+atspi = { version = "0.30", default-features = false, features = ["connection", "proxies", "tokio"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }

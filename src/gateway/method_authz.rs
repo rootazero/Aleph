@@ -32,7 +32,6 @@ const OPERATOR_TOOLS: &[&str] = &[
     "agent_delete",
     "agent_switch",
     "channel_pairing",
-    "clawhub",
     "hub_install_run",
     "moa",
     // Cluster: driving remote execution arms. Local `bash` is deliberately open

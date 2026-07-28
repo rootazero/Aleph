@@ -109,9 +109,10 @@ impl AlephTool for DesktopAxQueryFocused {
          its own affordances: `actions` (the exact AX action names it supports — pass one \
          verbatim to `ax_action` instead of guessing), `enabled:false` when greyed out, \
          `settable:false` when its value cannot be written, `secure:true` for a password field \
-         (whose value is never returned). Available on macOS (Accessibility permission required) \
-         and Windows (UI Automation); unavailable on Linux — fall back to screenshot + \
-         gui_locate there.";
+         (whose value is never returned). Available on macOS (Accessibility permission required), \
+         Windows (UI Automation) and Linux (AT-SPI2, when the desktop has accessibility \
+         enabled); where no accessibility layer is available, fall back to screenshot + \
+         gui_locate.";
 
     type Args = DesktopAxQueryFocusedArgs;
     type Output = DesktopOutput;
@@ -168,8 +169,9 @@ impl AlephTool for DesktopAxQueryTree {
          AX action names that node supports — pass one verbatim to `ax_action` instead of \
          guessing), `enabled` (false = greyed out), `settable` (false = value not writable), \
          `secure` (true = password field; its value is never returned). Available on macOS \
-         (Accessibility permission required) and Windows (UI Automation); unavailable on \
-         Linux — fall back to screenshot + gui_locate there.";
+         (Accessibility permission required), Windows (UI Automation) and Linux (AT-SPI2, when \
+         the desktop has accessibility enabled); where no accessibility layer is available, \
+         fall back to screenshot + gui_locate.";
 
     type Args = DesktopAxQueryTreeArgs;
     type Output = DesktopOutput;
@@ -228,8 +230,9 @@ impl AlephTool for DesktopAxQueryByRole {
          supports — pass one verbatim to `ax_action` instead of guessing), plus `enabled` \
          (false = greyed out), `settable` (false = value not writable) and `secure` (true = \
          password field; its value is never returned). Available on macOS (Accessibility \
-         permission required) and Windows (UI Automation); unavailable on Linux — fall back to \
-         screenshot + gui_locate there.";
+         permission required), Windows (UI Automation) and Linux (AT-SPI2, when the desktop has \
+         accessibility enabled); where no accessibility layer is available, fall back to \
+         screenshot + gui_locate.";
 
     type Args = DesktopAxQueryByRoleArgs;
     type Output = DesktopOutput;
@@ -380,8 +383,9 @@ impl AlephTool for DesktopAxSnapshot {
          the precondition instead); `settable:false` means its value cannot be written with \
          `set_value`; `secure:true` marks a password field, whose value is never returned and \
          which must not be typed into. Omit `pid` to snapshot the frontmost app. Available on \
-         macOS (Accessibility permission required) and Windows (UI Automation); unavailable on \
-         Linux — fall back to screenshot + gui_locate there.";
+         macOS (Accessibility permission required), Windows (UI Automation) and Linux (AT-SPI2, \
+         when the desktop has accessibility enabled); where no accessibility layer is available, \
+         fall back to screenshot + gui_locate.";
 
     type Args = DesktopAxSnapshotArgs;
     type Output = DesktopOutput;
