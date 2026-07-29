@@ -55,12 +55,15 @@ pub(in crate::commands::start) fn register_session_handlers(
         session_handlers::handle_usage_db,
         session_store
     );
-    register_handler!(
-        server,
-        "session.compact",
-        session_handlers::handle_compact_db,
-        session_store
-    );
+    // Manual compaction needs no SessionStore: it edits the session *event
+    // log* (what the prompt is rebuilt from) through the process-wide handles,
+    // not the `messages` read projection. Registered plainly rather than via
+    // `register_handler!`, which exists to bind a store.
+    server
+        .handlers_mut()
+        .register("session.compact", |req| async move {
+            session_handlers::handle_compact_db(req).await
+        });
     register_handler!(
         server,
         "session.truncate",

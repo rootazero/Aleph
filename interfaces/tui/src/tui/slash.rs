@@ -62,8 +62,10 @@ pub enum LocalCommand {
     ReplayShow { task_id: String },
     /// Show session token usage + cost estimate
     Usage,
-    /// Trigger session compaction (`KeepLastN` strategy)
-    Compress,
+    /// Summarize this conversation's older turns and drop them from the live
+    /// context. `instructions` is the optional trailing free text steering what
+    /// the summary must preserve (codex / pi / kimi-cli `/compact [instructions]`).
+    Compress { instructions: String },
     /// Abort the currently active run, if any
     Stop,
     /// Truncate the last user+assistant turn from history
@@ -89,7 +91,7 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ),
     (
         "/compress",
-        "Compact session history (server-side summarisation)",
+        "Summarize older turns and drop them from context (/compress [instructions])",
     ),
     ("/stop", "Abort the currently active run"),
     ("/undo", "Remove the last user+assistant turn from history"),
@@ -141,7 +143,9 @@ pub fn parse_input(input: &str) -> ParsedInput {
         "/clear" => ParsedInput::Local(LocalCommand::Clear),
         "/verbose" => ParsedInput::Local(LocalCommand::Verbose),
         "/usage" => ParsedInput::Local(LocalCommand::Usage),
-        "/compress" | "/compact" => ParsedInput::Local(LocalCommand::Compress),
+        "/compress" | "/compact" => ParsedInput::Local(LocalCommand::Compress {
+            instructions: args.to_string(),
+        }),
         "/stop" | "/abort" => ParsedInput::Local(LocalCommand::Stop),
         "/undo" => ParsedInput::Local(LocalCommand::Undo),
         "/retry" => ParsedInput::Local(LocalCommand::Retry),
@@ -227,12 +231,24 @@ mod tests {
         );
         assert_eq!(
             parse_input("/compress"),
-            ParsedInput::Local(LocalCommand::Compress)
+            ParsedInput::Local(LocalCommand::Compress {
+                instructions: String::new()
+            })
         );
         // /compact is an accepted alias for hermes parity
         assert_eq!(
             parse_input("/compact"),
-            ParsedInput::Local(LocalCommand::Compress)
+            ParsedInput::Local(LocalCommand::Compress {
+                instructions: String::new()
+            })
+        );
+        // Trailing free text becomes the summary directive (codex / pi /
+        // kimi-cli `/compact [instructions]`), not a chat message.
+        assert_eq!(
+            parse_input("/compact keep the API decisions"),
+            ParsedInput::Local(LocalCommand::Compress {
+                instructions: "keep the API decisions".to_string()
+            })
         );
         assert_eq!(parse_input("/stop"), ParsedInput::Local(LocalCommand::Stop));
         assert_eq!(

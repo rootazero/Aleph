@@ -7,9 +7,8 @@ use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionIdentityMeta, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
-    SessionChangedEvent, SessionFilter, SessionMetadata, SessionPatch, SessionPreview,
-    TruncateResult,
+    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionChangedEvent, SessionFilter,
+    SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
 };
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
@@ -214,30 +213,13 @@ impl FileSessionStore {
         Ok(())
     }
 
-    pub(crate) async fn write_checkpoint(
-        &self,
-        key: &str,
-        checkpoint_id: &str,
-        messages: &[MessageRecord],
-    ) -> Result<(), SessionStoreError> {
-        let dir = self.checkpoint_dir(key);
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create checkpoint dir: {e}"))
-        })?;
-        let path = dir.join(format!("{checkpoint_id}.jsonl"));
-        let mut contents = String::new();
-        for msg in messages {
-            let line = serde_json::to_string(msg).map_err(|e| {
-                SessionStoreError::DatabaseError(format!("Serialize checkpoint failed: {e}"))
-            })?;
-            contents.push_str(&line);
-            contents.push('\n');
-        }
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Write checkpoint failed: {e}"))
-        })?;
-        Ok(())
-    }
+    // NOTE: `write_checkpoint` is gone with the destructive `compact` that was
+    // its only caller. Checkpoints existed to make that deletion undoable;
+    // manual `/compact` deletes nothing, so there is nothing to snapshot. The
+    // readers (`list_checkpoints` / `restore_checkpoint` /
+    // `branch_from_checkpoint`, and their `sessions.compaction.*` RPCs) are
+    // kept and simply observe an empty set — they were already `Unsupported`
+    // on the default SQLite backend, so no default deployment changes.
 
     pub(crate) async fn read_checkpoint(
         &self,
@@ -556,59 +538,6 @@ impl SessionStore for FileSessionStore {
             }
         }
         Ok(hits)
-    }
-
-    async fn compact(
-        &self,
-        key: &SessionKey,
-        strategy: CompactStrategy,
-    ) -> Result<CompactResult, SessionStoreError> {
-        match strategy {
-            CompactStrategy::KeepLastN { n } => {
-                let key_str = key.to_key_string();
-                let mut messages = self.read_transcript(&key_str, None).await?;
-                let original = messages.len();
-                if original <= n {
-                    return Ok(CompactResult {
-                        compacted: false,
-                        deleted: 0,
-                    });
-                }
-                let checkpoint_id = format!("{}", chrono::Utc::now().timestamp_millis());
-                let removed: Vec<MessageRecord> = messages.drain(0..original - n).collect();
-                let deleted = removed.len();
-                self.write_checkpoint(&key_str, &checkpoint_id, &removed)
-                    .await?;
-                let path = self.transcript_path(&key_str);
-                let mut contents = String::new();
-                for msg in &messages {
-                    let line = serde_json::to_string(msg).map_err(|e| {
-                        SessionStoreError::DatabaseError(format!("Serialize failed: {e}"))
-                    })?;
-                    contents.push_str(&line);
-                    contents.push('\n');
-                }
-                tokio::fs::write(&path, contents).await.map_err(|e| {
-                    SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
-                })?;
-                if let Some(mut meta) = self.read_metadata(&key_str).await? {
-                    meta.message_count = messages.len() as i64;
-                    meta.compaction_count += 1;
-                    meta.checkpoints.push(CheckpointSummary {
-                        checkpoint_id: checkpoint_id.clone(),
-                        created_at: chrono::Utc::now().timestamp(),
-                        message_count: removed.len() as i64,
-                        retained_message_count: messages.len() as i64,
-                    });
-                    self.write_metadata(&key_str, &meta).await?;
-                    self.emit_session_changed(&key_str, "compact", Some(&meta));
-                }
-                Ok(CompactResult {
-                    compacted: true,
-                    deleted,
-                })
-            }
-        }
     }
 
     async fn truncate_messages(
