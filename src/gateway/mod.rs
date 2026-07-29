@@ -184,7 +184,7 @@ pub use run_event_bus::{
     wait_for_run_end, ActiveRunHandle, QueueError, RunEndResult, RunEvent,
     RunStatus as RunEventStatus, WaitError,
 };
-pub use webhook_receiver::{WebhookHandler, WebhookReceiver};
+pub use webhook_receiver::{WebhookHandler, WebhookMount, WebhookReceiver};
 pub use webhooks::{
     create_router as create_webhook_router, SignatureFormat, WebhookEndpointConfig, WebhookError,
     WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhooksConfig,

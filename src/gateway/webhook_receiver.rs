@@ -46,10 +46,9 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
-use super::channel::{ChannelResult, InboundMessage};
+use super::channel::{ChannelResult, InboundMessage, InboundMessageSender};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -78,100 +77,63 @@ pub trait WebhookHandler: Send + Sync {
     fn path(&self) -> &str;
 }
 
-/// Shared HTTP server for receiving channel webhooks.
+/// One webhook handler mounted at its own path, paired with the inbound sink
+/// of the channel that owns it.
 ///
-/// Manages an axum HTTP server that routes incoming webhook requests
-/// to registered `WebhookHandler` implementations.
-pub struct WebhookReceiver {
-    port: u16,
-    shutdown_tx: Option<watch::Sender<bool>>,
+/// The sink is the channel's own broadcast (`ChannelState::sender()`), not the
+/// registry's — going direct would bypass `start_message_forwarder`, the only
+/// place inbound traffic stamps channel health.
+pub struct WebhookMount {
+    pub handler: Arc<dyn WebhookHandler>,
+    pub inbound: InboundMessageSender,
 }
 
+/// Builds the axum routes for channel webhook ingestion.
+///
+/// This does **not** own a listener. The gateway's own server merges these
+/// routes into `build_router()`, so webhook traffic inherits the configured
+/// bind address, TLS, and security headers. The previous version bound
+/// `0.0.0.0` itself, which silently opened a LAN port regardless of
+/// `[gateway] host`.
+pub struct WebhookReceiver;
+
 impl WebhookReceiver {
-    /// Create a new `WebhookReceiver` bound to the given port.
+    /// Build the router for the given mounts.
+    ///
+    /// A mount whose path collides with a gateway route, or with an earlier
+    /// mount, is skipped with a warning — `Router::merge` panics on duplicate
+    /// routes and `path` is an operator-writable config field, so a typo must
+    /// not take the daemon down at boot.
     #[must_use]
-    pub const fn new(port: u16) -> Self {
-        Self {
-            port,
-            shutdown_tx: None,
-        }
-    }
-
-    /// Start the webhook receiver HTTP server.
-    ///
-    /// Builds an axum Router from the registered handlers and spawns
-    /// a Tokio task to serve requests. Incoming messages are forwarded
-    /// to `inbound_tx`.
-    ///
-    /// # Arguments
-    ///
-    /// * `handlers` - List of webhook handlers to register
-    /// * `inbound_tx` - Channel sender for forwarding parsed messages
-    pub async fn start(
-        &mut self,
-        handlers: Vec<Arc<dyn WebhookHandler>>,
-        inbound_tx: mpsc::Sender<InboundMessage>,
-    ) -> ChannelResult<()> {
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        self.shutdown_tx = Some(shutdown_tx);
-
-        // Build router from handlers
+    pub fn router(mounts: Vec<WebhookMount>) -> Router {
         let mut router = Router::new();
+        let mut mounted: Vec<String> = Vec::new();
 
-        for handler in handlers {
-            let path = handler.path().to_string();
-            let handler = Arc::clone(&handler);
-            let tx = inbound_tx.clone();
+        for mount in mounts {
+            let path = mount.handler.path().to_string();
 
-            let handler_state = Arc::new(HandlerState {
-                handler,
-                inbound_tx: tx,
-            });
-
-            router = router.route(&path, post(webhook_endpoint).with_state(handler_state));
-
-            info!(path = %path, "Registered webhook handler");
-        }
-
-        let port = self.port;
-        let mut shutdown_rx = shutdown_rx;
-
-        tokio::spawn(async move {
-            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-            info!(addr = %addr, "Webhook receiver starting");
-
-            let listener = match tokio::net::TcpListener::bind(addr).await {
-                Ok(l) => l,
-                Err(e) => {
-                    warn!(port = port, error = %e, "Failed to bind webhook receiver port");
-                    return;
-                }
-            };
-
-            let server = axum::serve(listener, router);
-
-            tokio::select! {
-                result = server => {
-                    if let Err(e) = result {
-                        warn!(error = %e, "Webhook receiver server error");
-                    }
-                }
-                _ = shutdown_rx.changed() => {
-                    info!("Webhook receiver shutting down");
-                }
+            if crate::gateway::server::is_reserved_route(&path) {
+                warn!(
+                    path = %path,
+                    "webhook path collides with a gateway route — handler not mounted"
+                );
+                continue;
+            }
+            if mounted.iter().any(|p| p == &path) {
+                warn!(path = %path, "duplicate webhook path — handler not mounted");
+                continue;
             }
 
-            info!("Webhook receiver stopped");
-        });
-
-        Ok(())
-    }
-
-    /// Stop the webhook receiver by sending the shutdown signal.
-    pub fn stop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
+            let handler_state = Arc::new(HandlerState {
+                handler: mount.handler,
+                inbound: mount.inbound,
+            });
+            router = router.route(&path, post(webhook_endpoint).with_state(handler_state));
+            info!(path = %path, "Registered webhook handler");
+            mounted.push(path);
         }
+
+        router
     }
 
     /// Compute HMAC-SHA256 signature of data with the given secret.
@@ -201,7 +163,7 @@ impl WebhookReceiver {
 /// Internal state passed to each axum handler.
 struct HandlerState {
     handler: Arc<dyn WebhookHandler>,
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    inbound: InboundMessageSender,
 }
 
 /// Axum endpoint handler that dispatches to the appropriate `WebhookHandler`.
@@ -224,22 +186,20 @@ async fn webhook_endpoint(
         Ok(messages) => {
             let mut dropped = 0usize;
             for msg in messages {
-                if let Err(e) = state.inbound_tx.send(msg).await {
+                if state.inbound.send(msg).is_err() {
                     dropped += 1;
                     warn!(
                         path = %state.handler.path(),
-                        error = %e,
-                        "Failed to forward inbound message (channel backpressure)"
+                        "Failed to forward inbound message (no subscriber on the channel)"
                     );
                 }
             }
             if dropped > 0 {
-                // Return 503 so upstream retries; silently returning 200
-                // would let an attacker flood the receiver and quietly
-                // suppress inbound messages without any operator signal.
+                // 503 so the sender retries: silently returning 200 would let
+                // messages vanish while the channel looks healthy.
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    format!("Dropped {dropped} messages due to backpressure"),
+                    format!("Dropped {dropped} messages: channel has no subscriber"),
                 );
             }
             (StatusCode::OK, String::from("ok"))
@@ -387,9 +347,9 @@ mod tests {
             let json: serde_json::Value = serde_json::from_slice(&body)
                 .map_err(|e| ChannelError::ReceiveFailed(format!("Invalid JSON: {e}")))?;
 
-            let text = json["message"]
+            let text = json["text"]
                 .as_str()
-                .ok_or_else(|| ChannelError::ReceiveFailed("Missing 'message' field".into()))?
+                .ok_or_else(|| ChannelError::ReceiveFailed("Missing 'text' field".into()))?
                 .to_string();
 
             Ok(vec![InboundMessage {
@@ -415,6 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_endpoint_valid_signature() {
+        use crate::gateway::channel::ChannelState;
         use axum::http::Request;
         use tower::ServiceExt;
 
@@ -424,18 +385,19 @@ mod tests {
             handler_path: "/webhook/mock".to_string(),
         });
 
-        let (tx, mut rx) = mpsc::channel::<InboundMessage>(16);
+        let channel_state = ChannelState::new(16);
+        let mut rx = channel_state.inbound_subscribe();
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
-            inbound_tx: tx,
+            inbound: channel_state.sender(),
         });
 
         let app = Router::new()
             .route("/webhook/mock", post(webhook_endpoint))
             .with_state(handler_state);
 
-        let body = r#"{"message":"Hello from webhook!"}"#;
+        let body = r#"{"text":"Hello from webhook!"}"#;
         let sig = WebhookReceiver::compute_signature(secret, body.as_bytes());
 
         let response = app
@@ -460,6 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_endpoint_invalid_signature() {
+        use crate::gateway::channel::ChannelState;
         use axum::http::Request;
         use tower::ServiceExt;
 
@@ -468,18 +431,18 @@ mod tests {
             handler_path: "/webhook/mock".to_string(),
         });
 
-        let (tx, _rx) = mpsc::channel::<InboundMessage>(16);
+        let channel_state = ChannelState::new(16);
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
-            inbound_tx: tx,
+            inbound: channel_state.sender(),
         });
 
         let app = Router::new()
             .route("/webhook/mock", post(webhook_endpoint))
             .with_state(handler_state);
 
-        let body = r#"{"message":"Unauthorized!"}"#;
+        let body = r#"{"text":"Unauthorized!"}"#;
 
         let response = app
             .oneshot(
@@ -498,6 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_endpoint_missing_signature() {
+        use crate::gateway::channel::ChannelState;
         use axum::http::Request;
         use tower::ServiceExt;
 
@@ -506,18 +470,18 @@ mod tests {
             handler_path: "/webhook/mock".to_string(),
         });
 
-        let (tx, _rx) = mpsc::channel::<InboundMessage>(16);
+        let channel_state = ChannelState::new(16);
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
-            inbound_tx: tx,
+            inbound: channel_state.sender(),
         });
 
         let app = Router::new()
             .route("/webhook/mock", post(webhook_endpoint))
             .with_state(handler_state);
 
-        let body = r#"{"message":"No sig!"}"#;
+        let body = r#"{"text":"No sig!"}"#;
 
         let response = app
             .oneshot(
@@ -534,10 +498,91 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    #[test]
-    fn test_webhook_receiver_creation() {
-        let receiver = WebhookReceiver::new(9090);
-        assert_eq!(receiver.port, 9090);
-        assert!(receiver.shutdown_tx.is_none());
+    // --- WebhookReceiver::router() integration tests ---
+
+    #[tokio::test]
+    async fn signed_post_reaches_the_channel_broadcast() {
+        use crate::gateway::channel::ChannelState;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let secret = "router-secret";
+        let state = ChannelState::new(16);
+        // Subscribe FIRST: InboundMessageSender::send returns Err when there are
+        // no subscribers (broadcast semantics), and in production the subscriber
+        // is ChannelRegistry::start_message_forwarder.
+        let mut rx = state.inbound_subscribe();
+
+        let handler = Arc::new(MockWebhookHandler {
+            secret: secret.to_string(),
+            handler_path: "/webhook/mock".to_string(),
+        });
+
+        let app = WebhookReceiver::router(vec![WebhookMount {
+            handler,
+            inbound: state.sender(),
+        }]);
+
+        let body = br#"{"text":"hello from webhook"}"#.to_vec();
+        let sig = WebhookReceiver::compute_signature(secret, &body);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/mock")
+                    .header("x-webhook-signature", sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let msg = rx
+            .try_recv()
+            .expect("message must reach the channel broadcast");
+        assert_eq!(msg.text, "hello from webhook");
+    }
+
+    #[tokio::test]
+    async fn unsigned_post_is_rejected_and_publishes_nothing() {
+        use crate::gateway::channel::ChannelState;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let state = ChannelState::new(16);
+        let mut rx = state.inbound_subscribe();
+
+        let handler = Arc::new(MockWebhookHandler {
+            secret: "router-secret".to_string(),
+            handler_path: "/webhook/mock".to_string(),
+        });
+
+        let app = WebhookReceiver::router(vec![WebhookMount {
+            handler,
+            inbound: state.sender(),
+        }]);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/mock")
+                    .header("x-webhook-signature", "sha256=deadbeef")
+                    .body(Body::from(br#"{"text":"forged"}"#.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            rx.try_recv().is_err(),
+            "rejected request must publish nothing"
+        );
     }
 }
