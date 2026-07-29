@@ -32,13 +32,26 @@
 //! depend on the channel router (P1). Delivery ordering is a gateway-wide I/O
 //! concern, so it lives beside the other gateway I/O seams.
 //!
+//! # The lane holds *waiting* messages only
+//!
+//! A ticket leaves the lane the moment its message stops waiting — which is
+//! when the engine **admits** it ([`mark_admitted`], called from
+//! `SessionRunRegistry::try_claim`), not when the resulting run finishes.
+//! `deliver_with_ticket` holds its guard across the whole `attempt()`, and
+//! `attempt()` is the entire agent run; keeping the ticket enqueued for that
+//! long made every follow-up park behind the very run it wanted to change, so
+//! the `Steer` and `Interrupt` busy-input modes could never reach the engine.
+//! See [`mark_admitted`] for the full failure shape.
+//!
 //! # Wake model (codex `watch::Sender<InputQueueActivity>` parity)
 //!
 //! Waiters do **not** poll. They park on a per-session [`tokio::sync::Notify`]
 //! that fires when:
 //! * the engine releases the session's run slot
 //!   ([`crate::gateway::execution_engine`]'s `SessionRunRegistry::release`
-//!   calls [`notify_slot_free`]) — the authoritative "you may try now" edge; or
+//!   calls [`notify_slot_free`]) — the authoritative "you may try now" edge;
+//! * the engine admits a queued run ([`mark_admitted`]) — the symmetric
+//!   "the lane just got shorter" edge; or
 //! * a ticket leaves the lane ([`TicketGuard`]'s `Drop`), promoting the next.
 //!
 //! A bounded fallback tick (`wake_fallback_secs`) still runs, so a missed
@@ -53,9 +66,11 @@
 
 mod config;
 mod deliver;
+mod spawn;
 
 pub use config::BusyQueueConfig;
 pub use deliver::{deliver_with_ticket, DeliveryOutcome};
+pub use spawn::spawn_queued_run;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -148,6 +163,53 @@ pub fn notify_slot_free(session_key: &str) {
     }
 }
 
+/// Report that the engine has admitted the run `run_id` on `session_key`: it is
+/// executing now, so it is no longer *waiting* and must stop holding the lane.
+///
+/// Called from the engine's `SessionRunRegistry::try_claim` — the one place a
+/// session's run slot is actually taken, exactly mirroring [`notify_slot_free`]
+/// on the release side. A run that never came through a lane (loop tick, goal
+/// continuation, delegated child) matches no ticket and this is a no-op.
+///
+/// # Why the lane must let go here
+///
+/// The lane is a **waiting room**, not a run registry. `deliver_with_ticket`
+/// holds its ticket across the whole `attempt()`, and `attempt()` *is* the agent
+/// run — so without this the front ticket sat at the head of its lane for the
+/// run's entire lifetime and every follow-up parked behind the very run it
+/// wanted to change. That starved the two busy-input modes which only mean
+/// anything while a sibling runs: `Steer` (inject into the live loop) and
+/// `Interrupt` (cancel it). Both silently degraded to `Queue` — a mid-task
+/// correction became a *separate* run after the first finished, and the Panel's
+/// queue auto-drain (which documents its reliance on Steer coalescing) turned
+/// one burst into N sequential runs.
+///
+/// Two smaller lies had the same root: `/stop` counted the message it was
+/// stopping among the "queued messages dropped" it reports, and
+/// `gateway.metrics.busy_queue.total_waiting` counted messages that had already
+/// become runs — the opposite of that gauge's documented meaning.
+pub fn mark_admitted(session_key: &str, run_id: &str) {
+    let wake = {
+        let mut map = lock();
+        let Some(lane) = map.get_mut(session_key) else {
+            return;
+        };
+        let before = lane.tickets.len();
+        lane.tickets.retain(|t| t.run_id != run_id);
+        if lane.tickets.len() == before {
+            return;
+        }
+        let wake = Arc::clone(&lane.wake);
+        if lane.tickets.is_empty() {
+            map.remove(session_key);
+        }
+        wake
+    };
+    // Promote whoever was behind the admitted run so it can attempt right away
+    // instead of waiting out the fallback tick.
+    wake.notify_waiters();
+}
+
 /// Abandon every message waiting on `session_key` and return how many were
 /// dropped.
 ///
@@ -159,6 +221,11 @@ pub fn notify_slot_free(session_key: &str) {
 /// **Only call this for an explicit user stop.** The `Interrupt` busy-input
 /// mode *depends* on the lane to restart the interrupting message after it
 /// cancels the running sibling, so it must not purge.
+///
+/// Scoped to messages that are genuinely still waiting: the message that
+/// already became the session's live run left the lane at
+/// [`mark_admitted`], so the count reported back to the user ("N queued
+/// messages dropped") no longer includes the run the stop is cancelling.
 pub fn purge(session_key: &str) -> usize {
     let (count, wake) = {
         let mut map = lock();
@@ -325,9 +392,10 @@ impl TicketGuard {
 
 impl Drop for TicketGuard {
     fn drop(&mut self) {
-        // Leaving the lane promotes whoever is behind us, so wake them.
-        // Removes the lane entirely once empty, so idle sessions leak nothing
-        // (and a later arrival starts with `purged` cleared).
+        // Leaving the lane promotes whoever is behind us, so wake them. A
+        // ticket already withdrawn by `mark_admitted` simply finds nothing to
+        // remove. Removes the lane entirely once empty, so idle sessions leak
+        // nothing (and a later arrival gets a fresh, uncancelled ticket).
         let wake = {
             let mut map = lock();
             let Some(lane) = map.get_mut(&self.session_key) else {
@@ -499,6 +567,75 @@ mod tests {
     #[test]
     fn purge_on_an_idle_session_is_a_no_op() {
         assert_eq!(purge("bq-test-purge-idle"), 0);
+    }
+
+    /// `/stop` reports "N queued messages dropped" to the user. The message the
+    /// user is actually stopping already became a run, so counting it made that
+    /// number a lie — and would have marked a live run's ticket cancelled.
+    #[test]
+    fn purge_ignores_a_run_the_engine_already_admitted() {
+        let s = "bq-test-purge-admitted";
+        let running = register(s, CAP, "run-live").unwrap();
+        let waiting = register(s, CAP, "run-queued").unwrap();
+        mark_admitted(s, "run-live");
+
+        assert_eq!(purge(s), 1, "only the still-waiting message is dropped");
+        assert!(waiting.is_cancelled());
+        assert!(
+            !running.is_cancelled(),
+            "a message that already became a run is not a queued message"
+        );
+    }
+
+    /// `gateway.metrics.busy_queue.total_waiting` is documented as the backlog
+    /// that has **not** become a run yet (its sibling gauge
+    /// `run_concurrency.waiting` covers runs blocked on the semaphore). Counting
+    /// the admitted run here inflated every busy session by one.
+    #[test]
+    fn snapshot_excludes_a_run_the_engine_already_admitted() {
+        let s = "bq-test-snap-admitted";
+        let _running = register(s, CAP, "run-live").unwrap();
+        let _waiting = register(s, CAP, "run-queued").unwrap();
+        mark_admitted(s, "run-live");
+
+        let snap = snapshot();
+        let depth = snap
+            .per_session
+            .iter()
+            .find(|(k, _)| k == s)
+            .map(|(_, d)| *d);
+        assert_eq!(depth, Some(1), "only the waiting message counts as backlog");
+    }
+
+    #[test]
+    fn mark_admitted_is_a_no_op_for_runs_that_never_queued() {
+        // Loop ticks, goal continuations and delegated children reach
+        // `try_claim` without ever taking a ticket.
+        mark_admitted("bq-test-admit-unknown-session", "run-x");
+
+        let s = "bq-test-admit-unknown-run";
+        let held = register(s, CAP, "run-a").unwrap();
+        mark_admitted(s, "some-other-run");
+        assert!(
+            held.is_front(),
+            "an unrelated admission must not disturb us"
+        );
+        assert_eq!(purge(s), 1, "and must not silently drop the ticket");
+    }
+
+    #[test]
+    fn a_lane_emptied_by_admission_is_garbage_collected() {
+        let s = "bq-test-admit-gc";
+        let held = register(s, CAP, "run-a").unwrap();
+        mark_admitted(s, "run-a");
+        assert!(
+            !lock().contains_key(s),
+            "withdrawing the last ticket must remove the lane, like Drop does"
+        );
+        // The guard is still alive for the run's lifetime; dropping it later
+        // must stay a clean no-op.
+        drop(held);
+        assert!(!lock().contains_key(s));
     }
 
     #[test]
