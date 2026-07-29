@@ -37,6 +37,10 @@ pub struct StoreState {
     pub config_values: RwSignal<serde_json::Map<String, serde_json::Value>>,
     pub installing: RwSignal<bool>,
     pub install_error: RwSignal<Option<String>>,
+    /// Post-install verification detail when the install landed but the artifact
+    /// did not come up healthy (`verify.ok == false`). Distinct from
+    /// `install_error`: the install itself succeeded.
+    pub install_warning: RwSignal<Option<String>>,
 }
 
 impl StoreState {
@@ -61,6 +65,7 @@ impl StoreState {
             config_values: RwSignal::new(serde_json::Map::new()),
             installing: RwSignal::new(false),
             install_error: RwSignal::new(None),
+            install_warning: RwSignal::new(None),
         }
     }
 
@@ -73,6 +78,7 @@ impl StoreState {
         self.install_missing.set(Vec::new());
         self.config_values.set(serde_json::Map::new());
         self.install_error.set(None);
+        self.install_warning.set(None);
         self.install_target.set(Some(entry));
     }
 }

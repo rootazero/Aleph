@@ -11,20 +11,76 @@ use tracing::info;
 /// fetch and hard-reset the working tree to `origin/main`. The checkout dir is
 /// official-content-only and never user-edited, so a hard reset is conflict-free.
 pub(crate) fn clone_or_update(repo_url: &str, checkout_dir: &Path) -> Result<(), String> {
-    if checkout_dir.join(".git").exists() {
-        return update_existing(checkout_dir).map_err(|e| format!("update {repo_url}: {e}"));
-    }
-    if let Some(parent) = checkout_dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
-    }
-    info!(url = %repo_url, dest = %checkout_dir.display(), "Cloning official content");
-    git2::Repository::clone(repo_url, checkout_dir)
-        .map(|_| ())
-        .map_err(|e| format!("clone {repo_url}: {e}"))
+    clone_or_update_at(repo_url, checkout_dir, None)
 }
 
-fn update_existing(checkout_dir: &Path) -> Result<(), git2::Error> {
-    let repo = git2::Repository::open(checkout_dir)?;
+/// Materialize `repo_url` in `checkout_dir` at a chosen revision.
+///
+/// - `git_ref: None` — track the default branch: hard-reset to `origin/main` on
+///   every call (the official-content path).
+/// - `git_ref: Some(rev)` — check out exactly that revision (tag, `origin/<branch>`,
+///   or a full commit SHA) with HEAD detached. A pin is *not* re-pointed by later
+///   calls, which is the whole point of pinning: the same `rev` always yields the
+///   same tree. Refs unknown to the local checkout trigger one refresh, then retry.
+pub(crate) fn clone_or_update_at(
+    repo_url: &str,
+    checkout_dir: &Path,
+    git_ref: Option<&str>,
+) -> Result<(), String> {
+    let existed = checkout_dir.join(".git").exists();
+    let repo = if existed {
+        git2::Repository::open(checkout_dir)
+            .map_err(|e| format!("open {}: {e}", checkout_dir.display()))?
+    } else {
+        if let Some(parent) = checkout_dir.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        info!(url = %repo_url, dest = %checkout_dir.display(), "Cloning official content");
+        git2::Repository::clone(repo_url, checkout_dir)
+            .map_err(|e| format!("clone {repo_url}: {e}"))?
+    };
+    match git_ref {
+        Some(rev) => {
+            checkout_pinned(&repo, rev).map_err(|e| format!("checkout '{rev}' of {repo_url}: {e}"))
+        }
+        // A fresh clone is already on the default branch; only an existing
+        // checkout needs the fetch + reset.
+        None if existed => {
+            update_existing_repo(&repo).map_err(|e| format!("update {repo_url}: {e}"))
+        }
+        None => Ok(()),
+    }
+}
+
+/// Check out an immutable revision with HEAD detached, refreshing remote refs
+/// once if the revision is not yet known locally.
+fn checkout_pinned(repo: &git2::Repository, rev: &str) -> Result<(), git2::Error> {
+    let object = match repo.revparse_single(rev) {
+        Ok(o) => o,
+        Err(_) => {
+            let mut remote = repo.find_remote("origin")?;
+            remote.fetch(
+                &[
+                    "+refs/heads/*:refs/remotes/origin/*",
+                    "+refs/tags/*:refs/tags/*",
+                ],
+                None,
+                None,
+            )?;
+            repo.revparse_single(rev)?
+        }
+    };
+    // Peel tags/annotated tags down to the commit they name.
+    let commit = object.peel(git2::ObjectType::Commit)?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    repo.checkout_tree(&commit, Some(&mut checkout))?;
+    repo.set_head_detached(commit.id())?;
+    Ok(())
+}
+
+fn update_existing_repo(repo: &git2::Repository) -> Result<(), git2::Error> {
     let mut remote = repo.find_remote("origin")?;
     remote.fetch(&["main"], None, None)?;
     let fetch_head = repo.find_reference("FETCH_HEAD")?;
@@ -96,5 +152,62 @@ mod tests {
         let checkout = tmp.path().join("checkout");
         let err = clone_or_update("/nonexistent/repo/path", &checkout);
         assert!(err.is_err());
+    }
+
+    /// A pinned revision materializes that exact tree — and stays pinned when the
+    /// default branch moves on. Without this, a catalog entry declaring
+    /// `git_ref` silently installed whatever HEAD happened to be.
+    #[test]
+    fn pinned_ref_checks_out_that_revision_and_survives_upstream_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let url = make_source_repo(&src, "v1");
+
+        // Tag the first commit, then move `main` forward.
+        let repo = git2::Repository::open(&src).unwrap();
+        let first = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.tag_lightweight("v1.0.0", first.as_object(), false)
+            .unwrap();
+        std::fs::write(src.join("SKILL.md"), "v2").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(std::path::Path::new("SKILL.md")).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "v2", &tree, &[&first])
+            .unwrap();
+
+        let checkout = tmp.path().join("pinned");
+        clone_or_update_at(&url, &checkout, Some("v1.0.0")).expect("pinned clone");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(),
+            "v1",
+            "pinned tag must not track main"
+        );
+        // Re-running the pin is idempotent and still does not advance to v2.
+        clone_or_update_at(&url, &checkout, Some("v1.0.0")).expect("pinned re-check");
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("SKILL.md")).unwrap(),
+            "v1"
+        );
+        // A full commit SHA pins just as well.
+        let by_sha = tmp.path().join("by-sha");
+        clone_or_update_at(&url, &by_sha, Some(&first.id().to_string())).expect("sha clone");
+        assert_eq!(
+            std::fs::read_to_string(by_sha.join("SKILL.md")).unwrap(),
+            "v1"
+        );
+    }
+
+    #[test]
+    fn unknown_pinned_ref_errors_rather_than_installing_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let url = make_source_repo(&src, "v1");
+        let checkout = tmp.path().join("checkout");
+        let err = clone_or_update_at(&url, &checkout, Some("v9.9.9-nope"));
+        assert!(err.is_err(), "an unresolvable pin must fail loudly");
     }
 }

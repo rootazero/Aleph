@@ -12,7 +12,7 @@ use crate::extension::marketplace::{MarketplaceManager, BUILTIN_MARKETPLACE_NAME
 use crate::extension::PluginScope;
 use crate::hub::catalog_client::ALEPH_HUB_ID;
 use crate::hub::secrets::secret_ref;
-use crate::hub::types::{ExtensionEntry, InstallSpec};
+use crate::hub::types::{ExtensionEntry, InstallSpec, McpTransport};
 use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 
 /// Build an `McpManagerConfig` from an install spec.
@@ -46,10 +46,31 @@ pub fn mcp_config_from_spec(
                 .with_env(env_map)
                 .with_auto_start(true))
         }
-        InstallSpec::McpRemote { url, .. } => {
-            // Header-secret injection for remote MCP is a follow-up; build the
-            // base config so the server is reachable.
-            Ok(McpManagerConfig::http(id, name, url).with_auto_start(true))
+        InstallSpec::McpRemote {
+            url,
+            transport,
+            headers,
+        } => {
+            // Declared headers are auth material (bearer tokens, API keys). Store
+            // the `{{secret:NAME}}` reference — never the plaintext — exactly as
+            // the stdio env path does; the actor resolves it per-connect.
+            let mut header_map = HashMap::new();
+            for h in headers {
+                if let Some(secret_name) = secret_refs.get(&h.name) {
+                    header_map.insert(h.name.clone(), secret_ref(secret_name));
+                } else if let Some(v) = plain_values.get(&h.name) {
+                    header_map.insert(h.name.clone(), v.clone());
+                }
+            }
+            let base = match transport {
+                McpTransport::Sse => McpManagerConfig::sse(id, name, url),
+                // StreamableHttp and (defensively) Stdio-on-a-remote-spec both
+                // speak the HTTP transport.
+                McpTransport::StreamableHttp | McpTransport::Stdio => {
+                    McpManagerConfig::http(id, name, url)
+                }
+            };
+            Ok(base.with_headers(header_map).with_auto_start(true))
         }
         InstallSpec::OciImage { .. } => {
             Err("OCI/Docker MCP containers are not installable in this version".into())
@@ -89,16 +110,26 @@ fn command_available(command: &str) -> bool {
 }
 
 /// Install a single skill from a `GitDir` spec: clone the repo into an isolated
-/// checkout, copy the `<subdir>` leaf into `<skills_dir>/<name>`, and stamp
-/// it `Github` in the manifest (so official sync never overwrites it). Pure
-/// w.r.t. the gateway — takes the resolved skills dir.
+/// checkout at the pinned `git_ref` (default branch when absent), verify the
+/// declared `sha256` against the leaf that is about to be copied, copy the
+/// `<subdir>` leaf into `<skills_dir>/<name>`, and stamp it `Github` in the
+/// manifest (so official sync never overwrites it). Pure w.r.t. the gateway —
+/// takes the resolved skills dir.
+///
+/// Both pins are enforced *before* any write: an unresolvable `git_ref` or a
+/// digest mismatch aborts with nothing installed. The trust disclosure shows the
+/// user this `sha256` and the install response echoes it as `pin.sha256`, so it
+/// has to mean something.
 pub fn install_git_skill(
     entry: &crate::hub::types::ExtensionEntry,
     spec: &InstallSpec,
     skills_dir: &std::path::Path,
 ) -> Result<String, String> {
     let InstallSpec::GitDir {
-        git_url, subdir, ..
+        git_url,
+        subdir,
+        git_ref,
+        sha256,
     } = spec
     else {
         return Err("install_git_skill requires a GitDir spec".into());
@@ -116,13 +147,19 @@ pub fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
-    // Clone into an isolated per-source checkout (never the live skills dir).
+    // Clone into an isolated per-source checkout (never the live skills dir),
+    // at the pinned revision when the catalog declares one.
     let checkout = skills_dir.join(".git-cache").join(mcp_server_id(&entry.id));
-    crate::bundled::clone_or_update(git_url, &checkout)?;
+    crate::bundled::clone_or_update_at(git_url, &checkout, git_ref.as_deref())?;
     let src_leaf = checkout.join(&leaf);
     if !src_leaf.is_dir() {
         return Err(format!("subdir '{leaf}' not found in {git_url}"));
     }
+    // Enforce the content pin before the first write.
+    crate::extension::marketplace::installer::verify_plugin_integrity(
+        &src_leaf,
+        sha256.as_deref(),
+    )?;
     let target = skills_dir.join(&safe_name);
     crate::bundled::copy_skill_leaf(&src_leaf, &target).map_err(|e| e.to_string())?;
 
@@ -214,7 +251,94 @@ pub async fn run_install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hub::types::EnvDecl;
+    use crate::hub::types::{EnvDecl, HeaderDecl};
+
+    fn remote(transport: McpTransport, headers: Vec<HeaderDecl>) -> InstallSpec {
+        InstallSpec::McpRemote {
+            url: "https://mcp.example.com/mcp".into(),
+            transport,
+            headers,
+        }
+    }
+
+    /// Regression: a declared secret header used to be collected from the user,
+    /// written to the vault, and then **dropped** — the server was dialed with no
+    /// auth at all while the install reported success.
+    #[test]
+    fn remote_spec_carries_secret_header_as_a_reference() {
+        let spec = remote(
+            McpTransport::StreamableHttp,
+            vec![
+                HeaderDecl {
+                    name: "Authorization".into(),
+                    secret: true,
+                },
+                HeaderDecl {
+                    name: "X-Region".into(),
+                    secret: false,
+                },
+            ],
+        );
+        let mut refs = HashMap::new();
+        refs.insert(
+            "Authorization".to_string(),
+            "ext.mcp.x.Authorization".to_string(),
+        );
+        let mut plain = HashMap::new();
+        plain.insert("X-Region".to_string(), "us".to_string());
+
+        let cfg = mcp_config_from_spec("x", "Y", &spec, &refs, &plain).unwrap();
+        assert_eq!(
+            cfg.headers.get("Authorization").map(String::as_str),
+            Some("{{secret:ext.mcp.x.Authorization}}"),
+            "the reference is persisted, never the plaintext"
+        );
+        assert_eq!(cfg.headers.get("X-Region").map(String::as_str), Some("us"));
+        assert_eq!(cfg.url.as_deref(), Some("https://mcp.example.com/mcp"));
+        assert!(cfg.auto_start);
+    }
+
+    /// A header the user did not supply is simply absent — never an empty string,
+    /// which would look like a real (wrong) credential to the server.
+    #[test]
+    fn remote_spec_omits_unsupplied_headers() {
+        let spec = remote(
+            McpTransport::StreamableHttp,
+            vec![HeaderDecl {
+                name: "Authorization".into(),
+                secret: true,
+            }],
+        );
+        let cfg =
+            mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default()).unwrap();
+        assert!(cfg.headers.is_empty());
+    }
+
+    /// An SSE catalog entry must be dialed as SSE. It used to be installed as
+    /// HTTP regardless of its declared transport.
+    #[test]
+    fn remote_sse_spec_keeps_its_transport() {
+        use crate::mcp::manager::McpTransportType;
+        let cfg = mcp_config_from_spec(
+            "x",
+            "Y",
+            &remote(McpTransport::Sse, vec![]),
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(matches!(cfg.transport, McpTransportType::Sse));
+
+        let cfg = mcp_config_from_spec(
+            "x",
+            "Y",
+            &remote(McpTransport::StreamableHttp, vec![]),
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(matches!(cfg.transport, McpTransportType::Http));
+    }
 
     #[test]
     fn stdio_spec_builds_config_with_secret_refs() {
@@ -270,12 +394,17 @@ mod tests {
         assert!(err.contains("not installable"));
     }
 
-    #[test]
-    fn install_git_skill_clones_subdir_and_stamps_source() {
+    /// Build a source repo containing `my-skill/SKILL.md` on `main`, plus the
+    /// skills dir and the entry the install path expects.
+    fn git_skill_fixture(
+        tmp: &std::path::Path,
+    ) -> (
+        String,
+        std::path::PathBuf,
+        crate::hub::types::ExtensionEntry,
+    ) {
         use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
-        let tmp = tempfile::tempdir().unwrap();
-        // Source repo with a `my-skill/SKILL.md` leaf.
-        let src = tmp.path().join("src");
+        let src = tmp.join("src");
         std::fs::create_dir_all(src.join("my-skill")).unwrap();
         std::fs::write(src.join("my-skill").join("SKILL.md"), b"# hi").unwrap();
         let repo = git2::Repository::init(&src).unwrap();
@@ -291,7 +420,7 @@ mod tests {
         // HEAD to an unborn `master`; without this the clone's working tree is empty).
         repo.set_head("refs/heads/main").unwrap();
 
-        let skills_dir = tmp.path().join("skills");
+        let skills_dir = tmp.join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
         let entry = ExtensionEntry {
             id: "aleph-hub:x/my-skill".into(),
@@ -314,19 +443,68 @@ mod tests {
             via: None,
             install_spec: None,
         };
-        let spec = InstallSpec::GitDir {
-            git_url: src.to_string_lossy().to_string(),
+        (src.to_string_lossy().to_string(), skills_dir, entry)
+    }
+
+    fn git_dir_spec(git_url: &str, sha256: Option<&str>) -> InstallSpec {
+        InstallSpec::GitDir {
+            git_url: git_url.to_string(),
             subdir: Some("my-skill".into()),
             git_ref: Some("main".into()),
-            sha256: None,
-        };
-        let path = install_git_skill(&entry, &spec, &skills_dir).expect("install");
+            sha256: sha256.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn install_git_skill_clones_subdir_and_stamps_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let path =
+            install_git_skill(&entry, &git_dir_spec(&url, None), &skills_dir).expect("install");
         assert!(std::path::Path::new(&path).join("SKILL.md").exists());
         let manifest = crate::bundled::manifest::InstallRegistry::load(&skills_dir).unwrap();
         assert_eq!(
             manifest.skills.get("my-skill").unwrap().source,
             crate::bundled::manifest::SkillOrigin::Github
         );
+    }
+
+    /// The `sha256` pin is shown to the user in the trust disclosure and echoed
+    /// back as `pin.sha256`, so it has to be enforced — and enforced *before* the
+    /// first write, leaving nothing installed on mismatch.
+    #[test]
+    fn install_git_skill_rejects_a_sha256_mismatch_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let bad = "0".repeat(64);
+        let err = install_git_skill(&entry, &git_dir_spec(&url, Some(&bad)), &skills_dir)
+            .expect_err("a mismatched pin must fail the install");
+        assert!(err.contains("integrity check failed"), "{err}");
+        assert!(
+            !skills_dir.join("my-skill").exists(),
+            "nothing may be installed when the pin does not match"
+        );
+    }
+
+    #[test]
+    fn install_git_skill_accepts_the_matching_sha256() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        // First install with no pin to materialize the checkout, then compute the
+        // digest of the exact leaf the install copies from.
+        install_git_skill(&entry, &git_dir_spec(&url, None), &skills_dir).expect("seed install");
+        let leaf = skills_dir
+            .join(".git-cache")
+            .join(mcp_server_id(&entry.id))
+            .join("my-skill");
+        let digest =
+            crate::extension::marketplace::installer::directory_digest(&leaf).expect("digest");
+
+        let fresh = tempfile::tempdir().unwrap();
+        let (url2, skills_dir2, entry2) = git_skill_fixture(fresh.path());
+        let path = install_git_skill(&entry2, &git_dir_spec(&url2, Some(&digest)), &skills_dir2)
+            .expect("matching pin must install");
+        assert!(std::path::Path::new(&path).join("SKILL.md").exists());
     }
 
     #[test]

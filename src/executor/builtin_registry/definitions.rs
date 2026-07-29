@@ -594,31 +594,36 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Extract text and structured data from documents",
         requires_config: true, // Requires media_pipeline
     },
-    // Store tools — require CatalogCache + marketplace configs
+    // Aleph Hub tools — require CatalogCache
+    BuiltinToolDefinition {
+        name: "hub_catalog_search",
+        description: "Search or browse the Aleph Hub catalog of installable extensions; returns the entry_id that hub_resolve_spec and hub_install_run require, plus installed / update-available / config / consent state per hit.",
+        requires_config: true, // Requires CatalogCache
+    },
     BuiltinToolDefinition {
         name: "hub_catalog_sync",
-        description: "Sync all extension sources into the local catalog cache and refresh functional categories.",
-        requires_config: true, // Requires CatalogCache + marketplace configs
+        description: "Refresh the local cache from the published Aleph Hub catalog. Keeps the last-good cache on failure.",
+        requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_resolve_spec",
-        description: "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.",
-        requires_config: true, // Requires CatalogCache + marketplace configs
+        description: "Resolve the install spec for a catalog entry by its id from the local catalog cache.",
+        requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_install_run",
-        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the store UI; OCI is rejected.",
+        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.",
         requires_config: true, // Requires CatalogCache + marketplace configs + vault
     },
     BuiltinToolDefinition {
         name: "hub_install_verify",
-        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins: checks the artifact is present on disk.",
+        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins and skills: checks the artifact is present on disk.",
         requires_config: true, // Requires live McpManagerHandle for MCP verification
     },
     BuiltinToolDefinition {
         name: "hub_fetch_docs",
-        description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
-        requires_config: false, // No CatalogCache needed; HTTP-only scaffold
+        description: "Fetch a text document (README / manifest) over HTTP with SSRF protection and a 64 KiB cap, and scan it for prompt-injection patterns before returning it.",
+        requires_config: false, // No CatalogCache needed; HTTP-only
     },
     // Team management tools — require TeamStore
     BuiltinToolDefinition {

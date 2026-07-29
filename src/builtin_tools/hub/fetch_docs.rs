@@ -1,7 +1,11 @@
-//! `hub_fetch_docs` — fetch a repo/URL's README/manifest for the long-tail
-//! install path. SCAFFOLD (v1): implemented + injection-scanned, but NOT wired
-//! to any user-facing install flow. The supported install path is the
-//! deterministic fast-path (P2/P3 UI).
+//! `hub_fetch_docs` — fetch a repo/URL's README/manifest and injection-scan it.
+//!
+//! The model is the consumer: when a catalog entry is too terse to judge, or an
+//! extension's setup lives in its README, this is how that text reaches the
+//! decision — SSRF-guarded, byte-capped, and scanned before it enters context.
+//! (It was long described as an unwired "scaffold" while being fully registered
+//! and dispatchable — a description that talked the model out of a working
+//! capability.)
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -28,9 +32,8 @@ pub struct HubFetchDocsOutput {
     pub injection_findings: Vec<InjectionFinding>,
 }
 
-/// Scaffold tool for the long-tail install path. Fetches a URL, caps the body
-/// to `DOC_BYTE_BUDGET`, and runs the injection scanner before returning.
-/// Not wired to any user install surface.
+/// Fetches a URL, caps the body to `DOC_BYTE_BUDGET`, and runs the injection
+/// scanner before returning.
 #[derive(Clone)]
 pub struct HubFetchDocsTool;
 
@@ -38,7 +41,11 @@ pub struct HubFetchDocsTool;
 impl AlephTool for HubFetchDocsTool {
     const NAME: &'static str = "hub_fetch_docs";
     const DESCRIPTION: &'static str =
-        "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.";
+        "Fetch a text document (README / manifest) over HTTP and scan it for prompt-injection \
+         before returning it. Private and reserved IP ranges are blocked; the body is capped at \
+         64 KiB and `truncated` says whether it was cut. Use it to read an extension's own docs \
+         when a catalog entry is too terse to decide on, or when install instructions live in a \
+         repo rather than the catalog.";
     type Args = HubFetchDocsArgs;
     type Output = HubFetchDocsOutput;
 

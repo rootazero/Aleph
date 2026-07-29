@@ -245,6 +245,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "extensions_store",
         name: "扩展商店",
         tools: &[
+            "hub_catalog_search",
             "hub_catalog_sync",
             "hub_resolve_spec",
             "hub_fetch_docs",
@@ -304,6 +305,34 @@ mod tests {
                 grouped.contains(&def.name),
                 "Builtin tool '{}' is not in any group",
                 def.name
+            );
+        }
+    }
+
+    /// The reverse direction of `test_all_builtin_tools_have_a_group`, scoped to
+    /// the one group other code derives an invariant from: `agents::registry`
+    /// reads `extensions_store` to prove the read-only verifier denies every Hub
+    /// tool, so a typo'd or stale name here would make that check assert about
+    /// nothing.
+    ///
+    /// Deliberately **not** applied to every group: builtins reach the registry by
+    /// two paths — `BUILTIN_TOOL_DEFINITIONS` (config-gated tools) and
+    /// `builder/core_tools.rs` (always-on core tools, registered by inline
+    /// `reg("name", …)` calls with no list to join against). `scratchpad` is a
+    /// live tool that legitimately appears in a group and not in the definitions
+    /// table. Widening this assertion means first giving the core path a data
+    /// source; until then it would fail on working tools.
+    #[test]
+    fn extensions_store_group_names_only_defined_tools() {
+        let defined: Vec<&str> = BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name).collect();
+        let family = TOOL_CATEGORIES
+            .iter()
+            .find(|c| c.id == "extensions_store")
+            .expect("extensions_store tool category");
+        for tool in family.tools {
+            assert!(
+                defined.contains(tool),
+                "extensions_store lists '{tool}', which is not in BUILTIN_TOOL_DEFINITIONS"
             );
         }
     }

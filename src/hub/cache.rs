@@ -9,11 +9,38 @@ pub struct CatalogFilter {
     pub kind: Option<ExtensionKind>,
     pub category: Option<ExtensionCategory>,
     pub source_id: Option<String>,
+    /// Free-text query, applied by [`matches_query`] after the indexed columns
+    /// have narrowed the rows.
     pub query: Option<String>,
 }
 
+/// Case-insensitive free-text match over the fields a human (or a model) would
+/// search by: name, description, tags, and author.
+///
+/// Applied in Rust rather than SQL because the indexed `name_lc` column alone
+/// misses the description and tags — which is where an extension actually says
+/// what it does — and matching the stored JSON blob with `LIKE` would hit the
+/// key names too (`"kind":"mcp"` matching a search for `mcp`).
+#[must_use]
+pub fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    e.name.to_lowercase().contains(&q)
+        || e.description.to_lowercase().contains(&q)
+        || e.tags.iter().any(|t| t.to_lowercase().contains(&q))
+        || e.author
+            .as_deref()
+            .is_some_and(|a| a.to_lowercase().contains(&q))
+}
+
 /// Schema: one row per extension; `data` holds the full JSON, indexed columns
-/// drive filtering. `name_lc` enables case-insensitive substring search.
+/// drive filtering. `name_lc` is the stable sort key.
+///
+/// The same file also carries the install provenance ledger
+/// (`hub::origin::init_origin_schema`) so both tables are created together and a
+/// fresh install never sees one without the other.
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS catalog (
@@ -28,7 +55,8 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_catalog_category ON catalog(category);
         CREATE INDEX IF NOT EXISTS idx_catalog_kind ON catalog(kind);
         CREATE INDEX IF NOT EXISTS idx_catalog_source ON catalog(source_id);",
-    )
+    )?;
+    crate::hub::origin::init_origin_schema(conn)
 }
 
 pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
@@ -87,10 +115,6 @@ pub fn query_entries(
         sql.push_str(" AND source_id = ?");
         args.push(Box::new(s.clone()));
     }
-    if let Some(q) = &f.query {
-        sql.push_str(" AND name_lc LIKE ?");
-        args.push(Box::new(format!("%{}%", q.to_lowercase())));
-    }
     sql.push_str(" ORDER BY name_lc");
     let mut stmt = conn.prepare(&sql)?;
     let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
@@ -100,7 +124,11 @@ pub fn query_entries(
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })
     })?;
-    rows.collect()
+    let mut out: Vec<ExtensionEntry> = rows.collect::<rusqlite::Result<_>>()?;
+    if let Some(q) = &f.query {
+        out.retain(|e| matches_query(e, q));
+    }
+    Ok(out)
 }
 
 pub fn clear_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
@@ -166,6 +194,34 @@ impl CatalogCache {
     pub async fn count_source(&self, source_id: &str) -> rusqlite::Result<usize> {
         let guard = self.conn.lock().await;
         count_source(&guard, source_id)
+    }
+
+    // --- install provenance ledger (see `hub::origin`) ---------------------
+
+    /// Record one completed Hub install. Idempotent by catalog entry id.
+    pub async fn record_origin(
+        &self,
+        origin: &crate::hub::origin::InstallOrigin,
+    ) -> rusqlite::Result<()> {
+        let guard = self.conn.lock().await;
+        crate::hub::origin::upsert_origin(&guard, origin)
+    }
+
+    /// Every recorded install, keyed by catalog entry id by the caller.
+    pub async fn origins(&self) -> rusqlite::Result<Vec<crate::hub::origin::InstallOrigin>> {
+        let guard = self.conn.lock().await;
+        crate::hub::origin::all_origins(&guard)
+    }
+
+    /// Forget the install record for an uninstalled backend object, addressed
+    /// the way `extensions.uninstall` addresses it.
+    pub async fn forget_installed_origin(
+        &self,
+        kind: ExtensionKind,
+        backend: &str,
+    ) -> rusqlite::Result<usize> {
+        let guard = self.conn.lock().await;
+        crate::hub::origin::forget_installed(&guard, kind, backend)
     }
 }
 
@@ -247,6 +303,52 @@ mod tests {
         .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "a");
+    }
+
+    /// A search has to reach the description and tags — that is where an
+    /// extension says what it does. Matching only the name meant a model asking
+    /// for "issue tracker" found nothing.
+    #[test]
+    fn query_reaches_description_tags_and_author() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        let mut e = entry("a", ExtensionCategory::Developer, "Octo");
+        e.description = "Track issues and pull requests.".into();
+        e.tags = vec!["vcs".into()];
+        e.author = Some("Acme Corp".into());
+        upsert_entry(&conn, &e).unwrap();
+        upsert_entry(&conn, &entry("b", ExtensionCategory::Data, "Postgres")).unwrap();
+
+        for needle in ["issues", "VCS", "acme"] {
+            let hits = query_entries(
+                &conn,
+                &CatalogFilter {
+                    query: Some(needle.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(hits.len(), 1, "'{needle}' should match exactly one entry");
+            assert_eq!(hits[0].id, "a");
+        }
+    }
+
+    /// The query must not leak the stored JSON's key names: searching `mcp`
+    /// used to be a candidate for matching every row via `"kind":"mcp"`.
+    #[test]
+    fn query_does_not_match_stored_json_keys() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        upsert_entry(&conn, &entry("a", ExtensionCategory::Developer, "Alpha")).unwrap();
+        let hits = query_entries(
+            &conn,
+            &CatalogFilter {
+                query: Some("trust_tier".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]

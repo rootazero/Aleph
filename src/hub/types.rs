@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionKind {
     Skill,
@@ -8,7 +8,7 @@ pub enum ExtensionKind {
     Mcp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionCategory {
     Search,
@@ -80,6 +80,30 @@ impl TrustTier {
             Self::Verified => "verified",
             Self::Community => "community",
             Self::Unverified => "unverified",
+        }
+    }
+
+    /// Ordering rank, higher = more trusted. Used to clamp a wire-declared tier
+    /// to the tier of the source that published it.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Official => 3,
+            Self::Verified => 2,
+            Self::Community => 1,
+            Self::Unverified => 0,
+        }
+    }
+
+    /// The lower of two tiers. A catalog entry may not claim more trust than the
+    /// source that served it: the wire is attacker-controlled if the hub is ever
+    /// compromised or MITM'd, so `official` must be earned by the *source*, not
+    /// self-declared per entry.
+    #[must_use]
+    pub fn clamped_to(self, ceiling: Self) -> Self {
+        if self.rank() <= ceiling.rank() {
+            self
+        } else {
+            ceiling
         }
     }
 }
@@ -207,6 +231,29 @@ mod tests {
     #[test]
     fn trust_tier_as_str() {
         assert_eq!(TrustTier::Unverified.as_str(), "unverified");
+    }
+
+    #[test]
+    fn trust_tier_clamps_to_source_ceiling() {
+        // A wire entry cannot out-rank its source.
+        assert_eq!(
+            TrustTier::Official.clamped_to(TrustTier::Verified),
+            TrustTier::Verified
+        );
+        // At or below the ceiling passes through untouched.
+        assert_eq!(
+            TrustTier::Community.clamped_to(TrustTier::Verified),
+            TrustTier::Community
+        );
+        assert_eq!(
+            TrustTier::Verified.clamped_to(TrustTier::Verified),
+            TrustTier::Verified
+        );
+        // An Official source may publish Official entries.
+        assert_eq!(
+            TrustTier::Official.clamped_to(TrustTier::Official),
+            TrustTier::Official
+        );
     }
 
     #[test]

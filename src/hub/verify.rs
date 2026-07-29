@@ -9,23 +9,32 @@ pub struct VerifyReport {
 }
 
 /// Pure verdict from an MCP server's observed state.
+///
+/// `other_capability_count` is the server's resources + resource templates +
+/// prompts. A server that exposes only those is a legitimate MCP server (a docs
+/// or resource provider), so the failure condition is "exposes *nothing*" rather
+/// than "exposes no tools" — otherwise a working install gets defamed.
 #[must_use]
-pub fn verdict(running: bool, tool_count: usize) -> VerifyReport {
+pub fn verdict(running: bool, tool_count: usize, other_capability_count: usize) -> VerifyReport {
     if !running {
-        VerifyReport {
+        return VerifyReport {
             ok: false,
             detail: "server not running".into(),
-        }
-    } else if tool_count == 0 {
-        VerifyReport {
+        };
+    }
+    match (tool_count, other_capability_count) {
+        (0, 0) => VerifyReport {
             ok: false,
-            detail: "running but exposes 0 tools".into(),
-        }
-    } else {
-        VerifyReport {
+            detail: "running but exposes no tools, resources or prompts".into(),
+        },
+        (0, other) => VerifyReport {
             ok: true,
-            detail: format!("running; {tool_count} tools"),
-        }
+            detail: format!("running; 0 tools, {other} resources/prompts"),
+        },
+        (tools, _) => VerifyReport {
+            ok: true,
+            detail: format!("running; {tools} tools"),
+        },
     }
 }
 
@@ -48,7 +57,9 @@ pub async fn verify_install(
                     Some(info) => {
                         let running =
                             matches!(info.health, crate::mcp::manager::HealthStatus::Healthy);
-                        verdict(running, info.tool_count)
+                        let other =
+                            info.resource_count + info.resource_template_count + info.prompt_count;
+                        verdict(running, info.tool_count, other)
                     }
                     None => VerifyReport {
                         ok: false,
@@ -96,20 +107,30 @@ mod tests {
 
     #[test]
     fn running_with_tools_is_ok() {
-        let r = verdict(true, 3);
+        let r = verdict(true, 3, 0);
         assert!(r.ok);
         assert!(r.detail.contains('3'));
     }
 
     #[test]
-    fn running_without_tools_is_warn() {
-        let r = verdict(true, 0);
+    fn running_with_nothing_exposed_is_fail() {
+        let r = verdict(true, 0, 0);
         assert!(!r.ok);
+        assert!(r.detail.contains("no tools"));
+    }
+
+    /// A resources-only MCP server is a real server. Judging on tool count alone
+    /// reported a working install as broken.
+    #[test]
+    fn running_with_only_resources_is_ok() {
+        let r = verdict(true, 0, 4);
+        assert!(r.ok);
+        assert!(r.detail.contains('4'));
     }
 
     #[test]
     fn not_running_is_fail() {
-        let r = verdict(false, 0);
+        let r = verdict(false, 0, 0);
         assert!(!r.ok);
     }
 }
