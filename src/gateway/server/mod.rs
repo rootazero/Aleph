@@ -363,6 +363,10 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
+    /// Channel webhook ingestion routes, built by `WebhookReceiver::router()`
+    /// once every channel has started. `None` when no configured channel
+    /// ingests over HTTP — the route table is then byte-identical to before.
+    webhook_routes: Option<Router>,
     /// Vault handle. Installed by [`GatewayServer::set_shared_token_manager`],
     /// which also publishes the process-global used by vault consumers
     /// (e.g. the WhatsApp vault store's crypto lookup).
@@ -384,6 +388,32 @@ pub struct GatewayServer {
     /// [`GatewayServer::set_audit_log`] and cloned into `GatewaySharedState`.
     /// `None` in test/probe constructors ⇒ auth events go unrecorded.
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+}
+
+/// Path prefixes the gateway router owns.
+///
+/// Keep this beside `build_router()` — a route added there and not added here
+/// becomes a boot panic waiting to happen, because `Router::merge` panics on
+/// duplicate routes and webhook paths come from operator-writable config.
+pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
+    "/ws",
+    "/health",
+    "/ready",
+    "/metrics",
+    "/artifact",
+    "/v1",
+    "/a2a",
+    "/.well-known",
+];
+
+/// Whether `path` collides with a route the gateway itself serves.
+///
+/// Matches on whole path segments: `/wsx` is not reserved even though `/ws` is.
+#[must_use]
+pub fn is_reserved_route(path: &str) -> bool {
+    RESERVED_ROUTE_PREFIXES
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
 impl GatewayServer {
@@ -428,6 +458,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            webhook_routes: None,
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
@@ -479,6 +510,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            webhook_routes: None,
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
@@ -524,6 +556,12 @@ impl GatewayServer {
     /// Idempotent — replaces any previously set admin router.
     pub fn set_admin_router(&mut self, router: Router) {
         self.admin_router = Some(router);
+    }
+
+    /// Mount channel webhook ingestion routes on the shared HTTP surface.
+    /// Idempotent — replaces any previously set webhook routes.
+    pub fn set_webhook_routes(&mut self, router: Router) {
+        self.webhook_routes = Some(router);
     }
 
     /// Install the `SharedTokenManager` (vault handle). Also publishes the
@@ -689,6 +727,13 @@ impl GatewayServer {
         // Spec C: mount admin IPC router under /v1/admin if configured.
         if let Some(admin) = self.admin_router.clone() {
             router = router.nest("/v1/admin", admin);
+        }
+
+        // Channel webhook ingestion (generic webhook channel, and any future
+        // channel that receives over HTTP POST). Auth is per-handler HMAC, the
+        // same posture as /metrics and /a2a — see the design spec.
+        if let Some(webhooks) = self.webhook_routes.clone() {
+            router = router.merge(webhooks);
         }
 
         router.layer(SecurityHeadersLayer::new())
@@ -943,6 +988,7 @@ mod tests {
     use super::super::middleware::MiddlewareChain;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn test_process_valid_request() {
@@ -1013,6 +1059,60 @@ mod tests {
         assert!(super::insecure_exposure_refused(false, false, true, false).is_none());
         // Non-loopback plaintext but explicitly allowed ⇒ allowed.
         assert!(super::insecure_exposure_refused(false, false, false, true).is_none());
+    }
+
+    #[tokio::test]
+    async fn webhook_routes_are_absent_until_set() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = GatewayServer::new(addr);
+        let router = server.build_router();
+
+        // No webhook routes set → the request falls through to the
+        // control-plane fallback's `/{*path}` catch-all, which only registers
+        // GET (SPA asset serving). It matches the path but rejects the POST
+        // method, so the route table answers 405, never a webhook handler.
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/none")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn set_webhook_routes_are_merged_into_build_router() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::post;
+        use tower::ServiceExt;
+
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mut server = GatewayServer::new(addr);
+        server.set_webhook_routes(
+            Router::new().route("/webhook/probe", post(|| async { "mounted" })),
+        );
+
+        let router = server.build_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/probe")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
 

@@ -432,6 +432,32 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
+            // The generic factory hardcodes the id "webhook"; rebuild with the
+            // real instance id so the registry keys the channel correctly
+            // (two webhook sections would otherwise both register as
+            // ChannelId("webhook") and the second silently overwrites the
+            // first in the registry's HashMap) and per-channel policy
+            // (busy_input_mode, permission_level, tool_permissions, ...),
+            // which is looked up by this same runtime id, actually applies.
+            if inst.channel_type == "webhook" {
+                match serde_json::from_value::<
+                    alephcore::gateway::interfaces::webhook::WebhookChannelConfig,
+                >(config_with_secrets.clone())
+                {
+                    Ok(wh_config) => {
+                        let wh_channel =
+                            alephcore::gateway::interfaces::webhook::WebhookChannel::new(
+                                &inst.id, wh_config,
+                            );
+                        channel = Box::new(wh_channel);
+                    }
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "webhook channel config parse failed; keeping generic channel with hardcoded id"
+                    ),
+                }
+            }
+
             let channel_id = channel_registry.register(channel).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
@@ -484,6 +510,51 @@ pub(in crate::commands::start) async fn initialize_channels(
         if !daemon {
             println!("LinkManager started (external bridge plugins)");
             println!();
+        }
+    }
+
+    // Mount webhook ingestion for every channel that receives over HTTP POST.
+    //
+    // Runs here, after every channel has started, because a channel only
+    // materialises its handler in `start()`. Without this block the generic
+    // webhook channel starts, reports Connected, and is deaf — the handler it
+    // built has no HTTP surface. (That was the state until 2026-07-29.)
+    {
+        use alephcore::gateway::{WebhookMount, WebhookReceiver};
+
+        let mut mounts: Vec<WebhookMount> = Vec::new();
+        for info in channel_registry.list().await {
+            let Some(handle) = channel_registry.get(&info.id).await else {
+                continue;
+            };
+            let channel = handle.read().await;
+            if let Some(handler) = channel.webhook_handler() {
+                // The channel's OWN broadcast, so start_message_forwarder
+                // still sees the traffic and stamps channel health. The status
+                // handle is what lets the endpoint refuse traffic once the
+                // channel is later stopped/deleted — this boot-time mount
+                // table itself is never rebuilt.
+                mounts.push(WebhookMount {
+                    handler,
+                    inbound: channel.state().sender(),
+                    status: channel.state().status_handle(),
+                    channel_id: info.id.clone(),
+                });
+            }
+        }
+
+        if !mounts.is_empty() {
+            // `channel_registry.list()` iterates a HashMap, whose order is not
+            // stable across restarts. Without a deterministic order here,
+            // which mount wins a duplicate path — and therefore which secret
+            // and which channel id is live on that path — would be a
+            // per-boot coin flip.
+            mounts.sort_by(|a, b| a.channel_id.as_str().cmp(b.channel_id.as_str()));
+            let count = mounts.len();
+            server.set_webhook_routes(WebhookReceiver::router(mounts));
+            if !daemon {
+                println!("  Gateway: {count} webhook ingestion route(s) mounted");
+            }
         }
     }
 

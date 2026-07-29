@@ -355,6 +355,25 @@ pub async fn handle_status(
 /// Starts a channel (connects, authenticates, begins polling).
 /// Before starting, re-reads channel config from app config so that
 /// Panel UI config changes take effect without server restart.
+/// True if `channel_id` just started with a webhook handler that cannot
+/// actually receive HTTP traffic yet.
+///
+/// `WebhookReceiver`'s route table is built once, from every channel's
+/// `webhook_handler()`, in the boot sequence (`subsystems.rs`) — before
+/// `GatewayServer::run` calls `build_router()` and starts serving. A channel
+/// started or created afterward through this RPC path is, by construction,
+/// too late to have a route: nothing rebuilds the router at runtime. Without
+/// this check the caller sees a bare "started" and reasonably assumes the
+/// channel is live, reproducing the advertised-but-disabled shape this branch
+/// exists to eliminate — just moved from boot time to the runtime path.
+async fn needs_webhook_restart(registry: &ChannelRegistry, channel_id: &ChannelId) -> bool {
+    let Some(channel_arc) = registry.get(channel_id).await else {
+        return false;
+    };
+    let channel = channel_arc.read().await;
+    channel.webhook_handler().is_some()
+}
+
 pub async fn handle_start(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
@@ -421,13 +440,26 @@ pub async fn handle_start(
     drop(config_snapshot);
 
     match registry.start_channel(&channel_id).await {
-        Ok(()) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "channel_id": channel_id.as_str(),
-                "status": "started",
-            }),
-        ),
+        Ok(()) => {
+            if needs_webhook_restart(&registry, &channel_id).await {
+                JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "channel_id": channel_id.as_str(),
+                        "status": "restart_required",
+                        "message": "channel started, but its webhook route can only be mounted at daemon boot — restart the daemon to receive inbound HTTP traffic",
+                    }),
+                )
+            } else {
+                JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "channel_id": channel_id.as_str(),
+                        "status": "started",
+                    }),
+                )
+            }
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -699,14 +731,28 @@ pub async fn handle_create(
         let start_result = registry.start_channel(&channel_id).await;
 
         match start_result {
-            Ok(()) => JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "id": id,
-                    "type": channel_type,
-                    "status": "started",
-                }),
-            ),
+            Ok(()) => {
+                if needs_webhook_restart(&registry, &channel_id).await {
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "id": id,
+                            "type": channel_type,
+                            "status": "restart_required",
+                            "message": "channel created and started, but its webhook route can only be mounted at daemon boot — restart the daemon to receive inbound HTTP traffic",
+                        }),
+                    )
+                } else {
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "id": id,
+                            "type": channel_type,
+                            "status": "started",
+                        }),
+                    )
+                }
+            }
             Err(e) => JsonRpcResponse::success(
                 request.id,
                 json!({

@@ -206,3 +206,99 @@ busy_input_mode = "queue"
 | 新 HTTP 路由扩大攻击面 | D3 已定姿态：与 `/health` `/metrics` `/a2a` 同层；配置即开关，secret 强制非空 |
 | trait 加方法波及全部 channel 实现 | 默认 `None`，现有实现零改动 |
 | QA 场景依赖长跑 run 的时序 | msg1 用一个足够长的任务；断言前轮询 sink 而非固定 sleep |
+
+## 9. QA 结果 (Real-Machine QA Results, 2026-07-29)
+
+真机执行，macOS 27 / Darwin 27.0.0。RED = `2b822e187`（Task 1 之前），GREEN = `409dc6eb8`（Task 5 之后）。
+两个 binary 必须各自独占 `CARGO_TARGET_DIR`：仓库根 `.cargo/config.toml` 把所有 worktree 钉到
+同一个 `target/`，两次 build 互相覆盖，且 cargo 对另一个 worktree 报 `Fresh alephcore` —— 共享
+target 结构上装不下两个 binary。
+
+| 场景 | 期望 | 实测 |
+|------|------|------|
+| RED · 接线前签名 POST | 连不上 / 404，sink 空 | **PASS**。`HTTP/1.1 405 Method Not Allowed` + `allow: GET,HEAD`，body 空（SPA 兜底只注册 GET/HEAD，POST 打到未匹配路径由 axum MethodRouter 回 405）。`sink.log` 0 行。boot 日志有 `Registered channel: webhook (webhook)` / `✓ Channel webhook started`，**没有** `webhook ingestion route(s) mounted` —— channel 报 Connected 而聋，正是断线形状 |
+| GREEN · 入站到达 | POST 200，sink 收到 agent 回复 | **PASS**。boot 增出 `Gateway: 1 webhook ingestion route(s) mounted`。`[post] HTTP 200 body='ok'`，~14s 后 sink 收到真实 agent 回复：`{"conversation_id":"qa-conv",…,"message":"QA-HELLO-OK",…}` |
+| GREEN · /stop 回执计数 | 回执含计数 = 2 | **PASS**。sink 实测：`⏹ 已停止当前任务。 已随本次停止取消 2 条排队中的消息。`（`Msg::RunStopped` + `Msg::QueuedMessagesDropped{count:2}`，Locale::Zh）。服务端日志同刻：`/stop: cancelled running run, run_id=cc4b658a…` + `/stop: dropped queued messages…, dropped=2`，且被取消的正是 msg1 自己的 run —— 证明 msg1 当时确实在飞，两条后继确实还在等 |
+| GREEN · 无排队时 /stop | 回执不带计数子句 | **PASS**。先经 `gateway.metrics.run_concurrency` 确认 `running_sessions=[] / total_waiting=0`，再 POST `/stop`，sink 实测：`当前没有正在执行的任务。`（`Msg::NoActiveRun`），**无**计数子句 —— 计数是实算不是常量 |
+
+### 9.1 脚本必须对着代码改，不能照抄草稿
+
+- **payload 文本字段是 `message` 不是 `text`**（`message_ops.rs::WebhookPayload`）。写 `text` 会
+  反序列化失败、端点回 400。
+- **签名头 / 格式与草稿一致**：`X-Webhook-Signature: sha256=<hex hmac-sha256>`。
+- **必须自带 `message_id`**：缺省时 `derive_message_id` 退化成 **内容指纹**（sender + conversation
+  + thread + message 的 SHA-256），于是跨场景重发的第二条 `/stop` 与第一条撞 id、被入站 dedup
+  静默丢弃。QA 每条消息带唯一 `message_id`。
+- **回执断言必须用中文**：真机 `[general]` 无 `language` 键 ⇒ `Locale::from_config(None)` ⇒ `Zh`。
+
+### 9.2 QA 时序的两个真陷阱（都不是产品 bug）
+
+1. **入站 coalescer 默认开着，`debounce_ms = 800`**（`coalescer.rs::CoalescingConfig::default`）。
+   两条后继 POST 相隔 32ms 会被**合并成一条**，车道深度只到 1。后继消息必须相隔 > 800ms。
+2. **`purge()` 只数「仍在等」的，不数已被提升为 running 的**。首轮 msg1 只跑了 11.4s，`/stop`
+   到达前它已结束、队首被 `mark_admitted` 提升成 running，于是回执如实报 `dropped=1`。
+   这是**正确行为**（CLAUDE.md §4.8：车道是候车室不是运行登记簿），不是缺陷 —— 断言 count=2
+   必须让 msg1 在 `/stop` 落地时**仍在飞**。同理，中途插 `gateway.metrics` 轮询（每次 WS 往返
+   1–2s）会把 `/stop` 推迟到 msg1 结束之后，反而测不到；改为紧凑发送、事后查日志对账。
+
+### 9.3 QA 顺带发现的既有缺陷（非本轮 Task 1–5 引入）
+
+**`WebhookChannelFactory::create` 硬编码 channel id `"webhook"`**（`interfaces/webhook/mod.rs:262`），
+丢弃 `create_channel_from_config(id, …)` 传进来的实例 id。而 `subsystems.rs` 把 router 侧策略
+注册在**配置段名**下（`register_channel_config(&inst.id, …)`），executor 又按**运行时 channel id**
+查（`channel_run_identity` → `configs.get(channel_id)`）。两者只有在配置段恰好叫 `webhook` 时才对得上。
+
+实测证据（配置段名为 `webhook_qa` 时的 boot 日志两行）：
+
+```
+Registered channel: webhook (webhook)
+Inbound router: access tiering registered for 'webhook_qa' (webhook) [tier=guest]
+```
+
+后果一：段名不等于 `webhook` 时，该 channel 的 `busy_input_mode` / `permission_level` /
+`default_workspace` / `tool_permissions` / slash-access **全部静默失效**，回落默认值（busy 模式退回
+`Steer`）。同族问题 whatsapp 已修 —— `subsystems.rs` 里那段注释写得很清楚：「The generic factory
+hardcodes the id "whatsapp"; rebuild with the real instance id so the registry keys the channel
+correctly and multi-instance configs are addressable」—— webhook 当时没有对应的重建分支。本轮 QA 的
+绕法是把配置段命名为 `[channels.webhook]` 让两个 id 重合。
+
+后果二（QA 当时未记录，事后审查补记）：`WebhookChannelFactory::create` 返回的硬编码 id 不只是
+「策略查不到」，还是一个**注册表覆盖 bug**——任意两个 `channel_type = "webhook"` 的配置段都会
+产出同一个 `ChannelId("webhook")`，而 `ChannelRegistry::register` 底层是 `HashMap`
+（`channel_registry.rs:124`），第二个 `register()` 会**静默覆盖**第一个。也就是说配置里写了两个
+webhook 频道，实际只有一个存活，且没有任何错误或警告提示第一个已经消失。
+
+**修复状态：已在整体复审的修复轮中解决**（`gateway: key the webhook channel by its config section
+name`）——`subsystems.rs` 在 whatsapp 分支之后镜像同一模式，为 `channel_type == "webhook"` 重建
+`WebhookChannel::new(&inst.id, wh_config)`，用真实实例 id 替换工厂硬编码的 `"webhook"`。该修复本身
+在 Task 1–5 范围之外，也晚于本节记录的 QA 运行——下面 §9.4 的命令与产物仍是**针对修复前的代码**
+跑的（QA 绕过配置段命名为 `[channels.webhook]`），并未针对本修复重跑；不改写这段历史。
+
+### 9.4 命令与脚本
+
+RED / GREEN 各自独占 target dir 构建后，把 binary 拷出来再跑（共享 target 会互相覆盖）：
+
+```bash
+# RED（detached worktree @ 2b822e187）与 GREEN 各构建一次，binary 立刻拷走
+CARGO_TARGET_DIR=<独立目录> cargo build --bin aleph-server
+
+python3 sink.py 8788                                   # 出站观测点
+./aleph-server-{RED,GREEN} --config aleph_qa.toml start # 注意 --config 是全局 flag，在子命令之前
+python3 post.py "<text>" "<unique-message-id>"
+```
+
+首条消息会撞 pairing 墙（`dm_policy` 默认 `Pairing`，回执带配对码）。走产品自己的审批链，
+**没有放宽任何访问控制**：
+
+```bash
+aleph-server gateway call --url ws://127.0.0.1:8787/ws channel.pairing.list    -p '{"channel":"webhook"}'
+aleph-server gateway call --url ws://127.0.0.1:8787/ws channel.pairing.approve -p '{"channel":"webhook","code":"<code>"}'
+```
+
+车道深度用 `gateway.metrics.run_concurrency` 的 `busy_queue.total_waiting` / `per_session[].depth`
+直读（实测到过 `{"depth": 2, "session_key": "agent:main:peer:dm-qa-user"}`）。
+
+`sink.py` / `post.py` / `aleph_qa.toml` 均为一次性脚本，跑在 scratch 目录，**未入库**。QA 配置由
+真实 `~/.aleph/config.toml` 复制而来（保留 provider），并**删掉 `[channels.AlephzBot]`** —— QA daemon
+不得把用户的真 Telegram bot 拉上线。注意 daemon 启动时会**改写传入的配置文件**（把 `secret`
+收进 vault 并按 channel id 归档），改段名后需重新写回 `secret`。
