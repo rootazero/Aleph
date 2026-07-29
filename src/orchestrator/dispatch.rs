@@ -150,6 +150,13 @@ pub enum TerminateReason {
     /// running prompt would otherwise blow the model's context window.
     /// Distinct from `HitMaxIterations` — same outward symptom, different
     /// cause (tokens vs iterations).
+    ///
+    /// **Retired signal, like [`Self::DiminishingReturns`]: no producer.** The
+    /// budget's `FinalReply` hard-stop is gone — pressure now escalates
+    /// `SplitSession` → `CompactToFit`'s deterministic truncation floor and the
+    /// loop never breaks on it (pinned by the harness's never-break tests).
+    /// Kept for i18n / summary / `escalate_partial_result` back-compat and for
+    /// blobs persisted before the escalation landed.
     ContextBudgetExhausted,
     /// `stall_config` watchdog tripped before the loop emitted progress.
     StallTimeout { elapsed_ms: u64 },
@@ -653,6 +660,23 @@ pub trait HarnessRunner: Send + Sync {
     /// running batches 8-wide. Default `None` leaves the spawner on the
     /// config default, matching test mocks / the simple engine.
     fn parallel_tool_concurrency(&self) -> Option<usize> {
+        None
+    }
+
+    /// The `[context_budget]` config this runner builds its own per-run
+    /// budget / compactor / preflight pipeline from. Threaded into
+    /// `SubagentTool` so a spawned subagent gets the same context management
+    /// instead of running with none: the spawner pinned all three to `None`,
+    /// so a child's prompt grew unbounded (every turn replays the full child
+    /// log) and a `prompt_too_long` had no compactor to rescue with — the
+    /// reactive drain went straight to `ReactiveCompactExhausted` and the
+    /// whole subagent run died. Default `None` (test mocks / the simple
+    /// engine / `[context_budget]` disabled) keeps the previous behaviour.
+    ///
+    /// The *config* travels, not the budget instance: each run needs its own
+    /// `ContextBudget` so calibration and circuit-breaker counters never leak
+    /// between the parent and its children.
+    fn context_budget_config(&self) -> Option<crate::context::budget::ContextBudgetConfig> {
         None
     }
 

@@ -126,6 +126,42 @@ impl PreflightPipeline {
 }
 
 // =============================================================================
+// Production wiring
+// =============================================================================
+
+/// The production cheap-pass pipeline, config-gated.
+///
+/// Single source for every turn driver that wants the deterministic pre-LLM
+/// passes: the main runner (`harness_bridge::runner_impl`) and the subagent
+/// spawner both call this instead of re-listing the stages. The list used to
+/// live inline in the runner only, which is exactly why subagents ran with no
+/// preflight at all — a second construction site had to re-derive it from
+/// nothing.
+///
+/// All three stages share ONE config-derived gate: the preventive band just
+/// below the LLM-compaction warning line. `FileOpSupersedeStage`'s own ratio is
+/// overridden to that same value so its standalone gate cannot drift above a
+/// custom warning threshold.
+///
+/// Ordering: `FileOpSupersedeStage` first so its stubs shrink the tool_result
+/// bodies before the pruner and the image stripper see them. The three stages
+/// are commutative for correctness (none touches the others' targets); the
+/// order is for log readability and minor cache wins.
+#[must_use]
+pub fn default_pipeline(cfg: &super::ContextBudgetConfig) -> PreflightPipeline {
+    use super::cheap_passes::{
+        FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
+    };
+    let preventive_floor = cfg.preventive_floor();
+    let stages: Vec<Box<dyn PreflightStage>> = vec![
+        Box::new(FileOpSupersedeStage::default().with_min_pressure_ratio(preventive_floor)),
+        Box::new(ToolResultPruningStage::default()),
+        Box::new(HistoricalImageStrippingStage),
+    ];
+    PreflightPipeline::new(stages).with_min_pressure_ratio(preventive_floor)
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

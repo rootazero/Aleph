@@ -209,10 +209,12 @@ impl From<LoopTraceState> for aleph_protocol::AgentTraceState {
 impl From<LoopTraceTurnOutcome> for aleph_protocol::AgentTraceTurnOutcome {
     fn from(outcome: LoopTraceTurnOutcome) -> Self {
         match outcome {
+            // The loop only ever produces these two — caps and cancellation are
+            // session-level exits. `AgentTraceTurnOutcome::{HitLimit,Cancelled}`
+            // stay on the protocol side for stored legacy blobs (same as
+            // `AgentTraceTextKind::Intermediate`); nothing produces them now.
             LoopTraceTurnOutcome::Continue => Self::Continue,
             LoopTraceTurnOutcome::Stop => Self::Stop,
-            LoopTraceTurnOutcome::HitLimit => Self::HitLimit,
-            LoopTraceTurnOutcome::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -347,8 +349,8 @@ mod tests {
             aleph_protocol::AgentTraceState::Act
         ));
         assert!(matches!(
-            aleph_protocol::AgentTraceTurnOutcome::from(LoopTraceTurnOutcome::Cancelled),
-            aleph_protocol::AgentTraceTurnOutcome::Cancelled
+            aleph_protocol::AgentTraceTurnOutcome::from(LoopTraceTurnOutcome::Stop),
+            aleph_protocol::AgentTraceTurnOutcome::Stop
         ));
         assert!(matches!(
             aleph_protocol::AgentTraceSessionOutcome::from(LoopTraceSessionOutcome::Completed),
