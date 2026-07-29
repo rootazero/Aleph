@@ -210,9 +210,117 @@ impl Drop for HomeEnvGuard {
     }
 }
 
+/// The **only** way for a test to hold both `$ALEPH_HOME` and `$HOME`.
+///
+/// [`HOME_LOCK`] and [`crate::utils::paths::ALEPH_HOME_TEST_GUARD`] are two
+/// separate mutexes over two separate env vars, so taking them by hand admits
+/// two orders — and two orders is an ABBA deadlock. That is not a theoretical
+/// risk: one test taking them in the opposite order to its three siblings hung
+/// the entire `--lib` run **forever** (measured: 15 hangs in 25 runs of
+/// `cargo test --lib skill::tests -- --test-threads=32`), with every other
+/// `ALEPH_HOME` test piled up behind it. A hang, not a failure — nothing goes
+/// red, the run just never ends.
+///
+/// This type takes them in one fixed order so no call site gets to choose.
+/// `nothing_acquires_the_two_env_locks_separately` (below) fails the build if a
+/// new site goes back to acquiring them individually, because the mistake it
+/// guards against cannot announce itself any other way.
+#[cfg(test)]
+pub(crate) struct HomeEnvGuards {
+    // Declaration order is drop order. Release order does not affect deadlock
+    // freedom, but mirroring acquisition keeps the nesting obvious.
+    _home: HomeEnvGuard,
+    _aleph_home: crate::utils::paths::AlephHomeEnvGuard,
+}
+
+#[cfg(test)]
+impl HomeEnvGuards {
+    /// Lock both, then point `$ALEPH_HOME` and `$HOME` at the given paths for
+    /// the guard's lifetime.
+    pub(crate) fn acquire_and_set(
+        aleph_home: impl AsRef<std::ffi::OsStr>,
+        home: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        // ALEPH_HOME first — the one and only order.
+        let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(aleph_home);
+        let home = HomeEnvGuard::acquire_and_set(home);
+        Self {
+            _home: home,
+            _aleph_home: aleph_home,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collect every `.rs` file under `dir`, recursively.
+    fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// No file may take the `$ALEPH_HOME` and `$HOME` locks individually —
+    /// [`HomeEnvGuards`] exists so the order is not a call site's to pick.
+    ///
+    /// This is a source scan rather than a runtime assertion because the bug it
+    /// catches produces a **hang**, not a failure: a suite that deadlocks never
+    /// reaches any assertion, so the only place to catch it is before it runs.
+    /// Same shape as the `src/harness/tests/budget.rs` ratchet.
+    #[test]
+    fn nothing_acquires_the_two_env_locks_separately() {
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_sources(&src_root, &mut files);
+        assert!(!files.is_empty(), "found no sources under {src_root:?}");
+
+        let mut offenders = Vec::new();
+        for path in files {
+            // This file *defines* `HomeEnvGuards`, so it is the one place that
+            // legitimately names both guards.
+            if path.ends_with("runtimes/post_install.rs") {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // `AlephHomeEnvGuard::acquire` ends with `HomeEnvGuard::acquire`, so
+            // blank the longer name out before looking for the shorter one.
+            // (`HomeEnvGuards::acquire` — the combined guard — does not match
+            // either, thanks to the plural.)
+            let takes_home = src
+                .replace("AlephHomeEnvGuard", "\u{0}")
+                .contains("HomeEnvGuard::acquire");
+            let takes_aleph_home = src.contains("AlephHomeEnvGuard::acquire")
+                || src.contains("IsolatedAlephHome::new")
+                || src.contains("ALEPH_HOME_TEST_GUARD");
+            if takes_home && takes_aleph_home {
+                offenders.push(
+                    path.strip_prefix(&src_root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these take the $ALEPH_HOME and $HOME locks separately — an ABBA \
+             deadlock that hangs the whole --lib run instead of failing it. Use \
+             `runtimes::post_install::HomeEnvGuards::acquire_and_set` instead: {offenders:?}"
+        );
+    }
 
     #[test]
     fn test_expand_home_with_var() {

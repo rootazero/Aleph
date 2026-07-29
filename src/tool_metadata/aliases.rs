@@ -66,8 +66,12 @@ pub const SHORTHAND_ALIASES: &[(&str, &str)] = &[
     // ── Session compaction (codex `/compact`, hermes `/compress` parity) ───
     // `session_compact` is a live `SessionManager`-dependent tool (`None` in
     // `create_tool_boxed`) but has an `execute_tool` dispatch arm, so the fast
-    // path runs it deterministically on every surface. The TUI/CLI already
-    // reach the same `SessionStore::compact` via the `session.compact` RPC.
+    // path runs it deterministically on every surface. The TUI/CLI reach the
+    // SAME `context::compact::manual::compact_session` through the
+    // `session.compact` RPC, so every surface compacts identically (R6).
+    // Trailing free text becomes the summary directive — see
+    // `slash_command::build_tool_arguments`'s `session_compact` arm, without
+    // which the generic `{input,query,args}` fallback silently drops it.
     ("compact", "session_compact"),
     ("compress", "session_compact"),
 ];

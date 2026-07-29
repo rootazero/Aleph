@@ -83,7 +83,9 @@ pub(super) async fn execute_local_command(
             }
         }
         LocalCommand::Usage => execute_usage(state, client).await,
-        LocalCommand::Compress => execute_compress(state, client).await,
+        LocalCommand::Compress { instructions } => {
+            execute_compress(state, client, &instructions).await;
+        }
         LocalCommand::Stop => execute_stop(state, client).await,
         LocalCommand::Undo => {
             execute_undo(state, client).await;
@@ -255,40 +257,53 @@ fn format_usage(state: &AppState, u: &UsageReply) -> String {
 }
 
 /// Response shape for `session.compact` RPC.
+///
+/// The server renders the human-readable line (it knows whether the run was a
+/// no-op, and why), so this is a thin carrier — R4: the interface renders, it
+/// does not re-derive.
 #[derive(Debug, serde::Deserialize)]
 struct CompactReply {
     #[serde(default)]
     message: String,
     #[serde(default)]
-    before_messages: u64,
-    #[serde(default)]
-    after_messages: u64,
-    #[serde(default)]
-    tokens_saved: u64,
+    summary: String,
 }
 
-async fn execute_compress(state: &mut AppState, client: &AlephClient) {
+/// How much of the summary to echo back in the TUI. The full text also lands in
+/// the conversation as a system message, so this is a preview, not the payload.
+const SUMMARY_PREVIEW_CHARS: usize = 400;
+
+async fn execute_compress(state: &mut AppState, client: &AlephClient, args: &str) {
     if state.current_run.is_some() {
         state.add_system_message(
             "Wait for the current run to finish before compacting (/stop to abort)".to_string(),
         );
         return;
     }
-    let params = json!({ "session_key": state.session_key });
+    // `/compress <instructions>` — the trailing free text steers what the
+    // summary must preserve (codex / pi / kimi-cli parity), matching what the
+    // Panel's `/compact <instructions>` sends through the tool path.
+    let instructions = args.trim();
+    let mut params = json!({ "session_key": state.session_key });
+    if !instructions.is_empty() {
+        params["instructions"] = json!(instructions);
+    }
     match client
         .call::<_, CompactReply>("session.compact", Some(params))
         .await
     {
         Ok(r) => {
-            let summary = if r.before_messages == r.after_messages {
-                format!("Compact: {}", r.message)
-            } else {
-                format!(
-                    "Compacted {} → {} messages (saved ~{} tokens)",
-                    r.before_messages, r.after_messages, r.tokens_saved
-                )
-            };
-            state.add_system_message(summary);
+            state.add_system_message(r.message);
+            if !r.summary.trim().is_empty() {
+                // P7 UTF-8 safety: cut on a char boundary, never a byte one.
+                let preview: String = r.summary.chars().take(SUMMARY_PREVIEW_CHARS).collect();
+                let ellipsis = if r.summary.chars().count() > SUMMARY_PREVIEW_CHARS {
+                    "…"
+                } else {
+                    ""
+                };
+                state.add_system_message(format!("{preview}{ellipsis}"));
+            }
         }
         Err(e) => state.add_system_message(format!("Compact error: {e}")),
     }

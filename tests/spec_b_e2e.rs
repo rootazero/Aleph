@@ -276,13 +276,6 @@ impl SessionStore for E2eSessionStore {
     ) -> Result<Vec<MessageRecord>, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn compact(
-        &self,
-        _key: &SessionKey,
-        _strategy: CompactStrategy,
-    ) -> Result<CompactResult, SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
     async fn list_checkpoints(
         &self,
         _key: &SessionKey,

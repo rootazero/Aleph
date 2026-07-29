@@ -1028,12 +1028,15 @@ impl BuiltinToolRegistry {
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .map(crate::builtin_tools::sessions::SessionNewTool::new),
+            // The tool itself is storeless (it drives the session event log via
+            // the process-wide handles); the store lookup survives only as the
+            // availability gate — no session backend, no `/compact`.
             session_compact_tool: config
                 .gateway_context
                 .as_ref()
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
-                .map(crate::builtin_tools::sessions::SessionCompactTool::new),
+                .map(|_| crate::builtin_tools::sessions::SessionCompactTool::new()),
             session_set_topic_tool: config
                 .gateway_context
                 .as_ref()

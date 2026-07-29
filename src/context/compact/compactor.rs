@@ -3,13 +3,15 @@
 //! Replaces old conversation history with concise summaries via a side-channel
 //! LLM call. Falls back to deterministic truncation when the LLM call fails.
 
-use std::borrow::Cow;
 use std::time::Duration;
 
-use super::preserve::{is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET};
+use super::preserve::{
+    is_summary_text, preserved_user_messages, PRESERVED_USER_TOKEN_BUDGET, SUMMARY_MARKER,
+};
 use super::summary_utils::{
-    build_summary_update_prompt, build_window_summary_prompt, latest_user_task,
-    strip_analysis_block,
+    build_summary_update_prompt, build_window_summary_prompt, cap_transcript_text,
+    latest_user_task, prepend_user_instructions, strip_analysis_block,
+    SUMMARIZER_INPUT_TOKEN_BUDGET,
 };
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
@@ -95,17 +97,6 @@ struct CompactionCache {
 /// be folded into the summary once it crosses either bound).
 const CACHE_EXTEND_MIN_MESSAGES: usize = 8;
 const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
-
-/// Summarizer-input token budget for a single compaction call. The window is
-/// anchored at the oldest compressible message and extended forward until the
-/// serialized (per-message-capped) transcript reaches this many estimated
-/// tokens — bounding the side-channel summarization call so a long compressible
-/// span cannot overflow the (possibly flash-tier) summarizer's own context
-/// window. Chosen well below common flash-tier windows (64k+) to leave room for
-/// the prompt scaffold and the summary output; spans larger than this fold into
-/// the running summary incrementally across turns via the cache extend-merge in
-/// [`ContextCompactor::reapply_cached`].
-const SUMMARIZER_INPUT_TOKEN_BUDGET: usize = 48_000;
 
 /// Bound on cross-run carry-over slots. Sessions beyond the cap evict the
 /// least-recently-WRITTEN entry (every `carryover_put` moves its key to the
@@ -541,7 +532,7 @@ impl ContextCompactor {
         match summary {
             Some(summary) => {
                 // Success: drain old window and insert the stripped summary.
-                let summary_text = format!("[Context Summary]\n{summary}");
+                let summary_text = format!("{SUMMARY_MARKER}\n{summary}");
                 let summary_msg = UnifiedMessage::user(summary_text.clone());
                 let tokens_after = estimate_tokens(&summary);
 
@@ -575,7 +566,7 @@ impl ContextCompactor {
                         None => deterministic_truncation(window),
                     };
                     let tokens_after = estimate_tokens(&truncated);
-                    let summary_text = format!("[Context Summary]\n{truncated}");
+                    let summary_text = format!("{SUMMARY_MARKER}\n{truncated}");
                     let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     splice_preserved(messages, window_start..window_end, preserved, summary_msg);
@@ -751,7 +742,7 @@ impl ContextCompactor {
             }
         };
 
-        let summary_text = format!("[Context Summary]\n{body}");
+        let summary_text = format!("{SUMMARY_MARKER}\n{body}");
         let tokens_after = estimate_tokens(&summary_text);
         // Re-preserve over the MERGED cover: the merge folds the gap into the
         // summary too, so the gap's own user turns must come back verbatim
@@ -777,18 +768,25 @@ impl ContextCompactor {
 
     /// Summarize a slice of messages and return the raw summary string.
     ///
-    /// Used by `session_split::summarize_pretail` to produce the seed text for
-    /// a child session without running a full `compact()` in-place.  Falls back
-    /// to deterministic truncation when the LLM call fails (mirrors `compact`).
+    /// Used by `session_split::summarize_pretail` (child-session seed) and by
+    /// `manual::compact_session` (user-driven `/compact`) to produce a summary
+    /// without running a full in-place `compact()`. Falls back to deterministic
+    /// truncation when the LLM call fails (mirrors `compact`).
     ///
     /// `focus` is the user's active task (the most recent request preserved
-    /// verbatim in the child's fresh tail). Passing it anchors the pre-tail
-    /// summary to the live work — the heavy-compaction path where losing the
-    /// task thread hurts most. `None` keeps the historical static prompt.
+    /// verbatim in the kept tail). Passing it anchors the summary to the live
+    /// work — the heavy-compaction path where losing the task thread hurts
+    /// most. `None` keeps the historical static prompt.
+    ///
+    /// `instructions` is the user's own `/compact <instructions>` directive
+    /// (codex / pi / kimi-cli parity). It outranks `focus`: the anchor is a
+    /// guess at what matters, this is the user saying so. `None` — the whole
+    /// automatic path — leaves the prompt byte-identical.
     pub(crate) async fn summarize_slice(
         &self,
         messages: &[UnifiedMessage],
         focus: Option<&str>,
+        instructions: Option<&str>,
     ) -> anyhow::Result<String> {
         if messages.is_empty() {
             return Ok(String::new());
@@ -798,7 +796,10 @@ impl ContextCompactor {
         let tokens_before = estimate_tokens(&transcript);
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
 
-        let prompt = build_window_summary_prompt(&transcript, token_budget, focus);
+        let prompt = prepend_user_instructions(
+            &build_window_summary_prompt(&transcript, token_budget, focus),
+            instructions,
+        );
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
 
@@ -959,36 +960,10 @@ fn strip_context_summary_prefix(text: &str) -> Option<&str> {
     Some(text[line_end..].trim_start_matches('\n'))
 }
 
-/// Per-message character cap applied to the summarizer transcript.
-///
-/// Old tool results and pasted blobs in the compaction window can each be many
-/// KB; an un-capped transcript can blow past the side-channel summarizer's own
-/// context window, failing the LLM call and forcing the lossy truncation
-/// fallback. openclaw caps tool-result serialization at 2000 chars for the same
-/// reason. This bounds the summarizer INPUT only — the stored message log and
-/// the fingerprint cache hash are computed from `messages`, never the
-/// transcript, so capping here cannot affect cache validity or what the model
-/// finally sees in context.
-const TRANSCRIPT_MSG_MAX_CHARS: usize = 2000;
-
-/// Cap `text` to [`TRANSCRIPT_MSG_MAX_CHARS`] Unicode scalar values on a char
-/// boundary (P7 UTF-8 safety), appending an elision marker when cut. The head
-/// carries the actionable signal (what the tool did / the turn's intent); the
-/// tail of a long old result is rarely load-bearing in a summary.
-fn cap_transcript_text(text: &str) -> Cow<'_, str> {
-    let count = text.chars().count();
-    if count <= TRANSCRIPT_MSG_MAX_CHARS {
-        return Cow::Borrowed(text);
-    }
-    let head: String = text.chars().take(TRANSCRIPT_MSG_MAX_CHARS).collect();
-    let dropped = count - TRANSCRIPT_MSG_MAX_CHARS;
-    Cow::Owned(format!("{head}… [+{dropped} chars elided]"))
-}
-
 /// Serialize a slice of messages into a human-readable transcript, capping each
 /// message body via [`cap_transcript_text`] so a few huge old tool results can
 /// never blow up the side-channel summarizer prompt.
-fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
+pub(crate) fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
         let text = msg.text_content();
@@ -1017,7 +992,7 @@ fn estimate_tokens(text: &str) -> usize {
 }
 
 /// Deterministic truncation: keep only the first line of each message.
-fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
+pub(crate) fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
     let mut lines = Vec::with_capacity(messages.len());
     for msg in messages {
         let role = match msg {
@@ -1041,6 +1016,7 @@ fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::summary_utils::TRANSCRIPT_MSG_MAX_CHARS;
     use super::*;
     use crate::providers::message::ContentBlock;
     use crate::providers::mock::MockProvider;
@@ -1727,7 +1703,10 @@ mod tests {
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
         let messages = make_messages(6);
-        let seed = compactor.summarize_slice(&messages, None).await.unwrap();
+        let seed = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
 
         assert!(
             !seed.trim().is_empty(),
@@ -2032,27 +2011,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cap_transcript_text_passes_short_text_through_borrowed() {
-        // Below the cap the text is returned untouched and borrowed (no alloc).
-        let short = "a short tool result";
-        let capped = cap_transcript_text(short);
-        assert!(matches!(capped, Cow::Borrowed(_)));
-        assert_eq!(capped, short);
-    }
-
-    #[test]
-    fn cap_transcript_text_truncates_on_char_boundary_with_marker() {
-        // A multibyte body over the cap must truncate without panicking and carry
-        // the elision marker — never slice mid-codepoint (P7 UTF-8 safety).
-        let long = "本".repeat(TRANSCRIPT_MSG_MAX_CHARS + 500);
-        let capped = cap_transcript_text(&long);
-        assert!(matches!(capped, Cow::Owned(_)));
-        assert!(capped.contains("chars elided]"));
-        // Head is bounded to the cap; the original is far longer.
-        assert!(capped.chars().count() < long.chars().count());
-        assert!(capped.starts_with('本'));
-    }
+    // `cap_transcript_text`'s own unit tests moved with it to `summary_utils`,
+    // where the cap is now single-sourced for all three drain sites.
 
     #[test]
     fn serialize_transcript_bounds_huge_tool_results() {

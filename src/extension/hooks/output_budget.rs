@@ -240,6 +240,15 @@ fn preview(text: &str, saved: Option<&Path>) -> String {
 mod tests {
     use super::*;
 
+    // Every test below that reaches `budget_one` with over-budget text writes a
+    // spill file, and `spill_dir` resolves that path off the *process-global*
+    // `ALEPH_HOME`. So each of them holds an `IsolatedAlephHome` for its whole
+    // body: without it the spill lands either in the developer's real `~/.aleph`
+    // or — worse — inside a sibling test's tempdir, which is deleted the moment
+    // that test ends, i.e. between the write and the read-back in
+    // `oversized_context_is_recoverable_from_the_spill_file`. That was a real
+    // flake: green when run alone, red under a full parallel run.
+
     /// Comfortably over the 2 500-token budget whatever ratio the estimator
     /// picks for this content.
     fn oversized() -> String {
@@ -265,6 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_context_is_bounded_and_keeps_head_and_tail() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let big = format!("HEAD-MARKER {} TAIL-MARKER", oversized());
         let out = budget_one("spill-test-session", big.clone()).await;
 
@@ -281,6 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_context_is_recoverable_from_the_spill_file() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let big = format!("UNIQUE-SPILL-BODY {}", oversized());
         let out = budget_one("spill-roundtrip", big.clone()).await;
 
@@ -303,7 +314,7 @@ mod tests {
             big.chars().count(),
             "spill must hold the FULL text, not the preview"
         );
-        let _ = std::fs::remove_file(&path);
+        // No cleanup: the isolated home owns the file and takes it with it.
     }
 
     #[tokio::test]
@@ -371,6 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn preview_is_char_boundary_safe_for_multibyte_text() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
         // Slicing by bytes at 1 500 would panic mid-codepoint on CJK.
         let big = "配置".repeat(20_000);
         let out = budget_one("cjk", big).await;

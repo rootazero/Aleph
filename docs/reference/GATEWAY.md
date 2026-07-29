@@ -111,7 +111,7 @@ The Gateway is Aleph's control plane, providing:
 | `session.get` | Get session info | `session_key` |
 | `session.list` | List all sessions | `filter?` |
 | `session.history` | Get message history | `session_key`, `limit?` |
-| `session.compact` | Compress session | `session_key` |
+| `session.compact` | Summarize older turns and drop them from the live context (`context::compact::manual`; soft-retires the event log, deletes nothing) | `session_key`, `instructions?` |
 | `session.delete` | Delete session | `session_key` |
 
 ### Config Methods

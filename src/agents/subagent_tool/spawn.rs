@@ -330,6 +330,10 @@ impl SubagentTool {
         if let Some(cap) = self.parallel_tool_concurrency {
             runtime = runtime.with_parallel_tool_concurrency(cap);
         }
+        if let Some(cfg) = self.context_budget_config.as_ref() {
+            // rust-doctor-disable-next-line excessive-clone
+            runtime = runtime.with_context_budget_config(cfg.clone());
+        }
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }

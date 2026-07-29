@@ -351,11 +351,19 @@ pub async fn handle_patch_db(
     }
 }
 
-/// Handle session.compact RPC request with database backend
-pub async fn handle_compact_db(
-    request: JsonRpcRequest,
-    manager: Arc<dyn SessionStore>,
-) -> JsonRpcResponse {
+/// Handle session.compact RPC request.
+///
+/// Drives the SAME `context::compact::manual::compact_session` the
+/// `session_compact` tool does (via the shared `run_manual_compaction`), so
+/// TUI `/compress`, CLI `aleph session compact`, Panel `/compact` and a model's
+/// own tool call are one behaviour (R6).
+///
+/// Takes no `SessionStore`: this operates on the session **event log** (the
+/// single source of truth the prompt is rebuilt from), not on the `messages`
+/// read projection. The old implementation deleted rows from that projection —
+/// which the agent never reads — and reported a fabricated `deleted × 50`
+/// token saving; both are gone.
+pub async fn handle_compact_db(request: JsonRpcRequest) -> JsonRpcResponse {
     let session_key = match request
         .params
         .as_ref()
@@ -366,44 +374,42 @@ pub async fn handle_compact_db(
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     };
 
-    let key = match SessionKey::from_key_string(&session_key) {
-        Some(k) => k,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Invalid session_key format",
-            );
-        }
-    };
+    if SessionKey::from_key_string(&session_key).is_none() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format");
+    }
 
-    // Get message count before compact
-    let before_msgs = manager.get_history(&key, None).await.map_or(0, |m| m.len());
-
-    match manager
-        .compact(
-            &key,
-            crate::gateway::session_store::types::CompactStrategy::KeepLastN {
-                n: crate::gateway::session_store::types::SESSION_COMPACT_KEEP_LAST_N,
-            },
-        )
-        .await
+    // `/compact <instructions>` (codex / pi / kimi-cli parity). The TUI passes
+    // whatever followed the command; absent/blank keeps the default summary.
+    let instructions = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("instructions"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    // No per-call keep-budget override: the verbatim tail budget is an operator
+    // setting (`[context_budget] manual_compact_keep_tokens`), and a knob with
+    // no caller is a knob that drifts. Deliberately absent, not forgotten.
+    match crate::builtin_tools::sessions::run_manual_compaction(
+        &session_key,
+        crate::context::compact::manual::ManualCompactOptions {
+            instructions,
+            keep_tokens: None,
+        },
+    )
+    .await
     {
-        Ok(result) => {
-            let after_msgs = before_msgs.saturating_sub(result.deleted);
-            let tokens_saved = result.deleted * 50; // rough estimate per message
-
+        Ok(outcome) => {
+            let rendered = crate::builtin_tools::sessions::render_manual_compaction(&outcome);
             JsonRpcResponse::success(
                 request.id,
                 json!({
-                    "message": if result.deleted > 0 {
-                        format!("Compacted {} messages.", result.deleted)
-                    } else {
-                        "Session is already compact.".to_string()
-                    },
-                    "before_messages": before_msgs,
-                    "after_messages": after_msgs,
-                    "tokens_saved": tokens_saved,
+                    "message": rendered.message,
+                    "compacted": outcome.events_compacted,
+                    "kept": outcome.events_kept,
+                    "tokens_before": outcome.tokens_before,
+                    "tokens_after": outcome.tokens_after,
+                    "tokens_saved": outcome.tokens_saved(),
+                    "summary": outcome.summary,
                 }),
             )
         }

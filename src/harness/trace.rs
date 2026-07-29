@@ -190,7 +190,10 @@ pub enum LoopTraceState {
     Act,
 }
 
-/// Outcome of a turn.
+/// Outcome of a turn — the only two a turn can end in. Caps and cancellation
+/// are SESSION-level exits ([`LoopTraceSessionOutcome`]); the former turn-level
+/// `HitLimit` / `Cancelled` had zero producers (protocol side keeps them for
+/// legacy blobs, like `AgentTraceTextKind::Intermediate`).
 ///
 /// `#[non_exhaustive]`: see [`LoopTraceState`] for rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,8 +202,6 @@ pub enum LoopTraceState {
 pub enum LoopTraceTurnOutcome {
     Continue,
     Stop,
-    HitLimit,
-    Cancelled,
 }
 
 /// Outcome of a session.

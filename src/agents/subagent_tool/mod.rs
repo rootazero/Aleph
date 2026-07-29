@@ -126,6 +126,11 @@ pub struct SubagentTool {
     /// matches the operator's configured value. `None` (the `new()` default)
     /// leaves the spawner on the config default.
     pub(super) parallel_tool_concurrency: Option<usize>,
+    /// The parent runner's `[context_budget]` config, inherited so a spawned
+    /// child builds its own budget / compactor / preflight pipeline. `None`
+    /// (the `new()` default, or `[context_budget]` disabled) leaves the child
+    /// context-unmanaged, matching the main harness under the same config.
+    pub(super) context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
 }
 
 impl SubagentTool {
@@ -174,7 +179,20 @@ impl SubagentTool {
             routing_store: None,
             default_max_iterations: None,
             parallel_tool_concurrency: None,
+            context_budget_config: None,
         }
+    }
+
+    /// Wire the parent runner's `[context_budget]` config so a spawned child
+    /// builds its own budget / compactor / preflight pipeline instead of
+    /// running with no context management at all.
+    #[must_use]
+    pub fn with_context_budget_config(
+        mut self,
+        cfg: crate::context::budget::ContextBudgetConfig,
+    ) -> Self {
+        self.context_budget_config = Some(cfg);
+        self
     }
 
     /// B15 — wire the parent runner's boot-time iteration cap so a spawned

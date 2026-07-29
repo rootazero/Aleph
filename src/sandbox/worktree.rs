@@ -63,7 +63,10 @@ impl WorktreeHandle {
 
     /// Explicit cleanup. Removes the worktree via `git worktree remove --force`,
     /// then marks the handle as cleaned up so `Drop` skips its safety-net work.
-    /// Performance contract: ≤ 100ms typical.
+    /// Performance contract: one `git worktree remove`, nothing on top — the
+    /// wall clock is git deleting the checkout and scales with repo size and
+    /// disk, so `h_t5` asserts it against a measured raw-git floor, not a
+    /// constant.
     pub async fn cleanup(self) -> Result<(), WorktreeError> {
         let result = remove_worktree(&self.repo_root, &self.path).await;
         self.cleaned_up.store(true, Ordering::Release);
@@ -132,7 +135,8 @@ impl Drop for WorktreeHandle {
 
 /// Create a fresh detached-HEAD worktree under `$TMPDIR/aleph-subagent-<label>-<uuid>/`.
 ///
-/// Performance contract: ≤ 200ms typical (git worktree add).
+/// Performance contract: one `git worktree add`, nothing on top — see
+/// [`WorktreeHandle::cleanup`] for why that is stated relatively.
 /// Errors: `NotAGitRepo` if `repo_root` has no `.git`; `Create` for any git failure.
 pub async fn create(
     repo_root: &Path,

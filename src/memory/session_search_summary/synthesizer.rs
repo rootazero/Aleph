@@ -270,13 +270,6 @@ pub(crate) mod test_support {
         ) -> Result<Vec<SearchHit>, SessionStoreError> {
             Err(SessionStoreError::DatabaseError("stub".into()))
         }
-        async fn compact(
-            &self,
-            _key: &SessionKey,
-            _strategy: CompactStrategy,
-        ) -> Result<CompactResult, SessionStoreError> {
-            Err(SessionStoreError::DatabaseError("stub".into()))
-        }
         async fn list_checkpoints(
             &self,
             _key: &SessionKey,
