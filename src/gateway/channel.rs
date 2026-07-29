@@ -34,6 +34,7 @@ use tokio::sync::broadcast;
 
 use crate::gateway::cancellation::CancellationToken;
 use crate::gateway::channel_approval::ChannelApprovalCapability;
+use crate::gateway::webhook_receiver::WebhookHandler;
 
 /// Result type for channel operations
 pub type ChannelResult<T> = Result<T, ChannelError>;
@@ -771,6 +772,18 @@ pub trait Channel: Send + Sync {
     /// Returns the channel's approval delivery capability if supported.
     /// Channels that don't support approval delivery return `None`.
     fn approval_capability(&self) -> Option<Arc<dyn ChannelApprovalCapability>> {
+        None
+    }
+
+    /// Webhook ingestion handler for channels that receive over HTTP POST.
+    ///
+    /// A channel returning `Some` gets its `path()` mounted on the gateway's
+    /// shared axum router by `initialize_channels`; `None` (the default) means
+    /// the channel receives some other way — a poll loop, a socket, a bridge.
+    ///
+    /// Returning `Some` only after `start()` is expected: collection runs once,
+    /// after every channel has started.
+    fn webhook_handler(&self) -> Option<Arc<dyn WebhookHandler>> {
         None
     }
 
