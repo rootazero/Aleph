@@ -66,9 +66,18 @@ impl SessionRunRegistry {
             if map.contains_key(&key) {
                 return false;
             }
-            map.insert(key, run_id.to_string());
+            map.insert(key.clone(), run_id.to_string());
             self.seq.fetch_add(1, Ordering::AcqRel);
         }
+        // Claim is the ONE place a session's run slot is actually taken, so it
+        // is the authoritative "this queued message has become a run" edge —
+        // the exact mirror of `release`'s `notify_slot_free` below. The busy
+        // wait lane holds *waiting* messages; a message that just started
+        // running must stop blocking the followers who need to reach the engine
+        // while it runs (that is how `Steer` and `Interrupt` work at all). A run
+        // that never came through the lane matches no ticket and this is a
+        // cheap no-op.
+        crate::gateway::busy_queue::mark_admitted(&key, run_id);
         self.broadcast_change();
         true
     }
@@ -190,6 +199,39 @@ mod tests {
         let mut want = vec![a.to_key_string(), b.to_key_string()];
         want.sort();
         assert_eq!(keys, want);
+    }
+
+    /// The wire that makes mid-loop steering reachable at all: claiming the
+    /// session's slot for a queued run withdraws that run's ticket from the
+    /// busy wait lane, so the next message becomes the lane's front and can
+    /// attempt delivery *while* the first run is still in flight (where the
+    /// engine steers or interrupts it). Without this the follower parked behind
+    /// a ticket held for the whole run and never reached `admit_run`.
+    #[test]
+    fn claim_withdraws_the_queued_run_from_its_wait_lane() {
+        use crate::gateway::busy_queue;
+
+        let reg = SessionRunRegistry::default();
+        let s = sk("lane-agent", "conv-claim");
+        let key = s.to_key_string();
+
+        let running = busy_queue::register(&key, 8, "run-1").expect("lane accepts the message");
+        let follower = busy_queue::register(&key, 8, "run-2").expect("lane accepts the follow-up");
+        assert!(!follower.is_front(), "the follower starts behind");
+
+        assert!(reg.try_claim(&s, "run-1"));
+        assert!(
+            follower.is_front(),
+            "admitting run-1 must let the follow-up reach the engine mid-run"
+        );
+        assert_eq!(
+            busy_queue::purge(&key),
+            1,
+            "only the still-waiting message is purgeable; the admitted run is not queued"
+        );
+
+        drop(running);
+        drop(follower);
     }
 
     #[test]

@@ -137,7 +137,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::busy_queue::{notify_slot_free, purge, register};
+    use crate::gateway::busy_queue::{mark_admitted, notify_slot_free, purge, register};
     use crate::sync_primitives::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -173,6 +173,97 @@ mod tests {
     async fn an_idle_session_delivers_on_the_first_attempt() {
         let outcome = deliver("bqd-idle", "run-idle", cfg(4), || async { Ok(()) }).await;
         assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
+    }
+
+    /// The lane is a **waiting room**, not a run registry.
+    ///
+    /// `attempt()` is the whole agent run, so the front ticket is held for the
+    /// run's entire lifetime. Until [`mark_admitted`] existed, that meant a
+    /// follow-up message parked behind the very run it wanted to change and
+    /// never reached the engine at all — starving the two busy-input modes that
+    /// only make sense *while* a sibling runs (`Steer` injects into the live
+    /// loop, `Interrupt` cancels it). Both silently degraded to `Queue`.
+    ///
+    /// Here the first attempt reports admission (exactly as
+    /// `SessionRunRegistry::try_claim` does in production) and then blocks, and
+    /// the follow-up must still get its own delivery attempt.
+    #[tokio::test]
+    async fn an_admitted_run_stops_blocking_its_lane() {
+        let s = "bqd-admitted-releases-lane";
+        let (release_a, hold_a) = tokio::sync::oneshot::channel::<()>();
+        let a_admitted = Arc::new(AtomicUsize::new(0));
+
+        let hold = Arc::new(tokio::sync::Mutex::new(Some(hold_a)));
+        let admitted = Arc::clone(&a_admitted);
+        let task_a = tokio::spawn(async move {
+            deliver(s, "run-a", cfg(4), move || {
+                let admitted = Arc::clone(&admitted);
+                let hold = Arc::clone(&hold);
+                async move {
+                    mark_admitted(s, "run-a");
+                    admitted.fetch_add(1, Ordering::SeqCst);
+                    // Stand in for the run's execution: the ticket is still
+                    // held here, which is the whole point.
+                    if let Some(rx) = hold.lock().await.take() {
+                        let _ = rx.await;
+                    }
+                    Ok(())
+                }
+            })
+            .await
+        });
+
+        while a_admitted.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        // The follow-up arrives mid-run. It must reach its attempt (in
+        // production: `admit_run`, which then steers or interrupts).
+        let b_attempts = Arc::new(AtomicUsize::new(0));
+        let ba = Arc::clone(&b_attempts);
+        let task_b = tokio::spawn(async move {
+            deliver(s, "run-b", cfg(4), move || {
+                let ba = Arc::clone(&ba);
+                async move {
+                    ba.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .await
+        });
+
+        let outcome_b = tokio::time::timeout(std::time::Duration::from_secs(5), task_b)
+            .await
+            .expect("the follow-up must reach the engine while the first run is still in flight")
+            .expect("delivery task panicked");
+        assert!(matches!(outcome_b, DeliveryOutcome::Executed(Ok(()))));
+        assert_eq!(b_attempts.load(Ordering::SeqCst), 1);
+
+        let _ = release_a.send(());
+        let _ = task_a.await;
+    }
+
+    /// FIFO among *waiting* messages is what admission release must not cost.
+    /// Two follow-ups arriving behind an already-admitted run still deliver in
+    /// arrival order, one at a time.
+    #[tokio::test]
+    async fn waiting_followups_keep_arrival_order_after_admission() {
+        let s = "bqd-admitted-fifo";
+        let front = register(s, 8, "run-a").expect("lane accepts the first message");
+        mark_admitted(s, "run-a"); // the engine took the slot for run-a
+
+        let b = register(s, 8, "run-b").expect("lane accepts the follow-up");
+        let c = register(s, 8, "run-c").expect("lane accepts the second follow-up");
+        assert!(
+            b.is_front(),
+            "with the admitted run out of the way, the first follow-up leads"
+        );
+        assert!(!c.is_front(), "the second follow-up still waits its turn");
+
+        drop(b);
+        assert!(c.is_front(), "departure promotes the next in arrival order");
+        drop(front); // the admitted run finishing must not disturb the lane
+        assert!(c.is_front());
     }
 
     #[tokio::test]
