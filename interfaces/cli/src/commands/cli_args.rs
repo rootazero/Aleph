@@ -791,10 +791,13 @@ pub enum SessionAction {
         /// Session key
         key: String,
     },
-    /// Compact session (compress history)
+    /// Compact a session: summarize its older turns and stop replaying them
     Compact {
         /// Session key
         key: String,
+        /// Optional focus for the summary, e.g. "keep the migration details"
+        #[arg(long)]
+        instructions: Option<String>,
     },
     /// Truncate the session message log to the most recent N messages
     /// (session.truncate; preserves session metadata).

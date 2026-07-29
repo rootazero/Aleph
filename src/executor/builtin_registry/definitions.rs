@@ -371,7 +371,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "session_compact",
-        description: "Compact the current conversation, dropping the oldest messages",
+        description: "Compact the current conversation: summarize the older turns, keep the recent ones",
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {

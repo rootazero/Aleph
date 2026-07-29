@@ -30,6 +30,18 @@ pub(crate) const PRESERVED_USER_TOKEN_BUDGET: usize = 20_000;
 /// and the head would grow without bound.
 const SUMMARY_MARKER_HEAD: &str = "[Context Summary";
 
+/// The canonical marker line every compaction drain site opens its summary
+/// with — the in-turn compactor's LLM and truncation paths, the session-split
+/// child seed, and manual `/compact`.
+///
+/// Load-bearing, not cosmetic: [`is_summary_text`] recognises exactly this, and
+/// through it so do verbatim user-turn preservation, the live-task anchor
+/// ([`super::summary_utils::latest_user_task`]), and the incremental
+/// "update the running summary" prompt. It was a bare literal at four sites; a
+/// typo in any one of them would silently make that site's summary look like
+/// user intent and compound it on every later cycle.
+pub(crate) const SUMMARY_MARKER: &str = "[Context Summary]";
+
 /// Whether `text` is a compaction summary rather than something the user said.
 ///
 /// Only matches the canonical marker forms the compactor emits
@@ -130,6 +142,16 @@ fn estimate_tokens(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_canonical_marker_is_recognised_by_the_predicate_that_gates_it() {
+        // The one coupling that makes single-sourcing the marker worth anything:
+        // if `SUMMARY_MARKER` and `is_summary_text` ever disagree, every drain
+        // site starts re-attaching its own summaries as user intent.
+        assert!(is_summary_text(SUMMARY_MARKER));
+        assert!(is_summary_text(&format!("{SUMMARY_MARKER}\nbody")));
+        assert!(SUMMARY_MARKER.starts_with(SUMMARY_MARKER_HEAD));
+    }
 
     #[test]
     fn preserves_user_turns_verbatim_in_chronological_order() {

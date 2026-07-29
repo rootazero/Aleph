@@ -281,6 +281,29 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     }
 
+    // Cheap-tier summarization provider, built once and used twice: by the
+    // per-run compactor (via `AgentHarnessRunner.cheap_provider`, below) and by
+    // user-driven `/compact`. The manual path has no run to inherit a provider
+    // from — the `session_compact` tool and the `session.compact` RPC are both
+    // reached without one — so it is published on a process-wide handle here,
+    // the same shape as `set_global_session_service` / `set_global_route_*`.
+    // Publishing it in ONE place is what keeps every `/compact` surface
+    // identical (R6); `None` degrades manual compaction to the deterministic
+    // summary, never to a no-op.
+    let cheap_summary_provider = build_cheap_summary_provider(config, primary_provider_key);
+    alephcore::context::compact::manual::install_manual_compaction(
+        alephcore::context::compact::manual::ManualCompactWiring {
+            summarizer: cheap_summary_provider
+                .clone()
+                .or_else(|| Some(default_provider.current())),
+            keep_tokens: config
+                .context_budget
+                .as_ref()
+                .and_then(|cb| cb.manual_compact_keep_tokens)
+                .unwrap_or(alephcore::context::compact::manual::DEFAULT_KEEP_TOKENS),
+        },
+    );
+
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
@@ -335,7 +358,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // route history-compaction summarization through it instead of the main
         // LLM. `None` (default / unset / same-as-primary / build error) keeps
         // the legacy path (summarization on the main provider).
-        cheap_provider: build_cheap_summary_provider(config, primary_provider_key),
+        cheap_provider: cheap_summary_provider,
         mcp_handle,
         // Wire `[prompt.extra_files]` so the documented config section has a
         // production consumer (`ExtraFilesLayer` via `build_system_prompt`).

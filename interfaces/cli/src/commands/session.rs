@@ -234,36 +234,45 @@ pub async fn truncate(
     Ok(())
 }
 
-/// Compact a session (compress history)
-pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+/// Compact a session: summarize its older turns and stop replaying them.
+///
+/// `instructions` is the optional focus for the summary (codex / pi / kimi-cli
+/// `/compact [instructions]` parity) — the same field the TUI's `/compress
+/// <text>` and the Panel's `/compact <text>` send.
+pub async fn compact(
+    server_url: &str,
+    key: &str,
+    instructions: Option<&str>,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "session_key": key });
+    let mut params = serde_json::json!({ "session_key": key });
+    if let Some(text) = instructions.map(str::trim).filter(|s| !s.is_empty()) {
+        params["instructions"] = serde_json::json!(text);
+    }
     let result: serde_json::Value = client.call("session.compact", Some(params)).await?;
 
     if json {
         output::print_json(&result);
     } else {
+        // The server owns the human-readable line — it knows whether this was a
+        // no-op and why (R4: the CLI renders, it does not re-derive).
         let msg = result
             .get("message")
             .and_then(|v| v.as_str())
             .unwrap_or("Compacted.");
-        let before = result
-            .get("before_messages")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let after = result
-            .get("after_messages")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let saved = result
-            .get("tokens_saved")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
         println!("{msg}");
-        println!("  Before: {before} messages");
-        println!("  After:  {after} messages");
-        println!("  Tokens saved: {saved}");
+        if let Some(summary) = result
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            println!();
+            println!("{summary}");
+        }
     }
 
     client.close().await?;

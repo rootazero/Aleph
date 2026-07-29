@@ -5,8 +5,8 @@ use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
-    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionFilter, SessionMetadata,
+    SessionPatch, SessionPreview, TruncateResult,
 };
 use crate::gateway::session_store::SessionStore;
 
@@ -201,72 +201,6 @@ impl SessionStore for SessionManager {
             .await
             .map_err(map_err)
             .map(|results| results.into_iter().map(search_result_to_hit).collect())
-    }
-
-    async fn compact(
-        &self,
-        key: &SessionKey,
-        strategy: CompactStrategy,
-    ) -> Result<CompactResult, SessionStoreError> {
-        match strategy {
-            CompactStrategy::KeepLastN { n } => {
-                let key_str = key.to_key_string();
-                let keep = n as i64;
-                let conn = self
-                    .conn
-                    .lock()
-                    .map_err(|e| SessionStoreError::DatabaseError(format!("Lock error: {e}")))?;
-
-                let threshold_id: Option<i64> = conn
-                    .query_row(
-                        "SELECT id FROM messages WHERE session_key = ?
-                         ORDER BY timestamp DESC LIMIT 1 OFFSET ?",
-                        params![&key_str, keep],
-                        |row| row.get(0),
-                    )
-                    .ok();
-
-                if let Some(threshold) = threshold_id {
-                    conn.execute(
-                        "DELETE FROM messages_fts WHERE rowid IN (
-                            SELECT id FROM messages WHERE session_key = ? AND id < ?
-                        )",
-                        params![&key_str, threshold],
-                    )
-                    .ok();
-
-                    let deleted = conn
-                        .execute(
-                            "DELETE FROM messages WHERE session_key = ? AND id < ?",
-                            params![&key_str, threshold],
-                        )
-                        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?;
-
-                    let new_count: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM messages WHERE session_key = ?",
-                            params![&key_str],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(0);
-
-                    conn.execute(
-                        "UPDATE sessions SET message_count = ?, compaction_count = compaction_count + 1 WHERE key = ?",
-                        params![new_count, &key_str],
-                    )
-                    .ok();
-
-                    return Ok(CompactResult {
-                        compacted: true,
-                        deleted,
-                    });
-                }
-                Ok(CompactResult {
-                    compacted: false,
-                    deleted: 0,
-                })
-            }
-        }
     }
 
     async fn truncate_messages(

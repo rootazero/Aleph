@@ -55,10 +55,22 @@ impl MessageProjector {
     }
 }
 
-/// True when this event was retired (`chat.clear` / `chat.rewind`) after it was
-/// enqueued — the drain is asynchronous, so a queued event can be retired
-/// *before* it reaches `messages`, and writing it then would silently un-clear
-/// the conversation the user just cleared.
+/// True when this event was retired after it was enqueued — the drain is
+/// asynchronous, so a queued event can be retired *before* it reaches
+/// `messages`, and writing it then would silently un-clear the conversation the
+/// user just cleared.
+///
+/// ⚠️ `retired_at` has two writers with **opposite** intent, and this gate reads
+/// only the flag. `retire_from` (`chat.clear` / `chat.rewind`) means "erase" —
+/// suppressing the row is the whole point. `retire_through` (manual `/compact`,
+/// `context::compact::manual`) means "stop replaying, keep everything" — for it
+/// the suppression is collateral: a compacted event that had not yet drained
+/// loses its Panel row. Bounded, not free: the compacted prefix sits at least a
+/// whole `keep_tokens` budget behind the head, so the drain must be lagging by
+/// that much for the two to meet, and the projection is already declared
+/// best-effort (`on_appended` drops on queue-full). Distinguishing the two
+/// would take a retirement *reason* on the row; that is a schema change with no
+/// observed failure behind it. If one ever shows up, this is the place.
 ///
 /// Fails closed: an unreadable event log is reported as retired, so the failure
 /// mode is a missing projection row (best-effort display, back-filled by

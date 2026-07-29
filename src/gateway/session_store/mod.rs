@@ -12,8 +12,8 @@ pub mod types;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::{
-    CheckpointSummary, CompactResult, CompactStrategy, DeleteResult, MessageRecord, SearchHit,
-    SessionFilter, SessionMetadata, SessionPatch, SessionPreview, TruncateResult,
+    CheckpointSummary, DeleteResult, MessageRecord, SearchHit, SessionFilter, SessionMetadata,
+    SessionPatch, SessionPreview, TruncateResult,
 };
 use async_trait::async_trait;
 
@@ -70,11 +70,12 @@ pub trait SessionStore: Send + Sync {
         max_results: usize,
     ) -> Result<Vec<SearchHit>, SessionStoreError>;
 
-    async fn compact(
-        &self,
-        key: &SessionKey,
-        strategy: CompactStrategy,
-    ) -> Result<CompactResult, SessionStoreError>;
+    // NOTE: there is deliberately no `compact` here. It existed to delete the
+    // oldest rows of THIS table, which is a read projection for the Panel — the
+    // agent's prompt is rebuilt from `session_events`, so the operation cost
+    // the user their scrollback and freed exactly zero context. User-driven
+    // `/compact` now lives in `context::compact::manual`, which compacts the
+    // event log and deletes nothing.
 
     /// Drop messages from the tail of a session, keeping only the first
     /// `keep_count` messages by chronological order.
