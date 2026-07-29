@@ -48,7 +48,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tracing::{info, warn};
 
-use super::channel::{ChannelResult, InboundMessage, InboundMessageSender};
+use super::channel::{ChannelResult, ChannelStatus, InboundMessage, InboundMessageSender};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -86,6 +86,14 @@ pub trait WebhookHandler: Send + Sync {
 pub struct WebhookMount {
     pub handler: Arc<dyn WebhookHandler>,
     pub inbound: InboundMessageSender,
+    /// The owning channel's shared status cell (`ChannelState::status_handle()`).
+    ///
+    /// The route table built from these mounts is a boot-time snapshot with no
+    /// invalidation — `channel.stop()`/`channel.delete` cannot remove a route
+    /// that already exists. Reading this status per-request is what actually
+    /// stops a stopped/deleted channel from still answering HTTP, without
+    /// building a dynamic mount table.
+    pub status: Arc<tokio::sync::RwLock<ChannelStatus>>,
 }
 
 /// Builds the axum routes for channel webhook ingestion.
@@ -126,6 +134,7 @@ impl WebhookReceiver {
             let handler_state = Arc::new(HandlerState {
                 handler: mount.handler,
                 inbound: mount.inbound,
+                status: mount.status,
             });
             router = router.route(&path, post(webhook_endpoint).with_state(handler_state));
             info!(path = %path, "Registered webhook handler");
@@ -163,6 +172,7 @@ impl WebhookReceiver {
 struct HandlerState {
     handler: Arc<dyn WebhookHandler>,
     inbound: InboundMessageSender,
+    status: Arc<tokio::sync::RwLock<ChannelStatus>>,
 }
 
 /// Axum endpoint handler that dispatches to the appropriate `WebhookHandler`.
@@ -171,6 +181,29 @@ async fn webhook_endpoint(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Step 0: Reject before doing any other work if we have positive evidence
+    // the owning channel is not connected (stopped or deleted). The mount
+    // table has no invalidation of its own, so this check is what actually
+    // stops a "stopped" channel from still answering HTTP.
+    //
+    // `try_read` intentionally fails OPEN on contention: a momentary
+    // write-lock holder (another request's status flip in flight) is not
+    // evidence the channel is down, and dropping live traffic on a lock race
+    // would be a worse bug than the one this guards against.
+    if let Ok(status) = state.status.try_read() {
+        if *status != ChannelStatus::Connected {
+            warn!(
+                path = %state.handler.path(),
+                status = ?*status,
+                "webhook received for a channel that is not connected — rejecting"
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                String::from("Service Unavailable: channel is not connected"),
+            );
+        }
+    }
+
     // Step 1: Verify signature
     if !state.handler.verify(&headers, &body) {
         warn!(path = %state.handler.path(), "Webhook signature verification failed");
@@ -385,11 +418,13 @@ mod tests {
         });
 
         let channel_state = ChannelState::new(16);
+        channel_state.set_status(ChannelStatus::Connected).await;
         let mut rx = channel_state.inbound_subscribe();
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
             inbound: channel_state.sender(),
+            status: channel_state.status_handle(),
         });
 
         let app = Router::new()
@@ -431,10 +466,12 @@ mod tests {
         });
 
         let channel_state = ChannelState::new(16);
+        channel_state.set_status(ChannelStatus::Connected).await;
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
             inbound: channel_state.sender(),
+            status: channel_state.status_handle(),
         });
 
         let app = Router::new()
@@ -470,10 +507,12 @@ mod tests {
         });
 
         let channel_state = ChannelState::new(16);
+        channel_state.set_status(ChannelStatus::Connected).await;
 
         let handler_state = Arc::new(HandlerState {
             handler: Arc::clone(&handler),
             inbound: channel_state.sender(),
+            status: channel_state.status_handle(),
         });
 
         let app = Router::new()
@@ -508,6 +547,7 @@ mod tests {
 
         let secret = "router-secret";
         let state = ChannelState::new(16);
+        state.set_status(ChannelStatus::Connected).await;
         // Subscribe FIRST: InboundMessageSender::send returns Err when there are
         // no subscribers (broadcast semantics), and in production the subscriber
         // is ChannelRegistry::start_message_forwarder.
@@ -521,6 +561,7 @@ mod tests {
         let app = WebhookReceiver::router(vec![WebhookMount {
             handler,
             inbound: state.sender(),
+            status: state.status_handle(),
         }]);
 
         let body = br#"{"text":"hello from webhook"}"#.to_vec();
@@ -554,6 +595,7 @@ mod tests {
         use tower::ServiceExt;
 
         let state = ChannelState::new(16);
+        state.set_status(ChannelStatus::Connected).await;
         let mut rx = state.inbound_subscribe();
 
         let handler = Arc::new(MockWebhookHandler {
@@ -564,6 +606,7 @@ mod tests {
         let app = WebhookReceiver::router(vec![WebhookMount {
             handler,
             inbound: state.sender(),
+            status: state.status_handle(),
         }]);
 
         let response = app
@@ -585,6 +628,53 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn disconnected_channel_returns_503_and_publishes_nothing() {
+        use crate::gateway::channel::ChannelState;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let secret = "router-secret";
+        // A fresh ChannelState defaults to Disconnected — mirrors the state
+        // left behind by `WebhookChannel::stop()` / `channel.delete`, which
+        // this test exists to prove the router now honors.
+        let state = ChannelState::new(16);
+        let mut rx = state.inbound_subscribe();
+
+        let handler = Arc::new(MockWebhookHandler {
+            secret: secret.to_string(),
+            handler_path: "/webhook/mock".to_string(),
+        });
+
+        let app = WebhookReceiver::router(vec![WebhookMount {
+            handler,
+            inbound: state.sender(),
+            status: state.status_handle(),
+        }]);
+
+        let body = br#"{"text":"hello from webhook"}"#.to_vec();
+        let sig = WebhookReceiver::compute_signature(secret, &body);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/mock")
+                    .header("x-webhook-signature", sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            rx.try_recv().is_err(),
+            "a stopped channel must publish nothing, even with a valid signature"
+        );
+    }
+
     // --- Reserved-path guard tests ---
 
     #[tokio::test]
@@ -602,6 +692,7 @@ mod tests {
         let router = WebhookReceiver::router(vec![WebhookMount {
             handler,
             inbound: state.sender(),
+            status: state.status_handle(),
         }]);
 
         // A router with zero routes 404s everything.
@@ -627,6 +718,8 @@ mod tests {
 
         let state_a = ChannelState::new(16);
         let state_b = ChannelState::new(16);
+        state_a.set_status(ChannelStatus::Connected).await;
+        state_b.set_status(ChannelStatus::Connected).await;
         let mut rx_a = state_a.inbound_subscribe();
         let mut rx_b = state_b.inbound_subscribe();
 
@@ -637,6 +730,7 @@ mod tests {
                     handler_path: "/webhook/dup".to_string(),
                 }),
                 inbound: state_a.sender(),
+                status: state_a.status_handle(),
             },
             WebhookMount {
                 handler: Arc::new(MockWebhookHandler {
@@ -644,6 +738,7 @@ mod tests {
                     handler_path: "/webhook/dup".to_string(),
                 }),
                 inbound: state_b.sender(),
+                status: state_b.status_handle(),
             },
         ];
 

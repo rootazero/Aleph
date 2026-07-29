@@ -504,10 +504,14 @@ pub(in crate::commands::start) async fn initialize_channels(
             let channel = handle.read().await;
             if let Some(handler) = channel.webhook_handler() {
                 // The channel's OWN broadcast, so start_message_forwarder
-                // still sees the traffic and stamps channel health.
+                // still sees the traffic and stamps channel health. The status
+                // handle is what lets the endpoint refuse traffic once the
+                // channel is later stopped/deleted — this boot-time mount
+                // table itself is never rebuilt.
                 mounts.push(WebhookMount {
                     handler,
                     inbound: channel.state().sender(),
+                    status: channel.state().status_handle(),
                 });
             }
         }
