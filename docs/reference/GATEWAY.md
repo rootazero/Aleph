@@ -329,17 +329,29 @@ channel's declared `BusyInputMode`:
 
 Anything that cannot be delivered inline joins its session's **FIFO wait lane**.
 All three surfaces share the one lane — the inbound router (channels) and both
-`aleph-server` RPC handlers (`agent.run`, `chat.send`) call
-`busy_queue::register` on the arrival path and `busy_queue::deliver_with_ticket`
-inside the spawned delivery task.
+`aleph-server` RPC handlers (`agent.run`, `chat.send`, via
+`busy_queue::spawn_queued_run`) call `busy_queue::register` on the arrival path
+and `busy_queue::deliver_with_ticket` inside the spawned delivery task.
 
 Invariants worth preserving:
 
 - **Ticket is taken synchronously on the arrival path**, before the delivery task
   is spawned. Registering inside the task makes lane order follow task
   scheduling instead of arrival order.
+- **The lane is a waiting room, not a run registry.** `deliver_with_ticket`
+  holds its ticket across the whole `attempt()`, and `attempt()` *is* the agent
+  run — so `SessionRunRegistry::try_claim` calls `busy_queue::mark_admitted` to
+  withdraw the ticket the moment the run is admitted (the exact mirror of
+  `release` → `notify_slot_free`). Without it the running message sits at the
+  head of its own lane for the run's entire lifetime, every follow-up parks
+  behind the very run it wants to change, and `Steer` / `Interrupt` — which only
+  mean anything *while* a sibling runs — silently degrade to `Queue`. The same
+  root cause made `/stop` count the message it was stopping among the "queued
+  messages dropped" and inflated `busy_queue.total_waiting` by one per busy
+  session. FIFO constrains only the messages that are still waiting.
 - **Waiters do not poll.** They park on a per-session `Notify` fired by
-  `SessionRunRegistry::release` (the authoritative slot-free edge) and by ticket
+  `SessionRunRegistry::release` (the authoritative slot-free edge),
+  `mark_admitted` (the symmetric "the lane just got shorter" edge), and ticket
   departures. `busy_queue_wake_fallback_secs` is a missed-signal safety net, not
   the delivery latency.
 - **`TicketGuard` is the only way in or out.** Its `Drop` is load-bearing: a

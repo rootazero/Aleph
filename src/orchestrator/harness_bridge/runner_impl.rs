@@ -63,6 +63,14 @@ impl HarnessRunner for AgentHarnessRunner {
         self.parallel_tool_concurrency
     }
 
+    /// Hand the spawner the SAME `[context_budget]` config this runner builds
+    /// its own budget / compactor / preflight triple from, so a subagent is
+    /// context-managed on the same terms as the main run.
+    fn context_budget_config(&self) -> Option<crate::context::budget::ContextBudgetConfig> {
+        // rust-doctor-disable-next-line excessive-clone
+        self.context_budget_config.clone()
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,
@@ -500,34 +508,10 @@ impl HarnessRunner for AgentHarnessRunner {
                 // lossy passes only act once the context is genuinely filling
                 // up (headroom's pressure-aware aggressiveness) — see
                 // `ContextBudgetConfig::preventive_floor`.
-                let pipeline = {
-                    use crate::context::budget::cheap_passes::{
-                        FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
-                    };
-                    use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
-                    // Single config-derived gate for all three cheap passes:
-                    // the preventive band just below the LLM-compaction warning
-                    // line. file_op_supersede's own ratio is overridden to this
-                    // same value so its standalone gate no longer carries a
-                    // hardcoded constant that could drift above a custom warning.
-                    let preventive_floor = cfg.preventive_floor();
-                    // FileOpSupersedeStage runs first so its stubs shrink the
-                    // tool_result bodies before ToolResultPruningStage and the
-                    // image stripper see them. The three stages are commutative
-                    // for correctness (none of them touches the others' targets);
-                    // ordering here is for log-readability and minor cache wins.
-                    let stages: Vec<Box<dyn PreflightStage>> = vec![
-                        Box::new(
-                            FileOpSupersedeStage::default()
-                                .with_min_pressure_ratio(preventive_floor),
-                        ),
-                        Box::new(ToolResultPruningStage::default()),
-                        Box::new(HistoricalImageStrippingStage),
-                    ];
-                    Arc::new(
-                        PreflightPipeline::new(stages).with_min_pressure_ratio(preventive_floor),
-                    )
-                };
+                // Stage list + preventive-band gate live in ONE place
+                // (`preflight::default_pipeline`) so the subagent spawner builds
+                // the identical pipeline instead of re-deriving it.
+                let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
                 (Some(budget), Some(compactor), Some(pipeline))
             }
             None => (None, None, None),

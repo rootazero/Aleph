@@ -233,6 +233,7 @@ mod tests {
         let manager = TokenRefreshManager::new(storage, TokenRefreshConfig::default());
 
         let metadata = OAuthServerMetadata {
+            issuer: Some("https://example.com".to_string()),
             authorization_endpoint: "https://example.com/auth".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: None,

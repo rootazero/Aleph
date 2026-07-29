@@ -841,6 +841,30 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
         1,
         "expected 1 ToolResult, got log={log:?}"
     );
+
+    // BOTH calls must appear on the run's tool timeline. That timeline is the
+    // authoritative terminal state (`FlowOutcome.tool_timeline` →
+    // `RunSummary.tool_summaries`) consumers reconcile against precisely
+    // because the `agent_trace` mirror is deliberately lossy — a blocked call
+    // used to be the ONE outcome that never got a timeline entry, so losing its
+    // single live frame left a row "running" with no backstop.
+    let timeline = harness.tool_timeline();
+    let blocked_entry = timeline
+        .iter()
+        .find(|inv| inv.id == "c1")
+        .expect("blocked call must be on the tool timeline");
+    assert!(!blocked_entry.success, "a block is not a success");
+    assert!(
+        blocked_entry
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("forbidden_tool")),
+        "the blocked entry must carry the guardrail reason, got {blocked_entry:?}",
+    );
+    assert!(
+        timeline.iter().any(|inv| inv.id == "c2" && inv.success),
+        "the executed call must still be on the timeline, got {timeline:?}",
+    );
 }
 
 #[tokio::test]

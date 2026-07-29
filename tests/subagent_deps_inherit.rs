@@ -136,6 +136,21 @@ async fn subagent_base_carries_4_p1_fields() {
         routing_store: None,
         default_max_iterations: None,
         parallel_tool_concurrency: None,
+        // Context management — sentinel `Some`, so the spawn below exercises
+        // the branch that builds the child's own budget + compactor +
+        // preflight triple (all three were hardcoded `None`, leaving a
+        // subagent with no context management at all).
+        context_budget_config: Some(alephcore::context::budget::ContextBudgetConfig {
+            token_budget: 10_000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 3.5,
+            fresh_tail_count: 6,
+            circuit_breaker_max: 3,
+            diminishing_window: 4,
+            diminishing_threshold: 500,
+            max_splits: 3,
+        }),
     };
 
     // Structural assertions — the 5 P1 fields are populated as expected.
@@ -157,6 +172,10 @@ async fn subagent_base_carries_4_p1_fields() {
     assert!(
         base.trace_sink.is_some(),
         "trace_sink must be Some when set on parent"
+    );
+    assert!(
+        base.context_budget_config.is_some(),
+        "context_budget_config must be Some when set on parent"
     );
 
     // Invoke spawn() — exercises the HarnessDeps construction site that

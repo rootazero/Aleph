@@ -25,6 +25,14 @@ use crate::mcp::auth::storage::{ClientInfo, OAuthStorage, OAuthTokens};
 /// OAuth server metadata (from .well-known/oauth-authorization-server)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthServerMetadata {
+    /// The authorization server's issuer identifier (RFC 8414).
+    ///
+    /// Identity of the authorization server itself, as opposed to any of its
+    /// endpoints. Client credentials are scoped to it, and RFC 9207 has the
+    /// client check an authorization response's `iss` against it. Optional
+    /// because not every deployment advertises one.
+    #[serde(default)]
+    pub issuer: Option<String>,
     /// Authorization endpoint URL
     pub authorization_endpoint: String,
     /// Token endpoint URL
@@ -138,13 +146,10 @@ impl OAuthProvider {
             AlephError::IoError("Server does not support dynamic client registration".to_string())
         })?;
 
-        let request_body = serde_json::json!({
-            "client_name": format!("Aleph MCP Client ({})", self.server_name),
-            "redirect_uris": [&self.callback_url],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none"
-        });
+        let request_body = registration_request_body(
+            &format!("Aleph MCP Client ({})", self.server_name),
+            &self.callback_url,
+        );
 
         let response = self
             .client
@@ -182,6 +187,8 @@ impl OAuthProvider {
             client_secret: reg_response.client_secret,
             client_id_issued_at: reg_response.client_id_issued_at,
             client_secret_expires_at: reg_response.client_secret_expires_at,
+            // rust-doctor-disable-next-line excessive-clone
+            issuer: metadata.issuer.clone(),
         };
 
         // Save client info
@@ -190,6 +197,40 @@ impl OAuthProvider {
             .await?;
 
         Ok(client_info)
+    }
+
+    /// Stored client credentials, but only if this authorization server is the
+    /// one that issued them.
+    ///
+    /// Client credentials are bound to their issuer: they must not be presented
+    /// to a different authorization server, and a server that has changed
+    /// issuers must be re-registered with. Returning `None` on a mismatch is
+    /// what makes the caller do that, so the check cannot be skipped by
+    /// reaching past it to the storage layer.
+    ///
+    /// A stored entry with no recorded issuer predates this field. It is reused
+    /// only when the current metadata also advertises none — otherwise the
+    /// pairing is unverifiable and re-registering is the cheap, safe answer.
+    pub async fn client_info_for(
+        &self,
+        metadata: &OAuthServerMetadata,
+    ) -> Result<Option<ClientInfo>> {
+        let Some(stored) = self.storage.get_client_info(&self.server_name).await? else {
+            return Ok(None);
+        };
+
+        if stored.issuer == metadata.issuer {
+            return Ok(Some(stored));
+        }
+
+        tracing::info!(
+            server = %self.server_name,
+            stored_issuer = ?stored.issuer,
+            current_issuer = ?metadata.issuer,
+            "Authorization server issuer changed; re-registering rather than \
+             reusing client credentials"
+        );
+        Ok(None)
     }
 
     /// Start the authorization flow
@@ -238,6 +279,10 @@ impl OAuthProvider {
         entry.oauth_state = Some(state.clone());
         // rust-doctor-disable-next-line excessive-clone
         entry.server_url = Some(self.server_url.clone());
+        // Recorded now so the authorization response's `iss` has something
+        // trustworthy to be checked against later (RFC 9207).
+        // rust-doctor-disable-next-line excessive-clone
+        entry.issuer = metadata.issuer.clone();
         self.storage.save_entry(&self.server_name, &entry).await?;
 
         Ok(AuthorizationRequest {
@@ -255,12 +300,18 @@ impl OAuthProvider {
     /// * `client_id` - Client ID
     /// * `code` - Authorization code received from callback
     /// * `received_state` - State parameter received from callback (for verification)
+    /// * `received_iss` - The `iss` parameter from the authorization response,
+    ///   when the authorization server sent one (RFC 9207). Validated against
+    ///   the issuer recorded at [`Self::start_authorization`] *before* the code
+    ///   is redeemed, so a code from a different authorization server cannot be
+    ///   exchanged at this one's token endpoint.
     pub async fn finish_authorization(
         &self,
         metadata: &OAuthServerMetadata,
         client_id: &str,
         code: &str,
         received_state: &str,
+        received_iss: Option<&str>,
     ) -> Result<OAuthTokens> {
         // Get stored state and code verifier
         let entry = self
@@ -283,6 +334,13 @@ impl OAuthProvider {
                 "State mismatch - possible CSRF attack".to_string(),
             ));
         }
+
+        // RFC 9207, checked before the code is redeemed.
+        validate_response_issuer(
+            &self.server_name,
+            entry.issuer.as_deref().or(metadata.issuer.as_deref()),
+            received_iss,
+        )?;
 
         // Exchange code for tokens
         let params = [
@@ -480,6 +538,58 @@ impl OAuthProvider {
     }
 }
 
+/// The Dynamic Client Registration request body (RFC 7591).
+///
+/// `application_type` matters more than it looks: Aleph receives the
+/// authorization callback on a loopback listener, and OpenID Connect
+/// registration defaults to `"web"`, which forbids exactly that redirect shape.
+/// Omitting the field is why loopback redirect URIs get rejected by
+/// OIDC-backed authorization servers.
+fn registration_request_body(client_name: &str, callback_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "client_name": client_name,
+        "redirect_uris": [callback_url],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "native"
+    })
+}
+
+/// Check an authorization response's `iss` against the issuer this flow was
+/// started with (RFC 9207).
+///
+/// Only a *present* `iss` is checked: authorization servers are encouraged, not
+/// required, to send one, so its absence cannot be an error without breaking
+/// every server that omits it. When it is present it must match — that is the
+/// whole point of the parameter, which exists so a code obtained from one
+/// authorization server cannot be fed to another's token endpoint (mix-up
+/// attack).
+///
+/// A received issuer with nothing recorded to compare against is also refused:
+/// an unverifiable claim is not a weaker version of a verified one.
+fn validate_response_issuer(
+    server_name: &str,
+    recorded: Option<&str>,
+    received: Option<&str>,
+) -> Result<()> {
+    let Some(received) = received else {
+        return Ok(());
+    };
+
+    match recorded {
+        Some(expected) if expected == received => Ok(()),
+        Some(expected) => Err(AlephError::IoError(format!(
+            "Authorization response issuer mismatch for '{server_name}': expected \
+             '{expected}', got '{received}' - refusing to redeem the authorization code"
+        ))),
+        None => Err(AlephError::IoError(format!(
+            "Authorization response for '{server_name}' carried issuer '{received}', but no \
+             issuer was recorded to check it against - refusing to redeem the authorization code"
+        ))),
+    }
+}
+
 /// Generate a cryptographically random code verifier for PKCE
 fn generate_code_verifier() -> String {
     let mut rng = rand::rng();
@@ -539,6 +649,125 @@ async fn parse_token_response(response: reqwest::Response) -> Result<OAuthTokens
 mod tests {
     use super::*;
 
+    const ISSUER: &str = "https://issuer.example.com";
+    const OTHER_ISSUER: &str = "https://attacker.example.com";
+
+    #[test]
+    fn absent_issuer_in_the_response_is_accepted() {
+        // Authorization servers only SHOULD send `iss`; requiring it would lock
+        // out every server that predates RFC 9207.
+        assert!(validate_response_issuer("srv", Some(ISSUER), None).is_ok());
+        assert!(validate_response_issuer("srv", None, None).is_ok());
+    }
+
+    #[test]
+    fn matching_issuer_is_accepted() {
+        assert!(validate_response_issuer("srv", Some(ISSUER), Some(ISSUER)).is_ok());
+    }
+
+    #[test]
+    fn mismatched_issuer_refuses_to_redeem_the_code() {
+        // The mix-up attack this parameter exists to stop: a code minted by one
+        // authorization server presented at another's token endpoint.
+        let err = validate_response_issuer("srv", Some(ISSUER), Some(OTHER_ISSUER))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains(ISSUER), "{err}");
+        assert!(err.contains(OTHER_ISSUER), "{err}");
+        assert!(err.contains("refusing to redeem"), "{err}");
+    }
+
+    #[test]
+    fn unverifiable_issuer_is_refused_rather_than_trusted() {
+        // A claim with nothing to check it against is not a weaker version of a
+        // verified one.
+        let err = validate_response_issuer("srv", None, Some(ISSUER))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no issuer was recorded"), "{err}");
+    }
+
+    #[test]
+    fn issuer_comparison_is_exact() {
+        // Issuer identifiers compare exactly (RFC 8414); a trailing slash or a
+        // case change is a different issuer, not the same one.
+        assert!(validate_response_issuer(
+            "srv",
+            Some("https://issuer.example.com"),
+            Some("https://issuer.example.com/")
+        )
+        .is_err());
+        assert!(validate_response_issuer(
+            "srv",
+            Some("https://issuer.example.com"),
+            Some("https://Issuer.Example.com")
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn client_credentials_are_reused_only_for_their_own_issuer() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(OAuthStorage::new(dir.path().join("auth.json")));
+        storage
+            .save_client_info(
+                "srv",
+                &ClientInfo {
+                    client_id: "client-from-issuer-a".to_string(),
+                    client_secret: None,
+                    client_id_issued_at: None,
+                    client_secret_expires_at: None,
+                    issuer: Some(ISSUER.to_string()),
+                },
+            )
+            .await
+            .unwrap();
+
+        let provider = OAuthProvider::new(
+            Arc::clone(&storage),
+            "srv",
+            "https://mcp.example.com",
+            "http://127.0.0.1:8899/callback",
+        );
+
+        let same_issuer = OAuthServerMetadata {
+            issuer: Some(ISSUER.to_string()),
+            authorization_endpoint: "https://issuer.example.com/authorize".to_string(),
+            token_endpoint: "https://issuer.example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec![],
+            grant_types_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        };
+        let reused = provider.client_info_for(&same_issuer).await.unwrap();
+        assert_eq!(reused.unwrap().client_id, "client-from-issuer-a");
+
+        // A different authorization server must not be handed this client
+        // identity; returning None is what drives a fresh registration.
+        let different_issuer = OAuthServerMetadata {
+            issuer: Some(OTHER_ISSUER.to_string()),
+            ..same_issuer
+        };
+        assert!(provider
+            .client_info_for(&different_issuer)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn dynamic_registration_declares_a_native_application() {
+        // Aleph's redirect URI is a loopback listener, which the OIDC default
+        // application_type of "web" forbids.
+        let body = registration_request_body("Aleph MCP Client (srv)", "http://127.0.0.1:8899/cb");
+
+        assert_eq!(body["application_type"], "native");
+        assert_eq!(body["redirect_uris"][0], "http://127.0.0.1:8899/cb");
+        assert_eq!(body["token_endpoint_auth_method"], "none");
+    }
+
     #[test]
     fn test_code_verifier_generation() {
         let verifier = generate_code_verifier();
@@ -570,6 +799,7 @@ mod tests {
     #[test]
     fn test_oauth_server_metadata_serialization() {
         let metadata = OAuthServerMetadata {
+            issuer: Some("https://example.com".to_string()),
             authorization_endpoint: "https://example.com/authorize".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: Some("https://example.com/register".to_string()),
@@ -621,6 +851,7 @@ mod tests {
 
         // Create metadata (not actually used since token is valid)
         let metadata = OAuthServerMetadata {
+            issuer: Some("https://example.com".to_string()),
             authorization_endpoint: "https://example.com/authorize".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: None,
@@ -657,6 +888,7 @@ mod tests {
         );
 
         let metadata = OAuthServerMetadata {
+            issuer: Some("https://example.com".to_string()),
             authorization_endpoint: "https://example.com/authorize".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: None,
@@ -702,6 +934,7 @@ mod tests {
         );
 
         let metadata = OAuthServerMetadata {
+            issuer: Some("https://example.com".to_string()),
             authorization_endpoint: "https://example.com/authorize".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: None,

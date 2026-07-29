@@ -115,6 +115,8 @@ graphify-out/
 /.claude/settings.local.json
 /.claude/scheduled_tasks.lock
 /.claude/worktrees/
+# opencode CLI local config (per-machine, references project plugins)
+/.opencode/
 
 # ==============================================================================
 # Project scratch & misc
