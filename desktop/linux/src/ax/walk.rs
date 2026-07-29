@@ -47,6 +47,10 @@ type BoxFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 pub struct Walk<'a> {
     bus: &'a Bus,
     pid: i32,
+    /// Node budget this walk was started with — the caller's, clamped to the
+    /// protocol range, or [`MAX_NODES`] for an internal scan that has none.
+    /// Kept so [`Self::spent`] can report against the budget actually in force.
+    max_nodes: usize,
     remaining: usize,
     budget: Budget,
     /// The application's tree, fetched once. `None` when it serves no cache, in
@@ -55,17 +59,24 @@ pub struct Walk<'a> {
 }
 
 impl<'a> Walk<'a> {
-    /// Start a walk over `pid`'s tree, materializing at most [`MAX_NODES`]
-    /// within `budget`.
+    /// Start a walk over `pid`'s tree, materializing at most `max_nodes` within
+    /// `budget`.
     ///
     /// Both bounds are needed and neither implies the other: the node count caps
     /// how much JSON a healthy application can produce, the budget caps how long
     /// an unhealthy one can stall. See [`super::budget`].
-    pub const fn new(bus: &'a Bus, pid: i32, budget: Budget) -> Self {
+    ///
+    /// `max_nodes` is the caller's, already clamped by
+    /// [`clamp_max_nodes`](aleph_protocol::desktop_bridge::methods::ax::clamp_max_nodes).
+    /// It is a parameter rather than the [`MAX_NODES`] constant because the
+    /// budget belongs to the request: an internal scan with no caller behind it
+    /// passes the constant explicitly, and says so at its call site.
+    pub const fn new(bus: &'a Bus, pid: i32, budget: Budget, max_nodes: usize) -> Self {
         Self {
             bus,
             pid,
-            remaining: MAX_NODES,
+            max_nodes,
+            remaining: max_nodes,
             budget,
             cache: None,
         }
@@ -84,13 +95,16 @@ impl<'a> Walk<'a> {
 
     /// Nodes materialised so far (delegates to the protocol's `QueryResult.node_count`).
     pub const fn spent(&self) -> u32 {
-        (MAX_NODES - self.remaining) as u32
+        (self.max_nodes - self.remaining) as u32
     }
 
     /// Whether the walk stopped because a budget — node count or wall clock —
     /// ran out. The returned tree is partial in that case, which the caller
     /// surfaces via `QueryResult::truncated`.
-    pub const fn exhausted(&self) -> bool {
+    ///
+    /// Not `const`: the wall-clock half reads `Instant::now()`. Only the node
+    /// half ([`Self::spent`]) is a pure field read.
+    pub fn exhausted(&self) -> bool {
         self.remaining == 0 || self.budget.spent()
     }
 
@@ -137,6 +151,17 @@ impl<'a> Walk<'a> {
         let root_path = root.inner().path().as_str().to_owned();
         let skeleton = self.skeleton(&root_path, depth)?;
 
+        // Charge the budget for what the skeleton selected.
+        //
+        // This pass picks its nodes from the cache in one go instead of walking
+        // down one `remaining -= 1` at a time like [`Self::element`], so without
+        // this line the counter never moves on the cached path — which is the
+        // *default* path. `node_count` came back 0 for every successful query,
+        // and `exhausted()` said `false` even when `skeleton` had just cut the
+        // tree at the budget: a silent truncation, the one failure the flag
+        // exists to prevent.
+        self.remaining = self.max_nodes.saturating_sub(skeleton.len());
+
         // Bounded so a large application cannot open thousands of concurrent
         // D-Bus calls at once: past a point that queues inside the target's
         // single-threaded main loop anyway, and the queue is invisible from here.
@@ -160,7 +185,7 @@ impl<'a> Walk<'a> {
     /// Select the nodes to materialize, breadth-first, from the cache alone.
     ///
     /// No I/O: every field here came back in the bulk fetch. The traversal is
-    /// breadth-first so that a tree hitting [`MAX_NODES`] keeps its shallow
+    /// breadth-first so that a tree hitting the node budget keeps its shallow
     /// structure — windows, toolbars, dialogs — rather than one deep spine.
     fn skeleton(&self, root_path: &str, depth: u32) -> Option<Vec<SkeletonNode>> {
         let cache = self.cache.as_ref()?;
@@ -169,7 +194,7 @@ impl<'a> Walk<'a> {
         let mut out = vec![SkeletonNode::new(root_path.to_owned(), root, 0)];
         let mut cursor = 0;
         while cursor < out.len() {
-            if out.len() >= MAX_NODES {
+            if out.len() >= self.max_nodes {
                 break;
             }
             let (path, level) = (out[cursor].path.clone(), out[cursor].level);
@@ -178,7 +203,7 @@ impl<'a> Walk<'a> {
                 continue;
             }
             for child_path in cache.children_of(&path) {
-                if out.len() >= MAX_NODES {
+                if out.len() >= self.max_nodes {
                     break;
                 }
                 let Some(item) = cache.get(child_path) else {

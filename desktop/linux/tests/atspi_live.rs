@@ -15,7 +15,9 @@ use std::time::Instant;
 
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop_linux::LinuxAccessibility;
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{
+    AxElement, QueryFocusedParams, QueryResult, QueryTreeParams, DEFAULT_MAX_NODES,
+};
 
 fn flatten(node: &AxElement, out: &mut Vec<AxElement>) {
     let mut copy = node.clone();
@@ -41,20 +43,24 @@ async fn a_snapshot_of_the_frontmost_app_is_bounded_in_wall_clock() {
     };
 
     let started = Instant::now();
-    let tree = ax
+    let result = ax
         .query_tree(QueryTreeParams {
             pid: None,
             max_depth: 8,
+            max_nodes: DEFAULT_MAX_NODES,
         })
         .await;
     let elapsed = started.elapsed();
 
-    let tree = tree.expect("query_tree").expect("a frontmost application");
+    let result = result.expect("query_tree");
+    let truncated = result.truncated;
+    let node_count = result.node_count;
+    let tree = result.element.expect("a frontmost application");
     let mut all = Vec::new();
     flatten(&tree, &mut all);
 
     println!(
-        "frontmost pid {} — {} nodes in {elapsed:?}",
+        "frontmost pid {} — {} nodes in {elapsed:?} (walked {node_count}, truncated {truncated})",
         tree.pid,
         all.len()
     );
@@ -74,6 +80,19 @@ async fn a_snapshot_of_the_frontmost_app_is_bounded_in_wall_clock() {
         "walk took {elapsed:?}"
     );
     assert!(!all.is_empty());
+    // The node budget is the protocol's, not a private constant — and when it
+    // does cut the tree the caller has to be told, or a model reads the pruned
+    // result as "that control does not exist".
+    assert!(
+        all.len() <= DEFAULT_MAX_NODES as usize,
+        "{} nodes exceeds the protocol budget of {DEFAULT_MAX_NODES}",
+        all.len()
+    );
+    assert!(
+        all.len() <= node_count as usize,
+        "returned {} nodes but reported walking only {node_count}",
+        all.len()
+    );
     for e in &all {
         assert!(
             e.role.starts_with("AX"),
@@ -86,6 +105,74 @@ async fn a_snapshot_of_the_frontmost_app_is_bounded_in_wall_clock() {
     }
 }
 
+/// The caller's `max_nodes` bounds the walk, and a cut walk says it was cut.
+///
+/// Both halves were broken here, and neither was visible from the result alone.
+/// `max_nodes` arrived and was thrown away (`let _ = clamp_max_nodes(..)`), so
+/// the walk always used the default; and the cached path — the *default* path —
+/// never charged the node counter, so `node_count` came back 0 and `truncated`
+/// came back `false` even when the tree had just been cut at the budget.
+///
+/// A silent cut is the dangerous failure: a model handed a pruned tree with no
+/// marker concludes the control it wanted does not exist and goes elsewhere.
+/// Mirrors macOS's `tier_a_a_budget_exhausted_walk_reports_that_it_was_cut`.
+#[tokio::test]
+#[ignore = "needs a live AT-SPI bus"]
+async fn a_budget_exhausted_walk_reports_that_it_was_cut() {
+    let Some(ax) = LinuxAccessibility::probe() else {
+        panic!("no accessibility bus on this host — nothing was verified");
+    };
+
+    let cut = ax
+        .query_tree(QueryTreeParams {
+            pid: None,
+            max_depth: 10,
+            max_nodes: 3,
+        })
+        .await
+        .expect("query_tree");
+
+    let mut cut_nodes = Vec::new();
+    flatten(
+        cut.element.as_ref().expect("a frontmost application"),
+        &mut cut_nodes,
+    );
+    assert!(
+        cut_nodes.len() <= 3,
+        "a 3-node budget returned {} nodes — max_nodes is being ignored",
+        cut_nodes.len()
+    );
+    assert_eq!(
+        cut.node_count, 3,
+        "the walk must spend exactly its budget, not approximately"
+    );
+    assert!(
+        cut.truncated,
+        "a 3-node budget over a real application's tree must report truncation"
+    );
+
+    let whole = ax
+        .query_tree(QueryTreeParams {
+            pid: None,
+            max_depth: 10,
+            max_nodes: DEFAULT_MAX_NODES,
+        })
+        .await
+        .expect("query_tree");
+
+    assert!(
+        whole.node_count > cut.node_count,
+        "the default budget must have read more than the 3-node one ({} vs {})",
+        whole.node_count,
+        cut.node_count
+    );
+    assert!(
+        whole.node_count > 0,
+        "a successful walk that reports reading zero nodes is the cached path \
+         failing to charge the budget"
+    );
+}
+
 /// A secure element never carries its value across the bus.
 ///
 /// This is the invariant the whole limb exists to protect, asserted against
@@ -96,10 +183,14 @@ async fn no_secure_element_ever_reports_a_value() {
     let Some(ax) = LinuxAccessibility::probe() else {
         panic!("no accessibility bus on this host — nothing was verified");
     };
-    let Ok(Some(tree)) = ax
+    let Ok(QueryResult {
+        element: Some(tree),
+        ..
+    }) = ax
         .query_tree(QueryTreeParams {
             pid: None,
             max_depth: 10,
+            max_nodes: DEFAULT_MAX_NODES,
         })
         .await
     else {
@@ -131,7 +222,7 @@ async fn the_focused_element_query_answers_or_says_why() {
     let Some(ax) = LinuxAccessibility::probe() else {
         panic!("no accessibility bus on this host — nothing was verified");
     };
-    match ax.query_focused().await {
+    match ax.query_focused(QueryFocusedParams::default()).await {
         Ok(Some(el)) => println!(
             "focused: role={} title={:?} secure={:?} settable={:?}",
             el.role, el.title, el.secure, el.settable
@@ -157,10 +248,14 @@ async fn a_full_depth_snapshot_stays_well_inside_the_budget() {
     };
     for depth in [2u32, 4, 8, 12] {
         let started = Instant::now();
-        let Ok(Some(tree)) = ax
+        let Ok(QueryResult {
+            element: Some(tree),
+            ..
+        }) = ax
             .query_tree(QueryTreeParams {
                 pid: None,
                 max_depth: depth,
+                max_nodes: DEFAULT_MAX_NODES,
             })
             .await
         else {
@@ -201,6 +296,7 @@ async fn the_bus_connection_is_paid_for_once() {
         ax.query_tree(QueryTreeParams {
             pid: None,
             max_depth: 2,
+            max_nodes: DEFAULT_MAX_NODES,
         })
     };
 
