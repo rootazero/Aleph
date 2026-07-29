@@ -38,6 +38,16 @@ pub fn equivalent(a: &Path, b: &Path) -> bool {
 /// not exclude each other, and a mutex-guarded test will then observe the
 /// serial-group test's dropped tempdir mid-save (config paths resolve off
 /// `ALEPH_HOME`).
+///
+/// **A test that needs `$HOME` as well must go through
+/// [`crate::runtimes::post_install::HomeEnvGuards`]** — never take that lock and
+/// this one by hand. They are two separate mutexes over two separate env vars,
+/// so acquiring them by hand admits two orders, and two orders is an ABBA
+/// deadlock: one test taking them in the reverse order to its siblings hung the
+/// whole `--lib` suite forever (a hang, not a failure) with every other
+/// `ALEPH_HOME` test queued behind it. `HomeEnvGuards` fixes the order in one
+/// place, and `nothing_acquires_the_two_env_locks_separately` fails if a new
+/// site goes around it.
 #[cfg(test)]
 pub(crate) static ALEPH_HOME_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -773,8 +783,8 @@ mod tests {
         std::fs::create_dir(project.join(".git")).unwrap();
 
         let dirs = {
-            let _aleph_home = AlephHomeEnvGuard::acquire_and_set(&aleph_home);
-            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            let _env =
+                crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, &home);
             get_all_skills_dirs(Some(&project)).unwrap()
         };
 

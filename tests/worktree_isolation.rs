@@ -42,6 +42,56 @@ fn is_git_repo() -> bool {
         .unwrap_or(false)
 }
 
+/// Wall clock, in ms, of a bare `git worktree add --detach` and the matching
+/// `git worktree remove --force` in *this* environment.
+///
+/// H-T5's budget is derived from this rather than from a constant. `create` and
+/// `cleanup` are one such git invocation each plus a uuid and a path join, so
+/// their elapsed time is git checking out — and then deleting — every tracked
+/// file in the repo. That cost scales with repo size and disk speed, not with
+/// Aleph code: on this tree a bare `git worktree add` measures ~700ms and
+/// `git worktree remove` ~600ms, both already past the 800/400ms constants this
+/// test used to assert, before Aleph runs a single line. An absolute budget
+/// therefore grades the machine. Measuring the floor here is what lets the test
+/// assert the one property the code actually owns — that the wrapper adds
+/// essentially nothing on top of git.
+fn raw_git_worktree_baseline(repo: &std::path::Path) -> (u128, u128) {
+    let path = std::env::temp_dir().join(format!("aleph-h-t5-baseline-{}", uuid::Uuid::new_v4()));
+
+    let t0 = std::time::Instant::now();
+    let added = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "add", "--detach"])
+        .arg(&path)
+        .arg("HEAD")
+        .output()
+        .expect("spawn baseline `git worktree add`");
+    let add_ms = t0.elapsed().as_millis();
+    assert!(
+        added.status.success(),
+        "baseline `git worktree add` failed: {}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+
+    let t1 = std::time::Instant::now();
+    let removed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["worktree", "remove", "--force"])
+        .arg(&path)
+        .output()
+        .expect("spawn baseline `git worktree remove`");
+    let remove_ms = t1.elapsed().as_millis();
+    assert!(
+        removed.status.success(),
+        "baseline `git worktree remove` failed: {}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+
+    (add_ms, remove_ms)
+}
+
 fn fresh_session_service() -> Arc<dyn SessionService> {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory sqlite");
     migrate_add_session_events(&conn).expect("migrate session_events");
@@ -343,6 +393,8 @@ async fn h_t5_create_and_cleanup_within_perf_budget() {
     }
 
     let repo = std::env::current_dir().unwrap();
+    let (raw_create_ms, raw_cleanup_ms) = raw_git_worktree_baseline(&repo);
+
     let t0 = std::time::Instant::now();
     let h = alephcore::sandbox::worktree::create(&repo, "h-t5", None)
         .await
@@ -351,19 +403,21 @@ async fn h_t5_create_and_cleanup_within_perf_budget() {
     let t1 = std::time::Instant::now();
     h.cleanup().await.expect("cleanup");
     let cleanup_ms = t1.elapsed().as_millis();
-    // Windows worktree ops (git worktree add + Defender on-access scans) run
-    // far slower than POSIX; widen the budget there, keep the tight CI guard on Unix.
-    let (create_budget, cleanup_budget) = if cfg!(windows) {
-        (8000, 4000)
-    } else {
-        (800, 400)
-    };
+
+    // Twice the measured floor plus 300ms of absolute headroom. Loose enough
+    // that ordinary run-to-run variance never fails it — and that a platform
+    // which slows git down uniformly (Windows Defender's on-access scan) slows
+    // the baseline in step instead of needing its own constant. Tight enough to
+    // catch a wrapper that grows a second git invocation, a sleep, or a walk
+    // over the checked-out tree.
+    let create_budget = raw_create_ms * 2 + 300;
+    let cleanup_budget = raw_cleanup_ms * 2 + 300;
     assert!(
         create_ms < create_budget,
-        "create took {create_ms}ms, budget {create_budget}ms"
+        "create took {create_ms}ms; raw `git worktree add` here is {raw_create_ms}ms, budget {create_budget}ms"
     );
     assert!(
         cleanup_ms < cleanup_budget,
-        "cleanup took {cleanup_ms}ms, budget {cleanup_budget}ms"
+        "cleanup took {cleanup_ms}ms; raw `git worktree remove` here is {raw_cleanup_ms}ms, budget {cleanup_budget}ms"
     );
 }
