@@ -5,7 +5,7 @@
 //! (`[execution]`) simply carries operator overrides in. Every field used to be
 //! a bare `const` inside the inbound executor, so changing one meant a rebuild.
 
-/// Caps and timings for [`super::deliver_when_free`].
+/// Caps and timings for [`super::deliver_with_ticket`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BusyQueueConfig {
     /// Messages one session's lane may hold before `REJECT_NEWEST` kicks in.
