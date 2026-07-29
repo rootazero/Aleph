@@ -165,6 +165,7 @@ impl McpClient {
             &config.env,
             config.cwd.as_ref(),
             timeout,
+            Some(Arc::clone(&self.sampling_handler)),
         )
         .await?;
 
@@ -633,7 +634,12 @@ impl McpClient {
             }
         };
 
-        let connection = McpServerConnection::with_transport(&config.name, transport).await?;
+        let connection = McpServerConnection::with_transport(
+            &config.name,
+            transport,
+            Some(Arc::clone(&self.sampling_handler)),
+        )
+        .await?;
         let connection = Arc::new(connection);
 
         let tool_count = connection.list_tools().await.len();
@@ -748,6 +754,25 @@ impl McpClient {
                 tracing::debug!(server = %connection.name(), error = %e, "MCP refresh prompts failed");
             }
         }
+    }
+
+    /// Re-fetch every cached list whose server-supplied `ttlMs` has lapsed, and
+    /// report which kinds actually changed.
+    ///
+    /// Driven by the manager's health tick. See
+    /// [`McpServerConnection::refresh_expired_lists`] for why expiry alone is
+    /// not treated as a change.
+    pub async fn refresh_expired_lists(&self) -> crate::mcp::external::ChangedLists {
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
+
+        let mut changed = crate::mcp::external::ChangedLists::default();
+        for connection in &connections {
+            changed = changed.merged(connection.refresh_expired_lists().await);
+        }
+        changed
     }
 }
 

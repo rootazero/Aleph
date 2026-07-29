@@ -49,6 +49,7 @@ pub mod error_class;
 pub mod external;
 pub mod jsonrpc;
 pub mod manager;
+pub mod modern;
 mod preflight;
 pub mod presets;
 mod prompts;

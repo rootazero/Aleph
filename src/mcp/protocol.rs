@@ -658,22 +658,32 @@ impl SamplingChunk {
     }
 }
 
-/// MCP protocol revision Aleph speaks. Sent in the `initialize` body and as
-/// the `MCP-Protocol-Version` HTTP header on Streamable HTTP requests. Pinned
-/// to `2025-03-26` — the revision that introduced the Streamable HTTP transport
-/// (`transport::http`) and audio content, both of which Aleph implements.
-/// Servers may negotiate this down; the transport then echoes their value (see
-/// `McpTransport::set_protocol_version`).
-pub const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+/// MCP protocol revision Aleph proposes to **legacy** servers — those that
+/// still expect the `initialize` handshake (`2025-11-25` and earlier).
+///
+/// Pinned to `2025-03-26`, the revision that introduced the Streamable HTTP
+/// transport (`transport::http`) and audio content, both of which Aleph
+/// implements. Servers may negotiate this down; the transport then echoes their
+/// value (see `McpTransport::set_dialect`).
+///
+/// The handshake-less revision Aleph speaks to modern servers is
+/// [`crate::mcp::modern::MCP_MODERN_PROTOCOL_VERSION`]. Which of the two applies
+/// is decided once per server by the `server/discover` probe, never guessed.
+pub const MCP_LEGACY_PROTOCOL_VERSION: &str = "2025-03-26";
 
 impl InitializeParams {
-    /// Create default initialize params for Aleph
+    /// Create the `initialize` params Aleph sends to a legacy server.
+    ///
+    /// `can_sample` reflects whether this connection actually carries a
+    /// sampling handler. A declared capability is a promise the server is
+    /// entitled to act on, so a connection that could only answer with an error
+    /// declares nothing and is never asked.
     #[must_use]
-    pub fn aleph_default() -> Self {
+    pub fn aleph_default(can_sample: bool) -> Self {
         Self {
-            protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+            protocol_version: MCP_LEGACY_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities {
-                sampling: Some(SamplingCapability::default()),
+                sampling: can_sample.then(SamplingCapability::default),
                 experimental: None,
             },
             client_info: ClientInfo {
@@ -784,10 +794,22 @@ mod tests {
 
     #[test]
     fn test_mcp_initialize_params() {
-        let params = InitializeParams::aleph_default();
+        let params = InitializeParams::aleph_default(true);
         assert_eq!(params.client_info.name, "Aleph");
         let json = serde_json::to_string(&params).unwrap();
         assert!(json.contains("protocolVersion"));
+        assert!(json.contains("sampling"));
+    }
+
+    #[test]
+    fn initialize_params_withhold_sampling_without_a_handler() {
+        // A declared capability is a promise; a connection that cannot service
+        // sampling must not invite the server to request it.
+        let params = InitializeParams::aleph_default(false);
+
+        assert!(params.capabilities.sampling.is_none());
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(!json.contains("sampling"));
     }
 
     #[test]

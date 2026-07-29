@@ -4,13 +4,25 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
+use crate::mcp::modern::cache::{is_stale, CacheDirective};
+use crate::mcp::modern::discover::{
+    select_version, DiscoverResult, VersionChoice, DISCOVER_METHOD,
+};
+use crate::mcp::modern::headers::{collect_param_headers, extract_param_headers, ParamHeader};
+use crate::mcp::modern::mrtr::{self, InputRequired};
+use crate::mcp::modern::{
+    aleph_client_capabilities, aleph_client_info, is_modern_error, McpDialect, RequestMeta,
+    UnsupportedVersion, MCP_MODERN_PROTOCOL_VERSION,
+};
+use crate::mcp::sampling::SamplingHandler;
 use crate::mcp::transport::{McpTransport, StdioTransport};
 use crate::mcp::types::McpTool;
 use crate::sync_primitives::Arc;
@@ -36,6 +48,67 @@ pub enum ConnectionState {
     Failed,
 }
 
+/// Which cached lists came back different after a TTL-driven re-fetch.
+///
+/// Deliberately mirrors the granularity of the server-sent list-changed
+/// notifications, so a caller can feed both into the same publish path rather
+/// than inventing a second one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChangedLists {
+    /// `tools/list` differs from what was cached.
+    pub tools: bool,
+    /// `resources/list` or `resources/templates/list` differs.
+    pub resources: bool,
+    /// `prompts/list` differs.
+    pub prompts: bool,
+}
+
+impl ChangedLists {
+    /// Whether anything changed at all.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.tools || self.resources || self.prompts
+    }
+
+    /// Combine two reports, as when one client fronts several connections.
+    #[must_use]
+    pub const fn merged(self, other: Self) -> Self {
+        Self {
+            tools: self.tools || other.tools,
+            resources: self.resources || other.resources,
+            prompts: self.prompts || other.prompts,
+        }
+    }
+}
+
+/// A cheap content signature for change detection.
+///
+/// The cached list types carry no `PartialEq`, and serializing catches a
+/// changed description or input schema that comparing names alone would miss.
+/// A serialization failure yields the same value on both sides, which reports
+/// "unchanged" — the quiet outcome, not a spurious re-sync.
+fn fingerprint<T: serde::Serialize>(items: &T) -> String {
+    serde_json::to_string(items).unwrap_or_default()
+}
+
+/// What the `server/discover` probe concluded about a server.
+#[derive(Debug)]
+enum EraProbe {
+    /// Speak the stateless shape at this revision.
+    Modern {
+        /// The revision both sides implement.
+        version: String,
+        /// What discovery reported, or `None` when the era was inferred from an
+        /// error rather than from a successful `DiscoverResult` — in which case
+        /// capabilities are still unknown and have to be asked for again.
+        discovered: Option<DiscoverResult>,
+    },
+    /// The server predates `2026-07-28`; open with the `initialize` handshake.
+    Legacy,
+    /// A modern server with no revision in common.
+    Incompatible(Vec<String>),
+}
+
 /// External MCP server connection
 ///
 /// This struct manages the lifecycle and communication with an MCP server.
@@ -58,10 +131,41 @@ pub struct McpServerConnection {
     cached_resource_templates: RwLock<Vec<crate::mcp::types::McpResourceTemplate>>,
     /// Cached prompts list
     cached_prompts: RwLock<Vec<crate::mcp::prompts::McpPrompt>>,
-    /// Cached server instructions (from initialize response)
+    /// Cached server instructions (from the handshake or `server/discover`)
     cached_instructions: RwLock<Option<String>>,
     /// Connection state
     state: RwLock<ConnectionState>,
+    /// Which protocol era this server speaks.
+    ///
+    /// Settled exactly once, by [`Self::handshake`], before any other request —
+    /// the spec makes the era a property of the server, not of a request, so
+    /// re-deciding per call would be both wasteful and a source of drift. A
+    /// `OnceLock` rather than a lock keeps the read on the request path free.
+    dialect: OnceLock<McpDialect>,
+    /// The `_meta` block attached to every modern request. Absent on the legacy
+    /// path, where the same information was exchanged once during `initialize`.
+    request_meta: OnceLock<RequestMeta>,
+    /// `x-mcp-header` annotations per server-local tool name, harvested when
+    /// the tool list is refreshed and consumed when the tool is called.
+    param_headers: RwLock<HashMap<String, Vec<ParamHeader>>>,
+    /// When each cached list goes stale, per the server's `ttlMs` hints.
+    cache_expiry: RwLock<CacheExpiry>,
+    /// Services MRTR input requests. Installed by [`crate::mcp::McpClient`]
+    /// after construction, mirroring how the notification handler is wired.
+    sampling: RwLock<Option<Arc<SamplingHandler>>>,
+}
+
+/// When each cached list stops being fresh.
+///
+/// `None` means the server gave no `ttlMs` hint for that list, which is every
+/// pre-`2026-07-28` server — those entries stay valid until a `listChanged`
+/// notification or a reconnect replaces them, exactly as before.
+#[derive(Debug, Default)]
+struct CacheExpiry {
+    tools: Option<Instant>,
+    resources: Option<Instant>,
+    resource_templates: Option<Instant>,
+    prompts: Option<Instant>,
 }
 
 impl McpServerConnection {
@@ -76,6 +180,10 @@ impl McpServerConnection {
     /// * `timeout` - Per-request timeout (defaults to 30s for individual RPCs).
     ///   The total connection timeout is always `DEFAULT_CONNECT_TIMEOUT` (300s)
     ///   to allow for slow server startup.
+    /// * `sampling` - Handler for server-requested LLM completions, or `None`.
+    ///   Supplied here rather than installed afterwards because the connection
+    ///   declares its capabilities during the handshake: a connection that
+    ///   cannot sample must not claim it can.
     pub async fn connect(
         name: impl Into<String>,
         command: impl AsRef<str>,
@@ -83,6 +191,7 @@ impl McpServerConnection {
         env: &HashMap<String, String>,
         cwd: Option<&PathBuf>,
         timeout: Option<Duration>,
+        sampling: Option<Arc<SamplingHandler>>,
     ) -> Result<Self> {
         let name = name.into();
         // Total connection timeout is always the larger default (300s) to allow
@@ -92,7 +201,7 @@ impl McpServerConnection {
         // Wrap entire connection process with timeout
         tokio::time::timeout(
             connect_timeout,
-            Self::connect_internal(&name, command, args, env, cwd, timeout),
+            Self::connect_internal(&name, command, args, env, cwd, timeout, sampling),
         )
         .await
         .map_err(|_| {
@@ -114,6 +223,7 @@ impl McpServerConnection {
         env: &HashMap<String, String>,
         cwd: Option<&PathBuf>,
         timeout: Option<Duration>,
+        sampling: Option<Arc<SamplingHandler>>,
     ) -> Result<Self> {
         // Spawn the server process
         let mut transport = StdioTransport::spawn(name, command, args, env, cwd).await?;
@@ -123,7 +233,7 @@ impl McpServerConnection {
             transport = transport.with_timeout(t);
         }
 
-        Self::with_transport(name, Arc::new(transport)).await
+        Self::with_transport(name, Arc::new(transport), sampling).await
     }
 
     /// Create a connection with a custom transport
@@ -134,15 +244,17 @@ impl McpServerConnection {
     /// # Arguments
     /// * `name` - Server name for identification
     /// * `transport` - An `Arc`-wrapped transport implementing `McpTransport`
+    /// * `sampling` - Handler for server-requested LLM completions, or `None`
     ///
     /// # Example
     /// ```ignore
     /// let http_transport = HttpTransport::new("https://mcp.example.com").await?;
-    /// let conn = McpServerConnection::with_transport("remote-server", Arc::new(http_transport)).await?;
+    /// let conn = McpServerConnection::with_transport("remote-server", Arc::new(http_transport), None).await?;
     /// ```
     pub async fn with_transport(
         name: impl Into<String>,
         transport: Arc<dyn McpTransport>,
+        sampling: Option<Arc<SamplingHandler>>,
     ) -> Result<Self> {
         let name = name.into();
         let conn = Self {
@@ -156,17 +268,276 @@ impl McpServerConnection {
             cached_prompts: RwLock::new(Vec::new()),
             cached_instructions: RwLock::new(None),
             state: RwLock::new(ConnectionState::Connecting),
+            dialect: OnceLock::new(),
+            request_meta: OnceLock::new(),
+            param_headers: RwLock::new(HashMap::new()),
+            cache_expiry: RwLock::new(CacheExpiry::default()),
+            sampling: RwLock::new(sampling),
         };
 
-        // Perform MCP initialize handshake
-        conn.initialize().await?;
+        conn.handshake().await?;
 
         Ok(conn)
     }
 
-    /// Perform MCP initialize handshake
-    async fn initialize(&self) -> Result<()> {
-        let params = mcp_types::InitializeParams::aleph_default();
+    /// Whether this connection can service a server's request for an LLM
+    /// completion — and therefore whether it may declare the capability.
+    async fn can_sample(&self) -> bool {
+        self.sampling.read().await.is_some()
+    }
+
+    /// The protocol dialect settled for this server, or `None` before the probe.
+    #[must_use]
+    pub fn dialect(&self) -> Option<&McpDialect> {
+        self.dialect.get()
+    }
+
+    /// Whether this connection speaks the stateless `2026-07-28` shape.
+    fn is_modern(&self) -> bool {
+        self.dialect.get().is_some_and(McpDialect::is_modern)
+    }
+
+    /// Build an outbound request.
+    ///
+    /// The single point at which a request on this connection comes into
+    /// existence. A modern server rejects any request that lacks the required
+    /// `_meta`, and there is no handshake left to carry that information once —
+    /// so it has to ride on every request, and the only way to keep that true is
+    /// for no call site to be able to build a request without passing through
+    /// here. Legacy connections have no `request_meta`, so their params travel
+    /// exactly as they did before.
+    fn request(&self, method: &str, params: Option<Value>) -> JsonRpcRequest {
+        let id = self.id_gen.next();
+        match self.request_meta.get() {
+            Some(meta) => JsonRpcRequest::with_params(id, method, meta.attach(params)),
+            None => match params {
+                Some(params) => JsonRpcRequest::with_params(id, method, params),
+                None => JsonRpcRequest::new(id, method),
+            },
+        }
+    }
+
+    /// Decide which era this server speaks, then open the connection that way.
+    async fn handshake(&self) -> Result<()> {
+        let can_sample = self.can_sample().await;
+        let probe_meta = RequestMeta::new(
+            MCP_MODERN_PROTOCOL_VERSION,
+            &aleph_client_info(),
+            &aleph_client_capabilities(can_sample),
+        );
+
+        match self.probe_era(&probe_meta).await {
+            EraProbe::Modern {
+                version,
+                discovered,
+            } => self.adopt_modern(version, discovered, can_sample).await,
+            EraProbe::Legacy => self.initialize_legacy(can_sample).await,
+            EraProbe::Incompatible(supported) => {
+                return Err(AlephError::IoError(format!(
+                    "MCP server '{}' supports only protocol {:?}; Aleph speaks {} \
+                     and the handshake-based revisions up to {}",
+                    self.name,
+                    supported,
+                    MCP_MODERN_PROTOCOL_VERSION,
+                    mcp_types::MCP_LEGACY_PROTOCOL_VERSION
+                )))
+            }
+        }?;
+
+        {
+            let mut state = self.state.write().await;
+            *state = ConnectionState::Ready;
+        }
+
+        // Pre-fetch tools list
+        self.refresh_tools().await?;
+
+        // Pre-fetch resources and prompts (non-fatal if not supported)
+        if let Err(e) = self.refresh_resources().await {
+            tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
+        }
+        if let Err(e) = self.refresh_resource_templates().await {
+            tracing::debug!(server = %self.name, error = %e, "Resource templates refresh failed (may not be supported)");
+        }
+        if let Err(e) = self.refresh_prompts().await {
+            tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
+        }
+
+        Ok(())
+    }
+
+    /// Probe the server with `server/discover`.
+    ///
+    /// Modern servers must implement it, so its answer settles the era in one
+    /// round-trip. The spec's rule is "fall back on any error that is not a
+    /// recognized modern error" — a spec-reserved code proves the peer is
+    /// modern and means *correct the request*, while everything else (a
+    /// `method not found`, an HTTP error page, a transport failure) means the
+    /// server predates this revision and wants the `initialize` handshake.
+    async fn probe_era(&self, probe_meta: &RequestMeta) -> EraProbe {
+        let request = JsonRpcRequest::with_params(
+            self.id_gen.next(),
+            DISCOVER_METHOD,
+            probe_meta.attach(None),
+        );
+
+        let response = match self.transport.send_request(&request).await {
+            Ok(response) => response,
+            Err(e) => {
+                // Not an answer at all. If the server is simply dead the
+                // legacy handshake fails next and reports it properly; there is
+                // nothing here worth failing the connection over.
+                tracing::debug!(
+                    server = %self.name,
+                    error = %e,
+                    "server/discover did not answer; treating server as legacy"
+                );
+                return EraProbe::Legacy;
+            }
+        };
+
+        let result = match response.into_result() {
+            Ok(result) => result,
+            Err(error) => {
+                if !is_modern_error(error.code) {
+                    tracing::debug!(
+                        server = %self.name,
+                        code = error.code,
+                        "server/discover rejected with a non-modern error; using the handshake"
+                    );
+                    return EraProbe::Legacy;
+                }
+                return match UnsupportedVersion::from_error(&error) {
+                    Some(unsupported) => {
+                        match select_version(&unsupported.supported, MCP_MODERN_PROTOCOL_VERSION) {
+                            VersionChoice::Modern(version) => EraProbe::Modern {
+                                version,
+                                discovered: None,
+                            },
+                            VersionChoice::Legacy => EraProbe::Legacy,
+                            VersionChoice::Incompatible(supported) => {
+                                EraProbe::Incompatible(supported)
+                            }
+                        }
+                    }
+                    None => {
+                        // A spec-reserved code identifies a modern peer even
+                        // when it carries no version list to negotiate with.
+                        tracing::warn!(
+                            server = %self.name,
+                            code = error.code,
+                            message = %error.message,
+                            "server/discover returned a modern protocol error; \
+                             continuing as a modern server"
+                        );
+                        EraProbe::Modern {
+                            version: MCP_MODERN_PROTOCOL_VERSION.to_string(),
+                            discovered: None,
+                        }
+                    }
+                };
+            }
+        };
+
+        let discovered: DiscoverResult = match serde_json::from_value(result) {
+            Ok(discovered) => discovered,
+            Err(e) => {
+                tracing::warn!(
+                    server = %self.name,
+                    error = %e,
+                    "server/discover answered with an unparsable result; using the handshake"
+                );
+                return EraProbe::Legacy;
+            }
+        };
+
+        match select_version(&discovered.supported_versions, MCP_MODERN_PROTOCOL_VERSION) {
+            VersionChoice::Modern(version) => EraProbe::Modern {
+                version,
+                discovered: Some(discovered),
+            },
+            VersionChoice::Legacy => EraProbe::Legacy,
+            VersionChoice::Incompatible(supported) => EraProbe::Incompatible(supported),
+        }
+    }
+
+    /// Commit this connection to the stateless shape.
+    async fn adopt_modern(
+        &self,
+        version: String,
+        discovered: Option<DiscoverResult>,
+        can_sample: bool,
+    ) -> Result<()> {
+        let dialect = McpDialect::Modern {
+            version: version.clone(),
+        };
+        self.transport.set_dialect(&dialect);
+        let _ = self.dialect.set(dialect);
+        let _ = self.request_meta.set(RequestMeta::new(
+            &version,
+            &aleph_client_info(),
+            &aleph_client_capabilities(can_sample),
+        ));
+
+        // The era can be settled by an *error* that merely proves the peer is
+        // modern (a version rejection, a missing-capability complaint). That
+        // tells us nothing about what the server serves, and leaving
+        // capabilities empty would silently skip resources and prompts for the
+        // rest of the connection's life. Now that the dialect is committed, ask
+        // again — properly this time.
+        let discovered = match discovered {
+            Some(discovered) => discovered,
+            None => self.rediscover().await,
+        };
+
+        let server_info = discovered.server_info();
+        tracing::info!(
+            server = %self.name,
+            protocol = %version,
+            server_name = ?server_info.as_ref().map(|i| &i.name),
+            "MCP server discovered (stateless protocol)"
+        );
+
+        {
+            let mut caps = self.capabilities.write().await;
+            *caps = Some(discovered.capabilities);
+        }
+        {
+            let mut inst = self.cached_instructions.write().await;
+            *inst = discovered.instructions;
+        }
+
+        Ok(())
+    }
+
+    /// Re-run discovery on a connection whose dialect is already settled.
+    ///
+    /// Non-fatal: a server that still will not answer leaves capabilities
+    /// empty, which degrades to "tools only" rather than failing a connection
+    /// that has already proved it speaks the protocol.
+    async fn rediscover(&self) -> DiscoverResult {
+        let request = self.request(DISCOVER_METHOD, None);
+        let parsed = match self.transport.send_request(&request).await {
+            Ok(response) => response
+                .into_result()
+                .ok()
+                .and_then(|result| serde_json::from_value(result).ok()),
+            Err(_) => None,
+        };
+
+        parsed.unwrap_or_else(|| {
+            tracing::warn!(
+                server = %self.name,
+                "Modern MCP server did not answer server/discover; \
+                 continuing without its capability list"
+            );
+            DiscoverResult::default()
+        })
+    }
+
+    /// Open the connection the way every revision before `2026-07-28` expects.
+    async fn initialize_legacy(&self, can_sample: bool) -> Result<()> {
+        let params = mcp_types::InitializeParams::aleph_default(can_sample);
         let request = JsonRpcRequest::with_params(
             self.id_gen.next(),
             "initialize",
@@ -202,8 +573,11 @@ impl McpServerConnection {
         // Honor the negotiated revision on every subsequent request. The
         // Streamable HTTP transport echoes it on the `MCP-Protocol-Version`
         // header; other transports treat this as a no-op.
-        self.transport
-            .set_protocol_version(&init_result.protocol_version);
+        let dialect = McpDialect::Legacy {
+            version: init_result.protocol_version,
+        };
+        self.transport.set_dialect(&dialect);
+        let _ = self.dialect.set(dialect);
 
         // Store capabilities
         {
@@ -227,26 +601,6 @@ impl McpServerConnection {
             );
         }
 
-        // Update state
-        {
-            let mut state = self.state.write().await;
-            *state = ConnectionState::Ready;
-        }
-
-        // Pre-fetch tools list
-        self.refresh_tools().await?;
-
-        // Pre-fetch resources and prompts (non-fatal if not supported)
-        if let Err(e) = self.refresh_resources().await {
-            tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
-        }
-        if let Err(e) = self.refresh_resource_templates().await {
-            tracing::debug!(server = %self.name, error = %e, "Resource templates refresh failed (may not be supported)");
-        }
-        if let Err(e) = self.refresh_prompts().await {
-            tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
-        }
-
         Ok(())
     }
 
@@ -259,21 +613,26 @@ impl McpServerConnection {
     /// `(items, next_cursor)`. `MAX_PAGES` bounds a server whose cursor never
     /// terminates (or fails to advance) so a buggy or hostile server cannot
     /// pin the connection in an unbounded fetch loop.
-    async fn drain_paginated<T, F>(&self, method: &str, mut extract: F) -> Result<Vec<T>>
+    /// Returns the drained items alongside the freshness hint the server
+    /// attached. The hint is read from the **first** page: it describes the
+    /// listing as a whole, and honoring a later page's shorter TTL would expire
+    /// a list that is already complete.
+    async fn drain_paginated<T, F>(
+        &self,
+        method: &str,
+        mut extract: F,
+    ) -> Result<(Vec<T>, CacheDirective)>
     where
         F: FnMut(Value) -> Result<(Vec<T>, Option<String>)>,
     {
         const MAX_PAGES: usize = 100;
         let mut items: Vec<T> = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut directive = CacheDirective::default();
 
-        for _ in 0..MAX_PAGES {
-            let request = match &cursor {
-                Some(c) => {
-                    JsonRpcRequest::with_params(self.id_gen.next(), method, json!({ "cursor": c }))
-                }
-                None => JsonRpcRequest::new(self.id_gen.next(), method),
-            };
+        for page_index in 0..MAX_PAGES {
+            let params = cursor.as_ref().map(|c| json!({ "cursor": c }));
+            let request = self.request(method, params);
             let response = self.transport.send_request(&request).await?;
             let result = response.into_result().map_err(|e| {
                 AlephError::IoError(format!(
@@ -282,11 +641,15 @@ impl McpServerConnection {
                 ))
             })?;
 
+            if page_index == 0 {
+                directive = CacheDirective::from_result(&result);
+            }
+
             let (page, next) = extract(result)?;
             items.extend(page);
             match next {
                 Some(c) if !c.is_empty() => cursor = Some(c),
-                _ => return Ok(items),
+                _ => return Ok((items, directive)),
             }
         }
 
@@ -297,12 +660,12 @@ impl McpServerConnection {
             collected = items.len(),
             "MCP list pagination hit the page cap; truncating (server cursor did not terminate)"
         );
-        Ok(items)
+        Ok((items, directive))
     }
 
     /// Refresh the cached tools list
     pub async fn refresh_tools(&self) -> Result<()> {
-        let raw_tools = self
+        let (raw_tools, directive) = self
             .drain_paginated("tools/list", |result| {
                 let page: mcp_types::ToolsListResult =
                     serde_json::from_value(result).map_err(|e| {
@@ -318,9 +681,36 @@ impl McpServerConnection {
         // Convert to our McpTool format. External tool metadata is untrusted:
         // normalize the input schema so strict providers do not reject malformed
         // schemas, and flag descriptions that look like prompt injection.
+        let mirrors_headers = self.transport.mirrors_param_headers();
+        let mut param_headers: HashMap<String, Vec<ParamHeader>> = HashMap::new();
         let tools: Vec<McpTool> = raw_tools
             .into_iter()
-            .map(|t| {
+            .filter_map(|t| {
+                // `x-mcp-header` annotations are read from the raw schema, before
+                // normalization, and a malformed one takes only its own tool
+                // out — the spec requires excluding it from `tools/list`, since
+                // the client could not build headers the server would accept,
+                // but one bad definition must not cost the server its others.
+                if mirrors_headers {
+                    let raw_schema = t.input_schema.as_ref().unwrap_or(&Value::Null);
+                    match collect_param_headers(raw_schema) {
+                        Ok(annotations) if !annotations.is_empty() => {
+                            param_headers.insert(t.name.clone(), annotations);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                server = %self.name,
+                                tool = %t.name,
+                                reason = %e,
+                                "MCP tool definition has an invalid x-mcp-header annotation; \
+                                 excluding the tool"
+                            );
+                            return None;
+                        }
+                    }
+                }
+
                 let description = t.description.unwrap_or_default();
                 if let Some(marker) = crate::mcp::scan_description_for_injection(&description) {
                     tracing::warn!(
@@ -338,7 +728,7 @@ impl McpServerConnection {
                 // annotations behave exactly like the pre-annotation default
                 // (exclusive, no confirmation).
                 let annotations = t.annotations.unwrap_or_default();
-                McpTool {
+                Some(McpTool {
                     name: format!("{}:{}", self.name, t.name), // Namespace with server name
                     description,
                     input_schema: crate::mcp::normalize_tool_schema(
@@ -347,7 +737,7 @@ impl McpServerConnection {
                     requires_confirmation: annotations.is_destructive(),
                     read_only: annotations.is_read_only(),
                     idempotent: annotations.is_idempotent(),
-                }
+                })
             })
             .collect();
 
@@ -362,6 +752,11 @@ impl McpServerConnection {
             let mut cached = self.cached_tools.write().await;
             *cached = tools;
         }
+        {
+            let mut headers = self.param_headers.write().await;
+            *headers = param_headers;
+        }
+        self.cache_expiry.write().await.tools = directive.expires_at(Instant::now());
 
         Ok(())
     }
@@ -376,7 +771,7 @@ impl McpServerConnection {
         }
         drop(caps);
 
-        let raw_resources = self
+        let (raw_resources, directive) = self
             .drain_paginated("resources/list", |result| {
                 let page: mcp_types::ResourcesListResult =
                     serde_json::from_value(result).map_err(|e| {
@@ -406,8 +801,11 @@ impl McpServerConnection {
             "Cached resources list"
         );
 
-        let mut cached = self.cached_resources.write().await;
-        *cached = resources;
+        {
+            let mut cached = self.cached_resources.write().await;
+            *cached = resources;
+        }
+        self.cache_expiry.write().await.resources = directive.expires_at(Instant::now());
 
         Ok(())
     }
@@ -429,7 +827,7 @@ impl McpServerConnection {
         }
         drop(caps);
 
-        let raw_templates = self
+        let (raw_templates, directive) = self
             .drain_paginated("resources/templates/list", |result| {
                 let page: mcp_types::ResourceTemplatesListResult = serde_json::from_value(result)
                     .map_err(|e| {
@@ -459,8 +857,11 @@ impl McpServerConnection {
             "Cached resource templates list"
         );
 
-        let mut cached = self.cached_resource_templates.write().await;
-        *cached = templates;
+        {
+            let mut cached = self.cached_resource_templates.write().await;
+            *cached = templates;
+        }
+        self.cache_expiry.write().await.resource_templates = directive.expires_at(Instant::now());
 
         Ok(())
     }
@@ -475,7 +876,7 @@ impl McpServerConnection {
         }
         drop(caps);
 
-        let raw_prompts = self
+        let (raw_prompts, directive) = self
             .drain_paginated("prompts/list", |result| {
                 let page: mcp_types::PromptsListResult =
                     serde_json::from_value(result).map_err(|e| {
@@ -512,10 +913,88 @@ impl McpServerConnection {
             "Cached prompts list"
         );
 
-        let mut cached = self.cached_prompts.write().await;
-        *cached = prompts;
+        {
+            let mut cached = self.cached_prompts.write().await;
+            *cached = prompts;
+        }
+        self.cache_expiry.write().await.prompts = directive.expires_at(Instant::now());
 
         Ok(())
+    }
+
+    /// Re-fetch any cached list whose server-supplied `ttlMs` has lapsed, and
+    /// report which of them actually came back different.
+    ///
+    /// `2026-07-28` removed the always-on server-to-client stream that carried
+    /// `listChanged`; a client that has not opened a `subscriptions/listen`
+    /// stream has the TTL hint as its only freshness signal. A server that
+    /// supplies no TTL — every pre-`2026-07-28` one — never becomes stale here,
+    /// so this costs those connections nothing.
+    ///
+    /// The *changed* half matters as much as the refresh. A lapsed TTL means
+    /// "you may no longer assume this is fresh", not "this changed", so
+    /// announcing a change on every expiry would make the tool registry
+    /// re-sync on a timer forever. Only a list whose content actually differs
+    /// is reported, and the caller turns that into the same list-changed signal
+    /// a server notification would have produced.
+    pub async fn refresh_expired_lists(&self) -> ChangedLists {
+        let now = Instant::now();
+        let expiry = {
+            let guard = self.cache_expiry.read().await;
+            (
+                guard.tools,
+                guard.resources,
+                guard.resource_templates,
+                guard.prompts,
+            )
+        };
+        let mut changed = ChangedLists::default();
+
+        if is_stale(expiry.0, now) {
+            let before = fingerprint(&*self.cached_tools.read().await);
+            match self.refresh_tools().await {
+                Ok(()) => {
+                    changed.tools = fingerprint(&*self.cached_tools.read().await) != before;
+                }
+                Err(e) => {
+                    tracing::debug!(server = %self.name, error = %e, "Expired tools list refresh failed");
+                }
+            }
+        }
+
+        // Templates live under the resources capability and share its
+        // list-changed signal, so either going stale refreshes both.
+        if is_stale(expiry.1, now) || is_stale(expiry.2, now) {
+            let before = (
+                fingerprint(&*self.cached_resources.read().await),
+                fingerprint(&*self.cached_resource_templates.read().await),
+            );
+            if let Err(e) = self.refresh_resources().await {
+                tracing::debug!(server = %self.name, error = %e, "Expired resources list refresh failed");
+            }
+            if let Err(e) = self.refresh_resource_templates().await {
+                tracing::debug!(server = %self.name, error = %e, "Expired resource templates refresh failed");
+            }
+            let after = (
+                fingerprint(&*self.cached_resources.read().await),
+                fingerprint(&*self.cached_resource_templates.read().await),
+            );
+            changed.resources = after != before;
+        }
+
+        if is_stale(expiry.3, now) {
+            let before = fingerprint(&*self.cached_prompts.read().await);
+            match self.refresh_prompts().await {
+                Ok(()) => {
+                    changed.prompts = fingerprint(&*self.cached_prompts.read().await) != before;
+                }
+                Err(e) => {
+                    tracing::debug!(server = %self.name, error = %e, "Expired prompts list refresh failed");
+                }
+            }
+        }
+
+        changed
     }
 
     /// Get cached tools list
@@ -564,23 +1043,137 @@ impl McpServerConnection {
             .any(|t| t.name == full_name || t.name == name)
     }
 
+    /// Answer the input requests a server attached to an interim result.
+    ///
+    /// Only capabilities Aleph declared can appear here (a conformant server
+    /// must not ask for others), so in practice this dispatches sampling.
+    async fn fulfill_input_requests(
+        &self,
+        interim: &InputRequired,
+    ) -> Result<serde_json::Map<String, Value>> {
+        let mut responses = serde_json::Map::new();
+        if !interim.needs_input() {
+            return Ok(responses);
+        }
+
+        // rust-doctor-disable-next-line excessive-clone
+        let handler = self.sampling.read().await.clone();
+        let Some(handler) = handler else {
+            return Err(AlephError::IoError(format!(
+                "MCP server '{}' asked for additional input, but no sampling handler \
+                 is installed on this connection",
+                self.name
+            )));
+        };
+
+        for (key, request) in &interim.requests {
+            let answer = mrtr::fulfill(key, request, &handler, &self.name).await?;
+            responses.insert(key.clone(), answer);
+        }
+        Ok(responses)
+    }
+
+    /// Send a request that may come back asking for more input, and drive it to
+    /// a final result.
+    ///
+    /// This is the Multi Round-Trip Requests loop. Each leg is an independent
+    /// request — a fresh JSON-RPC id, the *original* params plus this round's
+    /// answers, and the server's opaque `requestState` echoed back untouched.
+    /// Servers that carry no such state simply never take the retry branch, so
+    /// legacy connections walk straight through.
+    async fn send_with_mrtr(
+        &self,
+        method: &str,
+        original_params: Value,
+        extra_headers: &[(String, String)],
+        context: &str,
+    ) -> Result<Value> {
+        debug_assert!(
+            mrtr::supports_input_required(method),
+            "MRTR is defined only for tools/call, resources/read, and prompts/get"
+        );
+
+        // rust-doctor-disable-next-line excessive-clone
+        let mut attempt = original_params.clone();
+
+        for _ in 0..mrtr::MAX_ROUNDS {
+            let request = self.request(method, Some(attempt));
+            let response = match self
+                .transport
+                .send_request_with_headers(&request, extra_headers)
+                .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    // Classify for actionable diagnostics, then surface the
+                    // original error unchanged (variant-preserving).
+                    let kind = crate::mcp::classify_mcp_error(&e.to_string());
+                    tracing::warn!(
+                        server = %self.name,
+                        method,
+                        error_kind = kind.as_str(),
+                        error = %e,
+                        "MCP request failed at transport"
+                    );
+                    return Err(e);
+                }
+            };
+
+            let result = response.into_result().map_err(|e| {
+                let kind = crate::mcp::classify_mcp_error(&e.to_string());
+                AlephError::IoError(format!("{context} failed: {e}{}", kind.guidance_suffix()))
+            })?;
+
+            let Some(interim) = InputRequired::from_result(&result) else {
+                return Ok(result);
+            };
+
+            tracing::debug!(
+                server = %self.name,
+                method,
+                requested = interim.requests.len(),
+                "MCP server requested additional input; retrying"
+            );
+
+            let responses = self.fulfill_input_requests(&interim).await?;
+            attempt = mrtr::retry_params(
+                &original_params,
+                responses,
+                interim.request_state.as_deref(),
+            );
+        }
+
+        Err(AlephError::IoError(format!(
+            "{context} did not complete: MCP server '{}' asked for more input \
+             {} times without producing a result",
+            self.name,
+            mrtr::MAX_ROUNDS
+        )))
+    }
+
     /// Call a tool on this server
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
         // Strip server namespace prefix if present
         let tool_name = strip_server_prefix(name, &self.name);
 
+        // Parameters the server asked to have mirrored into HTTP headers. Read
+        // from the schema captured when the tool list was refreshed, so the
+        // headers describe the arguments actually being sent.
+        let extra_headers = {
+            let annotations = self.param_headers.read().await;
+            annotations
+                .get(tool_name)
+                .map(|a| extract_param_headers(a, &arguments))
+                .unwrap_or_default()
+        };
+
         let params = mcp_types::ToolCallParams {
             name: tool_name.to_string(),
             arguments: Some(arguments),
         };
-
-        let request = JsonRpcRequest::with_params(
-            self.id_gen.next(),
-            "tools/call",
-            serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize tool call params: {e}"))
-            })?,
-        );
+        let params = serde_json::to_value(&params).map_err(|e| {
+            AlephError::IoError(format!("Failed to serialize tool call params: {e}"))
+        })?;
 
         tracing::debug!(
             server = %self.name,
@@ -588,32 +1181,14 @@ impl McpServerConnection {
             "Calling tool"
         );
 
-        let response = match self.transport.send_request(&request).await {
-            Ok(r) => r,
-            Err(e) => {
-                // Classify the failure for actionable diagnostics, then surface
-                // the original error unchanged (variant-preserving, non-breaking).
-                let kind = crate::mcp::classify_mcp_error(&e.to_string());
-                tracing::warn!(
-                    server = %self.name,
-                    tool = %tool_name,
-                    error_kind = kind.as_str(),
-                    error = %e,
-                    "MCP tool call failed at transport"
-                );
-                return Err(e);
-            }
-        };
-        let result = response.into_result().map_err(|e| {
-            let kind = crate::mcp::classify_mcp_error(&e.to_string());
-            AlephError::IoError(format!(
-                "Tool call '{}' on '{}' failed: {}{}",
-                tool_name,
-                self.name,
-                e,
-                kind.guidance_suffix()
-            ))
-        })?;
+        let result = self
+            .send_with_mrtr(
+                "tools/call",
+                params,
+                &extra_headers,
+                &format!("Tool call '{}' on '{}'", tool_name, self.name),
+            )
+            .await?;
 
         // Parse tool call result
         let call_result: mcp_types::ToolCallResult =
@@ -697,13 +1272,9 @@ impl McpServerConnection {
             uri: resource_uri.to_string(),
         };
 
-        let request = JsonRpcRequest::with_params(
-            self.id_gen.next(),
-            "resources/read",
-            serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize resource read params: {e}"))
-            })?,
-        );
+        let params = serde_json::to_value(&params).map_err(|e| {
+            AlephError::IoError(format!("Failed to serialize resource read params: {e}"))
+        })?;
 
         tracing::debug!(
             server = %self.name,
@@ -711,13 +1282,14 @@ impl McpServerConnection {
             "Reading resource"
         );
 
-        let response = self.transport.send_request(&request).await?;
-        let result = response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "Resource read '{}' on '{}' failed: {}",
-                resource_uri, self.name, e
-            ))
-        })?;
+        let result = self
+            .send_with_mrtr(
+                "resources/read",
+                params,
+                &[],
+                &format!("Resource read '{}' on '{}'", resource_uri, self.name),
+            )
+            .await?;
 
         let read_result: mcp_types::ResourceReadResult =
             serde_json::from_value(result).map_err(|e| {
@@ -767,13 +1339,9 @@ impl McpServerConnection {
             arguments,
         };
 
-        let request = JsonRpcRequest::with_params(
-            self.id_gen.next(),
-            "prompts/get",
-            serde_json::to_value(&params).map_err(|e| {
-                AlephError::IoError(format!("Failed to serialize prompt get params: {e}"))
-            })?,
-        );
+        let params = serde_json::to_value(&params).map_err(|e| {
+            AlephError::IoError(format!("Failed to serialize prompt get params: {e}"))
+        })?;
 
         tracing::debug!(
             server = %self.name,
@@ -781,13 +1349,14 @@ impl McpServerConnection {
             "Getting prompt"
         );
 
-        let response = self.transport.send_request(&request).await?;
-        let result = response.into_result().map_err(|e| {
-            AlephError::IoError(format!(
-                "Prompt get '{}' on '{}' failed: {}",
-                prompt_name, self.name, e
-            ))
-        })?;
+        let result = self
+            .send_with_mrtr(
+                "prompts/get",
+                params,
+                &[],
+                &format!("Prompt get '{}' on '{}'", prompt_name, self.name),
+            )
+            .await?;
 
         let get_result: mcp_types::PromptGetResult =
             serde_json::from_value(result).map_err(|e| {
@@ -871,8 +1440,17 @@ impl McpServerConnection {
     /// stateless HTTP transport, whose [`is_running`](Self::is_running) can do
     /// no better than always return `true`; it doubles as a keepalive that
     /// holds long-lived connections open against idle disconnects.
+    /// Revision `2026-07-28` removed `ping`, so modern connections probe with
+    /// `server/discover` instead — the cheapest method every modern server is
+    /// required to implement, and one whose answer is genuinely informative
+    /// rather than merely non-empty.
     pub async fn ping(&self) -> bool {
-        let request = JsonRpcRequest::new(self.id_gen.next(), "ping");
+        let method = if self.is_modern() {
+            DISCOVER_METHOD
+        } else {
+            "ping"
+        };
+        let request = self.request(method, None);
         self.transport.send_request(&request).await.is_ok()
     }
 
@@ -901,6 +1479,674 @@ impl McpServerConnection {
 mod tests {
     use super::*;
 
+    use std::collections::VecDeque;
+
+    use crate::mcp::jsonrpc::{JsonRpcError, JsonRpcResponse};
+    use crate::mcp::modern::{META_FIELD, META_PROTOCOL_VERSION};
+    use async_trait::async_trait;
+    use tokio::sync::Mutex;
+
+    /// A transport that answers from a per-method script and records what it
+    /// was asked, so a test can assert on the *wire* rather than on internals.
+    struct ScriptedTransport {
+        name: String,
+        replies: Mutex<HashMap<String, VecDeque<std::result::Result<Value, JsonRpcError>>>>,
+        seen: Mutex<Vec<JsonRpcRequest>>,
+        notifications: Mutex<Vec<String>>,
+        headers_seen: Mutex<Vec<(String, Vec<(String, String)>)>>,
+        dialect: std::sync::Mutex<Option<McpDialect>>,
+        mirrors_headers: bool,
+    }
+
+    impl ScriptedTransport {
+        fn new() -> Self {
+            Self {
+                name: "scripted".to_string(),
+                replies: Mutex::new(HashMap::new()),
+                seen: Mutex::new(Vec::new()),
+                notifications: Mutex::new(Vec::new()),
+                headers_seen: Mutex::new(Vec::new()),
+                dialect: std::sync::Mutex::new(None),
+                mirrors_headers: false,
+            }
+        }
+
+        fn mirroring() -> Self {
+            Self {
+                mirrors_headers: true,
+                ..Self::new()
+            }
+        }
+
+        /// Queue one answer for `method`. Answers are consumed in order, so a
+        /// method can behave differently on a retry.
+        async fn push(
+            self: &Arc<Self>,
+            method: &str,
+            reply: std::result::Result<Value, JsonRpcError>,
+        ) {
+            self.replies
+                .lock()
+                .await
+                .entry(method.to_string())
+                .or_default()
+                .push_back(reply);
+        }
+
+        /// The default script for a modern server: discovery plus an empty tool
+        /// list, which is what `handshake` fetches before returning.
+        async fn script_modern(self: &Arc<Self>) {
+            self.push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": [MCP_MODERN_PROTOCOL_VERSION],
+                    "capabilities": {"tools": {}},
+                    "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "s", "version": "1"}}
+                })),
+            )
+            .await;
+            self.push(
+                "tools/list",
+                Ok(json!({"resultType": "complete", "tools": []})),
+            )
+            .await;
+        }
+
+        /// The default script for a legacy server: `server/discover` is an
+        /// unknown method, then the handshake proceeds.
+        async fn script_legacy(self: &Arc<Self>) {
+            self.push(
+                DISCOVER_METHOD,
+                Err(JsonRpcError {
+                    code: -32601,
+                    message: "Method not found".to_string(),
+                    data: None,
+                }),
+            )
+            .await;
+            self.push(
+                "initialize",
+                Ok(json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "s", "version": "1"}
+                })),
+            )
+            .await;
+            self.push("tools/list", Ok(json!({"tools": []}))).await;
+        }
+
+        async fn methods_seen(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .await
+                .iter()
+                .map(|r| r.method.clone())
+                .collect()
+        }
+
+        async fn requests_for(&self, method: &str) -> Vec<JsonRpcRequest> {
+            self.seen
+                .lock()
+                .await
+                .iter()
+                .filter(|r| r.method == method)
+                .cloned()
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl McpTransport for ScriptedTransport {
+        async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+            self.seen.lock().await.push(request.clone());
+
+            let reply = self
+                .replies
+                .lock()
+                .await
+                .get_mut(&request.method)
+                .and_then(VecDeque::pop_front);
+
+            let (result, error) = match reply {
+                Some(Ok(value)) => (Some(value), None),
+                Some(Err(e)) => (None, Some(e)),
+                None => (
+                    None,
+                    Some(JsonRpcError {
+                        code: -32601,
+                        message: format!("no scripted reply for {}", request.method),
+                        data: None,
+                    }),
+                ),
+            };
+
+            Ok(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Some(request.id),
+                result,
+                error,
+            })
+        }
+
+        async fn send_request_with_headers(
+            &self,
+            request: &JsonRpcRequest,
+            extra_headers: &[(String, String)],
+        ) -> Result<JsonRpcResponse> {
+            self.headers_seen
+                .lock()
+                .await
+                .push((request.method.clone(), extra_headers.to_vec()));
+            self.send_request(request).await
+        }
+
+        async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
+            self.notifications
+                .lock()
+                .await
+                .push(notification.method.clone());
+            Ok(())
+        }
+
+        async fn is_alive(&self) -> bool {
+            true
+        }
+
+        async fn close(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn server_name(&self) -> &str {
+            &self.name
+        }
+
+        fn mirrors_param_headers(&self) -> bool {
+            self.mirrors_headers
+        }
+
+        fn set_dialect(&self, dialect: &McpDialect) {
+            *self.dialect.lock().unwrap_or_else(|e| e.into_inner()) = Some(dialect.clone());
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    async fn connect_with(transport: &Arc<ScriptedTransport>) -> Result<McpServerConnection> {
+        McpServerConnection::with_transport(
+            "scripted",
+            Arc::clone(transport) as Arc<dyn McpTransport>,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn modern_server_skips_the_handshake() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_modern().await;
+
+        let conn = connect_with(&transport).await.unwrap();
+
+        assert_eq!(
+            conn.dialect(),
+            Some(&McpDialect::Modern {
+                version: MCP_MODERN_PROTOCOL_VERSION.to_string()
+            })
+        );
+        let methods = transport.methods_seen().await;
+        assert!(!methods.contains(&"initialize".to_string()), "{methods:?}");
+        assert!(transport.notifications.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn modern_requests_all_carry_the_required_meta() {
+        // There is no handshake left to state the protocol version once, so
+        // every single request has to carry it or the server rejects it.
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_modern().await;
+
+        connect_with(&transport).await.unwrap();
+
+        let seen = transport.seen.lock().await;
+        assert!(!seen.is_empty());
+        for request in seen.iter() {
+            let meta = request
+                .params
+                .as_ref()
+                .and_then(|p| p.get(META_FIELD))
+                .unwrap_or_else(|| panic!("{} carried no _meta", request.method));
+            assert_eq!(meta[META_PROTOCOL_VERSION], MCP_MODERN_PROTOCOL_VERSION);
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_server_falls_back_to_the_handshake() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_legacy().await;
+
+        let conn = connect_with(&transport).await.unwrap();
+
+        assert_eq!(
+            conn.dialect(),
+            Some(&McpDialect::Legacy {
+                version: "2025-03-26".to_string()
+            })
+        );
+        let methods = transport.methods_seen().await;
+        assert!(methods.contains(&"initialize".to_string()), "{methods:?}");
+        assert_eq!(
+            transport.notifications.lock().await.as_slice(),
+            ["notifications/initialized"]
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_requests_carry_no_modern_meta() {
+        // The legacy path must be byte-identical to what it was before the
+        // modern one existed.
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_legacy().await;
+
+        connect_with(&transport).await.unwrap();
+
+        for request in transport.requests_for("tools/list").await {
+            let carries_meta = request
+                .params
+                .as_ref()
+                .is_some_and(|p| p.get(META_FIELD).is_some());
+            assert!(!carries_meta, "legacy tools/list carried _meta");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_spec_reserved_error_identifies_a_modern_server() {
+        // Even when discovery fails, a spec-reserved code proves the peer is
+        // modern — falling back to `initialize` there would be wrong.
+        let transport = Arc::new(ScriptedTransport::new());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Err(JsonRpcError {
+                    code: crate::mcp::modern::error_codes::UNSUPPORTED_PROTOCOL_VERSION,
+                    message: "Unsupported protocol version".to_string(),
+                    data: Some(json!({
+                        "supported": [MCP_MODERN_PROTOCOL_VERSION, "2025-11-25"],
+                        "requested": "1900-01-01"
+                    })),
+                }),
+            )
+            .await;
+        transport
+            .push(
+                "tools/list",
+                Ok(json!({"resultType": "complete", "tools": []})),
+            )
+            .await;
+
+        let conn = connect_with(&transport).await.unwrap();
+
+        assert!(conn.dialect().is_some_and(McpDialect::is_modern));
+        assert!(!transport
+            .methods_seen()
+            .await
+            .contains(&"initialize".to_string()));
+    }
+
+    #[tokio::test]
+    async fn an_era_settled_by_an_error_still_learns_the_capabilities() {
+        // A spec-reserved error proves the peer is modern but says nothing
+        // about what it serves. Leaving capabilities empty would silently skip
+        // resources and prompts for the life of the connection.
+        let transport = Arc::new(ScriptedTransport::new());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Err(JsonRpcError {
+                    code: crate::mcp::modern::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY,
+                    message: "need something".to_string(),
+                    data: None,
+                }),
+            )
+            .await;
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": [MCP_MODERN_PROTOCOL_VERSION],
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "instructions": "use me well"
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "tools/list",
+                Ok(json!({"resultType": "complete", "tools": []})),
+            )
+            .await;
+        transport
+            .push(
+                "resources/list",
+                Ok(json!({
+                    "resultType": "complete",
+                    "resources": [{"uri": "file:///a", "name": "a"}]
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "resources/templates/list",
+                Ok(json!({"resultType": "complete", "resourceTemplates": []})),
+            )
+            .await;
+
+        let conn = connect_with(&transport).await.unwrap();
+
+        assert!(conn.dialect().is_some_and(McpDialect::is_modern));
+        assert_eq!(conn.instructions().await.as_deref(), Some("use me well"));
+        // The resources capability was learned on the second ask, so the
+        // resource list was actually fetched.
+        assert_eq!(conn.list_resources().await.len(), 1);
+        assert!(!transport
+            .methods_seen()
+            .await
+            .contains(&"initialize".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_server_offering_only_older_revisions_uses_the_handshake() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": ["2025-06-18", "2025-11-25"]
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "initialize",
+                Ok(json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {}
+                })),
+            )
+            .await;
+        transport.push("tools/list", Ok(json!({"tools": []}))).await;
+
+        let conn = connect_with(&transport).await.unwrap();
+
+        assert!(conn.dialect().is_some_and(|d| !d.is_modern()));
+    }
+
+    #[tokio::test]
+    async fn no_shared_revision_fails_the_connection_with_the_reason() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": ["2099-01-01"]
+                })),
+            )
+            .await;
+
+        let Err(err) = connect_with(&transport).await else {
+            panic!("connecting to a server with no shared revision should fail");
+        };
+        let err = err.to_string();
+
+        assert!(err.contains("2099-01-01"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn mrtr_retries_with_the_answers_and_a_fresh_id() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_modern().await;
+        // First attempt: the server needs an LLM completion. Second: done.
+        transport
+            .push(
+                "tools/call",
+                Ok(json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        "capital": {
+                            "method": "sampling/createMessage",
+                            "params": {
+                                "messages": [{
+                                    "role": "user",
+                                    "content": {"type": "text", "text": "capital of France?"}
+                                }],
+                                "maxTokens": 50
+                            }
+                        }
+                    },
+                    "requestState": "opaque-blob"
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "tools/call",
+                Ok(json!({
+                    "resultType": "complete",
+                    "content": [{"type": "text", "text": "done"}]
+                })),
+            )
+            .await;
+
+        let sampling = Arc::new(SamplingHandler::new());
+        sampling
+            .set_callback(|_req| async { Ok(SamplingHandler::text_response("Paris")) })
+            .await;
+        let conn = McpServerConnection::with_transport(
+            "scripted",
+            Arc::clone(&transport) as Arc<dyn McpTransport>,
+            Some(sampling),
+        )
+        .await
+        .unwrap();
+
+        let result = conn.call_tool("t", json!({"x": 1})).await.unwrap();
+        assert_eq!(result["content"][0]["text"], "done");
+
+        let calls = transport.requests_for("tools/call").await;
+        assert_eq!(calls.len(), 2, "expected an initial call and one retry");
+
+        // Independent requests, so the ids must differ.
+        assert_ne!(calls[0].id, calls[1].id);
+
+        let first = calls[0].params.as_ref().unwrap();
+        assert!(first.get("inputResponses").is_none());
+        assert!(first.get("requestState").is_none());
+
+        let retry = calls[1].params.as_ref().unwrap();
+        assert_eq!(retry["requestState"], "opaque-blob");
+        assert_eq!(retry["inputResponses"]["capital"]["role"], "assistant");
+        assert_eq!(
+            retry["inputResponses"]["capital"]["content"]["text"],
+            "Paris"
+        );
+        // The original arguments must survive the retry.
+        assert_eq!(retry["arguments"]["x"], 1);
+    }
+
+    #[tokio::test]
+    async fn input_requests_without_a_sampler_fail_with_a_reason() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_modern().await;
+        transport
+            .push(
+                "tools/call",
+                Ok(json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        "k": {"method": "sampling/createMessage", "params": {}}
+                    }
+                })),
+            )
+            .await;
+
+        let conn = connect_with(&transport).await.unwrap();
+        let err = conn
+            .call_tool("t", json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no sampling handler"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_finishes_is_bounded() {
+        let transport = Arc::new(ScriptedTransport::new());
+        transport.script_modern().await;
+        // Always asks for more, never produces a result.
+        for _ in 0..(mrtr::MAX_ROUNDS + 2) {
+            transport
+                .push(
+                    "tools/call",
+                    Ok(json!({
+                        "resultType": "input_required",
+                        "requestState": "again"
+                    })),
+                )
+                .await;
+        }
+
+        let conn = connect_with(&transport).await.unwrap();
+        let err = conn
+            .call_tool("t", json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("did not complete"), "{err}");
+        assert_eq!(
+            transport.requests_for("tools/call").await.len(),
+            mrtr::MAX_ROUNDS
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_with_a_malformed_header_annotation_is_excluded() {
+        let transport = Arc::new(ScriptedTransport::mirroring());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": [MCP_MODERN_PROTOCOL_VERSION],
+                    "capabilities": {"tools": {}}
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "tools/list",
+                Ok(json!({
+                    "resultType": "complete",
+                    "tools": [
+                        {
+                            "name": "good",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "region": {"type": "string", "x-mcp-header": "Region"}
+                                }
+                            }
+                        },
+                        {
+                            "name": "bad",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ratio": {"type": "number", "x-mcp-header": "Ratio"}
+                                }
+                            }
+                        }
+                    ]
+                })),
+            )
+            .await;
+
+        let conn = connect_with(&transport).await.unwrap();
+        let names: Vec<String> = conn
+            .list_tools()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+
+        // One bad definition must not cost the server its working tools.
+        assert_eq!(names, vec!["scripted:good".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn annotated_parameters_are_mirrored_into_headers() {
+        let transport = Arc::new(ScriptedTransport::mirroring());
+        transport
+            .push(
+                DISCOVER_METHOD,
+                Ok(json!({
+                    "resultType": "complete",
+                    "supportedVersions": [MCP_MODERN_PROTOCOL_VERSION],
+                    "capabilities": {"tools": {}}
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "tools/list",
+                Ok(json!({
+                    "resultType": "complete",
+                    "tools": [{
+                        "name": "execute_sql",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "region": {"type": "string", "x-mcp-header": "Region"},
+                                "query": {"type": "string"}
+                            }
+                        }
+                    }]
+                })),
+            )
+            .await;
+        transport
+            .push(
+                "tools/call",
+                Ok(json!({"resultType": "complete", "content": []})),
+            )
+            .await;
+
+        let conn = connect_with(&transport).await.unwrap();
+        conn.call_tool(
+            "execute_sql",
+            json!({"region": "us-west1", "query": "SELECT 1"}),
+        )
+        .await
+        .unwrap();
+
+        let headers = transport.headers_seen.lock().await;
+        let call = headers
+            .iter()
+            .find(|(method, _)| method == "tools/call")
+            .expect("tools/call was not sent");
+        assert_eq!(
+            call.1,
+            vec![("mcp-param-region".to_string(), "us-west1".to_string())]
+        );
+    }
+
     // Note: Most tests require an actual MCP server to be available
     // These are basic structure tests
 
@@ -917,6 +2163,7 @@ mod tests {
             "/nonexistent/mcp/server",
             &[],
             &HashMap::new(),
+            None,
             None,
             None,
         )

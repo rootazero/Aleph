@@ -108,7 +108,9 @@ impl AlephToolDyn for McpLoginTool {
             let metadata = provider.discover_metadata().await?;
 
             // Reuse a previously registered client or register dynamically.
-            let client_info = match storage.get_client_info(&server_id).await? {
+            // Credentials are only reused when this same authorization server
+            // issued them; a changed issuer re-registers instead.
+            let client_info = match provider.client_info_for(&metadata).await? {
                 Some(info) => info,
                 None => provider.register_client(&metadata).await?,
             };
@@ -130,6 +132,7 @@ impl AlephToolDyn for McpLoginTool {
                                 &client_info.client_id,
                                 &cb.code,
                                 &cb.state,
+                                cb.iss.as_deref(),
                             )
                             .await
                         {

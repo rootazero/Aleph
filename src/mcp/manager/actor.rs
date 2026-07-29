@@ -263,6 +263,20 @@ impl McpManagerActor {
                 if let Some(health) = self.health_states.get_mut(&server_id) {
                     health.record_success();
                 }
+
+                // Revision 2026-07-28 dropped the always-on server-to-client
+                // stream, so for a client that has not opened a
+                // `subscriptions/listen` stream a lapsed cache TTL is the only
+                // signal that a list may have moved. Anything that really did
+                // change is fed into the same path a server-sent notification
+                // takes, so there is one publisher rather than two.
+                for kind in changed_list_kinds(client.refresh_expired_lists().await) {
+                    let _ = self.cmd_tx.try_send(McpCommand::ServerListChanged {
+                        // rust-doctor-disable-next-line excessive-clone
+                        server_id: server_id.clone(),
+                        kind,
+                    });
+                }
             } else if let Some(health) = self.health_states.get_mut(&server_id) {
                 health.record_failure(
                     "health probe: transport not alive",
@@ -1054,6 +1068,24 @@ impl McpManagerActor {
         tracing::info!("Configuration reloaded");
         Ok(())
     }
+}
+
+/// Map a TTL-driven refresh report onto the list-changed kinds it implies.
+///
+/// Resource templates share the resources signal, which is why
+/// [`ChangedLists`] carries no separate flag for them.
+fn changed_list_kinds(changed: crate::mcp::external::ChangedLists) -> Vec<ListChangeKind> {
+    let mut kinds = Vec::new();
+    if changed.tools {
+        kinds.push(ListChangeKind::Tools);
+    }
+    if changed.resources {
+        kinds.push(ListChangeKind::Resources);
+    }
+    if changed.prompts {
+        kinds.push(ListChangeKind::Prompts);
+    }
+    kinds
 }
 
 /// Map an MCP notification method to the capability list it changed, if any.

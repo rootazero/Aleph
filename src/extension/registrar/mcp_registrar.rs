@@ -333,6 +333,11 @@ async fn spawn_inline(
         &config.env,
         None,
         None,
+        // Agent-scoped inline servers run outside `McpClient` and so have no
+        // sampling handler to hand them. Passing `None` keeps the declared
+        // capabilities honest: the server is never asked for something this
+        // connection could only answer with an error.
+        None,
     )
     .await
     .map_err(|e| McpScopeError::InlineStartup {

@@ -80,6 +80,15 @@ pub struct ClientInfo {
     pub client_id_issued_at: Option<i64>,
     /// Unix timestamp when `client_secret` expires (0 = never)
     pub client_secret_expires_at: Option<i64>,
+    /// The authorization server that issued these credentials.
+    ///
+    /// Client credentials are scoped to their issuer: presenting them to a
+    /// different authorization server leaks a client identity across trust
+    /// boundaries, so a change of issuer must force a re-registration rather
+    /// than a reuse. `None` on entries written before this field existed, and
+    /// on servers whose metadata advertises no `issuer`.
+    #[serde(default)]
+    pub issuer: Option<String>,
 }
 
 // Manual Debug impl: client_secret is a credential — never log it.
@@ -93,6 +102,7 @@ impl std::fmt::Debug for ClientInfo {
             )
             .field("client_id_issued_at", &self.client_id_issued_at)
             .field("client_secret_expires_at", &self.client_secret_expires_at)
+            .field("issuer", &self.issuer)
             .finish()
     }
 }
@@ -112,6 +122,15 @@ pub struct OAuthEntry {
     pub oauth_state: Option<String>,
     /// The server URL this entry is for
     pub server_url: Option<String>,
+    /// The authorization server issuer recorded when the in-flight
+    /// authorization began.
+    ///
+    /// RFC 9207: when the authorization response carries an `iss` parameter the
+    /// client must check it against this value *before* redeeming the code, so
+    /// a code minted by one authorization server cannot be redeemed as if it
+    /// came from another.
+    #[serde(default)]
+    pub issuer: Option<String>,
 }
 
 // Manual Debug impl: code_verifier (PKCE secret) and oauth_state (CSRF token)
@@ -130,6 +149,7 @@ impl std::fmt::Debug for OAuthEntry {
                 &self.oauth_state.as_ref().map(|_| "<redacted>"),
             )
             .field("server_url", &self.server_url)
+            .field("issuer", &self.issuer)
             .finish()
     }
 }
@@ -591,6 +611,7 @@ mod tests {
             client_secret: Some("secret456".to_string()),
             client_id_issued_at: Some(1234567890),
             client_secret_expires_at: None,
+            issuer: Some("https://example.com".to_string()),
         };
 
         storage
