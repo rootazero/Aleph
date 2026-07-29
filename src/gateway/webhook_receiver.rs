@@ -104,7 +104,6 @@ impl WebhookReceiver {
     /// mount, is skipped with a warning — `Router::merge` panics on duplicate
     /// routes and `path` is an operator-writable config field, so a typo must
     /// not take the daemon down at boot.
-    #[must_use]
     pub fn router(mounts: Vec<WebhookMount>) -> Router {
         let mut router = Router::new();
         let mut mounted: Vec<String> = Vec::new();
@@ -584,5 +583,113 @@ mod tests {
             rx.try_recv().is_err(),
             "rejected request must publish nothing"
         );
+    }
+
+    // --- Reserved-path guard tests ---
+
+    #[tokio::test]
+    async fn reserved_path_is_skipped_not_panicked() {
+        use crate::gateway::channel::ChannelState;
+
+        let state = ChannelState::new(16);
+        let handler = Arc::new(MockWebhookHandler {
+            secret: "s".to_string(),
+            handler_path: "/ws".to_string(),
+        });
+
+        // Must not panic, and must produce a router with no /ws route of its own
+        // (merging one into the gateway router is what would panic at boot).
+        let router = WebhookReceiver::router(vec![WebhookMount {
+            handler,
+            inbound: state.sender(),
+        }]);
+
+        // A router with zero routes 404s everything.
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/ws")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn duplicate_webhook_paths_are_deduped() {
+        use crate::gateway::channel::ChannelState;
+
+        let state_a = ChannelState::new(16);
+        let state_b = ChannelState::new(16);
+        let mut rx_a = state_a.inbound_subscribe();
+        let mut rx_b = state_b.inbound_subscribe();
+
+        let mounts = vec![
+            WebhookMount {
+                handler: Arc::new(MockWebhookHandler {
+                    secret: "s".to_string(),
+                    handler_path: "/webhook/dup".to_string(),
+                }),
+                inbound: state_a.sender(),
+            },
+            WebhookMount {
+                handler: Arc::new(MockWebhookHandler {
+                    secret: "s".to_string(),
+                    handler_path: "/webhook/dup".to_string(),
+                }),
+                inbound: state_b.sender(),
+            },
+        ];
+
+        // Must not panic on the duplicate route.
+        let router = WebhookReceiver::router(mounts);
+
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let body = br#"{"text":"dup"}"#.to_vec();
+        let sig = WebhookReceiver::compute_signature("s", &body);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/dup")
+                    .header("x-webhook-signature", sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // First mount wins; the second was skipped.
+        assert!(rx_a.try_recv().is_ok(), "first mount must be the live one");
+        assert!(
+            rx_b.try_recv().is_err(),
+            "second mount must have been skipped"
+        );
+    }
+
+    #[test]
+    fn reserved_route_matches_prefix_segments_only() {
+        use crate::gateway::server::is_reserved_route;
+
+        assert!(is_reserved_route("/ws"));
+        assert!(is_reserved_route("/health"));
+        assert!(is_reserved_route("/v1/chat/completions"));
+        assert!(is_reserved_route("/a2a/stream"));
+        assert!(is_reserved_route("/artifact/x/y/z"));
+        assert!(is_reserved_route("/.well-known/agent-card.json"));
+
+        // A path that merely starts with the same letters is NOT reserved.
+        assert!(!is_reserved_route("/wsx"));
+        assert!(!is_reserved_route("/healthcheck"));
+        assert!(!is_reserved_route("/webhook/generic"));
     }
 }

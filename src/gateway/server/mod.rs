@@ -386,6 +386,32 @@ pub struct GatewayServer {
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
+/// Path prefixes the gateway router owns.
+///
+/// Keep this beside `build_router()` — a route added there and not added here
+/// becomes a boot panic waiting to happen, because `Router::merge` panics on
+/// duplicate routes and webhook paths come from operator-writable config.
+pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
+    "/ws",
+    "/health",
+    "/ready",
+    "/metrics",
+    "/artifact",
+    "/v1",
+    "/a2a",
+    "/.well-known",
+];
+
+/// Whether `path` collides with a route the gateway itself serves.
+///
+/// Matches on whole path segments: `/wsx` is not reserved even though `/ws` is.
+#[must_use]
+pub fn is_reserved_route(path: &str) -> bool {
+    RESERVED_ROUTE_PREFIXES
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+}
+
 impl GatewayServer {
     /// Create a new Gateway server with default configuration
     pub fn new(addr: SocketAddr) -> Self {
