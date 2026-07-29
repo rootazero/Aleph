@@ -199,6 +199,15 @@ pub async fn run_dispatch_and_drain_classified(
     locale: Locale,
     occupancy_out: &std::sync::Mutex<Option<RunContextOccupancy>>,
 ) -> Result<String, DispatchFailure> {
+    // Session this run's provider dials are witnessed under. Captured before
+    // `req` moves into the dispatch; the drain below reads the witness at the
+    // terminal frame, and the second copy serves the path where the drain never
+    // saw that frame.
+    // rust-doctor-disable-next-line excessive-clone
+    let witness_session = req.session_hint.clone();
+    // rust-doctor-disable-next-line excessive-clone
+    let witness_session_for_fallback = witness_session.clone();
+
     // 1. Dispatch.
     let handle = orchestrator.dispatch(req).await.map_err(map_flow_error)?;
 
@@ -232,6 +241,15 @@ pub async fn run_dispatch_and_drain_classified(
                 match events.recv().await {
                     Ok(event) => {
                         let is_complete = matches!(event, FlowStreamEvent::Complete(_));
+                        // The route correction has to precede the terminal
+                        // frame, not follow the dispatch: channel replies append
+                        // their fallback notice while flushing on `Complete`, so
+                        // a `ModelResolved` emitted after this point sets
+                        // `fallback_info` that nothing will ever read.
+                        if is_complete {
+                            emit_route_correction(&emitter, &run_id, witness_session.as_deref())
+                                .await;
+                        }
                         match emit_flow_event(event, &emitter, &run_id, &drain_state).await {
                             Ok(()) => {
                                 if is_complete {
@@ -316,6 +334,10 @@ pub async fn run_dispatch_and_drain_classified(
     let complete_forwarded = drain.await.unwrap_or(false);
     propagate.abort();
     if !complete_forwarded {
+        // The drain never reached its correction either, so make it here — still
+        // ahead of the terminal frame, which is the ordering channel replies
+        // depend on. A no-op if the drain already took the witness.
+        emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
         // No plan: this fallback fires precisely when the drain never saw the
         // `Complete` frame, so its latched execution list is unavailable here.
         let summary = super::event_drain::build_run_summary(&outcome, None);
@@ -358,6 +380,79 @@ pub async fn run_dispatch_and_drain_classified(
     Ok(response)
 }
 
+/// Emit the `ModelResolved` correction, if this run's provider dials ended up
+/// somewhere other than where the walk set out for.
+///
+/// The run-start `ModelResolved` states what was *asked for*; it is emitted
+/// before anything has been dialed, so it cannot know about a migration. This is
+/// the other half: the failover walk records what actually answered
+/// ([`route_witness`](crate::providers::route_witness)) and this turns that into
+/// the `is_fallback` flag every user-visible fallback notice gates on — Panel,
+/// TUI, CLI and the channel reply line.
+///
+/// Silent when nothing deviated, which is the overwhelmingly common case: all
+/// four surfaces render nothing on the happy path, and announcing the model on
+/// every run would be noise.
+///
+/// Taking (not reading) the witness is deliberate — it keeps the map bounded and
+/// stops one run's migration from being re-announced by the next.
+async fn emit_route_correction(
+    emitter: &Arc<dyn EventEmitter>,
+    run_id: &str,
+    session: Option<&str>,
+) {
+    let Some(session) = session else {
+        return;
+    };
+    let Some(witness) = crate::providers::route_witness::take(session) else {
+        return;
+    };
+    let Some(model_info) = correction_for(&witness) else {
+        return;
+    };
+    tracing::info!(
+        run_id,
+        original = %witness.first.label(),
+        served_provider = %witness.served.provider,
+        served_model = %witness.served.label(),
+        "run was served by a fallback endpoint"
+    );
+    if let Err(e) = emitter
+        .emit(crate::gateway::event_emitter::StreamEvent::ModelResolved {
+            run_id: run_id.to_string(),
+            model_info,
+        })
+        .await
+    {
+        tracing::warn!(
+            run_id,
+            error = %e,
+            "failed to emit the fallback ModelResolved correction"
+        );
+    }
+}
+
+/// Turn a route witness into the `ModelInfo` the correction carries, or `None`
+/// when the run was served by what it set out for.
+///
+/// Split out of [`emit_route_correction`] so the decision is testable without an
+/// emitter: this is the sole producer of `is_fallback: true` in the whole
+/// system, and every user-visible fallback notice hangs off it.
+fn correction_for(
+    witness: &crate::providers::route_witness::RouteWitness,
+) -> Option<crate::providers::health::ModelInfo> {
+    if !witness.deviated() {
+        return None;
+    }
+    Some(crate::providers::health::ModelInfo {
+        model: witness.served.label(),
+        // rust-doctor-disable-next-line excessive-clone
+        provider: witness.served.provider.clone(),
+        is_fallback: true,
+        original_model: Some(witness.first.label()),
+    })
+}
+
 fn map_flow_error(err: FlowError) -> DispatchFailure {
     match err {
         FlowError::Cancelled => DispatchFailure::Cancelled,
@@ -365,5 +460,83 @@ fn map_flow_error(err: FlowError) -> DispatchFailure {
             DispatchFailure::Transient { provider, message }
         }
         other => DispatchFailure::Fatal(format!("flow: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod route_correction_tests {
+    use super::correction_for;
+    use crate::providers::route_witness::{Dialed, RouteWitness};
+
+    fn witness(first: Dialed, served: Dialed) -> RouteWitness {
+        RouteWitness { first, served }
+    }
+
+    #[test]
+    fn a_run_served_by_its_first_choice_produces_no_correction() {
+        // The happy path, and the overwhelmingly common one. Emitting here
+        // would announce the model on every single run across four surfaces.
+        let w = witness(
+            Dialed::new("openai", Some("gpt-5".into())),
+            Dialed::new("openai", Some("gpt-5".into())),
+        );
+        assert!(correction_for(&w).is_none());
+    }
+
+    #[test]
+    fn a_provider_migration_names_both_ends() {
+        let w = witness(
+            Dialed::new("openai", Some("gpt-5".into())),
+            Dialed::new("anthropic", Some("claude-sonnet-5".into())),
+        );
+        let info = correction_for(&w).expect("a migration must produce a correction");
+        assert!(info.is_fallback, "this is the only producer of the flag");
+        assert_eq!(info.provider, "anthropic");
+        assert_eq!(info.model, "claude-sonnet-5");
+        assert_eq!(info.original_model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn a_sibling_model_migration_keeps_the_provider_and_still_reports() {
+        // Same endpoint, different model — the user still did not get what the
+        // walk set out for, so the notice is warranted.
+        let w = witness(
+            Dialed::new("openai", Some("gpt-5".into())),
+            Dialed::new("openai", Some("gpt-5-mini".into())),
+        );
+        let info = correction_for(&w).expect("a sibling-model migration is a deviation");
+        assert_eq!(info.provider, "openai");
+        assert_eq!(info.model, "gpt-5-mini");
+        assert_eq!(info.original_model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn a_default_model_endpoint_is_labelled_not_left_blank() {
+        // An empty model list on a slot means "let the provider choose". There
+        // is no model id to name, and naming the requested one would be a lie —
+        // so the label says what actually happened instead of rendering an
+        // empty string into the notice.
+        let w = witness(
+            Dialed::new("openai", Some("gpt-5".into())),
+            Dialed::new("ollama", None),
+        );
+        let info = correction_for(&w).expect("deviation");
+        assert_eq!(info.model, "ollama's default model");
+        assert_eq!(info.original_model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn the_same_model_on_another_provider_still_reports() {
+        // Two providers serving the same model id (e.g. openai + azure). The
+        // model labels match, so the three renderers that guard on
+        // `original != model` drop the arrow — but the notice must still fire,
+        // because the endpoint changed.
+        let w = witness(
+            Dialed::new("openai", Some("gpt-4o".into())),
+            Dialed::new("azure", Some("gpt-4o".into())),
+        );
+        let info = correction_for(&w).expect("a provider change is a deviation");
+        assert_eq!(info.provider, "azure");
+        assert_eq!(info.original_model.as_deref(), Some("gpt-4o"));
     }
 }

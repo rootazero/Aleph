@@ -369,13 +369,21 @@ impl EventEmitter for ReplyEmitter {
                     self.buffer.lock().await.push_str(&notice);
                 }
 
-                // Append fallback notice for non-Panel channels (Telegram, CLI, etc.)
+                // Append fallback notice for non-Panel channels (Telegram, CLI, etc.).
+                // The arrow is dropped when the model id is unchanged — the run
+                // moved to a different *provider* serving the same id, and
+                // "gpt-4o → gpt-4o" reads as a bug. Same guard the TUI and CLI
+                // renderers already apply; this one lacked it because until the
+                // route witness landed, nothing could set `is_fallback` truthfully
+                // and the branch never actually ran.
                 if let Some(info) = self.fallback_info.lock().await.take() {
-                    let original = info.original_model.as_deref().unwrap_or("unknown");
-                    let notice = format!(
-                        "\n\n\u{26a1} {} \u{2192} {} ({})",
-                        original, info.model, info.provider,
-                    );
+                    let head = match info.original_model.as_deref() {
+                        Some(orig) if orig != info.model => {
+                            format!("{orig} \u{2192} {}", info.model)
+                        }
+                        _ => info.model.clone(),
+                    };
+                    let notice = format!("\n\n\u{26a1} {head} ({})", info.provider);
                     self.buffer.lock().await.push_str(&notice);
                 }
 

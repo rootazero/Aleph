@@ -493,31 +493,17 @@ async fn delete_provider_inner(
 // Test
 // ============================================================================
 
-/// Test a provider connection (without health reset)
-pub async fn handle_test_no_registry(
-    request: JsonRpcRequest,
-    config_store: Arc<RwLock<Config>>,
-    vault: Arc<SharedTokenManager>,
-) -> JsonRpcResponse {
-    handle_test_inner(request, config_store, vault, None).await
-}
-
-/// Test a provider connection (with health reset on success)
+/// Test a provider connection, resetting its circuit breaker on success.
+///
+/// This used to come in two variants — one taking the `MultiProviderRegistry`
+/// and one without — because the reset went through that registry's own health
+/// map. The breaker that actually gates dialing is reached through the process
+/// route-observability handle instead, so the registry is not needed here and
+/// the split collapsed with it.
 pub async fn handle_test(
     request: JsonRpcRequest,
     config_store: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
-    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
-) -> JsonRpcResponse {
-    handle_test_inner(request, config_store, vault, Some(&multi_registry)).await
-}
-
-/// Shared implementation for testing a provider connection
-async fn handle_test_inner(
-    request: JsonRpcRequest,
-    config_store: Arc<RwLock<Config>>,
-    vault: Arc<SharedTokenManager>,
-    multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
 ) -> JsonRpcResponse {
     let params: TestParams = match parse_params(&request) {
         Ok(p) => p,
@@ -590,16 +576,12 @@ async fn handle_test_inner(
                     error!(error = %e, "Failed to save config after test");
                 }
             }
-            // Reset health to Healthy after successful connection test.
-            if let Some(registry) = multi_registry {
-                use crate::thinker::ProviderRegistry;
-                registry.reset_health(name);
-            }
-            // The registry's health map only feeds the `ModelResolved` badge;
-            // the map that decides whether a request is even *dialed* is the
-            // failover circuit breaker. Resetting only the first was why a
-            // rotated credential stayed shut out for the full 10-minute
-            // permanent-failure cooldown despite "Test connection" going green.
+            // Reset the circuit breaker that decides whether a request is even
+            // dialed, so a rotated credential is tried again immediately instead
+            // of staying shut out for the full 10-minute permanent-failure
+            // cooldown despite "Test connection" going green. (There used to be
+            // a second reset here, against a registry health map that fed only
+            // the `ModelResolved` badge and gated no dial; that map is gone.)
             if let Some(obs) = crate::providers::route_observe::global_route_observability() {
                 if obs.health.reset(name).await {
                     info!(provider = %name, "connection test passed; failover circuit reset");
@@ -917,9 +899,19 @@ async fn set_default_provider_inner(
                 if let Err(e) = registry.set_default(&name) {
                     error!(name = %name, error = %e, "Failed to set default in multi-registry");
                 } else {
-                    // Reset health to Healthy when provider is set as default
-                    use crate::thinker::ProviderRegistry;
-                    registry.reset_health(&name);
+                    // Clear the breaker that gates dialing, so a provider
+                    // promoted to default is actually tried. This used to reset
+                    // the registry's own health map instead — which fed only the
+                    // `ModelResolved` badge and gated nothing — so promoting a
+                    // provider whose circuit was open left it skipped for the
+                    // rest of the cooldown. Same fix, and same reason, as the
+                    // connection-test path above.
+                    if let Some(obs) = crate::providers::route_observe::global_route_observability()
+                    {
+                        if obs.health.reset(&name).await {
+                            info!(name = %name, "set as default; failover circuit reset");
+                        }
+                    }
                     info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
                 }
             }
