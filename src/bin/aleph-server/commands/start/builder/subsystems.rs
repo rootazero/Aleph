@@ -487,6 +487,40 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
+    // Mount webhook ingestion for every channel that receives over HTTP POST.
+    //
+    // Runs here, after every channel has started, because a channel only
+    // materialises its handler in `start()`. Without this block the generic
+    // webhook channel starts, reports Connected, and is deaf — the handler it
+    // built has no HTTP surface. (That was the state until 2026-07-29.)
+    {
+        use alephcore::gateway::{WebhookMount, WebhookReceiver};
+
+        let mut mounts: Vec<WebhookMount> = Vec::new();
+        for info in channel_registry.list().await {
+            let Some(handle) = channel_registry.get(&info.id).await else {
+                continue;
+            };
+            let channel = handle.read().await;
+            if let Some(handler) = channel.webhook_handler() {
+                // The channel's OWN broadcast, so start_message_forwarder
+                // still sees the traffic and stamps channel health.
+                mounts.push(WebhookMount {
+                    handler,
+                    inbound: channel.state().sender(),
+                });
+            }
+        }
+
+        if !mounts.is_empty() {
+            let count = mounts.len();
+            server.set_webhook_routes(WebhookReceiver::router(mounts));
+            if !daemon {
+                println!("  Gateway: {count} webhook ingestion route(s) mounted");
+            }
+        }
+    }
+
     channel_registry
 }
 

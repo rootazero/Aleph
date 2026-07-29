@@ -606,6 +606,31 @@ logging, a correlation feature.
 > global request-state registry on every connect, zeroing the `/metrics`
 > request-lifecycle counters and undercounting in-flight requests.
 
+### Channel webhook ingestion
+
+Channels that receive over HTTP POST (`generic webhook`, and future ones)
+return a handler from `Channel::webhook_handler()`. `initialize_channels`
+collects those after every channel has started and hands the resulting router
+to `GatewayServer::set_webhook_routes()`, which merges it in `build_router()`.
+
+- **One port.** Webhook traffic rides the gateway's own listener, so it
+  inherits `[gateway] host`, TLS, and `SecurityHeadersLayer`. `WebhookReceiver`
+  deliberately owns no listener — the version that bound `0.0.0.0` itself would
+  have opened a LAN surface regardless of the configured host.
+- **Auth is per-handler HMAC**, not the login wall — an external platform
+  cannot present a device token. Same posture as `/health`, `/metrics`, `/a2a`:
+  no transport-level auth, no rate limiter (that lives in `MiddlewareChain`,
+  on the JSON-RPC/WS path only).
+- **`path` is operator-writable**, so a collision with a gateway route would
+  panic `Router::merge` at boot. `is_reserved_route()` in `server/mod.rs` skips
+  those with a warning. Add every new gateway route to
+  `RESERVED_ROUTE_PREFIXES` in the same edit.
+- ⚠️ The sink is the channel's **own** `ChannelState::sender()`, not the
+  registry's. Going direct to the registry bypasses
+  `start_message_forwarder`, the only place inbound traffic stamps
+  `health.record_event()` — the channel would receive while health monitoring
+  reported it dead.
+
 ---
 
 ## See Also
