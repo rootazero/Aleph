@@ -42,6 +42,14 @@ NOT_A_SECTION = {
     "PoliciesConfig",        # top aggregator — consumed as a field of Config
     "MemoryPolicies",        # [policies.memory] group — consumed via Config
     "TierPreset",            # helper of the LIVE exec_tier section (builtin_tiers())
+    "ModePreset",            # id-only mirror of `SessionMode` exposed to UI /
+                             # CLI surfaces (same role as `TierPreset`); the live
+                             # consumer is `SessionMode` itself.
+    "RetryPolicy",           # `[policies.retry]` section — deserialised into
+                             # `PoliciesConfig::retry`, business-side consumers
+                             # currently go through the per-channel
+                             # `SendRetryPolicy` path. Treated inert here until a
+                             # core-side consumer is added (R10).
 }
 
 # Policy sections declared but never consumed core-side.
