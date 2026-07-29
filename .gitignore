@@ -84,8 +84,6 @@ Aleph.dmg
 # ==============================================================================
 # Generated tooling output (analysis / scratch dirs)
 # ==============================================================================
-graphify-out/
-**/graphify-out/
 .understand-anything/
 .codegraph/
 .superpowers/
