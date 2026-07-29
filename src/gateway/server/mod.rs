@@ -559,6 +559,7 @@ impl GatewayServer {
     }
 
     /// Mount channel webhook ingestion routes on the shared HTTP surface.
+    /// Idempotent — replaces any previously set webhook routes.
     pub fn set_webhook_routes(&mut self, router: Router) {
         self.webhook_routes = Some(router);
     }
@@ -1070,7 +1071,10 @@ mod tests {
         let server = GatewayServer::new(addr);
         let router = server.build_router();
 
-        // No webhook routes set → the path is not served by the gateway.
+        // No webhook routes set → the request falls through to the
+        // control-plane fallback's `/{*path}` catch-all, which only registers
+        // GET (SPA asset serving). It matches the path but rejects the POST
+        // method, so the route table answers 405, never a webhook handler.
         let response = router
             .oneshot(
                 Request::builder()
@@ -1081,11 +1085,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_ne!(
-            response.status(),
-            StatusCode::OK,
-            "an unset webhook surface must not answer 200"
-        );
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
