@@ -255,12 +255,24 @@ Registered channel: webhook (webhook)
 Inbound router: access tiering registered for 'webhook_qa' (webhook) [tier=guest]
 ```
 
-后果：段名不等于 `webhook` 时，该 channel 的 `busy_input_mode` / `permission_level` /
+后果一：段名不等于 `webhook` 时，该 channel 的 `busy_input_mode` / `permission_level` /
 `default_workspace` / `tool_permissions` / slash-access **全部静默失效**，回落默认值（busy 模式退回
 `Steer`）。同族问题 whatsapp 已修 —— `subsystems.rs` 里那段注释写得很清楚：「The generic factory
 hardcodes the id "whatsapp"; rebuild with the real instance id so the registry keys the channel
-correctly and multi-instance configs are addressable」—— webhook 没有对应的重建分支。本轮 QA 的
-绕法是把配置段命名为 `[channels.webhook]` 让两个 id 重合；**修复本身超出 Task 1–5 范围，单独记账**。
+correctly and multi-instance configs are addressable」—— webhook 当时没有对应的重建分支。本轮 QA 的
+绕法是把配置段命名为 `[channels.webhook]` 让两个 id 重合。
+
+后果二（QA 当时未记录，事后审查补记）：`WebhookChannelFactory::create` 返回的硬编码 id 不只是
+「策略查不到」，还是一个**注册表覆盖 bug**——任意两个 `channel_type = "webhook"` 的配置段都会
+产出同一个 `ChannelId("webhook")`，而 `ChannelRegistry::register` 底层是 `HashMap`
+（`channel_registry.rs:124`），第二个 `register()` 会**静默覆盖**第一个。也就是说配置里写了两个
+webhook 频道，实际只有一个存活，且没有任何错误或警告提示第一个已经消失。
+
+**修复状态：已在整体复审的修复轮中解决**（`gateway: key the webhook channel by its config section
+name`）——`subsystems.rs` 在 whatsapp 分支之后镜像同一模式，为 `channel_type == "webhook"` 重建
+`WebhookChannel::new(&inst.id, wh_config)`，用真实实例 id 替换工厂硬编码的 `"webhook"`。该修复本身
+在 Task 1–5 范围之外，也晚于本节记录的 QA 运行——下面 §9.4 的命令与产物仍是**针对修复前的代码**
+跑的（QA 绕过配置段命名为 `[channels.webhook]`），并未针对本修复重跑；不改写这段历史。
 
 ### 9.4 命令与脚本
 

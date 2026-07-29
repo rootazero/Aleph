@@ -432,6 +432,32 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
+            // The generic factory hardcodes the id "webhook"; rebuild with the
+            // real instance id so the registry keys the channel correctly
+            // (two webhook sections would otherwise both register as
+            // ChannelId("webhook") and the second silently overwrites the
+            // first in the registry's HashMap) and per-channel policy
+            // (busy_input_mode, permission_level, tool_permissions, ...),
+            // which is looked up by this same runtime id, actually applies.
+            if inst.channel_type == "webhook" {
+                match serde_json::from_value::<
+                    alephcore::gateway::interfaces::webhook::WebhookChannelConfig,
+                >(config_with_secrets.clone())
+                {
+                    Ok(wh_config) => {
+                        let wh_channel =
+                            alephcore::gateway::interfaces::webhook::WebhookChannel::new(
+                                &inst.id, wh_config,
+                            );
+                        channel = Box::new(wh_channel);
+                    }
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "webhook channel config parse failed; keeping generic channel with hardcoded id"
+                    ),
+                }
+            }
+
             let channel_id = channel_registry.register(channel).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
