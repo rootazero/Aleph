@@ -154,6 +154,10 @@ pub struct AgentRuntime {
     /// threaded into `SpawnerBase` so a child's Act-phase cap matches the
     /// operator's configured value (including 0/1 = disabled).
     parallel_tool_concurrency: Option<usize>,
+    /// The parent runner's `[context_budget]` config, threaded into
+    /// `SpawnerBase` so each spawned child builds its own budget + compactor +
+    /// preflight pipeline instead of running context-unmanaged.
+    context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
 }
 
 impl AgentRuntime {
@@ -189,6 +193,7 @@ impl AgentRuntime {
             routing_store: None,
             default_max_iterations: None,
             parallel_tool_concurrency: None,
+            context_budget_config: None,
         }
     }
 
@@ -197,6 +202,17 @@ impl AgentRuntime {
     #[must_use]
     pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
         self.default_max_iterations = Some(max_iterations);
+        self
+    }
+
+    /// Wire the parent runner's `[context_budget]` config so every spawned
+    /// child gets its own budget / compactor / preflight pipeline.
+    #[must_use]
+    pub fn with_context_budget_config(
+        mut self,
+        cfg: crate::context::budget::ContextBudgetConfig,
+    ) -> Self {
+        self.context_budget_config = Some(cfg);
         self
     }
 
@@ -517,6 +533,10 @@ impl AgentRuntime {
             // operator's `[tool_service] parallel_tool_concurrency` (0/1 =
             // disabled) instead of the hardcoded config default.
             parallel_tool_concurrency: self.parallel_tool_concurrency,
+            // The parent's `[context_budget]` config, so the child is context-
+            // managed on the same terms (the spawner builds its own instances).
+            // rust-doctor-disable-next-line excessive-clone
+            context_budget_config: self.context_budget_config.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

@@ -1030,6 +1030,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(cap) = orchestrator.harness.parallel_tool_concurrency() {
                     t = t.with_parallel_tool_concurrency(cap);
                 }
+                // Inherit the runner's `[context_budget]` config so a spawned
+                // child builds its OWN budget + compactor + preflight pipeline.
+                // The spawner pinned all three to `None`, so a subagent had no
+                // context management whatsoever: `build_prompt` replays the
+                // whole child log every turn, nothing compacted it, and when the
+                // provider finally said `prompt_too_long` the reactive drain
+                // found no compactor, marked the rescue exhausted, and killed
+                // the run. `None` (mocks / simple engine / `[context_budget]`
+                // disabled) keeps the child unmanaged, matching the main run.
+                if let Some(cfg) = orchestrator.harness.context_budget_config() {
+                    t = t.with_context_budget_config(cfg);
+                }
                 // P3 Stage I — hand subagents the shared plugin-registry handle
                 // so a role declaring `mcp_servers:` frontmatter can provision
                 // its per-agent MCP scope (reference validation + referenced-tool

@@ -243,7 +243,54 @@ mod tests {
             // no runner default is threaded through.
             default_max_iterations: None,
             parallel_tool_concurrency: None,
+            // Context management off in the fixture: these tests assert spawn
+            // mechanics, and a wired compactor would put a side-channel LLM
+            // call behind the scripted provider.
+            context_budget_config: None,
         }
+    }
+
+    // -- Context management ------------------------------------------------
+
+    /// A subagent used to run with `context_budget` / `context_compactor` /
+    /// `preflight_pipeline` all hardcoded `None`, i.e. with no context
+    /// management whatsoever: the child prompt replays the whole child log
+    /// every turn, nothing compacted it, and a `prompt_too_long` had no
+    /// compactor to rescue with — the reactive drain went straight to
+    /// `ReactiveCompactExhausted` and the whole child run died.
+    ///
+    /// Pins the all-or-nothing gating `HarnessDeps` documents: with a config
+    /// all three are wired; without one all three stay absent (matching the
+    /// main harness when `[context_budget]` is disabled). A compactor without
+    /// a preflight pipeline would pay for LLM summarisation where free
+    /// structural pruning was available.
+    #[test]
+    fn context_triple_is_all_or_nothing_and_follows_the_config() {
+        let llm: Arc<dyn AiProvider> = Arc::new(crate::providers::mock::MockProvider::new("ok"));
+
+        let (budget, compactor, preflight) = super::super::build_context_triple(None, &llm);
+        assert!(
+            budget.is_none() && compactor.is_none() && preflight.is_none(),
+            "no [context_budget] config → child stays unmanaged, like the main harness",
+        );
+
+        let cfg = crate::context::budget::ContextBudgetConfig {
+            token_budget: 10_000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 3.5,
+            fresh_tail_count: 6,
+            circuit_breaker_max: 3,
+            diminishing_window: 4,
+            diminishing_threshold: 500,
+            max_splits: 3,
+        };
+        let (budget, compactor, preflight) = super::super::build_context_triple(Some(&cfg), &llm);
+        assert!(
+            budget.is_some() && compactor.is_some() && preflight.is_some(),
+            "a configured child must get budget AND compactor AND preflight — \
+             any one missing is the gap this test exists for",
+        );
     }
 
     fn agent_with_allowed(id: &str, tools: Vec<&str>) -> AgentDef {

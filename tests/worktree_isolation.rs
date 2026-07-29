@@ -148,6 +148,7 @@ async fn h_t1_worktree_isolation_happy_path() {
         routing_store: None,
         default_max_iterations: None,
         parallel_tool_concurrency: None,
+        context_budget_config: None,
     };
 
     let agent_def =

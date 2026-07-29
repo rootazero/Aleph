@@ -72,6 +72,19 @@ impl AgentHarness {
                 // stream closes its ToolStart with a matching ToolEnd (error
                 // body) instead of leaving the call pending forever.
                 callback.on_tool_call_done(&call.id, None, Some(&block_msg), dur_ms);
+                // Same terminal bookkeeping every other Act outcome gets
+                // (success / error / memo hit / cross-batch refusal); a block
+                // was the only one that skipped it, leaving the call out of
+                // `tool_timeline` → `RunSummary.tool_summaries`, the
+                // authoritative state consumers reconcile the deliberately
+                // lossy `agent_trace` stream against.
+                self.push_tool_invocation(
+                    call.id.clone(),
+                    call.name.clone(),
+                    dur_ms,
+                    false,
+                    Some(block_msg.clone()),
+                );
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
