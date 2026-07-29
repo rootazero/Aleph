@@ -620,7 +620,12 @@ to `GatewayServer::set_webhook_routes()`, which merges it in `build_router()`.
 - **Auth is per-handler HMAC**, not the login wall — an external platform
   cannot present a device token. Same posture as `/health`, `/metrics`, `/a2a`:
   no transport-level auth, no rate limiter (that lives in `MiddlewareChain`,
-  on the JSON-RPC/WS path only).
+  on the JSON-RPC/WS path only). The signature also binds no timestamp or
+  nonce (unlike Stripe/GitHub's `t=…,v1=…`), so replay protection is
+  incidental — it comes only from inbound dedup at
+  `src/gateway/inbound_router/dedup.rs`, whose window is **5 minutes**; a
+  captured signed request replayed after that re-triggers an agent run. This
+  is posture, not a known gap requiring action.
 - **`path` is operator-writable**, so a collision with a gateway route would
   panic `Router::merge` at boot. `is_reserved_route()` in `server/mod.rs` skips
   those with a warning. Add every new gateway route to

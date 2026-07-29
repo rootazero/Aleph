@@ -538,11 +538,18 @@ pub(in crate::commands::start) async fn initialize_channels(
                     handler,
                     inbound: channel.state().sender(),
                     status: channel.state().status_handle(),
+                    channel_id: info.id.clone(),
                 });
             }
         }
 
         if !mounts.is_empty() {
+            // `channel_registry.list()` iterates a HashMap, whose order is not
+            // stable across restarts. Without a deterministic order here,
+            // which mount wins a duplicate path — and therefore which secret
+            // and which channel id is live on that path — would be a
+            // per-boot coin flip.
+            mounts.sort_by(|a, b| a.channel_id.as_str().cmp(b.channel_id.as_str()));
             let count = mounts.len();
             server.set_webhook_routes(WebhookReceiver::router(mounts));
             if !daemon {

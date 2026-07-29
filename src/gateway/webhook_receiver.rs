@@ -48,7 +48,9 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tracing::{info, warn};
 
-use super::channel::{ChannelResult, ChannelStatus, InboundMessage, InboundMessageSender};
+use super::channel::{
+    ChannelId, ChannelResult, ChannelStatus, InboundMessage, InboundMessageSender,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -94,6 +96,9 @@ pub struct WebhookMount {
     /// stops a stopped/deleted channel from still answering HTTP, without
     /// building a dynamic mount table.
     pub status: Arc<tokio::sync::RwLock<ChannelStatus>>,
+    /// The owning channel's id, so a skipped mount's warning names which
+    /// config section is at fault instead of only the (possibly shared) path.
+    pub channel_id: ChannelId,
 }
 
 /// Builds the axum routes for channel webhook ingestion.
@@ -111,7 +116,12 @@ impl WebhookReceiver {
     /// A mount whose path collides with a gateway route, or with an earlier
     /// mount, is skipped with a warning — `Router::merge` panics on duplicate
     /// routes and `path` is an operator-writable config field, so a typo must
-    /// not take the daemon down at boot.
+    /// not take the daemon down at boot. A path missing its leading `/` is
+    /// likewise skipped rather than left to panic in `Router::route` — the
+    /// only current producer validates this (`WebhookChannelConfig::validate`),
+    /// but that is enforced by convention, not by this function, and a future
+    /// `WebhookHandler` without that validation should not be able to take the
+    /// daemon down at boot.
     pub fn router(mounts: Vec<WebhookMount>) -> Router {
         let mut router = Router::new();
         let mut mounted: Vec<String> = Vec::new();
@@ -119,15 +129,28 @@ impl WebhookReceiver {
         for mount in mounts {
             let path = mount.handler.path().to_string();
 
+            if !path.starts_with('/') {
+                warn!(
+                    channel_id = %mount.channel_id,
+                    path = %path,
+                    "webhook path missing leading '/' — handler not mounted"
+                );
+                continue;
+            }
             if crate::gateway::server::is_reserved_route(&path) {
                 warn!(
+                    channel_id = %mount.channel_id,
                     path = %path,
                     "webhook path collides with a gateway route — handler not mounted"
                 );
                 continue;
             }
             if mounted.iter().any(|p| p == &path) {
-                warn!(path = %path, "duplicate webhook path — handler not mounted");
+                warn!(
+                    channel_id = %mount.channel_id,
+                    path = %path,
+                    "duplicate webhook path — handler not mounted"
+                );
                 continue;
             }
 
@@ -562,6 +585,7 @@ mod tests {
             handler,
             inbound: state.sender(),
             status: state.status_handle(),
+            channel_id: ChannelId::new("mock-channel"),
         }]);
 
         let body = br#"{"text":"hello from webhook"}"#.to_vec();
@@ -607,6 +631,7 @@ mod tests {
             handler,
             inbound: state.sender(),
             status: state.status_handle(),
+            channel_id: ChannelId::new("mock-channel"),
         }]);
 
         let response = app
@@ -651,6 +676,7 @@ mod tests {
             handler,
             inbound: state.sender(),
             status: state.status_handle(),
+            channel_id: ChannelId::new("mock-channel"),
         }]);
 
         let body = br#"{"text":"hello from webhook"}"#.to_vec();
@@ -693,6 +719,7 @@ mod tests {
             handler,
             inbound: state.sender(),
             status: state.status_handle(),
+            channel_id: ChannelId::new("ws-channel"),
         }]);
 
         // A router with zero routes 404s everything.
@@ -704,6 +731,44 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/ws")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn path_missing_leading_slash_is_skipped_not_panicked() {
+        use crate::gateway::channel::ChannelState;
+
+        let state = ChannelState::new(16);
+        let handler = Arc::new(MockWebhookHandler {
+            secret: "s".to_string(),
+            handler_path: "webhook/no-slash".to_string(),
+        });
+
+        // Must not panic — Router::route panics on a path without a leading
+        // '/'. The sole current producer (WebhookChannelConfig::validate) is
+        // guarded elsewhere; this is the builder defending itself against a
+        // future WebhookHandler that isn't.
+        let router = WebhookReceiver::router(vec![WebhookMount {
+            handler,
+            inbound: state.sender(),
+            status: state.status_handle(),
+            channel_id: ChannelId::new("no-slash-channel"),
+        }]);
+
+        // A router with zero routes 404s everything.
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/no-slash")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -731,6 +796,7 @@ mod tests {
                 }),
                 inbound: state_a.sender(),
                 status: state_a.status_handle(),
+                channel_id: ChannelId::new("channel-a"),
             },
             WebhookMount {
                 handler: Arc::new(MockWebhookHandler {
@@ -739,6 +805,7 @@ mod tests {
                 }),
                 inbound: state_b.sender(),
                 status: state_b.status_handle(),
+                channel_id: ChannelId::new("channel-b"),
             },
         ];
 
