@@ -249,3 +249,42 @@ async fn webhook_endpoint(
 | 删 `pub` 常量/函数破坏外部调用者 | 已 grep 全仓：消费者只在 crate 内（`webhook_receiver.rs` 一处 + 一条自测） |
 | 收窄路径破坏现存部署 | §2.F 证明：接线从未发布，`path` 此前对入站零作用 |
 | 表与注册表的耦合越层 | 两者同在 `src/gateway/`；表是注册表的投影，属 I/O 记账而非业务逻辑（R4 不涉） |
+
+## QA 结果 (Task 8 — Real-Machine Verification, 2026-07-30)
+
+**环境**：`ALEPH_HOME` 隔离数据目录/vault/锁（不动 `~/.aleph/`），QA daemon 绑
+`127.0.0.1:8787`，与用户真实 daemon（PID 17978，`127.0.0.1:18790`）并存、互不干扰。
+
+**被测二进制**：`/Volumes/TBU4/Workspace/Aleph/target/debug/aleph-server`
+（workspace 共享 target dir，由仓库根 `.cargo/config.toml` 的 `target-dir` 钉死，
+各 worktree 共用，用意是避免并发全量构建把机器打满）。构建于 `cargo build --bin
+aleph-server` 后 `ls -l` 确认时间戳 `7 30 11:56`，晚于本轮构建起始时间
+`7 30 11:53:23`——确系本分支代码所出二进制。
+
+**QA daemon PID**：33713（`--config .../aleph_qa.toml start`，`ALEPH_HOME=.../home`）。
+
+### 五项断言
+
+| # | 断言 | 观测结果 |
+|---|------|----------|
+| 1 | 启动期挂载日志 | 日志含 `Gateway: 1 webhook ingestion route(s) mounted`（`daemon.log:215`，紧邻 `Registered channel: webhook (webhook)` / `✓ Channel webhook started`） |
+| 2 | 签名 POST 成功 | `POST /webhook/qa` + 合法签名 → **`HTTP/1.1 200 OK`** |
+| 3 | `channel.stop` 摘除端点 | `channel.stop {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"stopped"}`；同一条签名 POST → **`HTTP/1.1 404 Not Found`**（非 503，非 200） |
+| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；期间 daemon PID 全程为 33713（`pgrep` 二次核对同一 PID，未重启）；同一条签名 POST → **`HTTP/1.1 200 OK`** |
+| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致，未泄露通道状态） |
+
+全部 5 项 **PASS**。
+
+**一个 QA 配方注记（非代码缺陷）**：首次签名 POST 用了 `{"sender_id":"qa-user","text":"..."}`，
+被 `WebhookPayload` 拒绝为 400（`message` 字段必填，非 `text`，见
+`src/gateway/interfaces/webhook/message_ops.rs:56`）——这是我签名脚本的负载错误，
+不是被测代码的缺陷；改用 `{"sender_id":"qa-user","message":"hello from qa"}` 后如上表所示一致通过。
+
+### 清理验证
+
+- 仅 kill 了本轮记录的 QA PID 33713；`ps -p 33713` 之后为空。
+- 用户真实 daemon `pgrep -fl aleph-server` 之后仍只列出 **PID 17978**（`/Applications/Aleph.app/...--daemon start`），存活未受影响。
+- `~/.aleph/config.toml`：kill 前后 `ls -la` 均为 `22779` 字节 / `7月 27 20:59` mtime，`md5` 为 `1fc8ffc10270521529b35d95b205a504`——未被写入。
+
+**结论**：本轮设计的核心主张——运行时 `channel.start` 无需重启即可让新挂载的
+webhook 路由可达，且 `stop` 之后立即变为 404 而非静默 503——在真机上得到验证。
