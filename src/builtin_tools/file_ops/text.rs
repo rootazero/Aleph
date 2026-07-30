@@ -22,15 +22,31 @@ pub(super) const DEFAULT_READ_LINE_LIMIT: u64 = 2000;
 /// lines, whichever binds first (pi's `truncate.ts` uses the same rule with a
 /// line count and a byte count).
 ///
-/// Sits below `result_processing::DEFAULT_RESULT_BUDGET_TOKENS` (8 000) on
-/// purpose. `file_read` deliberately has no result budget of its own — a read is
-/// the only way the model can pull a persisted blob back, so persisting one would
-/// loop — which means an oversized window used to be cut by the *generic*
-/// head+tail truncator, silently removing the middle of content whose
-/// `message` / `returned_lines` / `truncated` fields had already been minted for
-/// the whole window. Staying under the backstop keeps the window and the
-/// continuation offset describing it truthful.
-pub(super) const READ_WINDOW_TOKENS: usize = 6000;
+/// `file_read` deliberately has no result budget of its own — a read is the only
+/// way the model can pull a persisted blob back, so persisting one would loop —
+/// which means an oversized window is cut by the *generic* head+tail truncator,
+/// silently removing the middle of content whose `message` / `returned_lines` /
+/// `truncated` fields were already minted for the whole window. Staying under the
+/// backstop is what keeps the window and its continuation offset truthful.
+///
+/// This constant is only the upper bound; [`read_window_tokens`] clamps it to the
+/// backstop actually in force.
+const READ_WINDOW_TOKENS_MAX: usize = 6000;
+
+/// Fraction (in twentieths) of the backstop a window may occupy, leaving room for
+/// JSON escaping (`\n` -> `\\n`, `\"` -> `\\\"`) and the sibling envelope fields
+/// that ride alongside `content` in the flattened result.
+const READ_WINDOW_HEADROOM_X20: usize = 17;
+
+/// Token budget for one `file_read` window, clamped to the backstop in force.
+///
+/// The clamp matters: on a small-window model the boot-installed ceiling drops
+/// the backstop to as little as 2 000 tokens, and a fixed 6 000-token window would
+/// then overrun it on *every read*.
+pub(super) fn read_window_tokens() -> usize {
+    let backstop = crate::tools::result_processing::read_backstop_tokens();
+    READ_WINDOW_TOKENS_MAX.min(backstop * READ_WINDOW_HEADROOM_X20 / 20)
+}
 
 /// Number of leading bytes inspected when classifying a file as binary.
 const BINARY_SNIFF_BYTES: usize = 8192;

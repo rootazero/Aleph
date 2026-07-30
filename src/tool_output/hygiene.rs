@@ -13,7 +13,7 @@
 //!
 //! Both of Aleph's content-aware cleaners key off line structure:
 //!
-//! - [`structured::classify`] requires `MIN_LINES` lines, so it returns `None`
+//! - `structured::classify` requires `MIN_LINES` lines, so it returns `None`
 //!   for any single-line input. The log / search / diff / json reducers were
 //!   therefore **unreachable for every builtin tool** — they only ever fired on
 //!   MCP tools, which return a bare `Value::String` with real newlines.

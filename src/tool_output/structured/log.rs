@@ -102,15 +102,39 @@ fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
+/// A diagnostic continuation line: a single-character marker followed by
+/// whitespace.
+///
+/// Test runners and compilers all use this convention for the body of a
+/// diagnostic — pytest's `E   AssertionError` / `>   assert got == …`, rustc's
+/// `|` gutter, doctest's `|`. They sit at the *same* indent as the loud line they
+/// belong to, so an indentation test alone cannot tell them from a sibling
+/// `test x ... ok` (which starts with a multi-character word instead).
+fn is_continuation(line: &str) -> bool {
+    let mut chars = line.trim_start().chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(marker), Some(space)) if !marker.is_alphanumeric() || space.is_whitespace()
+    ) && !line.trim_start().is_empty()
+}
+
 /// Mark loud lines encountered along `order`, plus their trailing context, until
 /// `budget` *newly* marked loud lines are found. Returns how many it spent.
 ///
-/// Context extension stops at the first follower that isn't indented deeper than
-/// the loud line. That one predicate is what keeps the budget on diagnostics: a
-/// compiler error's `--> src/main.rs:10:5` continuation and a panic's stack
-/// frames are indented under it and get kept, whereas the line after
+/// Context extension stops at the first follower that is neither indented deeper
+/// than the loud line nor loud itself. That predicate is what keeps the budget on
+/// diagnostics: a compiler error's `--> src/main.rs:10:5` continuation and a
+/// panic's stack frames are indented under it and get kept, whereas the line after
 /// `test suite::case_7 ... FAILED` is `test suite::case_8 ... ok` at the same
 /// indent — sibling noise that used to consume two thirds of everything kept.
+///
+/// The two escapes matter as much as the indentation rule. pytest writes its
+/// assertion block at column 0 (`E   AssertionError: …`, `E     Differing
+/// items:`), so an indentation-only rule cut the diff off after its first line —
+/// keeping strictly less than the unconditional `i+1..=i+ERROR_CONTEXT` it
+/// replaced, which is the one outcome this change was not allowed to have. Hence
+/// [`is_continuation`] for a diagnostic body, and `is_loud` for a follower that
+/// would have been kept on its own merits anyway.
 fn mark_signal(
     lines: &[&str],
     keep: &mut [bool],
@@ -147,7 +171,11 @@ fn mark_signal(
             if i + k >= total {
                 break;
             }
-            if !follower.trim().is_empty() && indent_of(follower) <= base_indent {
+            if !follower.trim().is_empty()
+                && indent_of(follower) <= base_indent
+                && !is_loud(follower)
+                && !is_continuation(follower)
+            {
                 break;
             }
             keep[i + k] = true;
@@ -285,5 +313,86 @@ mod tests {
         let s = "error a\nerror b\nerror c\nerror d\nerror e\nerror f\nerror g\nerror h\n";
         // All 8 lines are loud → kept >= 70% → no reduction.
         assert!(reduce_log(s).is_none());
+    }
+
+    /// pytest writes its assertion block at column 0, so an indentation-only
+    /// context rule truncated the diff after the first line. The failing test's
+    /// name, the assertion and its diff all have to survive.
+    #[test]
+    fn pytest_assertion_block_survives() {
+        let mut s = String::from("..F...                              [100%]\n");
+        for i in 0..300 {
+            s.push_str(&format!("collected fixture chatter {i}\n"));
+        }
+        s.push_str(
+            "=================================== FAILURES ===================================\n",
+        );
+        s.push_str("_______________________ test_totals ________________________\n");
+        s.push_str("\n");
+        s.push_str("    def test_totals():\n");
+        s.push_str("        got = compute({'a': 1})\n");
+        s.push_str(">       assert got == {'a': 2}\n");
+        s.push_str("E       AssertionError: assert {'a': 1} == {'a': 2}\n");
+        s.push_str("E         Differing items:\n");
+        s.push_str("E         {'a': 1} != {'a': 2}\n");
+        s.push_str("\n");
+        s.push_str("test_totals.py:7: AssertionError\n");
+        for i in 0..300 {
+            s.push_str(&format!("teardown chatter {i}\n"));
+        }
+        s.push_str(
+            "=========================== short test summary info ============================\n",
+        );
+        s.push_str("1 failed, 5 passed in 0.03s\n");
+
+        let r = reduce_log(&s).expect("a pytest run must reduce");
+        for needle in [
+            "AssertionError: assert {'a': 1} == {'a': 2}",
+            "Differing items",
+            "!= {'a': 2}",
+            "1 failed, 5 passed",
+        ] {
+            assert!(
+                r.body.contains(needle),
+                "the assertion block must survive; missing {needle:?} in:\n{}",
+                r.body
+            );
+        }
+        assert!(
+            !r.body.contains("teardown chatter 150"),
+            "the chatter must still be dropped"
+        );
+    }
+
+    /// The other half of the same predicate: sibling `... ok` lines at the same
+    /// indent must NOT be pulled in as context, which is what wasted two thirds of
+    /// the budget before.
+    #[test]
+    fn sibling_ok_lines_are_not_kept_as_error_context() {
+        let mut s = String::from("running 400 tests\n");
+        for i in 0..400 {
+            if i == 10 {
+                s.push_str("test suite::boom ... FAILED\n");
+            } else {
+                s.push_str(&format!("test suite::case_{i} ... ok\n"));
+            }
+        }
+        s.push_str("test result: FAILED. 399 passed; 1 failed\n");
+        let r = reduce_log(&s).expect("must reduce");
+        assert!(r.body.contains("suite::boom"), "the failure must survive");
+        // The `... ok` lines that legitimately appear are the head/tail anchors;
+        // what must NOT appear is the failure's immediate followers being dragged
+        // in as "error context".
+        assert!(
+            !r.body.contains("case_11 ... ok"),
+            "the sibling line after the failure must not be kept as context:\n{}",
+            r.body
+        );
+        let oks = r.body.matches("... ok").count();
+        assert!(
+            oks <= KEEP_HEAD + KEEP_TAIL,
+            "only head/tail anchors may be passing-test lines, got {oks} in:\n{}",
+            r.body
+        );
     }
 }

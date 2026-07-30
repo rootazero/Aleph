@@ -61,6 +61,19 @@ fn result_budget_ceiling() -> usize {
     RESULT_BUDGET_CEILING.get().copied().unwrap_or(usize::MAX)
 }
 
+/// The token bound a read-family result is actually enforced against — the
+/// global default, clamped by the boot-installed window ceiling.
+///
+/// Exposed because `file_read` sizes its own window to stay under this. Reading
+/// the constant alone is not enough: on a small-window model the ceiling moves
+/// the bound down to as little as 2 000 tokens, and a producer that ignored it
+/// would hand the generic truncator a window to cut a hole in — the exact bug the
+/// self-sizing exists to prevent.
+#[must_use]
+pub(crate) fn read_backstop_tokens() -> usize {
+    DEFAULT_RESULT_BUDGET_TOKENS.min(result_budget_ceiling())
+}
+
 /// Resolve a tool's per-result token budget.
 ///
 /// Lookup order:
@@ -164,10 +177,7 @@ pub fn apply_result_budget(
         // The boot-installed window ceiling applies here too. It used to be
         // bypassed on this branch, which handed a 2 400-token-window model an
         // 8 000-token read allowance — the one case the knob exists to prevent.
-        let truncated = truncate_with_budget(
-            text,
-            DEFAULT_RESULT_BUDGET_TOKENS.min(result_budget_ceiling()),
-        );
+        let truncated = truncate_with_budget(text, read_backstop_tokens());
         let tokens_after = estimate_tokens_smart(&truncated);
         return ProcessedResult {
             text: truncated,
@@ -215,8 +225,11 @@ pub fn apply_result_budget(
         let footer_tokens = estimate_tokens_smart(&footer);
         let body = match original {
             // Content-typed: inline the signal, sized so body + footer still
-            // respect the tool's declared budget.
-            Some(_) => truncate_with_budget(text, budget.saturating_sub(footer_tokens)),
+            // respect the tool's declared budget. `distill_or_truncate` rather
+            // than a blind head/tail cut — a reduction that is *still* over budget
+            // is usually a wall of diagnostics, and the middle is where the
+            // failure is named.
+            Some(_) => distill_or_truncate(text, budget.saturating_sub(footer_tokens)),
             // Opaque: a bounded error preview only, as before — visible without
             // a ctx_search round-trip, absent when there is no error signal.
             None => inline_error_digest(text).unwrap_or_default(),

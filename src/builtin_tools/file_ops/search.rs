@@ -51,7 +51,7 @@ pub async fn execute_search(
             Ok(path) => {
                 // Build/VCS directories would otherwise consume the whole entry
                 // budget with generated files the caller did not ask about.
-                if is_skipped_dir_path(&path, pattern) {
+                if is_skipped_dir_path(&canonical, &path, pattern) {
                     skipped_generated += 1;
                     continue;
                 }
@@ -107,12 +107,25 @@ pub async fn execute_search(
 /// phrasing (`find.ts`) — telling the model the exact lever beats telling it
 /// only that something was dropped.
 pub(super) fn entry_cap_note(matched: usize, shown: usize, cap: usize) -> String {
+    entry_cap_note_with(matched, shown, cap, ", or narrow the pattern")
+}
+
+/// [`entry_cap_note`] with caller-supplied follow-up advice.
+///
+/// `list` takes no `pattern`, so telling its caller to narrow one named a lever
+/// that does not exist for that operation — the sort of instruction a model will
+/// dutifully try and get an argument error for.
+pub(super) fn entry_cap_note_with(
+    matched: usize,
+    shown: usize,
+    cap: usize,
+    advice: &str,
+) -> String {
     if matched <= shown {
         return String::new();
     }
     format!(
-        ". Showing {shown} of {matched} — {cap}-entry limit reached; \
-         pass limit={} for more, or narrow the pattern",
+        ". Showing {shown} of {matched} — {cap}-entry limit reached; pass limit={}{advice}",
         cap.saturating_mul(2)
     )
 }

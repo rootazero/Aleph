@@ -98,7 +98,15 @@ impl crate::context::budget::preflight::PreflightStage for ToolResultPruningStag
             // produced by `tools::result_processing::apply_result_budget`)
             // are already compact and carry the disk path the LLM needs.
             // Re-pruning them would erase the recovery handle.
-            if original_text.starts_with("[Full output persisted: ") {
+            //
+            // The marker is **not** necessarily at byte 0: Layer 2 puts an
+            // inline error digest, or the content-reduced body, *above* it. A
+            // `starts_with` test therefore missed the entire hygiene path and
+            // pruned exactly the results whose recovery handle matters most —
+            // the reduced body would be replaced by a first-line placeholder and
+            // the offloaded blob became unreachable. Scan every line, through
+            // the same single-source predicate `act.rs` already uses.
+            if crate::tools::result_store::extract_persisted_ref(&original_text).is_some() {
                 continue;
             }
             let original_tokens = estimate_tokens_smart(&original_text);
@@ -352,6 +360,28 @@ mod tests {
         assert_eq!(freed, 0, "persisted markers must not be re-pruned");
         let (_name, text) = messages[0].tool_result_info().expect("still a ToolResult");
         assert_eq!(text, marker, "marker text must remain verbatim");
+    }
+
+    /// Regression: Layer 2 composes `body\nfooter`, so the recovery marker is
+    /// not at byte 0 on the hygiene path. Pruning it would delete the reduced
+    /// body *and* the only pointer to the offloaded original — the round's
+    /// reversibility guarantee depends on this staying true.
+    #[tokio::test]
+    async fn a_marker_below_an_inlined_body_is_not_re_pruned() {
+        let composed = format!(
+            "[compacted log: kept 15/2017 lines]\n{}\n{}",
+            "test result: FAILED. 2000 passed; 1 failed".repeat(20),
+            "[Full output persisted: /tmp/aleph/x.txt (23730 tokens, bash)]"
+        );
+        let mut messages = vec![
+            UnifiedMessage::tool_result("call-1", "bash", composed.clone(), false),
+            UnifiedMessage::user("recent"),
+        ];
+        let stage = ToolResultPruningStage::default();
+        let freed = stage.prepare(&mut messages, &make_pressure(), 1).await;
+        assert_eq!(freed, 0, "a result carrying a marker must not be re-pruned");
+        let (_n, after) = messages[0].tool_result_info().expect("still a ToolResult");
+        assert_eq!(after, composed, "text must survive verbatim");
     }
 
     #[tokio::test]

@@ -1197,6 +1197,14 @@ const ERROR_BODY_TAIL_CHARS: usize = 1200;
 /// to distil.
 fn clean_error_body(body: &str) -> String {
     let stripped = crate::tool_output::sanitize::sanitize_command_output(body);
+    // Only reshape what would otherwise be cut. An error body that already fits
+    // reaches the model verbatim, exactly as before — distilling it would replace
+    // the actual message with a digest of the lines that merely *look* like
+    // errors, and unlike success output an error is never persisted, so there is
+    // no way back to what was dropped.
+    if stripped.chars().count() <= ERROR_BODY_MAX_CHARS {
+        return stripped.into_owned();
+    }
     if let Some(digest) = crate::tool_output::distill::distill_output(&stripped) {
         if digest.error_count > 0 {
             let rendered = digest.render(digest.salient.len());

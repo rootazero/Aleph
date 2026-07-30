@@ -175,11 +175,21 @@ fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
         }
         // Three priority tiers over this file's own lines: structural headers
         // (they name the file and its hunks), then changes, then context.
+        //
+        // Headers get at most *half* the quota. Taking them greedily starved the
+        // tier that matters: git emits 4 file headers plus one `@@` per hunk, so
+        // at 48+ files (quota == MIN_PER_FILE == 4) the header tier consumed every
+        // slot and the reduction contained **zero change lines** — a diff summary
+        // with no diff in it, under a header claiming it kept 240 lines.
         let mut picked = vec![false; run.len()];
         let mut n = 0usize;
         for tier in 0..3u8 {
+            let tier_ceiling = match tier {
+                0 => (quota / 2).max(1),
+                _ => quota,
+            };
             for (pos, &i) in run.iter().enumerate() {
-                if n >= quota {
+                if n >= tier_ceiling {
                     break;
                 }
                 if picked[pos] {
@@ -316,6 +326,39 @@ mod tests {
             r.body.len(),
             d.len()
         );
+    }
+
+    /// A wide diff must still contain actual changes. Greedy header selection made
+    /// a 48+-file diff reduce to nothing but per-file headers — zero `+`/`-` lines
+    /// and zero hunk headers — while the summary claimed 240 kept lines.
+    #[test]
+    fn a_wide_diff_still_keeps_change_lines() {
+        // 26 files of this shape is mostly signal, so `reduce` correctly declines
+        // on the byte guard and head/tail truncation takes over. The starvation bug
+        // lived at the widths where the per-file quota actually binds.
+        for files in [48usize, 60, 120, 400] {
+            let mut d = String::new();
+            for f in 0..files {
+                d.push_str(&format!("diff --git a/f{f}.rs b/f{f}.rs\n"));
+                d.push_str("index 1111111..2222222 100644\n");
+                d.push_str(&format!("--- a/f{f}.rs\n+++ b/f{f}.rs\n"));
+                d.push_str("@@ -1,6 +1,6 @@\n");
+                for c in 0..6 {
+                    d.push_str(&format!(" context {c}\n"));
+                }
+                d.push_str("-let old = 1;\n+let new = 2;\n");
+            }
+            let r = super::super::reduce(&d).expect("must reduce");
+            assert_eq!(r.kind, ContentKind::Diff, "files={files}");
+            let changes = r.body.lines().filter(|l| is_change(l)).count();
+            assert!(
+                changes > 0,
+                "files={files}: a diff reduction with no change lines is not a diff \
+                 (kept {}/{})",
+                r.kept_lines,
+                r.total_lines
+            );
+        }
     }
 
     /// git's default is `-U3`; a context window of 2 made the whole pass a no-op

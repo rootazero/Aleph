@@ -11,7 +11,7 @@
 //! Ordering matters: [`hygiene`] runs on the tool's `serde_json::Value` while
 //! its text fields still carry real newlines. Once the value is flattened with
 //! `Value::to_string()` every `\n` becomes a two-character escape and the whole
-//! result collapses onto one line — at which point [`structured::classify`] and
+//! result collapses onto one line — at which point `structured::classify` and
 //! [`distill`] can no longer see the line structure they route on.
 
 pub(crate) mod compressor;

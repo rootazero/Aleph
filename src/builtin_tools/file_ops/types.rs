@@ -90,11 +90,21 @@ pub const SKIPPED_DIRS: &[&str] = &[
     ".pytest_cache",
 ];
 
-/// Whether `path` sits inside a [`SKIPPED_DIRS`] directory that `pattern` does
-/// not mention. Mentioning it anywhere in the pattern opts back in.
+/// Whether `path` sits inside a [`SKIPPED_DIRS`] directory **below `root`** that
+/// `pattern` does not mention. Mentioning it anywhere in the pattern opts back in.
+///
+/// Only components below `root` are examined, and that is the whole subtlety: the
+/// paths a glob walk yields are absolute, so testing every component made the
+/// answer depend on where the project happens to live. A workspace at
+/// `~/src/build/myapp` or any path containing `vendor` / `dist` / `target` as an
+/// *ancestor* matched on that ancestor and every single entry was skipped — the
+/// tool would report zero matches for a directory full of files. `root` is the
+/// caller's already-canonicalized search root, i.e. the thing the user pointed at;
+/// what is above it is not theirs to be judged by.
 #[must_use]
-pub fn is_skipped_dir_path(path: &std::path::Path, pattern: &str) -> bool {
-    path.components().any(|c| {
+pub fn is_skipped_dir_path(root: &std::path::Path, path: &std::path::Path, pattern: &str) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    relative.components().any(|c| {
         let name = c.as_os_str().to_string_lossy();
         SKIPPED_DIRS.contains(&name.as_ref()) && !pattern.contains(name.as_ref())
     })

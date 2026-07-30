@@ -153,7 +153,13 @@ pub fn reduce(text: &str) -> Option<Reduction> {
 fn candidates(lines: &[&str]) -> Vec<ContentKind> {
     let mut out = Vec::new();
     if diff::looks_like_diff(lines) {
-        out.push(ContentKind::Diff);
+        // A diff is the one shape where falling through is *worse* than doing
+        // nothing: the log reducer keeps "loud" lines and drops the rest, and in a
+        // diff that means deleting every `-` line and every `@@` header — it
+        // returns something that still looks like a diff but describes a different
+        // change. So a diff is offered to its own reducer only; if that declines,
+        // the caller's head/tail truncation is the safe fallback.
+        return vec![ContentKind::Diff];
     }
     if json::looks_like_json(lines) {
         out.push(ContentKind::Json);

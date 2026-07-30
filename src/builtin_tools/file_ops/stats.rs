@@ -78,7 +78,7 @@ pub async fn execute_stats(
         // Build/VCS directories are generated content the caller did not ask
         // about; walking them is what made `stats src` a 115k-token result whose
         // own aggregate answer then got replaced by a persist marker.
-        if is_skipped_dir_path(&path, glob_pattern) {
+        if is_skipped_dir_path(&canonical, &path, glob_pattern) {
             skipped_generated += 1;
             continue;
         }

@@ -79,7 +79,7 @@ pub async fn execute_list(
         message: format!(
             "Listed {count} items in {}{}",
             canonical.display(),
-            super::search::entry_cap_note(count, files.len(), cap)
+            super::search::entry_cap_note_with(count, files.len(), cap, " to see the rest")
         ),
         files: Some(files),
         bytes_written: None,

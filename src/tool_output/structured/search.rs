@@ -16,10 +16,6 @@ const MAX_PER_FILE: usize = 5;
 const MAX_FILES: usize = 20;
 const MAX_TOTAL: usize = 60;
 
-/// Parse a grep/ripgrep line, returning the file path on success. Matches the
-/// `path<sep>line<sep>content` shape where `<sep>` is `:` (a match line) or `-`
-/// (a ripgrep context line). Returns `None` when there is no line-number
-/// marker (headers, blank lines, grouped-format content lines).
 /// Whether `p` is plausibly a file path, as opposed to a timestamp that happens
 /// to contain `<sep><digits><sep>`.
 ///
@@ -32,32 +28,51 @@ const MAX_TOTAL: usize = 60;
 /// grep reducer and crushed to five lines per pseudo-file (the year, or the
 /// hour), taking most of its ERROR lines with it.
 ///
-/// Three cheap rules, in this order:
-/// 1. A real path carries at least one letter. Kills `12`, `2026/07/30 12` and
-///    Go's default `2009/11/10 23:00:00` log stamp.
-/// 2. A path separator settles it — checked *before* the space rule so
-///    `C:\Program Files\x.rs` still parses.
-/// 3. Otherwise only a bare filename with a short alphanumeric extension counts,
-///    which is what keeps single-file grep (`main.rs:42:`) working while
-///    rejecting `[2026-07-30T12`.
+/// Three cheap rules:
+/// 1. A real path carries at least one letter. Kills `12` and `2026/07/30 12`.
+/// 2. **No whitespace.** grep and ripgrep write the path at column 0, so a
+///    candidate containing a space is a line *prefix*, not a path — which is
+///    what a log line's `… 12:30:00 server.go` looks like, and a bare
+///    "has a separator" test accepted it because of the `/` in the date. The one
+///    exception is a Windows drive prefix (`C:\Program Files\…`), where a space
+///    inside a genuine path is ordinary. The trade-off is deliberate: a POSIX
+///    path containing a space loses *grouping* (its hits route to the log
+///    reducer instead), whereas admitting prefixes crushed every timestamped log
+///    to five lines.
+/// 3. A path separator then settles it; otherwise only a filename-shaped token
+///    counts — which keeps single-file grep working for `main.rs:42:` *and* for
+///    extensionless `Makefile:12:` / `Dockerfile:3:`, while still rejecting
+///    `[2026-07-30T12` (bracket) and `INFO` is harmless (it would need four such
+///    lines at 60 % density to matter).
 fn looks_like_path(p: &str) -> bool {
     if !p.chars().any(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    let windows_drive = {
+        let b = p.as_bytes();
+        b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && (b[2] == b'\\' || b[2] == b'/')
+    };
+    if !windows_drive && p.chars().any(char::is_whitespace) {
         return false;
     }
     if p.contains('/') || p.contains('\\') {
         return true;
     }
-    if p.contains(' ') || p.contains('\t') {
-        return false;
-    }
-    p.rsplit_once('.').is_some_and(|(stem, ext)| {
-        !stem.is_empty()
-            && !ext.is_empty()
-            && ext.len() <= 8
-            && ext.chars().all(|c| c.is_ascii_alphanumeric())
-    })
+    // Separator-less: a filename-shaped token. Leading digits are excluded so a
+    // clock or version fragment cannot pass as a bare filename.
+    !p.starts_with(|c: char| c.is_ascii_digit())
+        && p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@' | '~'))
 }
 
+/// Parse a grep/ripgrep line, returning the file path on success. Matches the
+/// `path<sep>line<sep>content` shape where `<sep>` is `:` (a match line) or `-`
+/// (a ripgrep context line). Returns `None` when there is no line-number marker
+/// (headers, blank lines, grouped-format content lines) or when the candidate
+/// prefix isn't path-shaped (see [`looks_like_path`]).
 fn match_path(line: &str) -> Option<&str> {
     let bytes = line.as_bytes();
     // Skip a leading Windows drive colon ("C:\" or "C:/") so it isn't taken for
@@ -114,37 +129,48 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     // quadratic in (matches × distinct paths) — a repo-wide `rg` producing
     // 120 000 hits across 40 000 files spent ~3 s of blocking CPU deciding what
     // to throw away, nearly all of it on groups past `MAX_FILES` that are then
-    // discarded unread. Collection also stops opening new groups at `MAX_FILES`
-    // for the same reason; `distinct_paths` still counts them so the tally we
-    // report to the model stays truthful.
+    // discarded unread. Collection also stops opening new groups at `MAX_FILES`.
+    //
+    // Every distinct path still gets an index entry, so `index.len()` is the true
+    // file tally; paths past the cap map to `UNGROUPED` and open no group.
+    // Counting in the `None` arm instead counted a *line* per hit for every path
+    // past the cap — the entry was only inserted when a group was created, so
+    // those paths took the `None` arm again on every subsequent line, and the
+    // model was told "1 200 more files matched" for 380.
+    const UNGROUPED: usize = usize::MAX;
     let mut index: HashMap<&str, usize> = HashMap::new();
     let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut distinct_paths = 0usize;
     for (idx, &line) in lines.iter().enumerate() {
         let Some(path) = match_path(line) else {
             continue;
         };
         match index.get(path) {
+            Some(&UNGROUPED) => {}
             Some(&pos) => groups[pos].push(idx),
             None => {
-                distinct_paths += 1;
-                if groups.len() < MAX_FILES {
-                    index.insert(path, groups.len());
+                let pos = if groups.len() < MAX_FILES {
                     groups.push(vec![idx]);
-                }
+                    groups.len() - 1
+                } else {
+                    UNGROUPED
+                };
+                index.insert(path, pos);
             }
         }
     }
     if groups.is_empty() {
         return None;
     }
+    let distinct_paths = index.len();
 
     let mut kept: Vec<usize> = Vec::new();
     for idxs in &groups {
-        kept.extend(select_for_file(&lines, idxs));
+        // Check before extending, so `MAX_TOTAL` cannot admit a group only to
+        // leave it unrendered — the overall tally has to match what is shown.
         if kept.len() >= MAX_TOTAL {
             break;
         }
+        kept.extend(select_for_file(&lines, idxs));
     }
     kept.sort_unstable();
     kept.dedup();
@@ -156,11 +182,18 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     }
     let mut body = render_selected(&lines, &kept, total);
     // Dropping whole files has to be visible: otherwise a sweep across 400 files
-    // reads as a complete answer covering 20.
-    if distinct_paths > groups.len() {
+    // reads as a complete answer covering 20. Counted from what actually survived
+    // rendering, not from the group count — `MAX_TOTAL` and the truncate above can
+    // both drop a group that was admitted.
+    let files_shown = kept
+        .iter()
+        .filter_map(|&i| match_path(lines[i]))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    if distinct_paths > files_shown {
         body.push_str(&format!(
             "\n… ({} more files matched, not shown) …",
-            distinct_paths - groups.len()
+            distinct_paths - files_shown
         ));
     }
     Some(Reduction {
@@ -286,6 +319,81 @@ mod tests {
             r.body.contains("ERROR something exploded"),
             "error-bearing match must be kept; got:\n{}",
             r.body
+        );
+    }
+
+    #[test]
+    fn timestamped_log_lines_are_not_search_hits() {
+        // Every one of these used to parse as a `path:line:` hit, which routed
+        // whole logs to this reducer and crushed them to five lines.
+        for line in [
+            "2026-07-30 12:30:45 INFO aleph::gateway: started",
+            "[2026-07-30T12:30:45Z INFO alephcore] booting",
+            "Jul 30 06:46:12 host aleph[123]: hello",
+            "12:30:45 INFO plain clock log line",
+            "2026/07/30 12:30:00 server.go:15: listening",
+            "2026-07-30T12:30:45.123Z WARN retrying in 5s",
+        ] {
+            assert_eq!(match_path(line), None, "must not parse as a hit: {line}");
+        }
+    }
+
+    #[test]
+    fn real_grep_shapes_still_parse() {
+        for (line, want) in [
+            ("src/main.rs:42: let x = 1;", "src/main.rs"),
+            ("src/lib.rs-41-    context", "src/lib.rs"),
+            ("main.rs:7: fn main() {}", "main.rs"),
+            ("my-cool-file.rs:9: hit", "my-cool-file.rs"),
+            // Extensionless and dot-prefixed files are real and common.
+            ("Makefile:12: all:", "Makefile"),
+            ("Dockerfile:3: RUN apt-get", "Dockerfile"),
+            (".gitignore:4: target/", ".gitignore"),
+            ("C:\\proj\\src\\main.rs:10: hit", "C:\\proj\\src\\main.rs"),
+            // A Windows path with a space is the one whitespace exception.
+            (
+                "C:\\Program Files\\app\\x.rs:10: hit",
+                "C:\\Program Files\\app\\x.rs",
+            ),
+        ] {
+            assert_eq!(match_path(line), Some(want), "must parse: {line}");
+        }
+    }
+
+    /// The tally is per FILE, not per matching line, and it counts what actually
+    /// rendered — both halves were wrong and both over-reported.
+    #[test]
+    fn the_dropped_file_tally_counts_files_that_were_not_shown() {
+        // 30 files x 4 hits: MAX_FILES=20 groups, and MAX_TOTAL=60 stops well
+        // before all 20 are rendered.
+        let mut s = String::new();
+        for f in 0..30 {
+            for l in 0..4 {
+                s.push_str(&format!("src/f{f}.rs:{}: let target = 1;\n", l + 1));
+            }
+        }
+        let r = reduce_search(&s).expect("must reduce");
+
+        let shown: std::collections::HashSet<&str> =
+            r.body.lines().filter_map(match_path).collect();
+        let note = r
+            .body
+            .lines()
+            .find(|l| l.contains("more files matched"))
+            .expect("the note must be present");
+        let reported: usize = note
+            .split_whitespace()
+            .find_map(|w| w.trim_start_matches('(').parse::<usize>().ok())
+            .expect("the note carries a number");
+        assert_eq!(
+            reported,
+            30 - shown.len(),
+            "note said {reported} more; {} files shown of 30",
+            shown.len()
+        );
+        assert!(
+            reported < 30,
+            "the tally must count files, not matching lines: {note}"
         );
     }
 }

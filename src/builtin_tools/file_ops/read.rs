@@ -17,8 +17,8 @@ use tracing::info;
 use super::ops::read_file_bytes;
 use super::path_utils::get_denied_paths;
 use super::read_cache::{ReadCache, ReadCacheDecision};
-use super::text::{clamp_line, is_binary, DEFAULT_READ_LINE_LIMIT, READ_WINDOW_TOKENS};
-use crate::context::budget::pressure::chars_for_token_budget;
+use super::text::{clamp_line, is_binary, read_window_tokens, DEFAULT_READ_LINE_LIMIT};
+use crate::context::budget::pressure::chars_for_result_token_budget;
 use crate::error::Result;
 use crate::tools::AlephTool;
 
@@ -207,10 +207,14 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     // 2001 skipped the hole forever. Stopping at a char budget here keeps the
     // window and the message describing it consistent (pi applies the same
     // two-limits-whichever-first rule, `truncate.ts`).
-    // Sized from the token budget, not from a fixed byte count: the same budget
-    // buys ~2.5× more characters of source code than of CJK prose, so a flat
-    // "50 KB per read" would blow the budget for one and waste it on the other.
-    let char_budget = chars_for_token_budget(text, READ_WINDOW_TOKENS);
+    // Sized against the string the backstop is actually enforced on — the
+    // *flattened* result, not this file's own content. `Value::to_string()` emits
+    // one line containing `{`, which the estimator unconditionally scores as code
+    // (2.5 chars/token); measuring the raw file instead gave prose and CSV 3.5 and
+    // over-allocated the window by 1.4x, so the generic truncator downstream cut
+    // the difference out of the middle of a window whose `message` /
+    // `returned_lines` / `truncated` already described the whole thing.
+    let char_budget = chars_for_result_token_budget(read_window_tokens());
 
     let mut rendered = String::new();
     let mut chars = 0usize;
@@ -239,7 +243,7 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
     let truncated = end < lines.len();
     let message = if truncated {
         let why = if stopped_on_chars {
-            format!(" (~{READ_WINDOW_TOKENS}-token window limit)")
+            format!(" (~{}-token window limit)", read_window_tokens())
         } else {
             String::new()
         };
@@ -276,13 +280,17 @@ fn render_window(text: &str, args: &FileReadArgs, size: u64, path: String) -> Fi
 impl AlephTool for FileReadTool {
     const NAME: &'static str = "file_read";
     const DESCRIPTION: &'static str =
-        "Read a file's contents as `cat -n`-style numbered text lines. Returns up \
-         to 2000 lines from the start by default; use `offset` (1-based starting \
-         line) and `limit` (max lines) to page through larger files. Image files \
-         (png/jpeg/gif/tiff) are returned as a viewable image block so a vision \
-         model can see them directly; other binary files are detected and reported \
-         rather than dumped. The line-number prefixes are for reference only — \
-         strip them before passing text to file_edit.";
+        "Read a file's contents as `cat -n`-style numbered text lines. The window \
+         is bounded two ways, whichever binds first: at most 2000 lines, and a \
+         per-call size budget — so a wide or minified file returns fewer lines than \
+         you asked for. The `message` always reports the exact range returned and, \
+         when more remains, the `offset` to pass next; page with `offset` (1-based \
+         starting line) and `limit` (max lines) rather than assuming you got the \
+         whole window. Very long individual lines are clamped and say so. Image \
+         files (png/jpeg/gif/tiff) are returned as a viewable image block so a \
+         vision model can see them directly; other binary files are detected and \
+         reported rather than dumped. The line-number prefixes are for reference \
+         only — strip them before passing text to file_edit.";
 
     type Args = FileReadArgs;
     type Output = FileReadOutput;
@@ -635,11 +643,88 @@ mod tests {
 
         // And the window it returns fits the budget it promised, so the generic
         // truncator downstream never gets a chance to punch a hole in it.
-        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&out.content);
+        // Measured on the *flattened* result, because that is the string the
+        // Layer-2 backstop is enforced against — measuring `content` alone is
+        // what let the window overrun by 1.4x for prose while a test asserting
+        // the raw-content figure still passed.
+        let flat = serde_json::to_value(&out).unwrap().to_string();
+        let tokens = crate::context::budget::pressure::estimate_tokens_smart(&flat);
+        let backstop = crate::tools::result_processing::read_backstop_tokens();
         assert!(
-            tokens <= READ_WINDOW_TOKENS + 100,
-            "window should land at/under its token budget, got {tokens}"
+            tokens < backstop,
+            "the flattened window must fit the backstop it is sized against: \
+             {tokens} tokens vs backstop {backstop}"
         );
+    }
+
+    /// The invariant the whole self-sizing exists for, asserted end to end and on
+    /// the content type that used to break it.
+    ///
+    /// Prose scores 3.5 chars/token, but the *flattened* result is one line
+    /// containing `{` and so always scores 2.5 — sizing the window in the file's
+    /// own ratio space over-allocated by 1.4x, and `apply_result_budget` then cut
+    /// the difference out of the MIDDLE while `message` / `returned_lines` /
+    /// `truncated` still described the full window. Paging from the advertised
+    /// offset skipped that hole forever.
+    #[test]
+    fn a_prose_window_survives_the_layer_two_backstop_intact() {
+        // No code indicators anywhere, so the raw file scores the prose ratio.
+        let text: String = (0..2000)
+            .map(|i| format!("line {i} {}\n", "payload ".repeat(50)))
+            .collect();
+        let args = FileReadArgs {
+            path: String::new(),
+            offset: None,
+            limit: None,
+        };
+        let out = render_window(
+            &text,
+            &args,
+            text.len() as u64,
+            "/tmp/prose.txt".to_string(),
+        );
+        let advertised = out.returned_lines;
+
+        // Exactly what the dispatcher does: flatten, then apply Layer 2 with the
+        // read-family budget (None).
+        let flat = serde_json::to_value(&out).unwrap().to_string();
+        let processed = crate::tools::result_processing::apply_result_budget(
+            "c-prose",
+            "file_read",
+            &flat,
+            None,
+            None,
+            None,
+        );
+
+        assert!(
+            !processed.text.contains("[output truncated"),
+            "the window must survive the backstop untouched; it was cut instead"
+        );
+
+        // Untouched means it is still valid JSON, so recover `content` and check
+        // the gutters are contiguous 1..=advertised — no hole anywhere.
+        let back: serde_json::Value =
+            serde_json::from_str(&processed.text).expect("an untouched result is still valid JSON");
+        let content = back["content"].as_str().expect("content survived");
+        let seen: Vec<u64> = content
+            .lines()
+            .filter_map(|l| l.split('\t').next())
+            .filter_map(|g| g.trim().parse::<u64>().ok())
+            .collect();
+        assert_eq!(
+            seen.len() as u64,
+            advertised,
+            "every advertised line must be present, got {} of {advertised}",
+            seen.len()
+        );
+        for (i, n) in seen.iter().enumerate() {
+            assert_eq!(
+                *n,
+                i as u64 + 1,
+                "line numbering must be contiguous: {seen:?}"
+            );
+        }
     }
 
     /// A minified single-line file: the per-line clamp is what bounds it, and the

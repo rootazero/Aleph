@@ -207,6 +207,25 @@ pub fn chars_for_token_budget(sample: &str, budget_tokens: usize) -> usize {
     ((budget_tokens as f64) * ratio) as usize
 }
 
+/// How many characters of *tool-result payload* fit in `budget_tokens` once the
+/// result has been flattened to JSON.
+///
+/// A tool producer that must size its own output against the result budget has
+/// to measure the string the budget is actually enforced against, and that is
+/// **not** its own payload: `Value::to_string()` emits compact single-line JSON,
+/// so [`looks_like_code`] sees one line containing `{`, scores a 1.0 indicator
+/// ratio, and charges [`CODE_RATIO`] — *unconditionally, whatever the payload
+/// is*. Sizing a window with [`chars_for_token_budget`] on the raw content
+/// therefore over-allocates by 1.4x for prose or CSV (3.5 vs 2.5) and the
+/// enforcement step downstream then cuts the difference out of the middle.
+///
+/// Callers should still leave a margin on top of this for the escaping
+/// (`\n` -> `\\n`, `"` -> `\\"`) and the surrounding envelope fields.
+#[must_use]
+pub fn chars_for_result_token_budget(budget_tokens: usize) -> usize {
+    ((budget_tokens as f64) * CODE_RATIO) as usize
+}
+
 /// Estimates token count using content-aware ratio detection with an explicit
 /// prose baseline.
 ///
