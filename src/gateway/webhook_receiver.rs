@@ -99,6 +99,10 @@ pub struct WebhookMount {
     pub status: Arc<tokio::sync::RwLock<ChannelStatus>>,
     /// The owning channel's id, so a skipped mount's warning names which
     /// config section is at fault instead of only the (possibly shared) path.
+    ///
+    /// Also the key `WebhookMountTable::unmount_channel` matches on — this
+    /// field is what makes `channel.stop` / `channel.delete` actually remove
+    /// the endpoint, not just log a warning.
     pub channel_id: ChannelId,
 }
 
@@ -248,6 +252,17 @@ impl WebhookMountTable {
 /// `channel.stop` / `channel.delete` change the served surface after
 /// `serve()` has taken the router, and it keeps operator-writable paths out
 /// of axum's route table entirely.
+///
+/// ⚠️ The caller **must** compose this with [`Router::merge`], never
+/// [`Router::nest`]. `nest("/webhook", …)` strips the matched prefix from the
+/// `Uri` extractor before `webhook_endpoint` ever sees it, so
+/// `table.lookup(uri.path())` would look up `/probe` for a request at
+/// `/webhook/probe` — every mount misses, every webhook 404s, and it fails
+/// *silently*: this whole file's test suite still passes, because these
+/// tests exercise `router()` directly and never nest it. There is no
+/// in-process assertion that catches a `nest` regression; the only guard is
+/// Task 3's `set_webhook_mounts_makes_a_mounted_path_reachable`, which POSTs
+/// through the real `build_router()` and demands 200.
 pub struct WebhookReceiver;
 
 impl WebhookReceiver {
@@ -303,6 +318,10 @@ async fn webhook_endpoint(
     // `uri.path()` rather than the extracted `{*rest}`: the table is keyed by
     // the configured path verbatim, and going through the wildcard would add a
     // percent-decoding step on one side only.
+    //
+    // ⚠️ This is only correct because `WebhookReceiver::router` is required to
+    // be `.merge()`d, never `.nest()`d — see that function's doc comment.
+    // `nest` would strip the prefix here first, so every lookup would miss.
     let Some(mounted) = table.lookup(uri.path()).await else {
         return (
             StatusCode::NOT_FOUND,
