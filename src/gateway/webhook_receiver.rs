@@ -267,7 +267,6 @@ pub struct WebhookReceiver;
 
 impl WebhookReceiver {
     /// Route all `{WEBHOOK_ROUTE_PREFIX}/…` POSTs at `table`.
-    #[must_use]
     pub fn router(table: Arc<WebhookMountTable>) -> Router {
         Router::new().route(
             &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
@@ -304,10 +303,10 @@ impl WebhookReceiver {
 /// Order matters and is deliberate:
 ///   1. table lookup  → 404. An unmounted path is simply not served.
 ///   2. signature     → 403. FIRST, so an unauthenticated caller cannot tell
-///                      "channel down" from "wrong secret" (a state oracle).
+///      "channel down" from "wrong secret" (a state oracle).
 ///   3. channel status → 503. Depth only: `stop`/`delete` already removed the
-///                      mount, so this catches a channel that moved itself to
-///                      Error/Connecting without any RPC.
+///      mount, so this catches a channel that moved itself to
+///      Error/Connecting without any RPC.
 ///   4. parse + forward.
 async fn webhook_endpoint(
     State(table): State<Arc<WebhookMountTable>>,

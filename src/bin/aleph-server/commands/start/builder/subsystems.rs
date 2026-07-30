@@ -513,48 +513,20 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
-    // Mount webhook ingestion for every channel that receives over HTTP POST.
+    // Hand the registry's live webhook mount table to the HTTP surface.
     //
-    // Runs here, after every channel has started, because a channel only
-    // materialises its handler in `start()`. Without this block the generic
-    // webhook channel starts, reports Connected, and is deaf — the handler it
-    // built has no HTTP surface. (That was the state until 2026-07-29.)
+    // The registry is the single writer (`start_channel` / `stop_channel` /
+    // `restart_channel` / `register` / `create_channel` / `unregister`), so
+    // this is a one-time handoff of a shared handle — not a snapshot. Order
+    // does not matter: mounts made by the `start_all` above are already in the
+    // table, and anything started later through `channel.start` lands in the
+    // same table the router is reading.
     {
-        use alephcore::gateway::{WebhookMount, WebhookReceiver};
-
-        let mut mounts: Vec<WebhookMount> = Vec::new();
-        for info in channel_registry.list().await {
-            let Some(handle) = channel_registry.get(&info.id).await else {
-                continue;
-            };
-            let channel = handle.read().await;
-            if let Some(handler) = channel.webhook_handler() {
-                // The channel's OWN broadcast, so start_message_forwarder
-                // still sees the traffic and stamps channel health. The status
-                // handle is what lets the endpoint refuse traffic once the
-                // channel is later stopped/deleted — this boot-time mount
-                // table itself is never rebuilt.
-                mounts.push(WebhookMount {
-                    handler,
-                    inbound: channel.state().sender(),
-                    status: channel.state().status_handle(),
-                    channel_id: info.id.clone(),
-                });
-            }
-        }
-
-        if !mounts.is_empty() {
-            // `channel_registry.list()` iterates a HashMap, whose order is not
-            // stable across restarts. Without a deterministic order here,
-            // which mount wins a duplicate path — and therefore which secret
-            // and which channel id is live on that path — would be a
-            // per-boot coin flip.
-            mounts.sort_by(|a, b| a.channel_id.as_str().cmp(b.channel_id.as_str()));
-            let count = mounts.len();
-            server.set_webhook_routes(WebhookReceiver::router(mounts));
-            if !daemon {
-                println!("  Gateway: {count} webhook ingestion route(s) mounted");
-            }
+        let mounts = channel_registry.webhook_mounts();
+        let count = mounts.mounted_count().await;
+        server.set_webhook_mounts(mounts);
+        if !daemon && count > 0 {
+            println!("  Gateway: {count} webhook ingestion route(s) mounted");
         }
     }
 
