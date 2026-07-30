@@ -119,7 +119,7 @@ pub const WEBHOOK_ROUTE_PREFIX: &str = "/webhook";
 /// Requires a whole extra segment: `/webhook` and `/webhookx/y` are both out
 /// (the wildcard needs at least one segment, and the prefix must end on a
 /// segment boundary).
-fn is_mountable_path(path: &str) -> bool {
+pub(crate) fn is_mountable_path(path: &str) -> bool {
     path.strip_prefix(WEBHOOK_ROUTE_PREFIX)
         .and_then(|rest| rest.strip_prefix('/'))
         .is_some_and(|sub| !sub.is_empty())
