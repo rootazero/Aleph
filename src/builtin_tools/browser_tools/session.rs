@@ -112,7 +112,16 @@ impl AlephTool for BrowserSessionTool {
             }
         };
         let path_str = path.to_string_lossy().to_string();
-        let backend = super::make_backend(&self.manager, &args.profile);
+        let backend = match super::make_backend(&self.manager, &args.profile) {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(BrowserSessionOutput {
+                    success: false,
+                    path: None,
+                    message: Some(e.to_string()),
+                });
+            }
+        };
         let result = match args.action {
             SessionAction::Save => backend.save_state(&path).await,
             SessionAction::Load => backend.load_state(&path).await,

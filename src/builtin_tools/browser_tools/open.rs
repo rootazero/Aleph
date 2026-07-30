@@ -56,7 +56,16 @@ impl AlephTool for BrowserOpenTool {
             });
         }
 
-        let backend = super::make_backend(&self.manager, &args.profile);
+        let backend = match super::make_backend(&self.manager, &args.profile) {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(BrowserOpenOutput {
+                    success: false,
+                    tab_id: None,
+                    message: Some(e.to_string()),
+                });
+            }
+        };
         match backend.open_tab(&args.url).await {
             Ok(tab_id) => Ok(BrowserOpenOutput {
                 success: true,
@@ -136,6 +145,7 @@ mod tests {
                 blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
                 allowed_domains: vec![],
                 block_secrets_in_url: false,
+                block_secrets_in_input: false,
                 redact_secrets_in_content: false,
             },
             ..Default::default()
@@ -189,6 +199,7 @@ mod tests {
                 blocked_domains: vec![],
                 allowed_domains: vec!["*.allowed.com".to_string()],
                 block_secrets_in_url: false,
+                block_secrets_in_input: false,
                 redact_secrets_in_content: false,
             },
             ..Default::default()

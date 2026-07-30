@@ -14,7 +14,7 @@ use crate::tools::AlephTool;
 pub struct ProfileInfo {
     /// Profile name.
     pub name: String,
-    /// Current state (e.g. "Idle", "Running").
+    /// Derived liveness: "active" (live session) or "idle".
     pub state: String,
     /// Driver mode: "managed" (headless, default) or "`existing_session`" (visible browser, use only when user explicitly requests).
     pub driver: String,
@@ -26,7 +26,7 @@ pub struct ProfileInfo {
 pub enum ProfileAction {
     /// List all available profiles.
     List,
-    /// Get the current state of a specific profile.
+    /// Get the liveness and driver of a specific profile.
     GetState {
         /// Profile name to query.
         name: String,
@@ -75,14 +75,14 @@ impl AlephTool for BrowserProfileTool {
                     .manager
                     .list_profiles()
                     .into_iter()
-                    .map(|(name, state)| {
+                    .map(|(name, active)| {
                         let driver = self
                             .manager
                             .get_driver(&name)
                             .map_or_else(|| "unknown".to_string(), |d| format!("{d:?}"));
                         ProfileInfo {
                             name,
-                            state: format!("{state:?}"),
+                            state: if active { "active" } else { "idle" }.to_string(),
                             driver,
                         }
                     })
@@ -96,21 +96,28 @@ impl AlephTool for BrowserProfileTool {
                 })
             }
             ProfileAction::GetState { name } => {
-                let state = self.manager.get_state(&name);
-                match state {
-                    Some(s) => Ok(BrowserProfileOutput {
-                        success: true,
-                        profiles: None,
-                        state: Some(format!("{s:?}")),
-                        message: None,
-                    }),
-                    None => Ok(BrowserProfileOutput {
+                if self.manager.get_config(&name).is_none() {
+                    return Ok(BrowserProfileOutput {
                         success: false,
                         profiles: None,
                         state: None,
                         message: Some(format!("Profile '{name}' not found")),
-                    }),
+                    });
                 }
+                let active = self.manager.session_active(&name);
+                let driver = self
+                    .manager
+                    .get_driver(&name)
+                    .map_or_else(|| "unknown".to_string(), |d| format!("{d:?}"));
+                Ok(BrowserProfileOutput {
+                    success: true,
+                    profiles: None,
+                    state: Some(format!(
+                        "{} (driver: {driver})",
+                        if active { "active" } else { "idle" }
+                    )),
+                    message: None,
+                })
             }
         }
     }
@@ -156,8 +163,8 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
-        assert!(result.state.is_some());
-        assert!(result.state.unwrap().contains("Idle"));
+        // "default" has never been used → idle (with driver info attached).
+        assert_eq!(result.state.as_deref(), Some("idle (driver: Managed)"));
     }
 
     #[tokio::test]

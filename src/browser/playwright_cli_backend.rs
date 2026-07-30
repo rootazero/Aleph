@@ -59,24 +59,6 @@ fn target_ref(target: &ActionTarget) -> Result<&str, BrowserError> {
     }
 }
 
-/// Sentinel the wait probe returns when the text is present. A bare `true`
-/// would be ambiguous — the CLI's status lines or a boolean-valued page could
-/// also print a lone `true`; this token cannot occur by accident (the probe's
-/// result value is the only thing echoed, never the page text).
-const WAIT_PROBE_FOUND: &str = "ALEPH_WAIT_FOUND";
-
-/// Build the JS probe `playwright-cli eval` runs to test whether `text` is
-/// visible on the page. `serde_json::to_string` renders `text` as a quoted,
-/// fully-escaped string literal, so arbitrary text (quotes, backslashes,
-/// newlines) can never break out of the expression.
-fn wait_probe_func(text: &str) -> String {
-    let needle = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
-    format!(
-        "() => (!!document.body && document.body.innerText.includes({needle})) \
-         ? {WAIT_PROBE_FOUND:?} : 'absent'"
-    )
-}
-
 /// Translate a [`CookieOp`] into the `playwright-cli cookie-*` argv.
 ///
 /// Pure so the presence-flag (`--httpOnly`/`--secure`) vs value-flag
@@ -152,7 +134,31 @@ impl BrowserBackend for PlaywrightCliBackend {
         args.push("tab-new");
         args.push(url);
         let _ = self.run(&args, self.nav_timeout()).await?;
-        Ok("last".into())
+        // Re-list once: the CLI's `tab-new` returns no id, so both the real
+        // tab id AND the post-navigation audit come from this single snapshot
+        // (the newly opened tab is the last-listed one). A failed listing
+        // degrades to an empty snapshot — the audit skips and the id falls
+        // back to the "last" sentinel rather than failing a successful open.
+        let tabs_text = self.list_tabs().await.unwrap_or_default();
+        let tab_id = super::tab_registry::parse_tab_ids(&tabs_text)
+            .last()
+            .cloned();
+        // Post-navigation audit: a redirect may have landed the new tab on a
+        // blocked origin the navigation-time guard never saw. On a violation,
+        // quarantine — best-effort close the fresh tab — then surface the
+        // policy error.
+        if let Err(e) =
+            super::post_nav::verify_landed_url(&self.ssrf_guard, &tabs_text, tab_id.as_deref())
+                .await
+        {
+            if let Some(ref id) = tab_id {
+                if let Err(close_err) = self.close_tab(id).await {
+                    tracing::warn!(tab = %id, error = %close_err, "post-navigation quarantine: failed to close blocked tab");
+                }
+            }
+            return Err(e);
+        }
+        Ok(tab_id.unwrap_or_else(|| "last".into()))
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
@@ -172,6 +178,11 @@ impl BrowserBackend for PlaywrightCliBackend {
             .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
         let _ = self.run(&["goto", url], self.nav_timeout()).await?;
+        // Post-navigation audit: a redirect may have landed the tab on a
+        // blocked origin. `goto` drives the CLI session's current tab (the
+        // last-listed one by the tool layer's convention), so the audit
+        // resolves the active tab rather than the ignored `_tab_id`.
+        super::post_nav::audit_landed_tab(self, &self.ssrf_guard, None).await?;
         Ok(())
     }
 
@@ -344,32 +355,9 @@ impl BrowserBackend for PlaywrightCliBackend {
         Ok(())
     }
 
-    async fn wait_for_text(
-        &self,
-        _tab_id: &str,
-        text: &str,
-        timeout_ms: u64,
-    ) -> Result<bool, BrowserError> {
-        // playwright-cli has no wait command — poll the rendered page text via
-        // `eval` until the text appears or the budget elapses. Returns Ok(false)
-        // on timeout (text absent is an answer, not an error).
-        const POLL_INTERVAL: Duration = Duration::from_millis(500);
-        let func = wait_probe_func(text);
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-        loop {
-            let out = self.run(&["eval", &func], self.action_timeout()).await?;
-            // The probe's result value is the only thing echoed back; the
-            // sentinel cannot appear unless the probe returned "found".
-            if out.stdout.contains(WAIT_PROBE_FOUND) {
-                return Ok(true);
-            }
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
-                return Ok(false);
-            }
-            tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
-        }
-    }
+    // `wait_for` is NOT overridden: playwright-cli has no wait command, so the
+    // trait default's evaluate-polling (see `wait_probe`) is exactly right —
+    // this backend's `evaluate` runs the probe via `eval`.
 
     async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
         Ok(self.run(&["console"], self.action_timeout()).await?.stdout)
@@ -582,23 +570,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, BrowserError::ActionFailed(_)));
-    }
-
-    #[test]
-    fn test_wait_probe_func_is_arrow_function_with_escaped_needle() {
-        // Plain text embeds as a quoted literal inside an arrow function that
-        // resolves to the sentinel (never a bare boolean — see WAIT_PROBE_FOUND).
-        let f = wait_probe_func("Loading done");
-        assert!(f.starts_with("() => "));
-        assert!(f.contains("document.body.innerText.includes(\"Loading done\")"));
-        assert!(f.contains("\"ALEPH_WAIT_FOUND\""));
-        assert!(f.contains("'absent'"));
-        // Quotes/backslashes/newlines must stay inside the string literal.
-        let f = wait_probe_func("she said \"hi\\\" \n");
-        assert!(f.starts_with("() => "));
-        assert!(f.contains("\\\"hi\\\\\\\""));
-        assert!(f.contains("\\n"));
-        assert!(!f.contains('\n'), "raw newline would break the expression");
     }
 
     #[test]

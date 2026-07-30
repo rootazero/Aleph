@@ -60,6 +60,17 @@ impl AlephTool for BrowserDialogTool {
     type Output = BrowserDialogOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Input-side secret scan: prompt-dialog text is typed into the page,
+        // so the same deterministic policy gate as browser_type applies.
+        if let Some(ref text) = args.prompt_text {
+            if let Some(message) = super::check_input_secret_block(&self.manager, text) {
+                return Ok(BrowserDialogOutput {
+                    success: false,
+                    message: Some(message),
+                });
+            }
+        }
+
         let action = match args.action {
             DialogAction::Accept => "accept",
             DialogAction::Dismiss => "dismiss",
@@ -108,5 +119,47 @@ mod tests {
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dialog_blocks_secret_prompt_text() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserDialogTool::new(manager);
+        let result = tool
+            .call(BrowserDialogArgs {
+                profile: "default".into(),
+                action: DialogAction::Accept,
+                prompt_text: Some(
+                    "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
+                ),
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("Blocked"), "expected refusal: {message}");
+        // The refusal names the rule but never echoes the secret value.
+        assert!(!message.contains("sk-ant-api03"));
+    }
+
+    #[tokio::test]
+    async fn test_dialog_clean_prompt_text_not_blocked() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserDialogTool::new(manager);
+        let result = tool
+            .call(BrowserDialogArgs {
+                profile: "default".into(),
+                action: DialogAction::Accept,
+                prompt_text: Some("yes, I confirm".into()),
+            })
+            .await
+            .unwrap();
+
+        // Clean prompt text passes the secret scan and reaches the backend,
+        // which degrades gracefully without a running browser.
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(!message.contains("Blocked"), "clean prompt blocked: {message}");
     }
 }

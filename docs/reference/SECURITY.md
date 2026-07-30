@@ -833,7 +833,9 @@ Thin wrapper over the core SSRF engine with browser-specific features:
 
 ```rust
 pub struct BrowserSsrfGuard {
-    config: SsrfConfig,  // block_private, blocked_domains, allowed_domains
+    config: SsrfConfig,  // block_private, blocked_domains, allowed_domains,
+                         // block_secrets_in_url, redact_secrets_in_content,
+                         // block_secrets_in_input
 }
 
 impl BrowserSsrfGuard {
@@ -843,6 +845,31 @@ impl BrowserSsrfGuard {
     }
 }
 ```
+
+The browser boundary has **four layers** (all default-on; policy knobs under
+`[browser.policy]`):
+
+1. **Navigation-in** — `check_navigation` vets every agent-initiated `open`/`goto`
+   target: SSRF policy plus `block_secrets_in_url` (rejects URLs embedding a
+   Critical-severity credential, raw or percent-encoded — anti-exfiltration).
+2. **Post-landing** — `src/browser/post_nav.rs::verify_landed_url` re-checks the
+   URL the tab actually landed on after `open_tab`/`navigate` (HTTP redirects can
+   cross origins); a violation closes the tab (quarantine) and fails the call.
+   Interaction/history ops are deliberately not re-checked here.
+3. **Input-side** — `block_secrets_in_input` scans text typed into pages
+   (`browser_type` / `browser_fill_form` / `browser_select` / dialog prompts) for
+   Critical-severity secrets and refuses the action before it runs, so a
+   credential in the model's context cannot be typed into a form on an allowed
+   host. Cookie `set` values are intentionally exempt (a cookie value legitimately
+   IS a credential).
+4. **Content-out** — every page-derived read (snapshot / console / network /
+   evaluate / cookies / tab list) passes bound → `redact_secrets_in_content` →
+   prompt-injection wrapping; content reads additionally re-validate the tab's
+   CURRENT URL (`make_backend_and_tab_guarded`) so a JS/redirect navigation to a
+   blocked origin cannot be read out.
+
+Secret patterns are NOT duplicated in the browser layer: the `Critical`-severity
+PII rules (`src/pii/rules`) are the single source of truth for layers 1, 3 and 4.
 
 ### Content Sanitization
 

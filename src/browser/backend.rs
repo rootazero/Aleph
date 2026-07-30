@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use super::error::BrowserError;
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId,
+    ScrollDirection, SnapshotOutput, TabId, WaitCondition,
 };
 
 #[async_trait]
@@ -56,19 +56,9 @@ pub trait BrowserBackend: Send + Sync {
 
     /// Navigate the tab's history: back, forward, or reload the current page.
     ///
-    /// Default impl drives the page via `evaluate` with an arrow-function body —
-    /// both real backends' eval surfaces (`playwright-cli eval` and Chrome
-    /// `DevTools` MCP `evaluate_script`) require a function expression, not a bare
-    /// statement. Backends with a native history primitive override this so the
-    /// command waits for the resulting navigation to complete.
-    async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
-        let js = match nav {
-            HistoryNav::Back => "() => history.back()",
-            HistoryNav::Forward => "() => history.forward()",
-            HistoryNav::Refresh => "() => location.reload()",
-        };
-        self.evaluate(tab_id, js).await.map(|_| ())
-    }
+    /// Required method — both real backends implement it via a native history
+    /// primitive so the command waits for the resulting navigation to complete.
+    async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError>;
 
     /// Double-click an element. The target must be a snapshot ref — neither
     /// driver exposes a coordinate-based double-click primitive.
@@ -77,15 +67,29 @@ pub trait BrowserBackend: Send + Sync {
         Err(BrowserError::ActionFailed("dblclick not supported".into()))
     }
 
+    /// Wait until `condition` holds on the tab, within `timeout_ms`.
+    /// Returns `Ok(false)` on timeout — an absent condition is an answer, not
+    /// an error. The default impl polls `evaluate` with a JS probe (see
+    /// [`super::wait_probe`]); backends with a native wait primitive override
+    /// the arms they support (Chrome `DevTools` MCP overrides `Text`).
+    async fn wait_for(
+        &self,
+        tab_id: &str,
+        condition: &WaitCondition,
+        timeout_ms: u64,
+    ) -> Result<bool, BrowserError> {
+        super::wait_probe::poll_wait_for(self, tab_id, condition, timeout_ms).await
+    }
+
+    /// Text-only wait, kept for existing callers — thin shim over `wait_for`.
     async fn wait_for_text(
         &self,
-        _tab_id: &str,
-        _text: &str,
-        _timeout_ms: u64,
+        tab_id: &str,
+        text: &str,
+        timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
-        Err(BrowserError::ActionFailed(
-            "wait_for_text not supported".into(),
-        ))
+        self.wait_for(tab_id, &WaitCondition::Text(text.into()), timeout_ms)
+            .await
     }
 
     async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
@@ -106,8 +110,8 @@ pub trait BrowserBackend: Send + Sync {
     }
 
     /// Bring the given tab to the foreground / make it the active page.
-    /// Default impl returns Unsupported — only backends with a real notion of
-    /// active page (e.g. Chrome `DevTools` MCP) override.
+    /// Default impl returns Unsupported — both real backends override it
+    /// (Chrome `DevTools` MCP natively, Playwright CLI via `tab-select`).
     async fn switch_tab(&self, _tab_id: &str) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed(
             "switch_tab not supported".into(),
