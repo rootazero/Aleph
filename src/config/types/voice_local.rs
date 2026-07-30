@@ -206,8 +206,11 @@ impl VoiceSection {
     /// Render [`Self::vocabulary`] as the single hint string every backend takes
     /// (comma-separated), or `None` when nothing usable is configured.
     ///
-    /// One renderer for all three consumers so the batch and streaming paths
-    /// cannot bias the decoder differently.
+    /// One renderer for all consumers so no path can bias the decoder
+    /// differently: the batch Whisper `prompt`, the streaming handshake
+    /// `hotwords`/`initial_prompt` (primary *and* fallback `SttSource`), and —
+    /// one dictionary, two consumers — `VoiceModeLayer`'s transcription-repair
+    /// rule, which shows the model the same list on ASR-transcribed turns.
     #[must_use]
     pub fn vocabulary_hint(&self) -> Option<String> {
         let mut out = String::new();
