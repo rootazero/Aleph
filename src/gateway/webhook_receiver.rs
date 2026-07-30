@@ -92,11 +92,10 @@ pub struct WebhookMount {
     pub inbound: InboundMessageSender,
     /// The owning channel's shared status cell (`ChannelState::status_handle()`).
     ///
-    /// The route table built from these mounts is a boot-time snapshot with no
-    /// invalidation — `channel.stop()`/`channel.delete` cannot remove a route
-    /// that already exists. Reading this status per-request is what actually
-    /// stops a stopped/deleted channel from still answering HTTP, without
-    /// building a dynamic mount table.
+    /// Defence in depth, not the primary guard: `stop` / `delete` remove the
+    /// mount outright (see [`WebhookMountTable::unmount_channel`]). This cell
+    /// covers a channel that moved itself to `Error` / `Connecting` without any
+    /// RPC, where the mount legitimately outlives `Connected`.
     pub status: Arc<tokio::sync::RwLock<ChannelStatus>>,
     /// The owning channel's id, so a skipped mount's warning names which
     /// config section is at fault instead of only the (possibly shared) path.
@@ -236,70 +235,29 @@ impl WebhookMountTable {
     }
 }
 
-/// Builds the axum routes for channel webhook ingestion.
+/// Builds the single axum route that carries channel webhook ingestion.
 ///
-/// This does **not** own a listener. The gateway's own server merges these
-/// routes into `build_router()`, so webhook traffic inherits the configured
-/// bind address, TLS, and security headers. The previous version bound
+/// This does **not** own a listener. The gateway's own server merges this
+/// route into `build_router()`, so webhook traffic inherits the configured
+/// bind address, TLS, and security headers. An earlier version bound
 /// `0.0.0.0` itself, which silently opened a LAN port regardless of
 /// `[gateway] host`.
+///
+/// The route pattern is a constant, and the *contents* live in the shared
+/// [`WebhookMountTable`]. That split is what lets `channel.start` /
+/// `channel.stop` / `channel.delete` change the served surface after
+/// `serve()` has taken the router, and it keeps operator-writable paths out
+/// of axum's route table entirely.
 pub struct WebhookReceiver;
 
 impl WebhookReceiver {
-    /// Build the router for the given mounts.
-    ///
-    /// A mount whose path collides with a gateway route, or with an earlier
-    /// mount, is skipped with a warning — `Router::merge` panics on duplicate
-    /// routes and `path` is an operator-writable config field, so a typo must
-    /// not take the daemon down at boot. A path missing its leading `/` is
-    /// likewise skipped rather than left to panic in `Router::route` — the
-    /// only current producer validates this (`WebhookChannelConfig::validate`),
-    /// but that is enforced by convention, not by this function, and a future
-    /// `WebhookHandler` without that validation should not be able to take the
-    /// daemon down at boot.
-    pub fn router(mounts: Vec<WebhookMount>) -> Router {
-        let mut router = Router::new();
-        let mut mounted: Vec<String> = Vec::new();
-
-        for mount in mounts {
-            let path = mount.handler.path().to_string();
-
-            if !path.starts_with('/') {
-                warn!(
-                    channel_id = %mount.channel_id,
-                    path = %path,
-                    "webhook path missing leading '/' — handler not mounted"
-                );
-                continue;
-            }
-            if crate::gateway::server::is_reserved_route(&path) {
-                warn!(
-                    channel_id = %mount.channel_id,
-                    path = %path,
-                    "webhook path collides with a gateway route — handler not mounted"
-                );
-                continue;
-            }
-            if mounted.iter().any(|p| p == &path) {
-                warn!(
-                    channel_id = %mount.channel_id,
-                    path = %path,
-                    "duplicate webhook path — handler not mounted"
-                );
-                continue;
-            }
-
-            let handler_state = Arc::new(HandlerState {
-                handler: mount.handler,
-                inbound: mount.inbound,
-                status: mount.status,
-            });
-            router = router.route(&path, post(webhook_endpoint).with_state(handler_state));
-            info!(path = %path, "Registered webhook handler");
-            mounted.push(path);
-        }
-
-        router
+    /// Route all `{WEBHOOK_ROUTE_PREFIX}/…` POSTs at `table`.
+    #[must_use]
+    pub fn router(table: Arc<WebhookMountTable>) -> Router {
+        Router::new().route(
+            &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
+            post(webhook_endpoint).with_state(table),
+        )
     }
 
     /// Compute HMAC-SHA256 signature of data with the given secret.
@@ -326,32 +284,48 @@ impl WebhookReceiver {
     }
 }
 
-/// Internal state passed to each axum handler.
-struct HandlerState {
-    handler: Arc<dyn WebhookHandler>,
-    inbound: InboundMessageSender,
-    status: Arc<tokio::sync::RwLock<ChannelStatus>>,
-}
-
-/// Axum endpoint handler that dispatches to the appropriate `WebhookHandler`.
+/// Axum endpoint for every mounted channel webhook.
+///
+/// Order matters and is deliberate:
+///   1. table lookup  → 404. An unmounted path is simply not served.
+///   2. signature     → 403. FIRST, so an unauthenticated caller cannot tell
+///                      "channel down" from "wrong secret" (a state oracle).
+///   3. channel status → 503. Depth only: `stop`/`delete` already removed the
+///                      mount, so this catches a channel that moved itself to
+///                      Error/Connecting without any RPC.
+///   4. parse + forward.
 async fn webhook_endpoint(
-    State(state): State<Arc<HandlerState>>,
+    State(table): State<Arc<WebhookMountTable>>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // Step 0: Reject before doing any other work if we have positive evidence
-    // the owning channel is not connected (stopped or deleted). The mount
-    // table has no invalidation of its own, so this check is what actually
-    // stops a "stopped" channel from still answering HTTP.
-    //
-    // `try_read` intentionally fails OPEN on contention: a momentary
-    // write-lock holder (another request's status flip in flight) is not
-    // evidence the channel is down, and dropping live traffic on a lock race
-    // would be a worse bug than the one this guards against.
-    if let Ok(status) = state.status.try_read() {
+    // `uri.path()` rather than the extracted `{*rest}`: the table is keyed by
+    // the configured path verbatim, and going through the wildcard would add a
+    // percent-decoding step on one side only.
+    let Some(mounted) = table.lookup(uri.path()).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            String::from("Not Found: no webhook mounted at this path"),
+        );
+    };
+
+    if !mounted.handler.verify(&headers, &body) {
+        warn!(path = %uri.path(), "Webhook signature verification failed");
+        return (
+            StatusCode::FORBIDDEN,
+            String::from("Forbidden: invalid signature"),
+        );
+    }
+
+    // `try_read` intentionally fails OPEN on contention: a momentary write-lock
+    // holder (another request's status flip in flight) is not evidence the
+    // channel is down, and dropping live traffic on a lock race would be worse
+    // than the case this guards.
+    if let Ok(status) = mounted.status.try_read() {
         if *status != ChannelStatus::Connected {
             warn!(
-                path = %state.handler.path(),
+                path = %uri.path(),
                 status = ?*status,
                 "webhook received for a channel that is not connected — rejecting"
             );
@@ -362,24 +336,14 @@ async fn webhook_endpoint(
         }
     }
 
-    // Step 1: Verify signature
-    if !state.handler.verify(&headers, &body) {
-        warn!(path = %state.handler.path(), "Webhook signature verification failed");
-        return (
-            StatusCode::FORBIDDEN,
-            String::from("Forbidden: invalid signature"),
-        );
-    }
-
-    // Step 2: Parse payload into messages
-    match state.handler.handle(&headers, body).await {
+    match mounted.handler.handle(&headers, body).await {
         Ok(messages) => {
             let mut dropped = 0usize;
             for msg in messages {
-                if state.inbound.send(msg).is_err() {
+                if mounted.inbound.send(msg).is_err() {
                     dropped += 1;
                     warn!(
-                        path = %state.handler.path(),
+                        path = %uri.path(),
                         "Failed to forward inbound message (no subscriber on the channel)"
                     );
                 }
@@ -395,11 +359,7 @@ async fn webhook_endpoint(
             (StatusCode::OK, String::from("ok"))
         }
         Err(e) => {
-            warn!(
-                path = %state.handler.path(),
-                error = %e,
-                "Webhook handler error"
-            );
+            warn!(path = %uri.path(), error = %e, "Webhook handler error");
             (StatusCode::BAD_REQUEST, String::from("Bad request"))
         }
     }
@@ -566,186 +526,157 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_webhook_endpoint_valid_signature() {
-        use crate::gateway::channel::ChannelState;
-        use axum::http::Request;
-        use tower::ServiceExt;
-
-        let secret = "integration-test-secret";
-        let handler: Arc<dyn WebhookHandler> = Arc::new(MockWebhookHandler {
-            secret: secret.to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
-
-        let channel_state = ChannelState::new(16);
-        channel_state.set_status(ChannelStatus::Connected).await;
-        let mut rx = channel_state.inbound_subscribe();
-
-        let handler_state = Arc::new(HandlerState {
-            handler: Arc::clone(&handler),
-            inbound: channel_state.sender(),
-            status: channel_state.status_handle(),
-        });
-
-        let app = Router::new()
-            .route("/webhook/mock", post(webhook_endpoint))
-            .with_state(handler_state);
-
-        let body = r#"{"text":"Hello from webhook!"}"#;
-        let sig = WebhookReceiver::compute_signature(secret, body.as_bytes());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/webhook/mock")
-                    .header("X-Webhook-Signature", &sig)
-                    .body(axum::body::Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // Verify the message was forwarded
-        let msg = rx.try_recv().expect("Should have received inbound message");
-        assert_eq!(msg.text, "Hello from webhook!");
-        assert_eq!(msg.channel_id.as_str(), "mock-channel");
-    }
-
-    #[tokio::test]
-    async fn test_webhook_endpoint_invalid_signature() {
-        use crate::gateway::channel::ChannelState;
-        use axum::http::Request;
-        use tower::ServiceExt;
-
-        let handler: Arc<dyn WebhookHandler> = Arc::new(MockWebhookHandler {
-            secret: "real-secret".to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
-
-        let channel_state = ChannelState::new(16);
-        channel_state.set_status(ChannelStatus::Connected).await;
-
-        let handler_state = Arc::new(HandlerState {
-            handler: Arc::clone(&handler),
-            inbound: channel_state.sender(),
-            status: channel_state.status_handle(),
-        });
-
-        let app = Router::new()
-            .route("/webhook/mock", post(webhook_endpoint))
-            .with_state(handler_state);
-
-        let body = r#"{"text":"Unauthorized!"}"#;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/webhook/mock")
-                    .header("X-Webhook-Signature", "sha256=invalid")
-                    .body(axum::body::Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn test_webhook_endpoint_missing_signature() {
-        use crate::gateway::channel::ChannelState;
-        use axum::http::Request;
-        use tower::ServiceExt;
-
-        let handler: Arc<dyn WebhookHandler> = Arc::new(MockWebhookHandler {
-            secret: "some-secret".to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
-
-        let channel_state = ChannelState::new(16);
-        channel_state.set_status(ChannelStatus::Connected).await;
-
-        let handler_state = Arc::new(HandlerState {
-            handler: Arc::clone(&handler),
-            inbound: channel_state.sender(),
-            status: channel_state.status_handle(),
-        });
-
-        let app = Router::new()
-            .route("/webhook/mock", post(webhook_endpoint))
-            .with_state(handler_state);
-
-        let body = r#"{"text":"No sig!"}"#;
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/webhook/mock")
-                    .body(axum::body::Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // No signature header → verify returns false → FORBIDDEN
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    // --- WebhookReceiver::router() integration tests ---
-
-    #[tokio::test]
-    async fn signed_post_reaches_the_channel_broadcast() {
+    async fn post_without_a_signature_header_is_rejected() {
         use crate::gateway::channel::ChannelState;
         use axum::body::Body;
         use axum::http::Request;
         use tower::ServiceExt;
 
-        let secret = "router-secret";
         let state = ChannelState::new(16);
         state.set_status(ChannelStatus::Connected).await;
-        // Subscribe FIRST: InboundMessageSender::send returns Err when there are
-        // no subscribers (broadcast semantics), and in production the subscriber
-        // is ChannelRegistry::start_message_forwarder.
-        let mut rx = state.inbound_subscribe();
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(table);
 
-        let handler = Arc::new(MockWebhookHandler {
-            secret: secret.to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
-
-        let app = WebhookReceiver::router(vec![WebhookMount {
-            handler,
-            inbound: state.sender(),
-            status: state.status_handle(),
-            channel_id: ChannelId::new("mock-channel"),
-        }]);
-
-        let body = br#"{"text":"hello from webhook"}"#.to_vec();
-        let sig = WebhookReceiver::compute_signature(secret, &body);
-
-        let response = app
+        let response = router
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/webhook/mock")
-                    .header("x-webhook-signature", sig)
-                    .body(Body::from(body))
+                    .body(Body::from(br#"{"text":"no sig"}"#.to_vec()))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
 
-        let msg = rx
-            .try_recv()
-            .expect("message must reach the channel broadcast");
-        assert_eq!(msg.text, "hello from webhook");
+    // --- Dispatch through the shared table ---
+
+    /// POST `body` signed with `secret` to `path`, through a router built over
+    /// `table`. The router is built ONCE per test so that a mount added
+    /// afterwards proves the table is live, not snapshotted.
+    async fn signed_post(
+        router: &Router,
+        path: &str,
+        secret: &str,
+        body: &'static [u8],
+    ) -> StatusCode {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let sig = WebhookReceiver::compute_signature(secret, body);
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("x-webhook-signature", sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn signed_post_reaches_the_channel_broadcast() {
+        use crate::gateway::channel::ChannelState;
+
+        let state = ChannelState::new(16);
+        state.set_status(ChannelStatus::Connected).await;
+        // Subscribe FIRST: `InboundMessageSender::send` errors with no
+        // subscribers (broadcast semantics); in production the subscriber is
+        // `ChannelRegistry::start_message_forwarder`.
+        let mut rx = state.inbound_subscribe();
+
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(Arc::clone(&table));
+
+        let status = signed_post(&router, "/webhook/mock", "s", br#"{"text":"hi"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            rx.try_recv()
+                .expect("must reach the channel broadcast")
+                .text,
+            "hi"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mount_added_after_the_router_was_built_is_reachable() {
+        use crate::gateway::channel::ChannelState;
+
+        // This is the whole point of the table: `channel.create` / `channel.start`
+        // at runtime happen long after `build_router()`, and the router is
+        // immutable once `serve()` owns it. Before this task the answer was
+        // "restart the daemon".
+        let state = ChannelState::new(16);
+        state.set_status(ChannelStatus::Connected).await;
+        let mut rx = state.inbound_subscribe();
+
+        let table = Arc::new(WebhookMountTable::new());
+        let router = WebhookReceiver::router(Arc::clone(&table));
+
+        assert_eq!(
+            signed_post(&router, "/webhook/late", "s", br#"{"text":"hi"}"#).await,
+            StatusCode::NOT_FOUND,
+            "nothing is mounted yet"
+        );
+
+        table
+            .mount(mount_for("a", "/webhook/late", "s", &state))
+            .await;
+
+        assert_eq!(
+            signed_post(&router, "/webhook/late", "s", br#"{"text":"hi"}"#).await,
+            StatusCode::OK,
+            "the same router must now serve it — no rebuild, no restart"
+        );
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn unmounting_makes_the_endpoint_disappear() {
+        use crate::gateway::channel::ChannelState;
+
+        // `channel.stop` / `channel.delete` used to return "stopped" while the
+        // endpoint kept answering. 404 (not 503) is the fix: the route is gone.
+        let state = ChannelState::new(16);
+        state.set_status(ChannelStatus::Connected).await;
+        let mut rx = state.inbound_subscribe();
+
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(Arc::clone(&table));
+
+        assert_eq!(
+            signed_post(&router, "/webhook/mock", "s", br#"{"text":"hi"}"#).await,
+            StatusCode::OK
+        );
+        assert!(rx.try_recv().is_ok());
+
+        table.unmount_channel(&ChannelId::new("a")).await;
+
+        assert_eq!(
+            signed_post(&router, "/webhook/mock", "s", br#"{"text":"hi"}"#).await,
+            StatusCode::NOT_FOUND
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "an unmounted channel must publish nothing, even with a valid signature"
+        );
     }
 
     #[tokio::test]
@@ -759,19 +690,13 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let mut rx = state.inbound_subscribe();
 
-        let handler = Arc::new(MockWebhookHandler {
-            secret: "router-secret".to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(table);
 
-        let app = WebhookReceiver::router(vec![WebhookMount {
-            handler,
-            inbound: state.sender(),
-            status: state.status_handle(),
-            channel_id: ChannelId::new("mock-channel"),
-        }]);
-
-        let response = app
+        let response = router
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -791,205 +716,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disconnected_channel_returns_503_and_publishes_nothing() {
+    async fn signature_is_checked_before_channel_status() {
         use crate::gateway::channel::ChannelState;
         use axum::body::Body;
         use axum::http::Request;
         use tower::ServiceExt;
 
-        let secret = "router-secret";
-        // A fresh ChannelState defaults to Disconnected — mirrors the state
-        // left behind by `WebhookChannel::stop()` / `channel.delete`, which
-        // this test exists to prove the router now honors.
+        // A fresh ChannelState is Disconnected. An unauthenticated caller must
+        // not be able to tell "channel is down" (503) from "wrong secret" (403):
+        // that difference is a state oracle on an unauthenticated surface.
         let state = ChannelState::new(16);
-        let mut rx = state.inbound_subscribe();
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(table);
 
-        let handler = Arc::new(MockWebhookHandler {
-            secret: secret.to_string(),
-            handler_path: "/webhook/mock".to_string(),
-        });
-
-        let app = WebhookReceiver::router(vec![WebhookMount {
-            handler,
-            inbound: state.sender(),
-            status: state.status_handle(),
-            channel_id: ChannelId::new("mock-channel"),
-        }]);
-
-        let body = br#"{"text":"hello from webhook"}"#.to_vec();
-        let sig = WebhookReceiver::compute_signature(secret, &body);
-
-        let response = app
+        let response = router
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/webhook/mock")
-                    .header("x-webhook-signature", sig)
-                    .body(Body::from(body))
+                    .header("x-webhook-signature", "sha256=deadbeef")
+                    .body(Body::from(br#"{"text":"probe"}"#.to_vec()))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(
-            rx.try_recv().is_err(),
-            "a stopped channel must publish nothing, even with a valid signature"
-        );
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    // --- Reserved-path guard tests ---
-
     #[tokio::test]
-    async fn reserved_path_is_skipped_not_panicked() {
+    async fn disconnected_channel_returns_503_for_a_valid_signature() {
         use crate::gateway::channel::ChannelState;
 
+        // Still needed as depth: a channel can move itself to Error /
+        // Connecting without any RPC, so the mount outlives Connected.
         let state = ChannelState::new(16);
-        let handler = Arc::new(MockWebhookHandler {
-            secret: "s".to_string(),
-            handler_path: "/ws".to_string(),
-        });
+        let mut rx = state.inbound_subscribe();
 
-        // Must not panic, and must produce a router with no /ws route of its own
-        // (merging one into the gateway router is what would panic at boot).
-        let router = WebhookReceiver::router(vec![WebhookMount {
-            handler,
-            inbound: state.sender(),
-            status: state.status_handle(),
-            channel_id: ChannelId::new("ws-channel"),
-        }]);
+        let table = Arc::new(WebhookMountTable::new());
+        table
+            .mount(mount_for("a", "/webhook/mock", "s", &state))
+            .await;
+        let router = WebhookReceiver::router(table);
 
-        // A router with zero routes 404s everything.
-        use axum::body::Body;
-        use axum::http::Request;
-        use tower::ServiceExt;
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/ws")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn path_missing_leading_slash_is_skipped_not_panicked() {
-        use crate::gateway::channel::ChannelState;
-
-        let state = ChannelState::new(16);
-        let handler = Arc::new(MockWebhookHandler {
-            secret: "s".to_string(),
-            handler_path: "webhook/no-slash".to_string(),
-        });
-
-        // Must not panic — Router::route panics on a path without a leading
-        // '/'. The sole current producer (WebhookChannelConfig::validate) is
-        // guarded elsewhere; this is the builder defending itself against a
-        // future WebhookHandler that isn't.
-        let router = WebhookReceiver::router(vec![WebhookMount {
-            handler,
-            inbound: state.sender(),
-            status: state.status_handle(),
-            channel_id: ChannelId::new("no-slash-channel"),
-        }]);
-
-        // A router with zero routes 404s everything.
-        use axum::body::Body;
-        use axum::http::Request;
-        use tower::ServiceExt;
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/webhook/no-slash")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn duplicate_webhook_paths_are_deduped() {
-        use crate::gateway::channel::ChannelState;
-
-        let state_a = ChannelState::new(16);
-        let state_b = ChannelState::new(16);
-        state_a.set_status(ChannelStatus::Connected).await;
-        state_b.set_status(ChannelStatus::Connected).await;
-        let mut rx_a = state_a.inbound_subscribe();
-        let mut rx_b = state_b.inbound_subscribe();
-
-        let mounts = vec![
-            WebhookMount {
-                handler: Arc::new(MockWebhookHandler {
-                    secret: "s".to_string(),
-                    handler_path: "/webhook/dup".to_string(),
-                }),
-                inbound: state_a.sender(),
-                status: state_a.status_handle(),
-                channel_id: ChannelId::new("channel-a"),
-            },
-            WebhookMount {
-                handler: Arc::new(MockWebhookHandler {
-                    secret: "s".to_string(),
-                    handler_path: "/webhook/dup".to_string(),
-                }),
-                inbound: state_b.sender(),
-                status: state_b.status_handle(),
-                channel_id: ChannelId::new("channel-b"),
-            },
-        ];
-
-        // Must not panic on the duplicate route.
-        let router = WebhookReceiver::router(mounts);
-
-        use axum::body::Body;
-        use axum::http::Request;
-        use tower::ServiceExt;
-        let body = br#"{"text":"dup"}"#.to_vec();
-        let sig = WebhookReceiver::compute_signature("s", &body);
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/webhook/dup")
-                    .header("x-webhook-signature", sig)
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        // First mount wins; the second was skipped.
-        assert!(rx_a.try_recv().is_ok(), "first mount must be the live one");
-        assert!(
-            rx_b.try_recv().is_err(),
-            "second mount must have been skipped"
+        assert_eq!(
+            signed_post(&router, "/webhook/mock", "s", br#"{"text":"hi"}"#).await,
+            StatusCode::SERVICE_UNAVAILABLE
         );
+        assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn reserved_route_matches_prefix_segments_only() {
-        use crate::gateway::server::is_reserved_route;
+    #[tokio::test]
+    async fn unmounted_path_under_the_prefix_is_404() {
+        let table = Arc::new(WebhookMountTable::new());
+        let router = WebhookReceiver::router(table);
 
-        assert!(is_reserved_route("/ws"));
-        assert!(is_reserved_route("/health"));
-        assert!(is_reserved_route("/v1/chat/completions"));
-        assert!(is_reserved_route("/a2a/stream"));
-        assert!(is_reserved_route("/artifact/x/y/z"));
-        assert!(is_reserved_route("/.well-known/agent-card.json"));
-
-        // A path that merely starts with the same letters is NOT reserved.
-        assert!(!is_reserved_route("/wsx"));
-        assert!(!is_reserved_route("/healthcheck"));
-        assert!(!is_reserved_route("/webhook/generic"));
+        assert_eq!(
+            signed_post(&router, "/webhook/nothing-here", "s", b"{}").await,
+            StatusCode::NOT_FOUND
+        );
     }
 
     // --- WebhookMountTable admission rules ---
