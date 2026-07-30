@@ -52,6 +52,15 @@ impl AlephTool for BrowserSelectTool {
     type Output = BrowserSelectOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Input-side secret scan: a dropdown value is still text typed into the
+        // page, so the same deterministic policy gate as browser_type applies.
+        if let Some(message) = super::check_input_secret_block(&self.manager, &args.value) {
+            return Ok(BrowserSelectOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
+
         let target = if let Some(ref rid) = args.ref_id {
             ActionTarget::Ref {
                 ref_id: rid.clone(),
@@ -144,5 +153,51 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_select_blocks_secret_value() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserSelectTool::new(manager);
+
+        let result = tool
+            .call(BrowserSelectArgs {
+                profile: "default".into(),
+                selector: None,
+                ref_id: Some("combobox[0]".into()),
+                value: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("Blocked"), "expected refusal: {message}");
+        // The refusal names the rule but never echoes the secret value.
+        assert!(!message.contains("sk-ant-api03"));
+    }
+
+    #[tokio::test]
+    async fn test_select_clean_value_not_blocked() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserSelectTool::new(manager);
+
+        let result = tool
+            .call(BrowserSelectArgs {
+                profile: "default".into(),
+                selector: None,
+                ref_id: Some("combobox[0]".into()),
+                value: "us".into(),
+            })
+            .await
+            .unwrap();
+
+        // Clean value passes the secret scan and reaches the backend, which
+        // degrades gracefully without a running browser.
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(!message.contains("Blocked"), "clean value blocked: {message}");
     }
 }

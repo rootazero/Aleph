@@ -93,7 +93,6 @@ mod tests {
         let toml_str = r#"
         [browser.profiles.default]
         browser = "chromium"
-        cdp_port = 18800
 
         [browser.policy]
         block_private = true

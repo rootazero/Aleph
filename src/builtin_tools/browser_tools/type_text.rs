@@ -66,6 +66,15 @@ impl AlephTool for BrowserTypeTool {
     type Output = BrowserTypeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Input-side secret scan runs BEFORE the approval check: deterministic
+        // policy beats interactive approval (and is cheaper).
+        if let Some(message) = super::check_input_secret_block(&self.manager, &args.text) {
+            return Ok(BrowserTypeOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
+
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
             ActionType::BrowserType,

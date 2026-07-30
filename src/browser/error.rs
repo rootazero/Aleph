@@ -43,7 +43,4 @@ pub enum BrowserError {
 
     #[error("Browser profile not found: {0}")]
     ProfileNotFound(String),
-
-    #[error("Browser profile '{0}' is currently stopping")]
-    ProfileBusy(String),
 }

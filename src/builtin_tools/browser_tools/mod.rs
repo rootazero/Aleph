@@ -29,11 +29,8 @@ pub mod upload;
 pub mod wait_for;
 
 use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
-use crate::browser::playwright_cli_backend::PlaywrightCliBackend;
-use crate::browser::profile::BrowserDriver;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
@@ -79,6 +76,26 @@ pub(crate) async fn check_browser_approval(
         }
         ApprovalDecision::Ask { ref prompt } => Some(format!("Approval required: {prompt}")),
     }
+}
+
+/// Deterministic input-side secret gate for the form-input tools
+/// (`browser_type` / `browser_fill_form` / `browser_select` / `browser_dialog`
+/// prompt text) — the missing twin of the navigation-time
+/// `block_secrets_in_url` scan. Without it a `Critical`-severity secret in the
+/// model's context could be typed into a web form on an allowed host.
+///
+/// Callers run this BEFORE the approval check: deterministic policy beats
+/// interactive approval (and is cheaper). Returns the refusal message when
+/// `text` embeds a secret; the message names the matched rule but never echoes
+/// the secret value itself back to the model.
+pub(crate) fn check_input_secret_block(manager: &ProfileManager, text: &str) -> Option<String> {
+    manager.check_input_secret(text).map(|rule| {
+        format!(
+            "Blocked: input embeds a secret ({rule}) — refusing to type a credential into the \
+             page. If the user explicitly wants this, they can disable \
+             browser.policy.block_secrets_in_input."
+        )
+    })
 }
 
 /// Parse one `list_tabs` line into `(id, url)`.
@@ -148,31 +165,24 @@ async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserE
 
 /// Create the appropriate backend for the given profile.
 ///
-/// Headless mode follows the profile-level override, falling back to the global
-/// `playwright_cli.headless` default (resolved via `ProfileManager::resolve_headless`).
-pub(crate) fn make_backend(manager: &ProfileManager, profile: &str) -> Box<dyn BrowserBackend> {
+/// Single routing source: delegates to [`ProfileManager::get_backend`], which
+/// owns the driver→backend mapping and headless resolution. Unknown profiles
+/// yield [`BrowserError::ProfileNotFound`] — no silent fallback to a Managed
+/// backend under a name the user never configured.
+pub(crate) fn make_backend(
+    manager: &ProfileManager,
+    profile: &str,
+) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
     manager.record_activity(profile);
-    match manager.get_driver(profile) {
-        Some(BrowserDriver::ExistingSession) => Box::new(ChromeMcpBackend::new(
-            manager.get_chrome_mcp_driver(),
-            profile.to_string(),
-            manager.get_ssrf_guard(),
-        )),
-        Some(BrowserDriver::Managed) | None => Box::new(PlaywrightCliBackend::new(
-            manager.get_playwright_cli_driver(),
-            profile.to_string(),
-            manager.get_ssrf_guard(),
-            manager.resolve_headless(profile),
-        )),
-    }
+    manager.get_backend(profile)
 }
 
 /// Create the appropriate backend and resolve the active tab ID.
 pub(crate) async fn make_backend_and_tab(
     manager: &ProfileManager,
     profile: &str,
-) -> Result<(Box<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile);
+) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
+    let backend = make_backend(manager, profile)?;
     let tab_id = get_active_tab(backend.as_ref()).await?;
     // Reset the per-tab idle timer (Managed profiles only — see `touch_tab`).
     manager.touch_tab(profile, &tab_id);
@@ -195,8 +205,8 @@ pub(crate) async fn make_backend_and_tab(
 pub(crate) async fn make_backend_and_tab_guarded(
     manager: &ProfileManager,
     profile: &str,
-) -> Result<(Box<dyn BrowserBackend>, String), BrowserError> {
-    let backend = make_backend(manager, profile);
+) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
+    let backend = make_backend(manager, profile)?;
     let tabs_text = backend.list_tabs().await?;
     let tab_id = parse_active_tab_id(&tabs_text).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
@@ -358,16 +368,29 @@ pub(crate) fn redact_and_wrap_log(manager: &ProfileManager, text: &str) -> Strin
 /// [`crate::builtin_tools::file_ops`]'s image-read downscale.
 pub(crate) const MAX_SCREENSHOT_EDGE: u32 = 1568;
 
-/// Downscale a screenshot's longest edge to [`MAX_SCREENSHOT_EDGE`], re-encoding
-/// as PNG (the screenshot format contract every consumer — base64 output and the
-/// vision bridge — assumes). Returns the input bytes **unchanged** when the
-/// image is already within the cap (zero re-encode) or when decoding/encoding
-/// fails: post-processing must never turn a successful capture into a failure.
+/// Maximum screenshot payload (bytes) handed back to the model. The edge cap
+/// alone is not a byte budget: a dense capture (noise, dithered gradients,
+/// photo-heavy pages) re-encodes to several MB even at 1568px, flooding the
+/// provider request the same way an unbounded text read would. 5 MiB matches
+/// openclaw's screenshot ceiling and sits comfortably under provider
+/// per-image limits (Anthropic rejects images over ~5 MB on many endpoints).
+pub(crate) const MAX_SCREENSHOT_BYTES: usize = 5 * 1024 * 1024;
+
+/// Downscale a screenshot to fit BOTH budgets — longest edge
+/// [`MAX_SCREENSHOT_EDGE`] px and payload [`MAX_SCREENSHOT_BYTES`] bytes —
+/// re-encoding as PNG (the screenshot format contract every consumer —
+/// base64 output and the vision bridge — assumes). Returns the input bytes
+/// **unchanged** when the image is already within both caps (zero re-encode)
+/// or when decoding/encoding fails: post-processing must never turn a
+/// successful capture into a failure.
 pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     let Ok(decoded) = image::load_from_memory(&png_bytes) else {
         return png_bytes;
     };
-    if decoded.width().max(decoded.height()) <= MAX_SCREENSHOT_EDGE {
+    // Fast path: within both budgets → byte-for-byte passthrough.
+    if decoded.width().max(decoded.height()) <= MAX_SCREENSHOT_EDGE
+        && png_bytes.len() <= MAX_SCREENSHOT_BYTES
+    {
         return png_bytes;
     }
     let fitted = decoded.resize(
@@ -378,12 +401,38 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     let mut buf = Vec::new();
     if fitted
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-        .is_ok()
+        .is_err()
     {
-        buf
-    } else {
-        png_bytes
+        return png_bytes;
     }
+    if buf.len() <= MAX_SCREENSHOT_BYTES {
+        return buf;
+    }
+    // Still over the byte cap (dense content compresses poorly): iteratively
+    // downscale the edge-capped image — 0.7 / 0.5 / 0.35 / 0.25 of its
+    // dimensions, the 0.25 floor matching computer-use parity — re-encoding
+    // until under the cap. If the floor is reached first, return the smallest
+    // attempt: a slightly-over-budget screenshot beats dropping the capture.
+    let mut smallest = buf;
+    for scale in [0.7_f64, 0.5, 0.35, 0.25] {
+        let w = (f64::from(fitted.width()) * scale).round().max(1.0) as u32;
+        let h = (f64::from(fitted.height()) * scale).round().max(1.0) as u32;
+        let shrunk = fitted.resize_exact(w, h, image::imageops::FilterType::Triangle);
+        let mut attempt = Vec::new();
+        if shrunk
+            .write_to(&mut std::io::Cursor::new(&mut attempt), image::ImageFormat::Png)
+            .is_err()
+        {
+            break; // encode failure → fall through to the best attempt so far
+        }
+        if attempt.len() <= MAX_SCREENSHOT_BYTES {
+            return attempt;
+        }
+        if attempt.len() < smallest.len() {
+            smallest = attempt;
+        }
+    }
+    smallest
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
@@ -562,6 +611,48 @@ mod tests {
         // A decode failure must never drop the capture — bytes flow through.
         let junk = b"\x00\x01not a png".to_vec();
         assert_eq!(super::bound_screenshot_png(junk.clone()), junk);
+    }
+
+    /// Incompressible-noise PNG: solid-color fixtures deflate to nothing and
+    /// would never exercise the byte budget. A xorshift PRNG keeps the test
+    /// deterministic without pulling in a rand dependency.
+    fn noise_png(size: u32) -> Vec<u8> {
+        use image::{DynamicImage, ImageFormat, RgbaImage};
+        let mut state: u32 = 0x1234_5678;
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(size, size, |_, _| {
+            // xorshift32
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            image::Rgba([
+                (state & 0xff) as u8,
+                ((state >> 8) & 0xff) as u8,
+                ((state >> 16) & 0xff) as u8,
+                255,
+            ])
+        }));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn bound_screenshot_enforces_byte_cap_on_dense_capture() {
+        // Noise does not compress: even after the 1568px edge clamp the
+        // re-encoded PNG is ~10 MB, over the 5 MiB byte cap, so the iterative
+        // downscale must kick in. (2000px keeps the fixture cheap while still
+        // landing over the cap post-clamp.)
+        let noisy = noise_png(2000);
+        assert!(noisy.len() > super::MAX_SCREENSHOT_BYTES);
+        let out = super::bound_screenshot_png(noisy);
+        assert!(
+            out.len() <= super::MAX_SCREENSHOT_BYTES,
+            "dense capture must fit the byte budget: {} bytes",
+            out.len()
+        );
+        let decoded = image::load_from_memory(&out).expect("still a valid png");
+        assert!(decoded.width().max(decoded.height()) <= super::MAX_SCREENSHOT_EDGE);
     }
 
     #[tokio::test]

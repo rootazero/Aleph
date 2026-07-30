@@ -10,21 +10,22 @@ color = "#4A90E2"
 # headless omitted → follows [playwright_cli].headless
 
 [profiles.user]
-browser = "chrome"
+browser = "chrome"        # engine preference for discovery: chromium / chrome / brave / edge
 driver = "existing_session"
 color = "#00AA00"
+# proxy = "socks5://127.0.0.1:1080"        # → --proxy-server=… when Aleph launches the browser
+# user_data_dir = "/path/to/profile-dir"   # → --user-data-dir=… (state isolation)
+# extra_args = ["--disable-gpu"]           # appended LAST — user flags win over config-derived ones
 
 [policy]
 block_private = true
 blocked_domains = ["*.malware.com"]
 
 [playwright_cli]
-enabled = true
 # binary_path = "/custom/path/to/playwright-cli"   # optional override
 headless = true
 nav_timeout_secs = 30
 action_timeout_secs = 10
-persistent_sessions = false
 
 [chrome_mcp]
 command = "npx"

@@ -149,6 +149,36 @@ impl TabRegistry {
     }
 }
 
+/// Parse one `list_tabs` line into `(id, url)`.
+///
+/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
+/// CLI format `"Tab N: URL"`, and strips a trailing annotation such as
+/// `" [selected]"` from the URL. Returns `None` for lines without a numeric id.
+///
+/// Mirrors `parse_tab_line` in the browser-tools layer
+/// (`builtin_tools::browser_tools::mod`) — an acknowledged layering
+/// duplication: the `browser` crate layer may not reach up into
+/// `builtin_tools`, so the reaper and the post-navigation audit keep their own
+/// copy here.
+fn parse_tab_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    // Normalize "Tab N: URL" → "N: URL" so both formats share one parser.
+    let rest = line.strip_prefix("Tab ").unwrap_or(line);
+    let colon = rest.find(": ")?;
+    let id = rest.get(..colon)?.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let url_part = rest.get(colon + 2..)?.trim();
+    // Strip a trailing " [selected]" / " [active]" style annotation so the URL
+    // round-trips through a strict parser.
+    let url = match url_part.rfind(" [") {
+        Some(pos) if url_part.ends_with(']') => url_part.get(..pos).unwrap_or(url_part).trim(),
+        _ => url_part,
+    };
+    Some((id.to_string(), url.to_string()))
+}
+
 /// Extract numeric tab ids from a backend `list_tabs` listing.
 ///
 /// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
@@ -159,18 +189,28 @@ impl TabRegistry {
 pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
     tabs_text
         .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let rest = line.strip_prefix("Tab ").unwrap_or(line);
-            let colon = rest.find(": ")?;
-            let id = rest.get(..colon)?.trim();
-            if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-                Some(id.to_string())
-            } else {
-                None
-            }
-        })
+        .filter_map(parse_tab_line)
+        .map(|(id, _)| id)
         .collect()
+}
+
+/// The active (most recent) tab's URL, or `None` if no tabs parse.
+/// Uses the last entry because newly opened tabs append to the list.
+pub(crate) fn parse_active_tab_url(tabs_text: &str) -> Option<String> {
+    tabs_text
+        .lines()
+        .filter_map(parse_tab_line)
+        .map(|(_, url)| url)
+        .next_back()
+}
+
+/// The current URL of `tab_id` as reported by `list_tabs`, if present.
+pub(crate) fn tab_url_for(tabs_text: &str, tab_id: &str) -> Option<String> {
+    tabs_text
+        .lines()
+        .filter_map(parse_tab_line)
+        .rfind(|(id, _)| id == tab_id)
+        .map(|(_, url)| url)
 }
 
 #[cfg(test)]
@@ -186,6 +226,25 @@ mod tests {
         let text = "1: https://a.com\nTab 2: https://b.com [selected]\nnoise\nTab x: bad";
         assert_eq!(parse_tab_ids(text), ids(&["1", "2"]));
         assert!(parse_tab_ids("").is_empty());
+    }
+
+    #[test]
+    fn parse_active_tab_url_picks_last_and_strips_annotation() {
+        let text = "1: https://a.com\nTab 2: http://10.0.0.1/x [selected]";
+        assert_eq!(
+            parse_active_tab_url(text).as_deref(),
+            Some("http://10.0.0.1/x")
+        );
+        assert_eq!(parse_active_tab_url(""), None);
+        assert_eq!(parse_active_tab_url("noise only"), None);
+    }
+
+    #[test]
+    fn tab_url_for_matches_id() {
+        let text = "1: https://a.com\n2: http://10.0.0.1/x [selected]";
+        assert_eq!(tab_url_for(text, "1").as_deref(), Some("https://a.com"));
+        assert_eq!(tab_url_for(text, "2").as_deref(), Some("http://10.0.0.1/x"));
+        assert_eq!(tab_url_for(text, "9"), None);
     }
 
     #[test]

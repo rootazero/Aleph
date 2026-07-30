@@ -13,7 +13,7 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::types::{
     ActionTarget, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, TabId,
+    SnapshotOutput, TabId, WaitCondition,
 };
 
 pub struct ChromeMcpBackend {
@@ -152,6 +152,24 @@ impl BrowserBackend for ChromeMcpBackend {
             })
             .next_back();
 
+        // Post-navigation audit on the listing already fetched above (no
+        // extra round trip): a redirect may have landed the new tab on a
+        // blocked origin the navigation-time guard never saw. On a violation,
+        // quarantine — best-effort close the fresh tab — then surface the
+        // policy error. `close_tab` takes no profile lock, so calling it
+        // under `_guard` cannot deadlock.
+        if let Err(e) =
+            super::post_nav::verify_landed_url(&self.ssrf_guard, &tabs_text, last_id.as_deref())
+                .await
+        {
+            if let Some(ref id) = last_id {
+                if let Err(close_err) = self.close_tab(id).await {
+                    tracing::warn!(tab = %id, error = %close_err, "post-navigation quarantine: failed to close blocked tab");
+                }
+            }
+            return Err(e);
+        }
+
         last_id.ok_or_else(|| {
             BrowserError::TabNotFound(format!("Could not determine tab ID after opening {url}"))
         })
@@ -191,7 +209,10 @@ impl BrowserBackend for ChromeMcpBackend {
         self.driver.set_pending_launch_pin(&self.profile_name, pin);
         self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
             .await?;
-        Ok(())
+        // Post-navigation audit: a redirect may have landed the tab on a
+        // blocked origin the navigation-time guard never saw. Runs outside
+        // the profile lock (list/close take none), so no deadlock.
+        super::post_nav::audit_landed_tab(self, &self.ssrf_guard, Some(tab_id)).await
     }
 
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
@@ -362,16 +383,25 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(())
     }
 
-    async fn wait_for_text(
+    /// `Text` waits use the MCP-native `wait_for` tool (server-side wait, no
+    /// polling round-trips). The MCP tool has no selector/URL arms, so those
+    /// conditions fall back to the shared evaluate-polling loop.
+    async fn wait_for(
         &self,
         tab_id: &str,
-        text: &str,
+        condition: &WaitCondition,
         timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
+        let WaitCondition::Text(text) = condition else {
+            return super::wait_probe::poll_wait_for(self, tab_id, condition, timeout_ms).await;
+        };
         match self
             .select_and_call(
                 tab_id,
                 "wait_for",
+                // Note: chrome-devtools-mcp rejects a `timeout` above its own
+                // ceiling with a validation error (not a timeout result) — the
+                // tool layer's clamp (≤120s) keeps us inside the accepted range.
                 json!({ "text": text, "timeout": timeout_ms }),
             )
             .await

@@ -32,6 +32,14 @@ pub struct SsrfConfig {
     #[serde(default = "default_true")]
     pub block_secrets_in_url: bool,
 
+    /// Block form input (type/fill/select/dialog prompt text) that embeds a
+    /// credential to prevent secret exfiltration via a form field on an
+    /// otherwise policy-allowed host (default: true). Guards secrets going OUT
+    /// via form input — symmetric to [`Self::block_secrets_in_url`], which
+    /// guards secrets going OUT via the navigation URL.
+    #[serde(default = "default_true")]
+    pub block_secrets_in_input: bool,
+
     /// Redact embedded credentials (API keys, bearer tokens, private keys,
     /// bank/ID numbers) from page-derived text — accessibility snapshots,
     /// console output, network logs, JS-eval results — before it is returned to
@@ -56,6 +64,7 @@ impl Default for SsrfConfig {
             blocked_domains: Vec::new(),
             allowed_domains: Vec::new(),
             block_secrets_in_url: true,
+            block_secrets_in_input: true,
             redact_secrets_in_content: true,
         }
     }
@@ -333,6 +342,22 @@ impl BrowserSsrfGuard {
         Ok(())
     }
 
+    /// Scan `text` about to be typed into a page form (type/fill/select/dialog
+    /// prompt) for an embedded credential, when `block_secrets_in_input` is
+    /// set. Third leg of the secret-egress boundary, symmetric to
+    /// [`Self::check_navigation`]'s URL scan: a `Critical`-severity secret in
+    /// the model's context must not be typed into a web form on an otherwise
+    /// policy-allowed host. Returns the matched rule name on the first hit, or
+    /// `None` when the flag is off or the input is clean.
+    #[must_use]
+    pub fn check_input(&self, text: &str) -> Option<String> {
+        if self.config.block_secrets_in_input {
+            super::secret_guard::scan_text_for_secrets(text)
+        } else {
+            None
+        }
+    }
+
     /// Redact embedded credentials from page-derived `text` before it is handed
     /// back to the LLM, when `redact_secrets_in_content` is set. This is the OUT
     /// half of the secret-egress boundary (page content → model); the navigation
@@ -417,6 +442,7 @@ mod tests {
             blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
 
@@ -466,6 +492,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec!["*.trusted.com".to_string(), "api.example.org".to_string()],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
 
@@ -490,6 +517,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
 
@@ -519,6 +547,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
         for url in [
@@ -586,10 +615,27 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
         let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
         assert!(policy.check_navigation(url).await.is_ok());
+    }
+
+    #[test]
+    fn check_input_scans_form_text_when_enabled() {
+        // Default guard has block_secrets_in_input = true.
+        let policy = BrowserSsrfGuard::default();
+        let input = "token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+        assert_eq!(policy.check_input(input).as_deref(), Some("api_key"));
+        // Clean input passes.
+        assert!(policy.check_input("alice@example.com").is_none());
+        // Flag off → never blocks, even with a credential-shaped value.
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
+            block_secrets_in_input: false,
+            ..SsrfConfig::default()
+        });
+        assert!(policy.check_input(input).is_none());
     }
 
     #[test]
@@ -612,6 +658,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: true,
+            block_secrets_in_input: true,
             redact_secrets_in_content: false,
         });
         let page = "API token: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 shown";
@@ -784,6 +831,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
         let result = policy.check_url("http://evil.example/admin").await;
@@ -821,6 +869,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            block_secrets_in_input: false,
             redact_secrets_in_content: false,
         });
         let result = policy
