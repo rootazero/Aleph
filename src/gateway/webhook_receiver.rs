@@ -46,6 +46,8 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use super::channel::{
@@ -99,6 +101,139 @@ pub struct WebhookMount {
     /// The owning channel's id, so a skipped mount's warning names which
     /// config section is at fault instead of only the (possibly shared) path.
     pub channel_id: ChannelId,
+}
+
+/// The one path prefix every channel webhook route lives under.
+///
+/// A single constant route (`/webhook/{*rest}`) carries all channel webhook
+/// traffic, so an operator-writable `path` never enters axum's route table.
+/// That is what makes the mount table hot-swappable *and* what removed the
+/// boot-panic failure mode `RESERVED_ROUTE_PREFIXES` used to guard against.
+pub const WEBHOOK_ROUTE_PREFIX: &str = "/webhook";
+
+/// Whether `path` can be reached behind `{WEBHOOK_ROUTE_PREFIX}/{{*rest}}`.
+///
+/// Requires a whole extra segment: `/webhook` and `/webhookx/y` are both out
+/// (the wildcard needs at least one segment, and the prefix must end on a
+/// segment boundary).
+fn is_mountable_path(path: &str) -> bool {
+    path.strip_prefix(WEBHOOK_ROUTE_PREFIX)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|sub| !sub.is_empty())
+}
+
+/// What a request needs, cloned out of the table's read guard.
+///
+/// Handler work is async; holding the table's `RwLock` across that await
+/// would let one slow platform starve every other mount, plus block every
+/// `channel.start` / `stop`.
+pub(crate) struct MountedHandler {
+    pub(crate) handler: Arc<dyn WebhookHandler>,
+    pub(crate) inbound: InboundMessageSender,
+    pub(crate) status: Arc<RwLock<ChannelStatus>>,
+}
+
+/// Live `path -> mount` map behind the single webhook route.
+///
+/// Owned by `ChannelRegistry`, which is the only thing allowed to mutate it —
+/// mounting follows channel lifecycle instead of being a boot snapshot. A
+/// route that `channel.stop` / `channel.delete` cannot remove is an
+/// authenticated endpoint the operator believes is gone.
+#[derive(Default)]
+pub struct WebhookMountTable {
+    mounts: RwLock<HashMap<String, WebhookMount>>,
+}
+
+impl WebhookMountTable {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mount `mount` at its handler's declared path.
+    ///
+    /// Returns `false` when the mount was refused; every refusal is warned
+    /// with the offending channel id, never panicked — `path` is operator
+    /// config.
+    pub async fn mount(&self, mount: WebhookMount) -> bool {
+        let path = mount.handler.path().to_string();
+
+        if !is_mountable_path(&path) {
+            warn!(
+                channel_id = %mount.channel_id,
+                path = %path,
+                prefix = WEBHOOK_ROUTE_PREFIX,
+                "webhook path must be \"{WEBHOOK_ROUTE_PREFIX}/<name>\" — handler not mounted"
+            );
+            return false;
+        }
+
+        let mut mounts = self.mounts.write().await;
+        if let Some(existing) = mounts.get(&path) {
+            // Same channel restarting: always take the fresh handler. Keeping
+            // the old clone is precisely the staleness this table prevents.
+            if existing.channel_id != mount.channel_id {
+                // Two channels want one path — operator misconfiguration. Pick
+                // by channel id, not by arrival order: `start_all` iterates a
+                // HashMap, so arrival order would make route ownership a
+                // per-boot coin flip.
+                if existing.channel_id.as_str() <= mount.channel_id.as_str() {
+                    warn!(
+                        path = %path,
+                        holder = %existing.channel_id,
+                        refused = %mount.channel_id,
+                        "duplicate webhook path — keeping the lower channel id, handler not mounted"
+                    );
+                    return false;
+                }
+                warn!(
+                    path = %path,
+                    evicted = %existing.channel_id,
+                    holder = %mount.channel_id,
+                    "duplicate webhook path — lower channel id takes over the route"
+                );
+            }
+        }
+
+        let channel_id = mount.channel_id.clone();
+        mounts.insert(path.clone(), mount);
+        info!(path = %path, channel_id = %channel_id, "webhook handler mounted");
+        true
+    }
+
+    /// Remove every mount owned by `channel_id`. Returns how many were removed.
+    ///
+    /// Called on stop / delete / re-register. Idempotent.
+    pub async fn unmount_channel(&self, channel_id: &ChannelId) -> usize {
+        let mut mounts = self.mounts.write().await;
+        let before = mounts.len();
+        mounts.retain(|_, mount| &mount.channel_id != channel_id);
+        let removed = before - mounts.len();
+        if removed > 0 {
+            info!(
+                channel_id = %channel_id,
+                removed,
+                "webhook handler(s) unmounted"
+            );
+        }
+        removed
+    }
+
+    /// How many paths are live. Boot logging and diagnostics only.
+    pub async fn mounted_count(&self) -> usize {
+        self.mounts.read().await.len()
+    }
+
+    /// Exact-path lookup. The key is the configured path verbatim.
+    pub(crate) async fn lookup(&self, path: &str) -> Option<MountedHandler> {
+        let mounts = self.mounts.read().await;
+        let mount = mounts.get(path)?;
+        Some(MountedHandler {
+            handler: Arc::clone(&mount.handler),
+            inbound: mount.inbound.clone(),
+            status: Arc::clone(&mount.status),
+        })
+    }
 }
 
 /// Builds the axum routes for channel webhook ingestion.
@@ -273,7 +408,9 @@ async fn webhook_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::channel::{ChannelError, ChannelId, ConversationId, MessageId, UserId};
+    use crate::gateway::channel::{
+        ChannelError, ChannelId, ChannelState, ConversationId, MessageId, UserId,
+    };
     use chrono::Utc;
 
     // --- HMAC signature tests ---
@@ -853,5 +990,168 @@ mod tests {
         assert!(!is_reserved_route("/wsx"));
         assert!(!is_reserved_route("/healthcheck"));
         assert!(!is_reserved_route("/webhook/generic"));
+    }
+
+    // --- WebhookMountTable admission rules ---
+
+    fn mount_for(channel: &str, path: &str, secret: &str, state: &ChannelState) -> WebhookMount {
+        WebhookMount {
+            handler: Arc::new(MockWebhookHandler {
+                secret: secret.to_string(),
+                handler_path: path.to_string(),
+            }),
+            inbound: state.sender(),
+            status: state.status_handle(),
+            channel_id: ChannelId::new(channel),
+        }
+    }
+
+    #[tokio::test]
+    async fn mount_accepts_a_path_under_the_shared_prefix() {
+        use crate::gateway::channel::ChannelState;
+        let state = ChannelState::new(4);
+        let table = WebhookMountTable::new();
+
+        assert!(
+            table
+                .mount(mount_for("a", "/webhook/one", "s", &state))
+                .await
+        );
+        assert_eq!(table.mounted_count().await, 1);
+        assert!(table.lookup("/webhook/one").await.is_some());
+        // Exact match only — a sibling path is not a hit.
+        assert!(table.lookup("/webhook/one/").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn mount_refuses_paths_outside_the_shared_prefix() {
+        use crate::gateway::channel::ChannelState;
+        let state = ChannelState::new(4);
+        let table = WebhookMountTable::new();
+
+        // Every one of these is unreachable behind `/webhook/{*rest}`, so
+        // accepting it would re-create the advertised-but-disabled shape this
+        // work exists to remove: channel Connected, endpoint deaf.
+        for path in [
+            "/settings",        // would have shadowed a Panel SPA path
+            "/",                // ditto, the SPA root
+            "webhook/no-slash", // missing leading '/'
+            "/webhook",         // no sub-path — `{*rest}` matches nothing
+            "/webhook/",        // ditto
+            "/webhookx/sneaky", // prefix look-alike, not a segment match
+        ] {
+            assert!(
+                !table.mount(mount_for("a", path, "s", &state)).await,
+                "path {path} must be refused"
+            );
+        }
+        assert_eq!(table.mounted_count().await, 0);
+    }
+
+    /// Which handler is live at `path`, observed exactly the way production
+    /// observes it: only the live secret verifies. Comparing `Arc` identity
+    /// would not catch a table that kept the right *slot* with the wrong
+    /// secret, which is the failure that matters.
+    async fn live_secret_is(table: &WebhookMountTable, path: &str, secret: &str) -> bool {
+        let live = table.lookup(path).await.expect("must still be mounted");
+        let body = b"probe".as_slice();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Webhook-Signature",
+            WebhookReceiver::compute_signature(secret, body)
+                .parse()
+                .unwrap(),
+        );
+        live.handler.verify(&headers, body)
+    }
+
+    #[tokio::test]
+    async fn duplicate_path_keeps_the_smaller_channel_id() {
+        use crate::gateway::channel::ChannelState;
+        let state = ChannelState::new(4);
+
+        // Incumbent is the smaller id → newcomer is refused.
+        let table = WebhookMountTable::new();
+        assert!(
+            table
+                .mount(mount_for("aaa", "/webhook/dup", "first", &state))
+                .await
+        );
+        assert!(
+            !table
+                .mount(mount_for("zzz", "/webhook/dup", "second", &state))
+                .await
+        );
+        assert!(
+            live_secret_is(&table, "/webhook/dup", "first").await,
+            "incumbent must survive"
+        );
+
+        // Incumbent is the larger id → newcomer evicts it. Same outcome
+        // whichever order the registry happens to start channels in, which is
+        // the whole point (D5): route ownership must not be a per-boot coin flip.
+        let table = WebhookMountTable::new();
+        assert!(
+            table
+                .mount(mount_for("zzz", "/webhook/dup", "first", &state))
+                .await
+        );
+        assert!(
+            table
+                .mount(mount_for("aaa", "/webhook/dup", "second", &state))
+                .await
+        );
+        assert!(
+            live_secret_is(&table, "/webhook/dup", "second").await,
+            "the lower channel id must win regardless of arrival order"
+        );
+    }
+
+    #[tokio::test]
+    async fn remounting_the_same_channel_refreshes_the_handler() {
+        use crate::gateway::channel::ChannelState;
+        let state = ChannelState::new(4);
+        let table = WebhookMountTable::new();
+
+        // `restart_channel` builds a fresh handler; keeping the old clone is
+        // exactly the staleness this table exists to prevent (spec §2.E).
+        assert!(
+            table
+                .mount(mount_for("a", "/webhook/one", "old", &state))
+                .await
+        );
+        assert!(
+            table
+                .mount(mount_for("a", "/webhook/one", "new", &state))
+                .await
+        );
+        assert_eq!(table.mounted_count().await, 1);
+        assert!(live_secret_is(&table, "/webhook/one", "new").await);
+    }
+
+    #[tokio::test]
+    async fn unmount_channel_removes_every_path_that_channel_owns() {
+        use crate::gateway::channel::ChannelState;
+        let state = ChannelState::new(4);
+        let table = WebhookMountTable::new();
+
+        table
+            .mount(mount_for("a", "/webhook/one", "s", &state))
+            .await;
+        table
+            .mount(mount_for("a", "/webhook/two", "s", &state))
+            .await;
+        table
+            .mount(mount_for("b", "/webhook/three", "s", &state))
+            .await;
+
+        assert_eq!(table.unmount_channel(&ChannelId::new("a")).await, 2);
+        assert!(table.lookup("/webhook/one").await.is_none());
+        assert!(table.lookup("/webhook/two").await.is_none());
+        // A sibling channel's route must not be collateral damage.
+        assert!(table.lookup("/webhook/three").await.is_some());
+
+        // Unmounting an unknown channel is a no-op, not an error.
+        assert_eq!(table.unmount_channel(&ChannelId::new("nope")).await, 0);
     }
 }
