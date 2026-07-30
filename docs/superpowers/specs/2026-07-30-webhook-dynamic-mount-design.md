@@ -28,10 +28,12 @@
 后果（上一轮终审记录）：
 
 - `channel.stop` / `channel.delete` 回 `{"status":"stopped"}`，端点却照旧 200、照旧驱动 agent run
-  ——路由持有自己那份 `Arc<GenericWebhookHandler>` 克隆（与 `WebhookChannel.handler` 无关），
-  mount 也持有自己的 `broadcast::Sender` 克隆，于是 forwarder 唯一的退出条件
-  `RecvError::Closed` **永远不可能触发**。`delete` 更糟：留下一个操作者以为已删除、
-  却仍带密钥可用的认证端点。
+  ——路由持有自己那份 `Arc<GenericWebhookHandler>` 克隆（与 `WebhookChannel.handler` 无关）。
+  而 forwarder 之所以永不退出，与 mount 无关：forwarder 任务 **move 捕获一个
+  `channel_arc` 克隆并持有整个（无限）生命周期**（`channel_registry.rs:652-708`），
+  通道实例因此永不释放，`ChannelState` 的原始 `Sender` 随之永存，于是 forwarder 唯一的
+  退出条件 `RecvError::Closed` 对**任何已启动的通道**在结构上不可达。`delete` 更糟：
+  留下一个操作者以为已删除、却仍带密钥可用的认证端点。
 - 运行时 `channel.create` 没有 HTTP 面。
 
 ### B. `RESERVED_ROUTE_PREFIXES` 的唯一消费者是「路径进路由表」这件事本身
@@ -89,7 +91,7 @@ Panel 是 `fallback_service(control_plane)`（`server/mod.rs:713`），
 | D4 | 表的所有者 | **`ChannelRegistry`** | 「挂载跟随注册表」的字面实现。挂钩点全在一个文件内，避免 `register_channel_plugins` 那种「十个副本＝十个可忘处」 |
 | D5 | 重复 path 的裁决 | **`channel_id` 字典序小者胜；同 id 必刷新** | 与 main 上「排序后先到者胜」（`43fc94b36`）逐字等价，但不再依赖 `HashMap` 迭代序 ⇒ 路由归属跨重启确定，不是每次开机抛硬币 |
 | D6 | `RESERVED_ROUTE_PREFIXES` | **删除**（含 `is_reserved_route` 与其单测） | D2 之后零消费者。R10「零消费者立即撤回，绝不为未来留口」 |
-| D7 | 检查顺序 | **查表 → 验签 → 查状态 → 解析转发** | 未认证方拿到的恒是 403 / 404，区分不出通道死活 |
+| D7 | 检查顺序 | **查表 → 验签 → 查状态 → 解析转发** | 未认证方只能知道该路径上**是否有挂载**（启动中 403 / 已停止或已删除 404），无法得知已挂载通道的**状态**（旧的 503-vs-403 区分消失） |
 
 ## 4. 设计 (Design)
 
@@ -109,7 +111,9 @@ impl WebhookMountTable {
     pub async fn mount(&self, mount: WebhookMount) -> bool;
     /// 返回摘掉的条数
     pub async fn unmount_channel(&self, channel_id: &ChannelId) -> usize;
-    pub async fn len(&self) -> usize;               // boot 日志用
+    pub async fn mounted_count(&self) -> usize;     // boot 日志用；不叫 len —— 内在
+                                                    // len 无 is_empty 会触发
+                                                    // clippy::len_without_is_empty
 }
 
 // 构造器签名随之变化：
@@ -226,6 +230,7 @@ async fn webhook_endpoint(
 | 变化 | 说明 |
 |------|------|
 | `path` 必须以 `/webhook/` 开头 | 违者 `channel.start()` 报配置错。§2.F：无人受影响 |
+| `path` 在 `/webhook/` 之外的配置：**以前能启动（但聋），现在启动失败** | 这是有意交换，失败是响亮的：`validate()` 在 `WebhookChannelFactory::create` 与 `WebhookChannel::start` 都跑，boot 时错误无条件打到 stderr（`subsystems.rs:481`），点名要求的前缀并回显违规值。对这样的 operator 是可见变化，§2.F 的「无人受影响」以此为准 |
 | `GET /webhook/x` 由 SPA 空壳变 405 | 路由是 POST-only。无人依赖 |
 | `stop` / `delete` 后打入站由 503 变 404 | 端点真的不存在了，这是修复本身 |
 | `channel.start` / `channel.create` 不再回 `restart_required` | 运行时创建真的能收了 |
@@ -237,6 +242,19 @@ async fn webhook_endpoint(
 - **重复 path 的输家只有 `warn!`**：`channels.list` 里两个通道都仍报 `Connected`，
   其中一个是聋的——本轮主题的小残留。做彻底需要一个新的通道状态
   （"started but unmounted"），属独立一轮；不在这轮造新机制（P6）。
+- **重复 path 时 RPC 回执不诚实（上一条的回执维度）**：`WebhookMountTable::mount()`
+  返回 `bool`，两处生产调用点（`channel_registry.rs:365`、`:832`）都丢弃它。
+  对不可挂载的 path 无害（`validate()` 先在 `start()` 报错）；但**重复 path** 的情形下
+  通道照常启动、表拒绝挂载，RPC 仍回 `{"status":"started"}` 而通道是聋的——对这
+  一种情形，比被删除的 `"restart_required"` 回执还小退一步（后者至少告诉调用方
+  还收不到）。operator 能在日志里看到 `warn!` 点名两个 channel id
+  （`webhook_receiver.rs` 的 `mount()`），拿不到信息的是 RPC 调用方。代码修复
+  （把 bool 穿进回执）会改变 RPC 响应形状，属独立一轮。
+- **forwarder 任务与通道实例的泄漏**：forwarder move 捕获 `channel_arc` 并终身持有
+  （`channel_registry.rs` 的 `start_message_forwarder`），因此每次 `channel.stop` /
+  `channel.delete` / `channel.start` 重建都会泄漏一个 forwarder 任务加一个通道实例
+  （详见 §2.A 修正后的机制）。既有问题，本轮刻意不修；但本轮把 stop→start 变成了
+  被宣称的运行时工作流，泄漏从此是**累积性**的，需要独立一轮。
 - **msteams 的 `ChannelFactory`** / **`src/gateway/webhooks/`（~46 KB agent-trigger 子系统）**：
   上一轮已记账，定性 CUT/DECIDE，不是 CONNECT。
 
@@ -270,8 +288,8 @@ aleph-server` 后 `ls -l` 确认时间戳 `7 30 11:56`，晚于本轮构建起�
 | 1 | 启动期挂载日志 | 日志含 `Gateway: 1 webhook ingestion route(s) mounted`（`daemon.log:215`，紧邻 `Registered channel: webhook (webhook)` / `✓ Channel webhook started`） |
 | 2 | 签名 POST 成功 | `POST /webhook/qa` + 合法签名 → **`HTTP/1.1 200 OK`** |
 | 3 | `channel.stop` 摘除端点 | `channel.stop {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"stopped"}`；同一条签名 POST → **`HTTP/1.1 404 Not Found`**（非 503，非 200） |
-| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；同一条签名 POST → **`HTTP/1.1 200 OK`**。免重启的证据见下方「无重启的证据」——不止一次 `pgrep` 快照，而是结构化日志证明**全程只有一次进程生命周期** |
-| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致，未泄露通道状态）。两者在日志里的形状不同，见下方「404 与 403 的日志不对称性」 |
+| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；同一条签名 POST → **`HTTP/1.1 200 OK`**。免重启的证据见下方「无重启的证据」——不是靠 `pgrep` 快照，而是结构化日志证明**全程只有一次进程生命周期** |
+| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致——未认证方只能知道该路径上有无挂载（404 vs 403），得不到已挂载通道的状态）。两者在日志里的形状不同，见下方「404 与 403 的日志不对称性」 |
 
 全部 5 项 **PASS**。
 

@@ -261,8 +261,9 @@ impl WebhookMountTable {
 /// *silently*: this whole file's test suite still passes, because these
 /// tests exercise `router()` directly and never nest it. There is no
 /// in-process assertion that catches a `nest` regression; the only guard is
-/// Task 3's `set_webhook_mounts_makes_a_mounted_path_reachable`, which POSTs
-/// through the real `build_router()` and demands 200.
+/// the router-level test in `server/mod.rs`
+/// (`set_webhook_mounts_makes_a_mounted_path_reachable`), which POSTs through
+/// the real `build_router()` and demands 200.
 pub struct WebhookReceiver;
 
 impl WebhookReceiver {

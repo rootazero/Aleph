@@ -1248,7 +1248,12 @@ mod tests {
             .await;
         registry.start_channel(&id).await.unwrap();
 
-        registry.unregister(&id).await;
+        // `None` is the deterministic outcome here, not a scheduling accident:
+        // `channel_arc.clone()` (channel_registry.rs:360) runs before the
+        // forwarder is spawned, so the strong count is ≥2 immediately and the
+        // spawned task never releases it. `Arc::try_unwrap` therefore always
+        // fails on this path, and `unregister` always returns `None`.
+        assert!(registry.unregister(&id).await.is_none());
         assert_eq!(
             registry.webhook_mounts().mounted_count().await,
             0,

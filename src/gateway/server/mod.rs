@@ -1155,6 +1155,15 @@ mod tests {
         // route under this prefix would silently steal a channel's webhook path.
         // axum cannot be asked what is in its route table, so scan the source of
         // the only function that builds it.
+        //
+        // Boundary: this scans only `server/mod.rs`. A `/webhook/...` route
+        // registered in a router merged in from another file (`openai_routes`,
+        // `a2a_routes`, `artifact_routes`, `control_plane`, the `/v1/admin`
+        // nest) would NOT be caught — none exists today.
+        //
+        // The needles use the escaped-quote form (`.route(\"` here vs `.route("`
+        // in the scanned text) precisely so the test does not match its own
+        // source — correct but fragile; do not "clean up" that escaping.
         let src = include_str!("mod.rs");
         for (idx, line) in src.lines().enumerate() {
             let code = line.split("//").next().unwrap_or(line);

@@ -620,8 +620,13 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
   reachable without restarting the daemon. The earlier version built the route
   table once at boot: `stop` returned `"stopped"` while the endpoint kept
   answering 200 and driving agent runs, because the route held its own
-  `Arc<Handler>` clone and its own `broadcast::Sender` clone — the forwarder's
-  only exit condition (`RecvError::Closed`) could never fire.
+  `Arc<Handler>` clone. The forwarder never exiting has a separate,
+  mount-independent cause: the forwarder task captures a `channel_arc` clone
+  by move and holds it for its entire — infinite — lifetime
+  (`channel_registry.rs` `start_message_forwarder`). That keeps the channel
+  instance alive, which keeps `ChannelState`'s original `Sender` alive, so
+  `RecvError::Closed` is structurally unreachable for any started channel,
+  whether or not a mount exists.
 - **⚠️ `restart_channel` does not go through `stop_channel`/`start_channel`.**
   It calls `channel.stop()` + `channel.start()` directly, so it carries its own
   mount refresh. A hook set that only covers start/stop leaves the pre-restart
@@ -643,7 +648,13 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
   with both ids. Deterministic on purpose: `start_all` iterates a HashMap, so
   arrival order would make route ownership a per-boot coin flip. The loser is
   only warned — it still reports `Connected` in `channels.list` while being
-  deaf. Recorded limit, not a fix.
+  deaf, and the `channel.start` RPC still answers `{"status":"started"}`:
+  `mount()`'s refusal `bool` is discarded at both call sites, so the operator
+  sees the `warn!` naming both ids but the RPC caller is told nothing. For
+  that one case this is a small step backwards from the deleted
+  `"restart_required"` receipt. Recorded limit, not a fix — threading the
+  refusal into the receipt changes an RPC response shape and needs its own
+  round.
 - **One port.** Webhook traffic rides the gateway's own listener, so it
   inherits `[gateway] host`, TLS, and `SecurityHeadersLayer`. `WebhookReceiver`
   deliberately owns no listener — the version that bound `0.0.0.0` itself would
@@ -659,7 +670,8 @@ return a handler from `Channel::webhook_handler()`. `build_router()` registers
   is posture, not a known gap requiring action.
 - **Check order is deliberate**: lookup → 404, signature → 403, channel status
   → 503, then parse and forward. Signature comes *before* status so an
-  unauthenticated caller cannot tell "channel is down" from "wrong secret".
+  unauthenticated caller learns only whether a mount exists at that path,
+  never the mounted channel's status.
   The status check is depth only, for a channel that moved itself to
   `Error`/`Connecting` without any RPC; `try_read` fails **open** on
   contention, because a momentary write-lock holder is not evidence the
