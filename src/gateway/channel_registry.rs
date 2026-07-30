@@ -138,6 +138,11 @@ pub struct ChannelRegistry {
     /// preserves the historic in-memory-only behavior byte-for-byte. See
     /// [`super::delivery_queue`].
     delivery_store: Option<std::sync::Arc<super::delivery_queue::DeliveryStore>>,
+    /// Live webhook mount table. The registry is the single writer: mounting
+    /// follows channel lifecycle instead of being a boot-time snapshot, so
+    /// `stop` / `delete` / runtime `create` change what HTTP actually serves.
+    /// Handed to `GatewayServer::set_webhook_mounts` at boot.
+    webhook_mounts: Arc<super::webhook_receiver::WebhookMountTable>,
 }
 
 impl ChannelRegistry {
@@ -154,7 +159,14 @@ impl ChannelRegistry {
             voice_states: RwLock::new(HashMap::new()),
             send_retry: SendRetryPolicy::default(),
             delivery_store: None,
+            webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
         }
+    }
+
+    /// The live webhook mount table (shared handle).
+    #[must_use]
+    pub fn webhook_mounts(&self) -> Arc<super::webhook_receiver::WebhookMountTable> {
+        Arc::clone(&self.webhook_mounts)
     }
 
     /// Attach a durable outbound delivery queue (builder-style).
@@ -204,6 +216,11 @@ impl ChannelRegistry {
 
         drop(factories);
 
+        // Same reasoning as `register`: the freshly-created instance has not
+        // started, so drop whatever the outgoing instance at this id left
+        // mounted before the replacement lands.
+        self.webhook_mounts.unmount_channel(&channel_id).await;
+
         let mut channels = self.channels.write().await;
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
 
@@ -217,6 +234,12 @@ impl ChannelRegistry {
     /// Register an existing channel instance
     pub async fn register(&self, channel: Box<dyn Channel>) -> ChannelId {
         let channel_id = channel.id().clone();
+
+        // A replacement instance has not started, so it owns no handler. Drop
+        // whatever the outgoing instance left mounted, or the route keeps
+        // serving with the old secret until someone happens to start the new one.
+        self.webhook_mounts.unmount_channel(&channel_id).await;
+
         let mut channels = self.channels.write().await;
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
         info!("Registered channel: {}", channel_id);
@@ -225,6 +248,12 @@ impl ChannelRegistry {
 
     /// Unregister a channel
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
+        // Drop the HTTP surface before the instance leaves the registry —
+        // including when `Arc::try_unwrap` below fails and this returns None.
+        // `channel.delete` otherwise leaves an authenticated endpoint the
+        // operator believes is gone.
+        self.webhook_mounts.unmount_channel(channel_id).await;
+
         let mut channels = self.channels.write().await;
         if let Some(channel_arc) = channels.remove(channel_id) {
             // Try to extract the inner channel
@@ -293,6 +322,24 @@ impl ChannelRegistry {
         infos
     }
 
+    /// Build the webhook mount for `channel_id` from `channel`'s just-(re)started
+    /// state, if it exposes a webhook handler — `None` for every non-webhook
+    /// channel. Shared by `start_channel` and `restart_channel`, the two sites
+    /// where `start()` (re)builds the handler.
+    fn webhook_mount_for(
+        channel: &dyn Channel,
+        channel_id: &ChannelId,
+    ) -> Option<super::webhook_receiver::WebhookMount> {
+        channel
+            .webhook_handler()
+            .map(|handler| super::webhook_receiver::WebhookMount {
+                handler,
+                inbound: channel.state().sender(),
+                status: channel.state().status_handle(),
+                channel_id: channel_id.clone(),
+            })
+    }
+
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
@@ -302,9 +349,21 @@ impl ChannelRegistry {
         let mut channel = channel_arc.write().await;
         channel.start().await?;
 
+        // A webhook channel only materialises its handler in `start()`, so this
+        // is the earliest point the mount can exist. The sink is the channel's
+        // OWN broadcast so `start_message_forwarder` still stamps channel
+        // health — going to the registry's sender directly would make a
+        // receiving channel look dead to the health monitor.
+        let mount = Self::webhook_mount_for(&**channel, channel_id);
+
         // Start forwarding inbound messages
         self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
             .await;
+        drop(channel);
+
+        if let Some(mount) = mount {
+            self.webhook_mounts.mount(mount).await;
+        }
 
         info!("Started channel: {}", channel_id);
         Ok(())
@@ -318,6 +377,12 @@ impl ChannelRegistry {
 
         let mut channel = channel_arc.write().await;
         channel.stop().await?;
+        drop(channel);
+
+        // The route holds its own handler clone, so dropping the channel's
+        // copy is not enough — without this the endpoint keeps answering 200
+        // and driving agent runs after `channel.stop` reported "stopped".
+        self.webhook_mounts.unmount_channel(channel_id).await;
 
         info!("Stopped channel: {}", channel_id);
         Ok(())
@@ -755,6 +820,22 @@ impl ChannelRegistry {
         channel.stop().await?;
         channel.start().await?;
 
+        // This path does NOT go through stop_channel/start_channel, so it needs
+        // its own refresh: `start()` builds a NEW handler and the table would
+        // otherwise keep serving the pre-restart clone. If `start()` yielded no
+        // handler this time, unmount instead of leaving the stale one behind.
+        let mount = Self::webhook_mount_for(&**channel, channel_id);
+        drop(channel);
+
+        match mount {
+            Some(mount) => {
+                self.webhook_mounts.mount(mount).await;
+            }
+            None => {
+                self.webhook_mounts.unmount_channel(channel_id).await;
+            }
+        }
+
         info!("Restarted channel in place: {}", channel_id);
         Ok(())
     }
@@ -1045,5 +1126,179 @@ mod tests {
 
         assert!(matches!(result, Err(ChannelError::RateLimited { .. })));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    // --- Webhook mount follows channel lifecycle ---
+
+    /// Channel that materialises a webhook handler in `start()` and drops it in
+    /// `stop()` — the shape of `WebhookChannel`.
+    struct WebhookyChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+        path: String,
+        handler: Option<Arc<TestHandler>>,
+    }
+
+    struct TestHandler {
+        path: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::webhook_receiver::WebhookHandler for TestHandler {
+        fn verify(&self, _headers: &axum::http::HeaderMap, _body: &[u8]) -> bool {
+            true
+        }
+        async fn handle(
+            &self,
+            _headers: &axum::http::HeaderMap,
+            _body: axum::body::Bytes,
+        ) -> ChannelResult<Vec<crate::gateway::channel::InboundMessage>> {
+            Ok(vec![])
+        }
+        fn path(&self) -> &str {
+            &self.path
+        }
+    }
+
+    impl WebhookyChannel {
+        fn new(id: &str, path: &str) -> Self {
+            Self {
+                info: ChannelInfo {
+                    id: ChannelId::new(id),
+                    name: id.to_string(),
+                    channel_type: "test-webhook".to_string(),
+                    status: ChannelStatus::Disconnected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                path: path.to_string(),
+                handler: None,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for WebhookyChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            self.handler = Some(Arc::new(TestHandler {
+                path: self.path.clone(),
+            }));
+            self.state.set_status(ChannelStatus::Connected).await;
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            self.handler = None;
+            self.state.set_status(ChannelStatus::Disconnected).await;
+            Ok(())
+        }
+        fn webhook_handler(
+            &self,
+        ) -> Option<Arc<dyn crate::gateway::webhook_receiver::WebhookHandler>> {
+            self.handler
+                .clone()
+                .map(|h| h as Arc<dyn crate::gateway::webhook_receiver::WebhookHandler>)
+        }
+        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: Utc::now(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn start_channel_mounts_the_webhook() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        registry.start_channel(&id).await.unwrap();
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn stop_channel_unmounts_the_webhook() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+
+        registry.stop_channel(&id).await.unwrap();
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "a stopped channel must not keep an authenticated HTTP endpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn unregister_unmounts_the_webhook() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+
+        registry.unregister(&id).await;
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "channel.delete must remove the endpoint even when the Arc is still held"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_channel_refreshes_the_mount() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+        let first = registry
+            .webhook_mounts()
+            .lookup("/webhook/wh")
+            .await
+            .expect("mounted");
+
+        // restart_channel does NOT go through stop_channel/start_channel, so it
+        // needs its own hook — otherwise the table keeps the pre-restart
+        // handler clone forever.
+        registry.restart_channel(&id).await.unwrap();
+        let second = registry
+            .webhook_mounts()
+            .lookup("/webhook/wh")
+            .await
+            .expect("still mounted");
+
+        assert!(
+            !Arc::ptr_eq(&first.handler, &second.handler),
+            "the table must hold the handler built by the restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn re_registering_drops_the_outgoing_instance_mount() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+
+        // `channel.start` re-creates the instance from fresh config and
+        // re-registers it. The replacement has not started, so it owns no
+        // handler — the old mount must not keep serving with the old secret.
+        registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
     }
 }
