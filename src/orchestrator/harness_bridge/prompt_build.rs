@@ -802,17 +802,23 @@ async fn resolve_prompt_context(
         resolved_context.strategy = Some(crate::strategy::render_strategy_summary(&s));
         resolved_context.strategy_guardrails = Some(crate::strategy::render_guardrails_only(&s));
     }
-    // Voice mode: read the session-keyed flag the gateway inbound router set
+    // Voice mode: read the session-keyed state the gateway inbound router set
     // for this turn so `VoiceModeLayer` (priority 1710) injects the
     // spoken-reply guidelines. Mirrors `execution_plan` / `standing_goal` —
     // a mechanical session-keyed lookup, no judgment. `Off` (no voice)
     // leaves the prompt byte-identical; the `transcribed` bit distinguishes
-    // a spoken-only turn from one whose input was ASR-transcribed.
-    resolved_context.voice = match crate::gateway::voice::voice_mode::get(session_key_str) {
+    // a spoken-only turn from one whose input was ASR-transcribed, and the
+    // vocabulary hint rides along so the layer can invite term-accurate
+    // transcription repair (the same `[voice] vocabulary` that biased ASR).
+    let voice_turn = crate::gateway::voice::voice_mode::get(session_key_str);
+    resolved_context.voice = match &voice_turn {
         None => crate::thinker::context::VoiceContext::Off,
-        Some(false) => crate::thinker::context::VoiceContext::Spoken,
-        Some(true) => crate::thinker::context::VoiceContext::SpokenTranscribed,
+        Some(state) if state.transcribed => {
+            crate::thinker::context::VoiceContext::SpokenTranscribed
+        }
+        Some(_) => crate::thinker::context::VoiceContext::Spoken,
     };
+    resolved_context.voice_vocabulary = voice_turn.and_then(|state| state.vocabulary);
     // Approval regime (codex `<approval_policy>` parity): the turn's resolved
     // exec tier, already computed by the gateway with request/session/global
     // precedence and the channel clamp applied. Threaded through here rather
