@@ -158,10 +158,17 @@ fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
             .expect("invariant: a run was just pushed")
             .push(i);
     }
+    // `MIN_PER_FILE` is a floor, so on a very wide diff a per-file share would
+    // push the total back past `MAX_KEPT` (500 files × 4 = 2000 lines, each
+    // separated by its own omission marker). Bound the number of files that get
+    // detail; the rest are reported by the trailing "N more files changed" note,
+    // which is the honest answer at that width anyway.
+    let max_files = (MAX_KEPT / MIN_PER_FILE).max(1);
+    let runs = &runs[..runs.len().min(max_files)];
     let quota = (MAX_KEPT / runs.len().max(1)).max(MIN_PER_FILE);
 
     let mut out: Vec<usize> = Vec::new();
-    for run in &runs {
+    for run in runs {
         if run.len() <= quota {
             out.extend(run.iter().copied());
             continue;
@@ -273,6 +280,52 @@ mod tests {
         assert!(
             reduce_diff(&s).is_none(),
             "an all-change diff should not reduce"
+        );
+    }
+
+    /// A wide diff must stay bounded and must say how many files it dropped —
+    /// the old head truncate silently amputated 23 of 26 files under a header
+    /// that implied uniform line-level thinning.
+    #[test]
+    fn a_wide_diff_stays_bounded_and_reports_dropped_files() {
+        let mut d = String::new();
+        for f in 0..400 {
+            d.push_str(&format!("diff --git a/f{f}.rs b/f{f}.rs\n"));
+            d.push_str("index 1111111..2222222 100644\n");
+            d.push_str(&format!("--- a/f{f}.rs\n+++ b/f{f}.rs\n"));
+            d.push_str("@@ -1,6 +1,6 @@\n");
+            for c in 0..6 {
+                d.push_str(&format!(" context {c}\n"));
+            }
+            d.push_str("-let old = 1;\n+let new = 2;\n");
+        }
+        let r = reduce_diff(&d).expect("a 400-file diff must reduce");
+        assert!(
+            r.kept_lines <= MAX_KEPT + MIN_PER_FILE,
+            "kept must stay near the cap, got {}",
+            r.kept_lines
+        );
+        assert!(
+            r.body.contains("more files changed, not shown"),
+            "dropped files must be announced; body tail:\n{}",
+            &r.body[r.body.len().saturating_sub(200)..]
+        );
+        assert!(
+            r.body.len() < d.len() / 2,
+            "the body must be substantially smaller: {} vs {}",
+            r.body.len(),
+            d.len()
+        );
+    }
+
+    /// git's default is `-U3`; a context window of 2 made the whole pass a no-op
+    /// by construction, so this pins the invariant rather than the number.
+    #[test]
+    fn context_window_is_below_gits_default_u3() {
+        assert!(
+            MAX_CONTEXT < 3,
+            "MAX_CONTEXT={MAX_CONTEXT} must be < git's default -U3, or every \
+             context line sits within reach of an anchor and nothing is trimmed"
         );
     }
 }
