@@ -25,6 +25,11 @@ const MAX_STRING_CHARS: usize = 200;
 /// marker element. The head of a result list carries the shape; the tail is
 /// usually homogeneous repetition.
 const MAX_ARRAY_ELEMS: usize = 8;
+/// Objects wider than this keep their first N keys plus a `"…": "(+M more keys)"`
+/// marker entry. Generous compared to the array cap because an object's key set
+/// *is* its shape, and short scalars like `error` / `status` / `message` are
+/// exactly what must survive.
+const MAX_OBJECT_KEYS: usize = 48;
 /// Defensive recursion bound: beyond this depth a subtree collapses to a
 /// placeholder rather than recursing further (guards against adversarial /
 /// cyclic-looking deeply nested input — `serde_json` itself caps parse depth,
@@ -61,19 +66,25 @@ pub(super) fn looks_like_json(lines: &[&str]) -> bool {
 /// reduced form is not actually smaller than the input.
 pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
     let trimmed = text.trim();
-    let value: Value = serde_json::from_str(trimmed).ok()?;
-
-    let (reduced, changed) = shrink(&value, 0);
-    if !changed {
-        return None;
-    }
-    let body = serde_json::to_string_pretty(&reduced).ok()?;
-    // Pretty-printing can re-inflate a densely packed blob; only keep the
-    // reduction when it genuinely shrinks the payload (the caller also guards
-    // on tokens, this guards on bytes so a no-win never emits a header).
-    if body.len() >= trimmed.len() {
-        return None;
-    }
+    let body = match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => {
+            let (reduced, changed) = shrink(&value, 0);
+            if !changed {
+                return None;
+            }
+            serde_json::to_string_pretty(&reduced).ok()?
+        }
+        // Not one document — try ndjson / JSONL, which is what `rg --json`,
+        // `docker events` and `kubectl -o json --watch` all emit. The cheap
+        // `looks_like_json` gate (first line `{`, last line `}`) matches these,
+        // so before this arm existed they claimed the JSON slot, failed to parse,
+        // and — because `reduce` dispatched on one kind only — got no reduction
+        // from any reducer at all.
+        Err(_) => reduce_jsonl(trimmed)?,
+    };
+    // Whether the result is actually smaller is decided centrally, by
+    // `Reduction::is_meaningful_shrink`; a local `>=` check here once let a
+    // 91-byte saving on a 91 KB document pass as a reduction.
     // JSON tallies are chars, not lines: the body is re-pretty-printed, so
     // its line count is unrelated to the input's (a dense blob re-renders as
     // dozens of lines and the old "kept 43/1 lines" header lied). See the
@@ -86,6 +97,40 @@ pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
         kept_lines: kept_chars,
         total_lines: trimmed.chars().count(),
     })
+}
+
+/// Max records kept from a JSONL / ndjson stream, plus a tail marker. The head
+/// of such a stream carries its shape; `rg --json` in particular repeats one
+/// record type per hit.
+const MAX_JSONL_RECORDS: usize = 12;
+
+/// Reduce a newline-delimited JSON stream: every non-empty line must parse on its
+/// own, or this isn't JSONL and we decline. Each kept record goes through the
+/// same [`shrink`] used for a single document, re-emitted one compact record per
+/// line so the result is still machine-readable.
+fn reduce_jsonl(trimmed: &str) -> Option<String> {
+    let mut records = Vec::new();
+    let mut total = 0usize;
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(line).ok()?;
+        total += 1;
+        if records.len() < MAX_JSONL_RECORDS {
+            let (reduced, _) = shrink(&value, 0);
+            records.push(serde_json::to_string(&reduced).ok()?);
+        }
+    }
+    if total < 2 {
+        return None; // a single record is just a document; not our case
+    }
+    let mut body = records.join("\n");
+    if total > records.len() {
+        body.push_str(&format!("\n…(+{} more records)", total - records.len()));
+    }
+    Some(body)
 }
 
 /// Recursively shrink a JSON value, returning the reduced value and whether
@@ -131,12 +176,25 @@ fn shrink(value: &Value, depth: usize) -> (Value, bool) {
             (Value::Array(out), changed)
         }
         Value::Object(map) => {
-            let mut changed = false;
+            // Keys are the structural signal, so they are kept — but not without
+            // limit. A document that is large because it is *wide* (a lockfile,
+            // `cargo metadata`, `npm ls --json`, a locale bundle: thousands of
+            // short keys, no leaf over MAX_STRING_CHARS) set `changed = false`
+            // all the way up and so was the one class of oversized JSON the
+            // reducer structurally refused to touch. Cap parallel to the array
+            // arm above.
+            let mut changed = map.len() > MAX_OBJECT_KEYS;
             let mut out = serde_json::Map::new();
-            for (k, v) in map {
+            for (k, v) in map.iter().take(MAX_OBJECT_KEYS) {
                 let (nv, c) = shrink(v, depth + 1);
                 changed |= c;
                 out.insert(k.clone(), nv);
+            }
+            if map.len() > MAX_OBJECT_KEYS {
+                out.insert(
+                    "…".to_string(),
+                    Value::String(format!("(+{} more keys)", map.len() - MAX_OBJECT_KEYS)),
+                );
             }
             (Value::Object(out), changed)
         }

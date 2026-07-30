@@ -18,6 +18,20 @@ pub(super) const MAX_LINE_CHARS: usize = 2000;
 /// whole file (and flooding its context) in one call.
 pub(super) const DEFAULT_READ_LINE_LIMIT: u64 = 2000;
 
+/// Token ceiling for one `file_read` window — the second limit, applied across
+/// lines, whichever binds first (pi's `truncate.ts` uses the same rule with a
+/// line count and a byte count).
+///
+/// Sits below `result_processing::DEFAULT_RESULT_BUDGET_TOKENS` (8 000) on
+/// purpose. `file_read` deliberately has no result budget of its own — a read is
+/// the only way the model can pull a persisted blob back, so persisting one would
+/// loop — which means an oversized window used to be cut by the *generic*
+/// head+tail truncator, silently removing the middle of content whose
+/// `message` / `returned_lines` / `truncated` fields had already been minted for
+/// the whole window. Staying under the backstop keeps the window and the
+/// continuation offset describing it truthful.
+pub(super) const READ_WINDOW_TOKENS: usize = 6000;
+
 /// Number of leading bytes inspected when classifying a file as binary.
 const BINARY_SNIFF_BYTES: usize = 8192;
 

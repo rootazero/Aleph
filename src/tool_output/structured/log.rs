@@ -16,6 +16,17 @@ const KEEP_HEAD: usize = 2;
 const KEEP_TAIL: usize = 3;
 /// Max loud lines kept (prevents a flood of identical warnings dominating).
 const MAX_SIGNAL: usize = 24;
+/// How much of [`MAX_SIGNAL`] is reserved for a backwards scan from the tail.
+///
+/// A single forward pass is the wrong shape for test-runner output, which is
+/// where this reducer earns its keep. In `cargo test`, every `test x ... FAILED`
+/// line is loud, so the first `MAX_SIGNAL` failures exhausted the budget in the
+/// *roster* — and the `failures:` block, the `panicked at …` lines and the
+/// `assertion \`left == right\` failed` diffs all sit **after** that point, so
+/// they were dropped in their entirety. Every runner (cargo, pytest, jest, go
+/// test) puts its diagnostics and its summary at the end, so half the budget is
+/// spent scanning backwards from there.
+const SIGNAL_FROM_TAIL: usize = MAX_SIGNAL / 2;
 /// Lines kept after a loud line — captures the stack trace under an error.
 const ERROR_CONTEXT: usize = 3;
 /// Below this kept/total ratio (×10) the reduction isn't worth the header.
@@ -86,6 +97,65 @@ fn tail_indices(lines: &[&str], n: usize) -> Vec<usize> {
     idx
 }
 
+/// Leading-whitespace width of a line, in bytes (tabs count as one).
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Mark loud lines encountered along `order`, plus their trailing context, until
+/// `budget` *newly* marked loud lines are found. Returns how many it spent.
+///
+/// Context extension stops at the first follower that isn't indented deeper than
+/// the loud line. That one predicate is what keeps the budget on diagnostics: a
+/// compiler error's `--> src/main.rs:10:5` continuation and a panic's stack
+/// frames are indented under it and get kept, whereas the line after
+/// `test suite::case_7 ... FAILED` is `test suite::case_8 ... ok` at the same
+/// indent — sibling noise that used to consume two thirds of everything kept.
+fn mark_signal(
+    lines: &[&str],
+    keep: &mut [bool],
+    order: impl Iterator<Item = usize>,
+    budget: usize,
+) -> usize {
+    let total = lines.len();
+    let mut spent = 0usize;
+    let mut prev_loud: Option<&str> = None;
+    for i in order {
+        if spent >= budget {
+            break;
+        }
+        if !is_loud(lines[i]) {
+            prev_loud = None;
+            continue;
+        }
+        // Collapse an immediately-repeated loud line (progress-bar warnings).
+        if prev_loud == Some(lines[i]) {
+            continue;
+        }
+        prev_loud = Some(lines[i]);
+        // Only a newly-marked loud line costs budget; re-visiting one the other
+        // pass already kept is free, so the two passes can't double-charge.
+        if !keep[i] {
+            keep[i] = true;
+            spent += 1;
+        }
+        let base_indent = indent_of(lines[i]);
+        for k in 1..=ERROR_CONTEXT {
+            let Some(&follower) = lines.get(i + k) else {
+                break;
+            };
+            if i + k >= total {
+                break;
+            }
+            if !follower.trim().is_empty() && indent_of(follower) <= base_indent {
+                break;
+            }
+            keep[i + k] = true;
+        }
+    }
+    spent
+}
+
 pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
     let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
@@ -99,29 +169,18 @@ pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
     }
 
     // Loud lines + trailing context, with adjacent dedup so a burst of the same
-    // warning doesn't eat the whole signal budget.
-    let mut signal_kept = 0usize;
-    let mut prev_loud: Option<&str> = None;
-    for i in 0..total {
-        if signal_kept >= MAX_SIGNAL {
-            break;
-        }
-        if is_loud(lines[i]) {
-            if prev_loud == Some(lines[i]) {
-                continue; // collapse an immediately-repeated loud line
-            }
-            prev_loud = Some(lines[i]);
-            keep[i] = true;
-            signal_kept += 1;
-            for k in 1..=ERROR_CONTEXT {
-                if i + k < total {
-                    keep[i + k] = true;
-                }
-            }
-        } else {
-            prev_loud = None;
-        }
-    }
+    // warning doesn't eat the whole signal budget. Run backwards from the tail
+    // first — that half of the budget is reserved for the failure roster and
+    // summary a test runner writes last, and spending it first means a long
+    // stream of loud lines earlier in the log can no longer starve it.
+    let tail_budget = SIGNAL_FROM_TAIL.min(MAX_SIGNAL);
+    let spent_tail = mark_signal(&lines, &mut keep, (0..total).rev(), tail_budget);
+    mark_signal(
+        &lines,
+        &mut keep,
+        0..total,
+        MAX_SIGNAL.saturating_sub(spent_tail),
+    );
 
     let selected: Vec<usize> = (0..total).filter(|&i| keep[i]).collect();
     // Collapse a burst of identical consecutive lines kept via error-context
@@ -145,7 +204,7 @@ pub(super) fn reduce_log(text: &str) -> Option<Reduction> {
     if kept.len() * 10 >= total * MAX_KEPT_RATIO_X10 {
         return None;
     }
-    let body = render_selected(&lines, &kept);
+    let body = render_selected(&lines, &kept, total);
     Some(Reduction {
         kind: ContentKind::Log,
         body,

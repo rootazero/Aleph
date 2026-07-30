@@ -192,6 +192,21 @@ pub fn estimate_tokens_smart(content: &str) -> usize {
     estimate_tokens_aware(content, DEFAULT_PROSE_RATIO)
 }
 
+/// How many characters of text shaped like `sample` fit in `budget_tokens` —
+/// the inverse of [`estimate_tokens_smart`].
+///
+/// Producers that must *emit* text under a token budget (a windowed file read,
+/// a head/tail truncation) need this direction, and doing the arithmetic at the
+/// call site is how char and byte units get mixed up. Content-aware by
+/// construction: the same budget buys ~2.5× more characters of source than of
+/// CJK prose, which is exactly why a fixed "50 KB per read" limit cannot honour
+/// a token budget for both.
+#[must_use]
+pub fn chars_for_token_budget(sample: &str, budget_tokens: usize) -> usize {
+    let ratio = detect_content_ratio(sample).max(1.0);
+    ((budget_tokens as f64) * ratio) as usize
+}
+
 /// Estimates token count using content-aware ratio detection with an explicit
 /// prose baseline.
 ///

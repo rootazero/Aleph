@@ -10,15 +10,18 @@
 //!   budget. `read_file`-family tools always return `None` to break the
 //!   read → marker → re-read → persist loop, even if a misconfigured tool
 //!   declares its own budget.
-//! - `apply_result_budget(...)` runs the compress/persist/truncate cascade
+//! - `apply_result_budget(...)` runs the reduce/persist/truncate cascade
 //!   over a tool's text output and returns `ProcessedResult`.
+//!
+//! The *content-aware* half of the cleaning happens one step earlier, in
+//! [`crate::tool_output::hygiene`], because it has to see the tool's structured
+//! value while its text fields still carry real newlines — see that module for
+//! why flattening first made both content-aware cleaners blind.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::context::budget::pressure::{
-    content_ratio_with_baseline, estimate_tokens_smart, DEFAULT_PROSE_RATIO,
-};
+use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
@@ -122,21 +125,49 @@ pub struct ProcessedResult {
 /// Apply Layer 2 of the budget pipeline to a successful tool output.
 ///
 /// Caller is responsible for any tool-specific compression (e.g.
-/// `compress_tool_output`) before invoking this helper; this layer
-/// just decides between "keep verbatim", "persist + marker", and
+/// `compress_tool_output`) and for the field-wise ingress hygiene pass
+/// ([`crate::tool_output::hygiene::clean_result_value`]) before invoking this
+/// helper; this layer decides between "keep verbatim", "persist + marker", and
 /// "truncate".
+///
+/// `reduced_from` carries the **untouched original** when hygiene shortened
+/// `text`. Two things hang off it:
+///
+/// 1. The original — not the reduced body — is what gets persisted, so the lines
+///    the reducer dropped stay recoverable via `ctx_search` / `read_file`.
+///    Persisting the reduced copy would make the reduction irreversible.
+/// 2. It is the signal that we *know what the content was*. Only then is the
+///    reduced body inlined above the recovery marker: a type-routed reduction is
+///    signal-dense by construction, so handing it to the model directly saves the
+///    `ctx_search` round-trip (an extra LLM turn that re-sends the whole
+///    context). Opaque output keeps the marker-only behaviour, because there we
+///    cannot tell signal from noise and a head/tail slice would be a guess.
 pub fn apply_result_budget(
     tool_call_id: &str,
     tool_name: &str,
     text: &str,
     store: Option<&ToolResultStore>,
     budget: Option<usize>,
+    reduced_from: Option<&str>,
 ) -> ProcessedResult {
     let tokens = estimate_tokens_smart(text);
     let Some(budget) = budget else {
-        // Budget = None → never persist; distill salient errors/paths if any,
-        // else fall back to a global head+tail truncate.
-        let truncated = distill_or_truncate(text, DEFAULT_RESULT_BUDGET_TOKENS);
+        // Budget = None ⟺ the read-file family (see `resolve_result_budget`).
+        // A read result is *the exact lines the model asked for*, so it is only
+        // ever kept verbatim or head/tail-truncated — never semantically
+        // re-selected. Distilling here used to replace a large source file with
+        // a grep of its "error"-looking lines (`pub enum Error {` lowercases to
+        // a hit on the `"error "` marker), silently answering a different
+        // question than the one asked. `file_read` sizes its own window under
+        // this threshold, so this branch is now a backstop rather than a path.
+        //
+        // The boot-installed window ceiling applies here too. It used to be
+        // bypassed on this branch, which handed a 2 400-token-window model an
+        // 8 000-token read allowance — the one case the knob exists to prevent.
+        let truncated = truncate_with_budget(
+            text,
+            DEFAULT_RESULT_BUDGET_TOKENS.min(result_budget_ceiling()),
+        );
         let tokens_after = estimate_tokens_smart(&truncated);
         return ProcessedResult {
             text: truncated,
@@ -144,41 +175,65 @@ pub fn apply_result_budget(
             persisted_path: None,
         };
     };
+
+    // Only meaningful when hygiene actually changed something.
+    let original = reduced_from.filter(|orig| *orig != text);
+
     if tokens <= budget {
-        return ProcessedResult {
-            text: text.to_string(),
-            tokens_in_context: tokens,
-            persisted_path: None,
+        // Fits. Offload the untouched original when detail was dropped getting
+        // here, so the reduction stays reversible; otherwise keep it verbatim.
+        let Some(full) = original else {
+            return ProcessedResult {
+                text: text.to_string(),
+                tokens_in_context: tokens,
+                persisted_path: None,
+            };
+        };
+        return match recovery_footer(store, tool_call_id, tool_name, full, budget) {
+            Some((footer, path)) => {
+                let body = format!("{text}\n{footer}");
+                ProcessedResult {
+                    tokens_in_context: estimate_tokens_smart(&body),
+                    text: body,
+                    persisted_path: path,
+                }
+            }
+            None => ProcessedResult {
+                text: text.to_string(),
+                tokens_in_context: tokens,
+                persisted_path: None,
+            },
         };
     }
-    if let Some(store) = store {
-        if let Some(marker) = store.persist_if_large(tool_call_id, tool_name, text, budget) {
-            let path = extract_persisted_ref(&marker).and_then(parse_marker_path);
-            // Index the offloaded blob so the model can BM25-retrieve only the
-            // relevant slices via `ctx_search` instead of re-reading the whole
-            // file (which would defeat the offload). Best-effort: on failure
-            // the bare persist marker still lets the model `read_file` it back.
-            let indexed = store.index_output(tool_call_id, tool_name, text);
-            let full_marker = match indexed.filter(|o| o.sections > 0) {
-                Some(outcome) => format!("{marker}\n{}", search_hint(&outcome)),
-                None => marker,
-            };
-            // Surface key errors inline above the marker so a failed command's
-            // diagnostics are visible immediately, not gated behind a
-            // ctx_search round-trip. Bounded; absent when there is no error.
-            let full_marker = match inline_error_digest(text) {
-                Some(errors) => format!("{errors}\n{full_marker}"),
-                None => full_marker,
-            };
-            let tokens_after = estimate_tokens_smart(&full_marker);
-            return ProcessedResult {
-                text: full_marker,
-                tokens_in_context: tokens_after,
-                persisted_path: path,
-            };
-        }
-        // Persist failed (the store logs internally); fall through to truncate.
+
+    // Over budget. Persist the original (or `text` when there was no hygiene
+    // pass) and compose the inline body above the recovery footer.
+    let persist_source = original.unwrap_or(text);
+    if let Some((footer, path)) =
+        recovery_footer(store, tool_call_id, tool_name, persist_source, budget)
+    {
+        let footer_tokens = estimate_tokens_smart(&footer);
+        let body = match original {
+            // Content-typed: inline the signal, sized so body + footer still
+            // respect the tool's declared budget.
+            Some(_) => truncate_with_budget(text, budget.saturating_sub(footer_tokens)),
+            // Opaque: a bounded error preview only, as before — visible without
+            // a ctx_search round-trip, absent when there is no error signal.
+            None => inline_error_digest(text).unwrap_or_default(),
+        };
+        let composed = if body.is_empty() {
+            footer
+        } else {
+            format!("{body}\n{footer}")
+        };
+        return ProcessedResult {
+            tokens_in_context: estimate_tokens_smart(&composed),
+            text: composed,
+            persisted_path: path,
+        };
     }
+
+    // No store, or the persist failed (the store logs internally) — truncate.
     let truncated = distill_or_truncate(text, budget);
     let tokens_after = estimate_tokens_smart(&truncated);
     ProcessedResult {
@@ -186,6 +241,40 @@ pub fn apply_result_budget(
         tokens_in_context: tokens_after,
         persisted_path: None,
     }
+}
+
+/// Offload `full` to the result store and build the recovery footer the model
+/// uses to get the dropped detail back: the persist marker plus, when the blob
+/// indexed into sections, a `ctx_search` hint.
+///
+/// `None` when there is no store or the persist did not happen (content under
+/// `threshold`, or a write failure) — the caller then falls back to truncation.
+///
+/// `pub(crate)` for the harness Layer-3 turn spill (`harness/agent/act.rs`),
+/// which offloads for the same reason and must hand the model the same recovery
+/// handle. It used to call `persist_if_large` directly and so emitted a marker
+/// with **no** `ctx_search` hint over a blob that was never indexed — the model
+/// was pointed at a file it could only re-read whole, defeating the offload.
+pub(crate) fn recovery_footer(
+    store: Option<&ToolResultStore>,
+    tool_call_id: &str,
+    tool_name: &str,
+    full: &str,
+    threshold: usize,
+) -> Option<(String, Option<PathBuf>)> {
+    let store = store?;
+    let marker = store.persist_if_large(tool_call_id, tool_name, full, threshold)?;
+    let path = extract_persisted_ref(&marker).and_then(parse_marker_path);
+    // Index the offloaded blob so the model can BM25-retrieve only the relevant
+    // slices via `ctx_search` instead of re-reading the whole file (which would
+    // defeat the offload). Best-effort: on failure the bare persist marker still
+    // lets the model `read_file` it back.
+    let indexed = store.index_output(tool_call_id, tool_name, full);
+    let footer = match indexed.filter(|o| o.sections > 0) {
+        Some(outcome) => format!("{marker}\n{}", search_hint(&outcome)),
+        None => marker,
+    };
+    Some((footer, path))
 }
 
 /// Rescue inline image payloads from a structured tool-result value into the
@@ -322,9 +411,8 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     // char counts with byte offsets. All slicing is on exact char counts via
     // `char_byte_offset`, so there is no char/byte unit mixing. Keep ~70 %
     // head + 30 % tail.
-    let ratio = content_ratio_with_baseline(text, DEFAULT_PROSE_RATIO).max(1.0);
     let total_chars = text.chars().count();
-    let target_chars = ((budget_tokens as f64) * ratio) as usize;
+    let target_chars = chars_for_token_budget(text, budget_tokens);
     if target_chars >= total_chars {
         return text.to_string();
     }
@@ -610,7 +698,7 @@ mod tests {
     #[test]
     fn small_text_unchanged() {
         let (store, _base) = test_store("small_unchanged");
-        let out = apply_result_budget("c1", "bash", "hello", Some(&store), Some(10_000));
+        let out = apply_result_budget("c1", "bash", "hello", Some(&store), Some(10_000), None);
         assert_eq!(out.text, "hello");
         assert!(out.persisted_path.is_none());
     }
@@ -619,7 +707,7 @@ mod tests {
     fn budget_none_truncates_no_persist() {
         let (store, base) = test_store("budget_none");
         let big = "x".repeat(60_000);
-        let out = apply_result_budget("c2", "read_file", &big, Some(&store), None);
+        let out = apply_result_budget("c2", "read_file", &big, Some(&store), None, None);
         assert!(
             out.persisted_path.is_none(),
             "must not persist when budget is None"
@@ -645,7 +733,7 @@ mod tests {
             .map(|i| format!("line {i} payload alpha beta gamma"))
             .collect::<Vec<_>>()
             .join("\n");
-        let out = apply_result_budget("c3", "bash", &big, Some(&store), Some(100));
+        let out = apply_result_budget("c3", "bash", &big, Some(&store), Some(100), None);
         assert!(
             out.text.starts_with("[Full output persisted:"),
             "expected marker, got: {}",
@@ -673,7 +761,7 @@ mod tests {
     #[test]
     fn no_store_means_truncate_only() {
         let big = "z".repeat(40_000);
-        let out = apply_result_budget("c4", "bash", &big, None, Some(100));
+        let out = apply_result_budget("c4", "bash", &big, None, Some(100), None);
         assert!(out.persisted_path.is_none());
         assert!(!out.text.starts_with("[Full output persisted:"));
         assert!(
@@ -690,31 +778,146 @@ mod tests {
         assert_eq!(path, PathBuf::from("/tmp/aleph/x.txt"));
     }
 
+    /// A read result is the exact lines the model asked for. It may be
+    /// head/tail-truncated when it overruns, but it must never be replaced by a
+    /// *semantic re-selection* of itself — that answers a different question
+    /// than the one asked, and it silently drops everything the model wanted.
+    ///
+    /// This test previously asserted the opposite (that the read-family branch
+    /// distilled error lines). Two things made that wrong in production:
+    /// `pub enum Error {` lowercases into a hit on the `"error "` marker, so any
+    /// large Rust file with an error type was replaced by a grep of itself; and
+    /// a real `file_read` result reaches this function as single-line JSON, so
+    /// the "distilled errors" were in fact the first 400 chars of the JSON
+    /// envelope.
     #[test]
-    fn budget_none_distills_errors_instead_of_truncating() {
-        let (store, _base) = test_store("budget_none_distill");
-        // Error signal buried in the middle of head/tail noise.
-        let mut big = (0..400)
-            .map(|i| format!("   Compiling crate_{i}"))
+    fn read_family_truncates_and_never_re_selects_content() {
+        let (store, _base) = test_store("budget_none_no_distill");
+        let mut big = String::new();
+        big.push_str("pub enum Error {\n");
+        big.push_str("    NotFound,\n");
+        big.push_str("}\n");
+        for i in 0..3000 {
+            big.push_str(&format!("fn helper_{i}() -> u32 {{ {i} }}\n"));
+        }
+        big.push_str("// the last line of the file\n");
+
+        let out = apply_result_budget("c-distill", "read_file", &big, Some(&store), None, None);
+        assert!(out.persisted_path.is_none(), "reads are never persisted");
+        assert!(
+            !out.text.contains("Output digest"),
+            "a read must not be replaced by an error digest, got: {}",
+            &out.text[..160.min(out.text.len())]
+        );
+        assert!(
+            out.text.contains("[output truncated"),
+            "over-long reads are head/tail truncated, got: {}",
+            &out.text[..160.min(out.text.len())]
+        );
+        assert!(
+            out.text.starts_with("pub enum Error {"),
+            "the head the model asked for must survive"
+        );
+        assert!(
+            out.text.ends_with("// the last line of the file\n"),
+            "the tail must survive too"
+        );
+    }
+
+    /// Content-typed output over budget: the model gets the reduced signal
+    /// inline *and* the recovery handle, so it never has to spend a `ctx_search`
+    /// round-trip just to see which test failed.
+    #[test]
+    fn reduced_content_is_inlined_above_the_recovery_marker() {
+        let (store, _base) = test_store("reduced_inline");
+        let mut original = String::from("$ cargo test\n");
+        for i in 0..2000 {
+            original.push_str(&format!("test suite::case_{i} ... ok\n"));
+        }
+        original.push_str("test suite::case_boom ... FAILED\n");
+        original.push_str("test result: FAILED. 2000 passed; 1 failed\n");
+        let reduced = crate::tool_output::structured::reduce(&original)
+            .expect("a cargo test log must classify")
+            .render();
+
+        let out = apply_result_budget(
+            "c-inline",
+            "bash",
+            &reduced,
+            Some(&store),
+            Some(100),
+            Some(&original),
+        );
+
+        assert!(
+            out.persisted_path.is_some(),
+            "the original must be offloaded"
+        );
+        assert!(
+            out.text.contains("[Full output persisted:"),
+            "recovery marker missing: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("FAILED. 2000 passed; 1 failed"),
+            "the signal must be inline, not behind a ctx_search: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("case_500"),
+            "the passing-test noise must not be inlined"
+        );
+    }
+
+    /// The reduced body is offloaded even when it already fits the budget —
+    /// otherwise the lines the reducer dropped would be gone for good.
+    #[test]
+    fn fitting_reduced_content_still_offloads_the_original() {
+        let (store, _base) = test_store("reduced_fits");
+        let mut original = String::new();
+        for i in 0..3000 {
+            original.push_str(&format!("src/lib.rs:{i}: let target = {i};\n"));
+        }
+        let reduced = crate::tool_output::structured::reduce(&original)
+            .expect("grep output must classify")
+            .render();
+        assert!(
+            estimate_tokens_smart(&reduced) <= 8_000,
+            "precondition: the reduction fits the budget"
+        );
+
+        let out = apply_result_budget(
+            "c-fits",
+            "bash",
+            &reduced,
+            Some(&store),
+            Some(8_000),
+            Some(&original),
+        );
+        assert!(
+            out.persisted_path.is_some(),
+            "the dropped lines must stay recoverable, got: {}",
+            out.text
+        );
+        assert!(out.text.contains("[compacted search:"));
+        assert!(out.text.contains("[Full output persisted:"));
+    }
+
+    /// Guard the no-op: with no hygiene pass, an over-budget opaque result keeps
+    /// exactly the marker-only shape it has always had.
+    #[test]
+    fn opaque_over_budget_output_is_unchanged_by_the_new_path() {
+        let (store, _base) = test_store("opaque_unchanged");
+        let big = (0..2000)
+            .map(|i| format!("line {i} payload alpha beta gamma"))
             .collect::<Vec<_>>()
             .join("\n");
-        big.push_str("\nerror[E0382]: borrow of moved value: `x`\n");
-        big.push_str("  --> src/main.rs:42:9\n");
-        big.push_str(
-            &(0..400)
-                .map(|i| format!("   Finished step_{i}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-        let out = apply_result_budget("c-distill", "read_file", &big, Some(&store), None);
-        assert!(out.persisted_path.is_none());
+        let out = apply_result_budget("c-opaque", "bash", &big, Some(&store), Some(100), None);
         assert!(
-            out.text.contains("E0382") && out.text.contains("Output digest"),
-            "expected distilled errors, got: {}",
+            out.text.starts_with("[Full output persisted:"),
+            "marker must still lead for opaque content, got: {}",
             &out.text[..120.min(out.text.len())]
         );
-        // Head/tail compile noise must be gone.
-        assert!(!out.text.contains("Compiling crate_0"));
     }
 
     #[test]
@@ -727,7 +930,7 @@ mod tests {
         for i in 0..2000 {
             big.push_str(&format!("trace line {i} payload alpha beta gamma\n"));
         }
-        let out = apply_result_budget("c-persist", "bash", &big, Some(&store), Some(100));
+        let out = apply_result_budget("c-persist", "bash", &big, Some(&store), Some(100), None);
         assert!(out.persisted_path.is_some(), "should have persisted");
         // The marker is still present...
         assert!(out.text.contains("[Full output persisted:"));

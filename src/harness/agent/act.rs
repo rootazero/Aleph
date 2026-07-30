@@ -1034,27 +1034,23 @@ impl AgentHarness {
         let Some(store) = self.deps.result_store.as_ref() else {
             return;
         };
+        use crate::tools::result_processing::recovery_footer;
+        let offload = |s: &crate::tools::turn_budget::SpillInstruction| {
+            recovery_footer(Some(store), &s.call_id, &s.tool_name, &s.original_text, 0)
+        };
         for spill in spills {
             if spill.call_id != call.id {
                 // Earlier-iteration spill: its SessionEvent::ToolResult is
                 // already persisted, so post-hoc rewrite from here isn't
                 // possible. The marker file is still written for recovery;
                 // cheap_passes surfaces it on the next preflight.
-                let _ = store.persist_if_large(
-                    &spill.call_id,
-                    &spill.tool_name,
-                    &spill.original_text,
-                    0,
-                );
+                let _ = offload(&spill);
                 continue;
             }
             // Same-turn newest spill: rewrite output BEFORE the SessionEvent
             // is emitted so the LLM sees the marker instead of the full text.
-            if let Some(marker) =
-                store.persist_if_large(&spill.call_id, &spill.tool_name, &spill.original_text, 0)
-            {
-                output.value = serde_json::Value::String(marker);
-                output.metadata.truncated = true;
+            if let Some((footer, _)) = offload(&spill) {
+                output.value = serde_json::Value::String(footer);
             }
         }
     }

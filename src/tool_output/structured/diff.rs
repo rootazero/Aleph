@@ -5,10 +5,18 @@
 use super::{render_selected, ContentKind, Reduction};
 
 /// Context lines kept on each side of a run of changes.
-const MAX_CONTEXT: usize = 2;
+///
+/// Must stay **strictly below** git's default `-U3`, or the pass is a no-op by
+/// construction: with a 3-line context every unchanged line is within 2 of an
+/// anchor, so the old value of 2 kept 3011 of 3024 lines on a real 26-file diff
+/// and the only thing that shrank the output was the blind head truncate below.
+const MAX_CONTEXT: usize = 1;
 /// Hard cap on kept lines so a giant all-context diff still shrinks; the
 /// surrounding stage's token guard provides the final safety net.
 const MAX_KEPT: usize = 240;
+/// Floor on lines allotted to each file when the cap forces a per-file split, so
+/// every file keeps its header plus a little detail rather than vanishing.
+const MIN_PER_FILE: usize = 4;
 
 /// Cheap detector: a unified diff has unmistakable structural markers.
 pub(super) fn looks_like_diff(lines: &[&str]) -> bool {
@@ -86,16 +94,111 @@ pub(super) fn reduce_diff(text: &str) -> Option<Reduction> {
     if kept.len() >= total {
         return None; // all signal — nothing to drop
     }
+    let files_total = count_file_starts(&lines, 0..total);
     if kept.len() > MAX_KEPT {
-        kept.truncate(MAX_KEPT);
+        kept = trim_per_file(&lines, &kept);
     }
-    let body = render_selected(&lines, &kept);
+    let mut body = render_selected(&lines, &kept, total);
+    let files_shown = count_file_starts(&lines, kept.iter().copied());
+    if files_total > files_shown {
+        body.push_str(&format!(
+            "\n… ({} more files changed, not shown) …",
+            files_total - files_shown
+        ));
+    }
     Some(Reduction {
         kind: ContentKind::Diff,
         body,
         kept_lines: kept.len(),
         total_lines: total,
     })
+}
+
+/// Whether line `i` begins a new file's section.
+///
+/// `git diff` emits both `diff --git …` and `--- a/…` per file, so counting both
+/// would double every file. When any `diff ` header is present it is the sole
+/// marker; a header-less `diff -u` paste falls back to `--- `.
+fn starts_file(lines: &[&str], i: usize, git_style: bool) -> bool {
+    if git_style {
+        lines[i].starts_with("diff ")
+    } else {
+        lines[i].starts_with("--- ")
+    }
+}
+
+fn is_git_style(lines: &[&str]) -> bool {
+    lines.iter().any(|l| l.starts_with("diff "))
+}
+
+fn count_file_starts(lines: &[&str], idxs: impl Iterator<Item = usize>) -> usize {
+    let git_style = is_git_style(lines);
+    idxs.filter(|&i| starts_file(lines, i, git_style)).count()
+}
+
+/// Spread [`MAX_KEPT`] across the files the diff touches instead of taking the
+/// first `MAX_KEPT` kept lines.
+///
+/// The head truncate this replaces was the reason a 26-file diff reached the
+/// model as **3 files** under a header (`kept 240/3024 lines`) that implied
+/// uniform line-level thinning — so a model asked to review the change would
+/// confidently report that it touched three files. Each file now keeps its
+/// section header plus a share of its own detail, and change lines are preferred
+/// over context lines inside that share.
+fn trim_per_file(lines: &[&str], kept: &[usize]) -> Vec<usize> {
+    let git_style = is_git_style(lines);
+    // Split `kept` into per-file runs. Indices before the first file header
+    // (a header-less fragment) form an initial run of their own.
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    for &i in kept {
+        if runs.is_empty() || starts_file(lines, i, git_style) {
+            runs.push(Vec::new());
+        }
+        runs.last_mut()
+            .expect("invariant: a run was just pushed")
+            .push(i);
+    }
+    let quota = (MAX_KEPT / runs.len().max(1)).max(MIN_PER_FILE);
+
+    let mut out: Vec<usize> = Vec::new();
+    for run in &runs {
+        if run.len() <= quota {
+            out.extend(run.iter().copied());
+            continue;
+        }
+        // Three priority tiers over this file's own lines: structural headers
+        // (they name the file and its hunks), then changes, then context.
+        let mut picked = vec![false; run.len()];
+        let mut n = 0usize;
+        for tier in 0..3u8 {
+            for (pos, &i) in run.iter().enumerate() {
+                if n >= quota {
+                    break;
+                }
+                if picked[pos] {
+                    continue;
+                }
+                let wanted = match tier {
+                    0 => is_header(lines[i]),
+                    1 => is_change(lines[i]),
+                    _ => true,
+                };
+                if wanted {
+                    picked[pos] = true;
+                    n += 1;
+                }
+            }
+        }
+        out.extend(
+            run.iter()
+                .enumerate()
+                .filter(|(pos, _)| picked[*pos])
+                .map(|(_, &i)| i),
+        );
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]

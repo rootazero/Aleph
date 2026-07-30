@@ -8,6 +8,8 @@
 //! line-number marker is anchored on the earliest `<sep><digits><sep>` run so
 //! filenames containing dashes or colons parse correctly.
 
+use std::collections::HashMap;
+
 use super::{is_error_signal, render_selected, ContentKind, Reduction};
 
 const MAX_PER_FILE: usize = 5;
@@ -18,6 +20,44 @@ const MAX_TOTAL: usize = 60;
 /// `path<sep>line<sep>content` shape where `<sep>` is `:` (a match line) or `-`
 /// (a ripgrep context line). Returns `None` when there is no line-number
 /// marker (headers, blank lines, grouped-format content lines).
+/// Whether `p` is plausibly a file path, as opposed to a timestamp that happens
+/// to contain `<sep><digits><sep>`.
+///
+/// Without this test, `match_path` accepted the clock prefix of essentially every
+/// structured log line — `2026-07-30 12:30:45 INFO …` yielded `Some("2026")`,
+/// `[2026-07-30T12:30:45Z …]` yielded `Some("[2026")`, and
+/// `Jul 30 06:46:12 host …` yielded `Some("Jul 30 06")`. `looks_like_search` then
+/// matched 100 % of the lines, and because `candidates()` offers Search before
+/// Log, every `docker logs` / `journalctl` / tracing capture was routed to the
+/// grep reducer and crushed to five lines per pseudo-file (the year, or the
+/// hour), taking most of its ERROR lines with it.
+///
+/// Three cheap rules, in this order:
+/// 1. A real path carries at least one letter. Kills `12`, `2026/07/30 12` and
+///    Go's default `2009/11/10 23:00:00` log stamp.
+/// 2. A path separator settles it — checked *before* the space rule so
+///    `C:\Program Files\x.rs` still parses.
+/// 3. Otherwise only a bare filename with a short alphanumeric extension counts,
+///    which is what keeps single-file grep (`main.rs:42:`) working while
+///    rejecting `[2026-07-30T12`.
+fn looks_like_path(p: &str) -> bool {
+    if !p.chars().any(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    if p.contains('/') || p.contains('\\') {
+        return true;
+    }
+    if p.contains(' ') || p.contains('\t') {
+        return false;
+    }
+    p.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty()
+            && !ext.is_empty()
+            && ext.len() <= 8
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    })
+}
+
 fn match_path(line: &str) -> Option<&str> {
     let bytes = line.as_bytes();
     // Skip a leading Windows drive colon ("C:\" or "C:/") so it isn't taken for
@@ -43,7 +83,7 @@ fn match_path(line: &str) -> Option<&str> {
             }
             if j > i + 1 && j < bytes.len() && (bytes[j] == b':' || bytes[j] == b'-') {
                 let path = &line[..i];
-                if !path.is_empty() {
+                if !path.is_empty() && looks_like_path(path) {
                     return Some(path);
                 }
             }
@@ -68,17 +108,30 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     let total = lines.len();
 
     // Group match-line indices by file, preserving first-seen file order.
-    let mut order: Vec<&str> = Vec::new();
-    let mut groups: Vec<(usize, Vec<usize>)> = Vec::new(); // parallel to `order`
+    //
+    // The index is a `HashMap`, not a linear probe over the seen paths: at
+    // ingress this runs synchronously on the tool-result path, and the probe was
+    // quadratic in (matches × distinct paths) — a repo-wide `rg` producing
+    // 120 000 hits across 40 000 files spent ~3 s of blocking CPU deciding what
+    // to throw away, nearly all of it on groups past `MAX_FILES` that are then
+    // discarded unread. Collection also stops opening new groups at `MAX_FILES`
+    // for the same reason; `distinct_paths` still counts them so the tally we
+    // report to the model stays truthful.
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut distinct_paths = 0usize;
     for (idx, &line) in lines.iter().enumerate() {
         let Some(path) = match_path(line) else {
             continue;
         };
-        match order.iter().position(|&p| p == path) {
-            Some(pos) => groups[pos].1.push(idx),
+        match index.get(path) {
+            Some(&pos) => groups[pos].push(idx),
             None => {
-                order.push(path);
-                groups.push((idx, vec![idx]));
+                distinct_paths += 1;
+                if groups.len() < MAX_FILES {
+                    index.insert(path, groups.len());
+                    groups.push(vec![idx]);
+                }
             }
         }
     }
@@ -87,7 +140,7 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     }
 
     let mut kept: Vec<usize> = Vec::new();
-    for (_first, idxs) in groups.iter().take(MAX_FILES) {
+    for idxs in &groups {
         kept.extend(select_for_file(&lines, idxs));
         if kept.len() >= MAX_TOTAL {
             break;
@@ -101,7 +154,15 @@ pub(super) fn reduce_search(text: &str) -> Option<Reduction> {
     if kept.len() >= total {
         return None; // nothing dropped
     }
-    let body = render_selected(&lines, &kept);
+    let mut body = render_selected(&lines, &kept, total);
+    // Dropping whole files has to be visible: otherwise a sweep across 400 files
+    // reads as a complete answer covering 20.
+    if distinct_paths > groups.len() {
+        body.push_str(&format!(
+            "\n… ({} more files matched, not shown) …",
+            distinct_paths - groups.len()
+        ));
+    }
     Some(Reduction {
         kind: ContentKind::Search,
         body,

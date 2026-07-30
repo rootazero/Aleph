@@ -297,6 +297,16 @@ const BUDGETED: [&str; 12] = [
 /// both still said 5008), which is this file's own failure mode reappearing one
 /// layer up. The four changes, against R10's three questions:
 ///
+/// 5066 → 5062 (−4): paid down by the tool-output hygiene round. The Layer-3
+/// turn spill stopped calling `ToolResultStore::persist_if_large` directly and
+/// now reuses `result_processing::recovery_footer`, which offloads *and* indexes
+/// *and* appends the `ctx_search` hint — the same recovery handle Layer 2 emits.
+/// The spill previously handed the model a marker over an unindexed blob, so the
+/// only way back to the output was re-reading the whole file. Folding the two
+/// call sites into one closure paid for the change and −4 besides; the dead
+/// `ToolOutputMetadata.truncated` write went with it (write-only field, cut).
+/// Down-only ratchet: no 3-question answer required.
+///
 ///   - **`think.rs`, grace-turn wall-clock cap (+~14).** `race_llm_call`'s
 ///     timeout arm exists only when `deps.turn_timeout` is `Some`, so with turn
 ///     timeouts disabled a hung provider could hang a run that was already
@@ -362,7 +372,7 @@ const BUDGETED: [&str; 12] = [
 ///     over an in-process mpsc), so nothing reads back an old blob through this
 ///     enum; the protocol-side `AgentTraceTurnOutcome` keeps its wider set for
 ///     stored blobs, exactly as `AgentTraceTextKind::Intermediate` does.
-const CEILING: usize = 5066;
+const CEILING: usize = 5062;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

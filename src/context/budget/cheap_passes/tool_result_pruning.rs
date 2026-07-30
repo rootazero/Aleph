@@ -6,10 +6,10 @@
 //! preserves the "what did this tool do" signal at a fraction of the token
 //! cost — far better continuity than a bare token count.
 
-use crate::context::budget::cheap_passes::structured;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::tool_output::structured;
 use async_trait::async_trait;
 
 /// Max characters kept from a tool result's first line in the pruned hint.
