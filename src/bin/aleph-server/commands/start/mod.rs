@@ -1666,6 +1666,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             tracing::info!(
                                 synced = report.synced,
                                 failed = ?report.failed,
+                                generated_at = ?report.generated_at,
                                 "extensions catalog sync"
                             );
                         }

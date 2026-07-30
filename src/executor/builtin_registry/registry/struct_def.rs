@@ -324,6 +324,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
     /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
+    /// Hub catalog search (optional - requires CatalogCache). Supplies the
+    /// `entry_id` that resolve-spec / install-run take.
+    pub(crate) hub_catalog_search_tool: Option<crate::builtin_tools::hub::HubCatalogSearchTool>,
     /// Store catalog-sync tool (optional - requires CatalogCache + marketplace configs)
     pub(crate) hub_catalog_sync_tool: Option<crate::builtin_tools::hub::HubCatalogSyncTool>,
     /// Store resolve-spec tool (optional - requires CatalogCache + marketplace configs)

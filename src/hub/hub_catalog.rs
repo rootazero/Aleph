@@ -25,13 +25,21 @@ pub struct HubCatalogManifest {
     pub schema_version: u32,
     pub hub_id: String,
     pub name: String,
+    /// Publish timestamp, surfaced as catalog freshness in the sync report.
     #[serde(default)]
     pub generated_at: Option<String>,
+    /// Declared entry count — verified against `entries.len()` by
+    /// [`HubCatalogArtifact::validate`] so a truncated artifact cannot silently
+    /// replace a good cache slice with a partial one.
     #[serde(default)]
     pub entry_count: Option<u64>,
-    #[serde(default)]
-    pub content_hash: Option<String>,
 }
+
+/// Ids beginning with this prefix name *locally installed* extensions
+/// (`local:{kind}:{backend_id}`, see `gateway::handlers::extensions::lifecycle`).
+/// The wire must never mint one: `extensions.toggle` / `.uninstall` route on that
+/// prefix, so a catalog entry wearing it would address a real backend object.
+const RESERVED_LOCAL_ID_PREFIX: &str = "local:";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubCatalogEntry {
@@ -60,6 +68,46 @@ pub struct HubCatalogEntry {
     /// Upstream provenance label set by the publishing hub. Additive/back-compat.
     #[serde(default)]
     pub via: Option<String>,
+}
+
+impl HubCatalogArtifact {
+    /// Structural integrity gate, run before any entry reaches the cache.
+    ///
+    /// The catalog slot is *replace*-based, so an artifact that parses but is
+    /// wrong wipes the last-good slice. Three invariants are cheap and local:
+    /// the declared `entry_count` must match (catches a truncated or
+    /// partially-published artifact), ids must be unique (a duplicate silently
+    /// shadows the earlier row through `upsert`), and no id may claim the
+    /// reserved `local:` installed-id namespace.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(declared) = self.manifest.entry_count {
+            let actual = self.entries.len() as u64;
+            if declared != actual {
+                return Err(format!(
+                    "manifest entry_count {declared} != {actual} entries (truncated or partial artifact)"
+                ));
+            }
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.entries.len());
+        for e in &self.entries {
+            if e.id.trim().is_empty() {
+                return Err("entry with empty id".into());
+            }
+            if e.name.trim().is_empty() {
+                return Err(format!("entry '{}' has an empty name", e.id));
+            }
+            if e.id.starts_with(RESERVED_LOCAL_ID_PREFIX) {
+                return Err(format!(
+                    "entry '{}' claims the reserved '{RESERVED_LOCAL_ID_PREFIX}' installed-id namespace",
+                    e.id
+                ));
+            }
+            if !seen.insert(e.id.as_str()) {
+                return Err(format!("duplicate entry id '{}'", e.id));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl HubCatalogEntry {
@@ -104,6 +152,62 @@ mod tests {
         "install_spec":{"type":"mcp_stdio","command":"npx","args":["@acme/foo"]}
       }]
     }"#;
+
+    fn artifact(entries_json: &str, extra_manifest: &str) -> HubCatalogArtifact {
+        let body = format!(
+            r#"{{"manifest":{{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"{extra_manifest}}},"entries":{entries_json}}}"#
+        );
+        serde_json::from_str(&body).expect("fixture parses")
+    }
+
+    const ONE_ENTRY: &str = r#"[{"id":"aleph-hub:a","kind":"mcp","category":"other","name":"A",
+        "description":"d","repo_url":null,"trust_tier":"verified",
+        "install_spec":{"type":"mcp_stdio","command":"c","args":[]}}]"#;
+
+    #[test]
+    fn validate_accepts_matching_entry_count() {
+        assert!(artifact(ONE_ENTRY, r#","entry_count":1"#)
+            .validate()
+            .is_ok());
+        // absent entry_count is tolerated (field is optional by contract)
+        assert!(artifact(ONE_ENTRY, "").validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_truncated_artifact() {
+        let err = artifact(ONE_ENTRY, r#","entry_count":7"#)
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("entry_count"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_reserved_local_id_namespace() {
+        let entries = r#"[{"id":"local:mcp:github","kind":"mcp","category":"other","name":"X",
+            "description":"d","repo_url":null,"trust_tier":"official",
+            "install_spec":{"type":"mcp_stdio","command":"c","args":[]}}]"#;
+        let err = artifact(entries, "").validate().unwrap_err();
+        assert!(err.contains("reserved"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_ids_and_blank_fields() {
+        let dup = r#"[{"id":"x","kind":"mcp","category":"other","name":"A","description":"d",
+            "repo_url":null,"trust_tier":"official","install_spec":{"type":"mcp_stdio","command":"c","args":[]}},
+            {"id":"x","kind":"mcp","category":"other","name":"B","description":"d",
+            "repo_url":null,"trust_tier":"official","install_spec":{"type":"mcp_stdio","command":"c","args":[]}}]"#;
+        assert!(artifact(dup, "")
+            .validate()
+            .unwrap_err()
+            .contains("duplicate"));
+
+        let blank = r#"[{"id":"  ","kind":"mcp","category":"other","name":"A","description":"d",
+            "repo_url":null,"trust_tier":"official","install_spec":{"type":"mcp_stdio","command":"c","args":[]}}]"#;
+        assert!(artifact(blank, "")
+            .validate()
+            .unwrap_err()
+            .contains("empty id"));
+    }
 
     #[test]
     fn parses_and_normalizes() {

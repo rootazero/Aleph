@@ -269,11 +269,17 @@ mod tests {
 
     #[test]
     fn parse_install_done_branch() {
+        // `verify` is the backend's `VerifyReport` — `{ok, detail}`, the same
+        // shape `hub_install_verify` returns.
         let v = json!({ "ok": true, "outcome": {"kind":"mcp","id":"foo"},
-            "verify": {"ok": true, "tool_count": 7}, "pin": {"version":"1.0.0","sha256":null}, "injection_findings": [] });
+            "verify": {"ok": true, "detail": "running; 7 tools"}, "pin": {"version":"1.0.0","sha256":null}, "injection_findings": [] });
         match parse_install_result(&v).unwrap() {
             InstallResult::Done { verify, .. } => {
-                assert_eq!(verify.get("tool_count").and_then(|x| x.as_u64()), Some(7))
+                assert_eq!(verify.get("ok").and_then(|x| x.as_bool()), Some(true));
+                assert_eq!(
+                    verify.get("detail").and_then(|x| x.as_str()),
+                    Some("running; 7 tools")
+                );
             }
             other => panic!("expected Done, got {other:?}"),
         }
