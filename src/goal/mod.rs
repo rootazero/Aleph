@@ -6,7 +6,7 @@ pub mod pursuit;
 pub mod store;
 pub mod types;
 
-pub use store::{ContinuationDecision, GoalStore, RearmDecision};
+pub use store::{ContinuationDecision, FieldUpdate, GoalStore, RearmDecision};
 pub use types::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
 use crate::sync_primitives::Arc;

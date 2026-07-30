@@ -158,6 +158,16 @@ pub struct Goal {
     /// (the stamp falls back to `updated_at_ms`).
     #[serde(default)]
     pub completed_at_ms: Option<u64>,
+    /// Project root of the run that last claimed a continuation, recorded by
+    /// the claim pipeline so a wake that fires WITHOUT a post-run hook
+    /// (task-settle / boot re-arm / periodic recheck in `GoalWakeService`)
+    /// can rebuild the continuation in the same workspace instead of silently
+    /// falling back to the agent workspace (losing project CLAUDE.md /
+    /// AGENTS.md / project skills). Owned by the claim pipeline — preserved
+    /// across tool updates by `GoalStore::commit_field_update`.
+    /// `#[serde(default)]` → old payloads read `None`.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// One delegation session enrolled in a goal's shared token budget.
@@ -211,6 +221,7 @@ impl Goal {
             waiting_reason: None,
             budget_members: Vec::new(),
             completed_at_ms: None,
+            workspace: None,
         }
     }
 
@@ -273,6 +284,15 @@ impl Goal {
     pub const fn spent_continuation(mut self, now_ms: u64) -> Self {
         self.continuations_used = self.continuations_used.saturating_add(1);
         self.updated_at_ms = now_ms;
+        self
+    }
+
+    /// Record the claiming run's project root. Claim-pipeline scheduling
+    /// state, not a user-visible edit — deliberately does not bump
+    /// `updated_at_ms` (same contract as [`Self::with_pending_continuation`]).
+    #[must_use]
+    pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
+        self.workspace = workspace;
         self
     }
 

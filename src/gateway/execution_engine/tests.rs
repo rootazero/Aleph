@@ -1665,7 +1665,7 @@ async fn goal_continuation_inherits_the_originating_runs_project_root() {
     let ContinuationDecision::Fire {
         wake_ms, prompt, ..
     } = store
-        .try_claim_continuation(&session_str, None, now, false)
+        .try_claim_continuation(&session_str, None, now, false, None)
         .unwrap()
     else {
         panic!("an Active goal with runway must claim a continuation");
