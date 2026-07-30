@@ -28,10 +28,12 @@
 后果（上一轮终审记录）：
 
 - `channel.stop` / `channel.delete` 回 `{"status":"stopped"}`，端点却照旧 200、照旧驱动 agent run
-  ——路由持有自己那份 `Arc<GenericWebhookHandler>` 克隆（与 `WebhookChannel.handler` 无关），
-  mount 也持有自己的 `broadcast::Sender` 克隆，于是 forwarder 唯一的退出条件
-  `RecvError::Closed` **永远不可能触发**。`delete` 更糟：留下一个操作者以为已删除、
-  却仍带密钥可用的认证端点。
+  ——路由持有自己那份 `Arc<GenericWebhookHandler>` 克隆（与 `WebhookChannel.handler` 无关）。
+  而 forwarder 之所以永不退出，与 mount 无关：forwarder 任务 **move 捕获一个
+  `channel_arc` 克隆并持有整个（无限）生命周期**（`channel_registry.rs:652-708`），
+  通道实例因此永不释放，`ChannelState` 的原始 `Sender` 随之永存，于是 forwarder 唯一的
+  退出条件 `RecvError::Closed` 对**任何已启动的通道**在结构上不可达。`delete` 更糟：
+  留下一个操作者以为已删除、却仍带密钥可用的认证端点。
 - 运行时 `channel.create` 没有 HTTP 面。
 
 ### B. `RESERVED_ROUTE_PREFIXES` 的唯一消费者是「路径进路由表」这件事本身
@@ -89,7 +91,7 @@ Panel 是 `fallback_service(control_plane)`（`server/mod.rs:713`），
 | D4 | 表的所有者 | **`ChannelRegistry`** | 「挂载跟随注册表」的字面实现。挂钩点全在一个文件内，避免 `register_channel_plugins` 那种「十个副本＝十个可忘处」 |
 | D5 | 重复 path 的裁决 | **`channel_id` 字典序小者胜；同 id 必刷新** | 与 main 上「排序后先到者胜」（`43fc94b36`）逐字等价，但不再依赖 `HashMap` 迭代序 ⇒ 路由归属跨重启确定，不是每次开机抛硬币 |
 | D6 | `RESERVED_ROUTE_PREFIXES` | **删除**（含 `is_reserved_route` 与其单测） | D2 之后零消费者。R10「零消费者立即撤回，绝不为未来留口」 |
-| D7 | 检查顺序 | **查表 → 验签 → 查状态 → 解析转发** | 未认证方拿到的恒是 403 / 404，区分不出通道死活 |
+| D7 | 检查顺序 | **查表 → 验签 → 查状态 → 解析转发** | 未认证方只能知道该路径上**是否有挂载**（启动中 403 / 已停止或已删除 404），无法得知已挂载通道的**状态**（旧的 503-vs-403 区分消失） |
 
 ## 4. 设计 (Design)
 
@@ -109,7 +111,9 @@ impl WebhookMountTable {
     pub async fn mount(&self, mount: WebhookMount) -> bool;
     /// 返回摘掉的条数
     pub async fn unmount_channel(&self, channel_id: &ChannelId) -> usize;
-    pub async fn len(&self) -> usize;               // boot 日志用
+    pub async fn mounted_count(&self) -> usize;     // boot 日志用；不叫 len —— 内在
+                                                    // len 无 is_empty 会触发
+                                                    // clippy::len_without_is_empty
 }
 
 // 构造器签名随之变化：
@@ -226,6 +230,7 @@ async fn webhook_endpoint(
 | 变化 | 说明 |
 |------|------|
 | `path` 必须以 `/webhook/` 开头 | 违者 `channel.start()` 报配置错。§2.F：无人受影响 |
+| `path` 在 `/webhook/` 之外的配置：**以前能启动（但聋），现在启动失败** | 这是有意交换，失败是响亮的：`validate()` 在 `WebhookChannelFactory::create` 与 `WebhookChannel::start` 都跑，boot 时错误无条件打到 stderr（`subsystems.rs:481`），点名要求的前缀并回显违规值。对这样的 operator 是可见变化，§2.F 的「无人受影响」以此为准 |
 | `GET /webhook/x` 由 SPA 空壳变 405 | 路由是 POST-only。无人依赖 |
 | `stop` / `delete` 后打入站由 503 变 404 | 端点真的不存在了，这是修复本身 |
 | `channel.start` / `channel.create` 不再回 `restart_required` | 运行时创建真的能收了 |
@@ -237,6 +242,19 @@ async fn webhook_endpoint(
 - **重复 path 的输家只有 `warn!`**：`channels.list` 里两个通道都仍报 `Connected`，
   其中一个是聋的——本轮主题的小残留。做彻底需要一个新的通道状态
   （"started but unmounted"），属独立一轮；不在这轮造新机制（P6）。
+- **重复 path 时 RPC 回执不诚实（上一条的回执维度）**：`WebhookMountTable::mount()`
+  返回 `bool`，两处生产调用点（`channel_registry.rs:365`、`:832`）都丢弃它。
+  对不可挂载的 path 无害（`validate()` 先在 `start()` 报错）；但**重复 path** 的情形下
+  通道照常启动、表拒绝挂载，RPC 仍回 `{"status":"started"}` 而通道是聋的——对这
+  一种情形，比被删除的 `"restart_required"` 回执还小退一步（后者至少告诉调用方
+  还收不到）。operator 能在日志里看到 `warn!` 点名两个 channel id
+  （`webhook_receiver.rs` 的 `mount()`），拿不到信息的是 RPC 调用方。代码修复
+  （把 bool 穿进回执）会改变 RPC 响应形状，属独立一轮。
+- **forwarder 任务与通道实例的泄漏**：forwarder move 捕获 `channel_arc` 并终身持有
+  （`channel_registry.rs` 的 `start_message_forwarder`），因此每次 `channel.stop` /
+  `channel.delete` / `channel.start` 重建都会泄漏一个 forwarder 任务加一个通道实例
+  （详见 §2.A 修正后的机制）。既有问题，本轮刻意不修；但本轮把 stop→start 变成了
+  被宣称的运行时工作流，泄漏从此是**累积性**的，需要独立一轮。
 - **msteams 的 `ChannelFactory`** / **`src/gateway/webhooks/`（~46 KB agent-trigger 子系统）**：
   上一轮已记账，定性 CUT/DECIDE，不是 CONNECT。
 
@@ -249,3 +267,87 @@ async fn webhook_endpoint(
 | 删 `pub` 常量/函数破坏外部调用者 | 已 grep 全仓：消费者只在 crate 内（`webhook_receiver.rs` 一处 + 一条自测） |
 | 收窄路径破坏现存部署 | §2.F 证明：接线从未发布，`path` 此前对入站零作用 |
 | 表与注册表的耦合越层 | 两者同在 `src/gateway/`；表是注册表的投影，属 I/O 记账而非业务逻辑（R4 不涉） |
+
+## QA 结果 (Task 8 — Real-Machine Verification, 2026-07-30)
+
+**环境**：`ALEPH_HOME` 隔离数据目录/vault/锁（不动 `~/.aleph/`），QA daemon 绑
+`127.0.0.1:8787`，与用户真实 daemon（PID 17978，`127.0.0.1:18790`）并存、互不干扰。
+
+**被测二进制**：`/Volumes/TBU4/Workspace/Aleph/target/debug/aleph-server`
+（workspace 共享 target dir，由仓库根 `.cargo/config.toml` 的 `target-dir` 钉死，
+各 worktree 共用，用意是避免并发全量构建把机器打满）。构建于 `cargo build --bin
+aleph-server` 后 `ls -l` 确认时间戳 `7 30 11:56`，晚于本轮构建起始时间
+`7 30 11:53:23`——确系本分支代码所出二进制。
+
+**QA daemon PID**：33713（`--config .../aleph_qa.toml start`，`ALEPH_HOME=.../home`）。
+
+### 五项断言
+
+| # | 断言 | 观测结果 |
+|---|------|----------|
+| 1 | 启动期挂载日志 | 日志含 `Gateway: 1 webhook ingestion route(s) mounted`（`daemon.log:215`，紧邻 `Registered channel: webhook (webhook)` / `✓ Channel webhook started`） |
+| 2 | 签名 POST 成功 | `POST /webhook/qa` + 合法签名 → **`HTTP/1.1 200 OK`** |
+| 3 | `channel.stop` 摘除端点 | `channel.stop {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"stopped"}`；同一条签名 POST → **`HTTP/1.1 404 Not Found`**（非 503，非 200） |
+| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；同一条签名 POST → **`HTTP/1.1 200 OK`**。免重启的证据见下方「无重启的证据」——不是靠 `pgrep` 快照，而是结构化日志证明**全程只有一次进程生命周期** |
+| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致——未认证方只能知道该路径上有无挂载（404 vs 403），得不到已挂载通道的状态）。两者在日志里的形状不同，见下方「404 与 403 的日志不对称性」 |
+
+全部 5 项 **PASS**。
+
+### 无重启的证据 (Assertion 4)
+
+除了运行 `channel.start` 前手工核对过一次 `pgrep -fl "aleph-server.*aleph_qa.toml"`
+显示 PID 33713 仍在跑之外，更强的证据来自 daemon 自己的结构化日志
+（`~/.aleph/logs/aleph-server.log.2026-07-30`，`ALEPH_HOME` 隔离路径下）：
+
+- `12:00:50.612 INFO … [MEMORY] reason=baseline uptime_secs=0 rss_mb=204.2` — 全程唯一一条
+  `reason=baseline`，是本次进程生命周期的起点。
+- `12:03:10.301 WARN … [SHUTDOWN] signal=SIGTERM pid=33713 ppid=1 uptime_secs=141 signal_num=15 parent=/sbin/launchd`
+  — 全程唯一一条关机记录，`pid=33713` 与启动时的 PID 一致，`uptime_secs=141` 覆盖了从
+  boot 到本轮 QA 全部五项断言执行完毕、直到我手动 `kill` 为止的完整窗口（日志首行
+  `12:00:48.831`，末行 `12:03:10.302`，跨度约 140 秒）。
+- 中间没有第二条 `Aleph listening on http://127.0.0.1:8787`、没有第二条 `reason=baseline`——
+  也就是说不存在"重启又重新 boot 了一次"的痕迹。
+
+一条 `uptime_secs=141` 横跨整个 QA 窗口的日志，比两个时间点的 `pgrep` 快照更强：
+后者只证明"这两个瞬间 PID 相同"，前者排除了**窗口内任意时刻**发生重启的可能——
+两次 `channel.stop`/`channel.start` 往返（assertion 3/4 一次，assertion 5 一次）
+全部落在同一条不曾中断的进程生命周期里。
+
+进一步的佐证：assertion 4 里重发的那条签名 POST 被 dedup 层判定为重复而非新消息——
+`12:02:37.535 WARN alephcore::gateway::inbound_router: Duplicate message detected and
+dropped: webhook:wh-79240922c573f238e763937246cc10eaeaa851a328e2b258b6d52ebacf11ff26 from
+webhook:qa-user`。dedup 的键是消息内容哈希，判重成立说明这条 POST 的 body 与更早
+（`12:02:03.137` 那条被首次接受、转发的 "hello from qa"）**逐字节相同**——也就是说
+assertion 4 的验证对象确实是"同一条签名请求"，不是凑巧构造了另一条恰好也合法的请求。
+（HTTP 层仍回 200：dedup 发生在 webhook handler 返回 `200 ok` **之后**的下游路由阶段，
+不影响本轮断言只关心的 HTTP 状态码。）
+
+### 404 与 403 的日志不对称性 (Assertion 3/5)
+
+`channel.stop` 之后打入站请求（无论签名对错）在应用日志里**没有任何记录**——
+在 `12:02:11.247`（第一次 stop）与 `12:02:30.277`（下一次 start）之间、以及
+`12:02:46.985`（第二次 stop）与 `12:02:55.399`（下一次 start）之间，日志除一条无关的
+`DreamDaemon tick: skipped` 外没有任何与 `/webhook/qa` 相关的行——因为 axum 路由表里
+根本没有这条路径，请求在进入 `WebhookReceiver` 的 handler 代码之前就被路由层拒绝，
+应用代码从未被调用。
+
+相反，`channel.start` 之后的错误签名请求会显式记录：
+`12:02:55.407 WARN alephcore::gateway::webhook_receiver: Webhook signature verification
+failed, path=/webhook/qa`——handler 确实被调用了，只是签名校验没通过。
+
+这个"日志静默 vs. 显式 WARN"的不对称性，是路由**真的消失**（而非仅仅拒绝请求）的独立证据，
+与 HTTP 层 404 vs. 403 的区分相互印证。
+
+**一个 QA 配方注记（非代码缺陷）**：首次签名 POST 用了 `{"sender_id":"qa-user","text":"..."}`，
+被 `WebhookPayload` 拒绝为 400（`message` 字段必填，非 `text`，见
+`src/gateway/interfaces/webhook/message_ops.rs:56`）——这是我签名脚本的负载错误，
+不是被测代码的缺陷；改用 `{"sender_id":"qa-user","message":"hello from qa"}` 后如上表所示一致通过。
+
+### 清理验证
+
+- 仅 kill 了本轮记录的 QA PID 33713；`ps -p 33713` 之后为空。
+- 用户真实 daemon `pgrep -fl aleph-server` 之后仍只列出 **PID 17978**（`/Applications/Aleph.app/...--daemon start`），存活未受影响。
+- `~/.aleph/config.toml`：kill 前后 `ls -la` 均为 `22779` 字节 / `7月 27 20:59` mtime，`md5` 为 `1fc8ffc10270521529b35d95b205a504`——未被写入。
+
+**结论**：本轮设计的核心主张——运行时 `channel.start` 无需重启即可让新挂载的
+webhook 路由可达，且 `stop` 之后立即变为 404 而非静默 503——在真机上得到验证。

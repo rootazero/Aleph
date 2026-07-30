@@ -21,7 +21,7 @@
 //! [channels.config]
 //! secret = "my-hmac-secret"
 //! callback_url = "https://my-service.com/aleph/callback"
-//! path = "/webhook/generic"
+//! path = "/webhook/generic" # must live under /webhook/, the shared route prefix
 //! allowed_senders = []
 //! ```
 
