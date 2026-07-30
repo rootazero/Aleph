@@ -270,10 +270,55 @@ aleph-server` 后 `ls -l` 确认时间戳 `7 30 11:56`，晚于本轮构建起�
 | 1 | 启动期挂载日志 | 日志含 `Gateway: 1 webhook ingestion route(s) mounted`（`daemon.log:215`，紧邻 `Registered channel: webhook (webhook)` / `✓ Channel webhook started`） |
 | 2 | 签名 POST 成功 | `POST /webhook/qa` + 合法签名 → **`HTTP/1.1 200 OK`** |
 | 3 | `channel.stop` 摘除端点 | `channel.stop {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"stopped"}`；同一条签名 POST → **`HTTP/1.1 404 Not Found`**（非 503，非 200） |
-| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；期间 daemon PID 全程为 33713（`pgrep` 二次核对同一 PID，未重启）；同一条签名 POST → **`HTTP/1.1 200 OK`** |
-| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致，未泄露通道状态） |
+| 4 | 运行时 `channel.start` 免重启 | `channel.start {"channel_id":"webhook"}` → `{"channel_id":"webhook","status":"started"}`（**非** `restart_required`）；同一条签名 POST → **`HTTP/1.1 200 OK`**。免重启的证据见下方「无重启的证据」——不止一次 `pgrep` 快照，而是结构化日志证明**全程只有一次进程生命周期** |
+| 5 | 状态 oracle 闭合 | `channel.stop` 后错误签名（`sha256=deadbeef`）→ **`HTTP/1.1 404 Not Found`**（路径已消失，而非拒绝）；再 `channel.start` 后重复错误签名 → **`HTTP/1.1 403 Forbidden`**（与 `Connecting`/`Error` 通道对未授权调用者的观感一致，未泄露通道状态）。两者在日志里的形状不同，见下方「404 与 403 的日志不对称性」 |
 
 全部 5 项 **PASS**。
+
+### 无重启的证据 (Assertion 4)
+
+除了运行 `channel.start` 前手工核对过一次 `pgrep -fl "aleph-server.*aleph_qa.toml"`
+显示 PID 33713 仍在跑之外，更强的证据来自 daemon 自己的结构化日志
+（`~/.aleph/logs/aleph-server.log.2026-07-30`，`ALEPH_HOME` 隔离路径下）：
+
+- `12:00:50.612 INFO … [MEMORY] reason=baseline uptime_secs=0 rss_mb=204.2` — 全程唯一一条
+  `reason=baseline`，是本次进程生命周期的起点。
+- `12:03:10.301 WARN … [SHUTDOWN] signal=SIGTERM pid=33713 ppid=1 uptime_secs=141 signal_num=15 parent=/sbin/launchd`
+  — 全程唯一一条关机记录，`pid=33713` 与启动时的 PID 一致，`uptime_secs=141` 覆盖了从
+  boot 到本轮 QA 全部五项断言执行完毕、直到我手动 `kill` 为止的完整窗口（日志首行
+  `12:00:48.831`，末行 `12:03:10.302`，跨度约 140 秒）。
+- 中间没有第二条 `Aleph listening on http://127.0.0.1:8787`、没有第二条 `reason=baseline`——
+  也就是说不存在"重启又重新 boot 了一次"的痕迹。
+
+一条 `uptime_secs=141` 横跨整个 QA 窗口的日志，比两个时间点的 `pgrep` 快照更强：
+后者只证明"这两个瞬间 PID 相同"，前者排除了**窗口内任意时刻**发生重启的可能——
+两次 `channel.stop`/`channel.start` 往返（assertion 3/4 一次，assertion 5 一次）
+全部落在同一条不曾中断的进程生命周期里。
+
+进一步的佐证：assertion 4 里重发的那条签名 POST 被 dedup 层判定为重复而非新消息——
+`12:02:37.535 WARN alephcore::gateway::inbound_router: Duplicate message detected and
+dropped: webhook:wh-79240922c573f238e763937246cc10eaeaa851a328e2b258b6d52ebacf11ff26 from
+webhook:qa-user`。dedup 的键是消息内容哈希，判重成立说明这条 POST 的 body 与更早
+（`12:02:03.137` 那条被首次接受、转发的 "hello from qa"）**逐字节相同**——也就是说
+assertion 4 的验证对象确实是"同一条签名请求"，不是凑巧构造了另一条恰好也合法的请求。
+（HTTP 层仍回 200：dedup 发生在 webhook handler 返回 `200 ok` **之后**的下游路由阶段，
+不影响本轮断言只关心的 HTTP 状态码。）
+
+### 404 与 403 的日志不对称性 (Assertion 3/5)
+
+`channel.stop` 之后打入站请求（无论签名对错）在应用日志里**没有任何记录**——
+在 `12:02:11.247`（第一次 stop）与 `12:02:30.277`（下一次 start）之间、以及
+`12:02:46.985`（第二次 stop）与 `12:02:55.399`（下一次 start）之间，日志除一条无关的
+`DreamDaemon tick: skipped` 外没有任何与 `/webhook/qa` 相关的行——因为 axum 路由表里
+根本没有这条路径，请求在进入 `WebhookReceiver` 的 handler 代码之前就被路由层拒绝，
+应用代码从未被调用。
+
+相反，`channel.start` 之后的错误签名请求会显式记录：
+`12:02:55.407 WARN alephcore::gateway::webhook_receiver: Webhook signature verification
+failed, path=/webhook/qa`——handler 确实被调用了，只是签名校验没通过。
+
+这个"日志静默 vs. 显式 WARN"的不对称性，是路由**真的消失**（而非仅仅拒绝请求）的独立证据，
+与 HTTP 层 404 vs. 403 的区分相互印证。
 
 **一个 QA 配方注记（非代码缺陷）**：首次签名 POST 用了 `{"sender_id":"qa-user","text":"..."}`，
 被 `WebhookPayload` 拒绝为 400（`message` 字段必填，非 `text`，见
