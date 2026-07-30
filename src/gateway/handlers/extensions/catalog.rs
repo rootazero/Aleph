@@ -3,11 +3,9 @@
 //! across MCP / plugins / skills).
 
 use crate::gateway::handlers::parse_params;
-use crate::gateway::handlers::skills::{ensure_shared_system_initialized, shared_system};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::hub::cache::{CatalogCache, CatalogFilter};
-use crate::hub::install::mcp_server_id;
-use crate::hub::reconcile::{mcp_to_entry, plugin_to_entry, skill_to_entry};
+use crate::hub::reconcile::{collect_installed, mark_installed_state};
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
 use crate::mcp::manager::McpManagerHandle;
 use serde::Deserialize;
@@ -21,75 +19,6 @@ pub struct CatalogParams {
     pub category: Option<ExtensionCategory>,
     pub source_id: Option<String>,
     pub query: Option<String>,
-}
-
-/// Live-reconciled installed extensions across MCP / plugins / skills.
-///
-/// Best-effort: a failing or empty backend is logged and skipped — it never
-/// aborts, so a flaky MCP actor cannot blank the catalog or installed views.
-/// All calls are local (no network), so callers stay offline-capable.
-pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEntry> {
-    let mut out = Vec::new();
-
-    if let Some(mcp) = &mcp {
-        match mcp.list_servers().await {
-            Ok(servers) => out.extend(servers.iter().map(mcp_to_entry)),
-            Err(e) => tracing::warn!("collect_installed: mcp list failed: {e}"),
-        }
-    }
-
-    if let Some(mgr) = crate::extension::try_extension_manager() {
-        if let Err(e) = mgr.ensure_loaded().await {
-            tracing::warn!("collect_installed: failed to load plugins: {e}");
-        }
-        out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
-    }
-
-    ensure_shared_system_initialized().await;
-    out.extend(
-        shared_system()
-            .full_status()
-            .await
-            .iter()
-            .map(skill_to_entry),
-    );
-
-    out
-}
-
-/// Stamp `installed` / `enabled` onto each catalog entry by matching it against
-/// the live installed set. MCP matches exactly by its deterministic derived id
-/// (`local:mcp:{mcp_server_id(entry.id)}`); Plugin / Skill match by
-/// case-insensitive `name` within the same `kind`.
-fn mark_installed(catalog: &mut [ExtensionEntry], installed: &[ExtensionEntry]) {
-    // (kind.as_str(), lowercased name) -> enabled, for Plugin/Skill matching.
-    let by_name: HashMap<(String, String), bool> = installed
-        .iter()
-        .map(|e| {
-            (
-                (e.kind.as_str().to_string(), e.name.trim().to_lowercase()),
-                e.enabled,
-            )
-        })
-        .collect();
-
-    for e in catalog.iter_mut() {
-        let enabled = if e.kind == ExtensionKind::Mcp {
-            let expected = format!("local:mcp:{}", mcp_server_id(&e.id));
-            installed
-                .iter()
-                .find(|ie| ie.id == expected)
-                .map(|ie| ie.enabled)
-        } else {
-            by_name
-                .get(&(e.kind.as_str().to_string(), e.name.trim().to_lowercase()))
-                .copied()
-        };
-        if let Some(en) = enabled {
-            e.installed = true;
-            e.enabled = en;
-        }
-    }
 }
 
 /// extensions.catalog — filtered read of the cached catalog, reconciled against
@@ -117,7 +46,13 @@ pub async fn handle_catalog(
     match cache.query(&filter).await {
         Ok(mut entries) => {
             let installed = collect_installed(mcp).await;
-            mark_installed(&mut entries, &installed);
+            // Best-effort, like every other backend read here: a ledger read
+            // failure costs the update badge, never the catalog.
+            let origins = cache.origins().await.unwrap_or_else(|e| {
+                tracing::warn!("handle_catalog: install origin read failed: {e}");
+                Vec::new()
+            });
+            mark_installed_state(&mut entries, &installed, &origins);
             let items: Vec<serde_json::Value> = entries
                 .iter()
                 .map(|e| {
@@ -137,12 +72,58 @@ pub async fn handle_catalog(
     }
 }
 
-/// extensions.installed — live reconciled list across all backends.
+/// Stamp `update_available` onto the *installed* list.
+///
+/// The installed panel is where the update badge actually renders, so the ledger
+/// has to reach this path too — computing it only for browse cards would leave
+/// the badge dark forever. Walks façade id → ledger row → catalog entry:
+/// `local:{kind}:{backend}` identifies the backend object,
+/// `origin::local_ref_addresses` finds the row that installed it, and the row's
+/// `entry_id` names the catalog entry to compare against.
+async fn stamp_updates_from_ledger(installed: &mut [ExtensionEntry], cache: &CatalogCache) {
+    let origins = match cache.origins().await {
+        Ok(o) if !o.is_empty() => o,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!("handle_installed: install origin read failed: {e}");
+            return;
+        }
+    };
+    let catalog: HashMap<String, ExtensionEntry> =
+        match cache.query(&CatalogFilter::default()).await {
+            Ok(rows) => rows.into_iter().map(|e| (e.id.clone(), e)).collect(),
+            Err(e) => {
+                tracing::warn!("handle_installed: catalog read failed: {e}");
+                return;
+            }
+        };
+    for e in installed.iter_mut() {
+        let Some((kind, backend)) =
+            crate::gateway::handlers::extensions::lifecycle::parse_local_id(&e.id)
+        else {
+            continue;
+        };
+        let Some(origin) = origins.iter().find(|o| {
+            o.kind.as_str() == kind
+                && crate::hub::origin::local_ref_addresses(&o.local_ref, backend)
+        }) else {
+            continue;
+        };
+        if let Some(offered) = catalog.get(&origin.entry_id) {
+            e.update_available = crate::hub::origin::update_available(origin, offered);
+        }
+    }
+}
+
+/// extensions.installed — live reconciled list across all backends, with the
+/// update badge stamped from the install provenance ledger.
 pub async fn handle_installed(
     req: JsonRpcRequest,
     mcp: Option<McpManagerHandle>,
+    cache: Arc<CatalogCache>,
 ) -> JsonRpcResponse {
-    let out = collect_installed(mcp).await;
+    let mut out = collect_installed(mcp).await;
+    stamp_updates_from_ledger(&mut out, &cache).await;
     JsonRpcResponse::success(req.id, json!({ "extensions": out }))
 }
 
@@ -151,6 +132,8 @@ mod tests {
     use super::*;
     use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
 
+    // Reconciliation itself is tested in `hub::reconcile`; these cover only the
+    // façade-id → ledger → catalog walk that this handler owns.
     fn catalog_entry(id: &str, kind: ExtensionKind, name: &str) -> ExtensionEntry {
         ExtensionEntry {
             id: id.into(),
@@ -184,132 +167,73 @@ mod tests {
         e
     }
 
-    #[test]
-    fn mcp_entry_marked_installed_by_derived_id() {
-        // catalog id "aleph-hub:github" -> install id "aleph-hub_github"
-        // -> reconciled installed id "local:mcp:aleph-hub_github"
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:github",
-            ExtensionKind::Mcp,
-            "GitHub",
-        )];
-        let installed = vec![installed_entry(
+    async fn seeded_cache(offered_version: &str, installed_version: &str) -> CatalogCache {
+        let cache = CatalogCache::open_in_memory().unwrap();
+        let spec = crate::hub::types::InstallSpec::McpStdio {
+            command: "npx".into(),
+            args: vec!["@gh/mcp".into()],
+            env: vec![],
+        };
+        let mut offered = catalog_entry("aleph-hub:github", ExtensionKind::Mcp, "GitHub");
+        offered.version = Some(offered_version.to_string());
+        offered.install_spec = Some(spec.clone());
+        cache.upsert_many(&[offered.clone()]).await.unwrap();
+
+        let mut at_install = offered;
+        at_install.version = Some(installed_version.to_string());
+        cache
+            .record_origin(&crate::hub::origin::InstallOrigin::record(
+                &at_install,
+                &spec,
+                "aleph-hub_github",
+                0,
+            ))
+            .await
+            .unwrap();
+        cache
+    }
+
+    #[tokio::test]
+    async fn installed_list_gets_the_update_badge_from_the_ledger() {
+        let cache = seeded_cache("2.0.0", "1.0.0").await;
+        let mut installed = vec![installed_entry(
             "local:mcp:aleph-hub_github",
             ExtensionKind::Mcp,
             "GitHub",
             true,
         )];
-        mark_installed(&mut catalog, &installed);
-        assert!(catalog[0].installed);
-        assert!(catalog[0].enabled);
+        stamp_updates_from_ledger(&mut installed, &cache).await;
+        assert!(
+            installed[0].update_available,
+            "installed panel must see the newer catalog version"
+        );
     }
 
-    #[test]
-    fn mcp_entry_not_installed_when_no_match() {
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:absent",
+    #[tokio::test]
+    async fn installed_list_badge_stays_dark_at_the_same_version() {
+        let cache = seeded_cache("1.0.0", "1.0.0").await;
+        let mut installed = vec![installed_entry(
+            "local:mcp:aleph-hub_github",
             ExtensionKind::Mcp,
-            "Nope",
+            "GitHub",
+            true,
         )];
-        let installed = vec![installed_entry(
+        stamp_updates_from_ledger(&mut installed, &cache).await;
+        assert!(!installed[0].update_available);
+    }
+
+    /// An installed extension the ledger never recorded (installed by hand, or
+    /// before the ledger existed) makes no claim.
+    #[tokio::test]
+    async fn unrecorded_backend_gets_no_badge() {
+        let cache = seeded_cache("2.0.0", "1.0.0").await;
+        let mut installed = vec![installed_entry(
             "local:mcp:something-else",
             ExtensionKind::Mcp,
             "Other",
             true,
         )];
-        mark_installed(&mut catalog, &installed);
-        assert!(!catalog[0].installed);
-    }
-
-    #[test]
-    fn plugin_entry_marked_installed_by_name_case_insensitive() {
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:cool-plugin",
-            ExtensionKind::Plugin,
-            "Cool Plugin",
-        )];
-        // discovered plugin id differs; matched by name; enabled=false propagates
-        let installed = vec![installed_entry(
-            "local:plugin:whatever",
-            ExtensionKind::Plugin,
-            "cool plugin",
-            false,
-        )];
-        mark_installed(&mut catalog, &installed);
-        assert!(catalog[0].installed);
-        assert!(!catalog[0].enabled);
-    }
-
-    #[test]
-    fn name_match_does_not_cross_kinds() {
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:x",
-            ExtensionKind::Skill,
-            "Shared Name",
-        )];
-        let installed = vec![installed_entry(
-            "local:plugin:x",
-            ExtensionKind::Plugin,
-            "Shared Name",
-            true,
-        )];
-        mark_installed(&mut catalog, &installed);
-        assert!(!catalog[0].installed);
-    }
-
-    #[test]
-    fn official_primer_slug_reconciles_against_live_server() {
-        // primer id "aleph-hub:volcengine-veimagex" -> server id "aleph-hub_volcengine-veimagex"
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:volcengine-veimagex",
-            ExtensionKind::Mcp,
-            "veImageX",
-        )];
-        let installed = vec![installed_entry(
-            "local:mcp:aleph-hub_volcengine-veimagex",
-            ExtensionKind::Mcp,
-            "veImageX",
-            true,
-        )];
-        mark_installed(&mut catalog, &installed);
-        assert!(catalog[0].installed);
-    }
-
-    #[test]
-    fn skill_entry_marked_installed_by_name_case_insensitive() {
-        // The primer's "aleph-hub:pdf-tools" Skill entry collapses against a live
-        // local:skill entry of the same name — this is why official skills show
-        // installed with NO reconcile change (the convergence's load-bearing fact).
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:pdf-tools",
-            ExtensionKind::Skill,
-            "PDF Tools",
-        )];
-        let installed = vec![installed_entry(
-            "local:skill:pdf-tools",
-            ExtensionKind::Skill,
-            "pdf tools",
-            true,
-        )];
-        mark_installed(&mut catalog, &installed);
-        assert!(catalog[0].installed);
-        assert!(catalog[0].enabled);
-    }
-
-    #[test]
-    fn skill_entry_not_installed_when_name_differs() {
-        let mut catalog = vec![catalog_entry(
-            "aleph-hub:pdf-tools",
-            ExtensionKind::Skill,
-            "PDF Tools",
-        )];
-        let installed = vec![installed_entry(
-            "local:skill:other",
-            ExtensionKind::Skill,
-            "Other Skill",
-            true,
-        )];
-        mark_installed(&mut catalog, &installed);
-        assert!(!catalog[0].installed);
+        stamp_updates_from_ledger(&mut installed, &cache).await;
+        assert!(!installed[0].update_available);
     }
 }

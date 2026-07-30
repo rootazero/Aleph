@@ -65,6 +65,12 @@ pub struct McpManagerConfig {
     /// Environment variables
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Custom HTTP headers for remote (http/sse) transports — auth tokens, API
+    /// keys. Values may carry `{{secret:NAME}}` references, resolved per-spawn
+    /// exactly like [`Self::env`]; plaintext secrets are never persisted here.
+    /// Ignored for stdio.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
     /// Required runtime (e.g., "node", "python", "bun")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires_runtime: Option<String>,
@@ -99,6 +105,7 @@ impl McpManagerConfig {
             args: Vec::new(),
             url: None,
             env: HashMap::new(),
+            headers: HashMap::new(),
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
@@ -116,6 +123,7 @@ impl McpManagerConfig {
             args: Vec::new(),
             url: Some(url.into()),
             env: HashMap::new(),
+            headers: HashMap::new(),
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
@@ -133,6 +141,7 @@ impl McpManagerConfig {
             args: Vec::new(),
             url: Some(url.into()),
             env: HashMap::new(),
+            headers: HashMap::new(),
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
@@ -151,6 +160,14 @@ impl McpManagerConfig {
     #[must_use]
     pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Set custom HTTP headers (remote transports only). Values may be
+    /// `{{secret:NAME}}` references — they resolve at spawn, not here.
+    #[must_use]
+    pub fn with_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
         self
     }
 

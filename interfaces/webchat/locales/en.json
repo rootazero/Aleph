@@ -1495,6 +1495,8 @@
     "installing": "Installing…",
     "install_done": "Installed ✓",
     "install_failed": "Install failed",
+    "install_unhealthy": "Installed, but not healthy",
+    "install_unhealthy_hint": "The files are in place, but the extension did not come up. Check its configuration, then enable it again from Installed.",
     "leave_confirm": "Install in progress; leaving cancels it. Continue?"
   },
   "agents": {

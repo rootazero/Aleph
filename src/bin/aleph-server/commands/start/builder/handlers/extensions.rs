@@ -30,11 +30,13 @@ pub(in crate::commands::start) fn register_extensions_handlers(
     }
     {
         let mcp = mcp.clone();
+        let cache = cache.clone();
         server
             .handlers_mut()
             .register("extensions.installed", move |req| {
                 let mcp = mcp.clone();
-                async move { extensions::catalog::handle_installed(req, mcp).await }
+                let cache = cache.clone();
+                async move { extensions::catalog::handle_installed(req, mcp, cache).await }
             });
     }
     {
@@ -48,11 +50,13 @@ pub(in crate::commands::start) fn register_extensions_handlers(
     }
     {
         let mcp = mcp.clone();
+        let cache = cache.clone();
         server
             .handlers_mut()
             .register("extensions.uninstall", move |req| {
                 let mcp = mcp.clone();
-                async move { extensions::lifecycle::handle_uninstall(req, mcp).await }
+                let cache = cache.clone();
+                async move { extensions::lifecycle::handle_uninstall(req, mcp, cache).await }
             });
     }
 }

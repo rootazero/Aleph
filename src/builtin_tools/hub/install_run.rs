@@ -83,9 +83,20 @@ pub struct HubInstallRunArgs {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum InstallToolResult {
-    NeedsUserConsent { disclosure: DisclosurePayload },
-    Installed { outcome: Value },
-    Rejected { reason: String },
+    NeedsUserConsent {
+        disclosure: DisclosurePayload,
+    },
+    Installed {
+        outcome: Value,
+        /// Post-install health check, so the model never reports a bare success
+        /// for an extension that landed on disk but did not come up. `ok: false`
+        /// is not a failed install — the artifact is installed and the `detail`
+        /// says what is wrong.
+        verify: crate::hub::verify::VerifyReport,
+    },
+    Rejected {
+        reason: String,
+    },
 }
 
 fn outcome_json(o: &InstallOutcome) -> Value {
@@ -132,8 +143,11 @@ pub struct HubInstallRunTool {
 impl AlephTool for HubInstallRunTool {
     const NAME: &'static str = "hub_install_run";
     const DESCRIPTION: &'static str =
-        "Install a catalog entry by id (trust-gated). Clean specs install directly; \
-         ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.";
+        "Install a catalog entry by id (trust-gated). Get the id from hub_catalog_search. Clean \
+         specs install directly and come back with a post-install `verify` verdict; ack-required \
+         specs and anything that writes code to disk (skills, plugins) bounce to the user for \
+         consent via the Extensions UI without any side effect; OCI is rejected. \
+         `hub_catalog_search` tells you in advance which of those an entry will be.";
     type Args = HubInstallRunArgs;
     type Output = InstallToolResult;
 
@@ -232,8 +246,14 @@ impl HubInstallRunTool {
         let outcome = run_install(spec, &ctx)
             .await
             .map_err(|e| AlephError::other(format!("install failed: {e}")))?;
+        // Same provenance row the RPC install path writes — an agent-driven
+        // install must be exactly as traceable (and as update-checkable) as one
+        // the user clicked through.
+        crate::hub::origin::record_install(&self.cache, entry, spec, &outcome).await;
+        let verify = crate::hub::verify::verify_install(&outcome, self.mcp.as_ref()).await;
         Ok(InstallToolResult::Installed {
             outcome: outcome_json(&outcome),
+            verify,
         })
     }
 }

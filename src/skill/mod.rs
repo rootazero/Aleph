@@ -39,7 +39,7 @@ pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, Ski
 pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
 pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;
-pub use shared::shared_skill_system;
+pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 pub use usage::{SkillState, UsageStats, UsageStore};

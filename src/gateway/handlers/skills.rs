@@ -6,23 +6,18 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
 use crate::domain::skill::{PromptScope, SkillId};
-use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
+use crate::skill::{SkillConfigUpdate, SkillSystem};
 
 /// Shared `SkillSystem` instance — delegates to the process-wide singleton.
 pub(crate) fn shared_system() -> &'static SkillSystem {
     crate::skill::shared_skill_system()
 }
 
-static INIT_CELL: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
-
+/// Delegates to the latch that lives beside the singleton
+/// (`crate::skill::ensure_shared_skill_system_initialized`), so this handler
+/// module and the Hub's reconciliation share one first-init.
 pub(crate) async fn ensure_shared_system_initialized() {
-    let system = shared_system();
-    let dirs = default_skill_dirs();
-    INIT_CELL
-        .get_or_init(|| async move {
-            let _ = system.init(dirs).await;
-        })
-        .await;
+    crate::skill::ensure_shared_skill_system_initialized().await;
 }
 
 // ============================================================================

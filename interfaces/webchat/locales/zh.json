@@ -1495,6 +1495,8 @@
     "installing": "正在安装…",
     "install_done": "已安装 ✓",
     "install_failed": "安装失败",
+    "install_unhealthy": "已安装，但未就绪",
+    "install_unhealthy_hint": "文件已就位，但扩展没有起来。请检查其配置，然后在「已安装」中重新启用。",
     "leave_confirm": "安装正在进行中；离开将取消安装。是否继续？"
   },
   "agents": {

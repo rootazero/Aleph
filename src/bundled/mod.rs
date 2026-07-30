@@ -35,6 +35,6 @@ pub const OFFICIAL_SKILLS_REPO: &str = "https://github.com/rootazero/Aleph-skill
 pub const OFFICIAL_PLUGINS_REPO: &str = "https://github.com/rootazero/Aleph-plugins";
 
 pub(crate) use extractor::copy_skill_leaf;
-pub(crate) use sync::clone_or_update;
+pub(crate) use sync::{clone_or_update, clone_or_update_at};
 
 pub use extractor::{extract_bundled_content, sync_official_now, SyncKind, SyncReport};
