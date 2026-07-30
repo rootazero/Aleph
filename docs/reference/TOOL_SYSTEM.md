@@ -119,7 +119,7 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `file_read` | Read file content | `path`, `encoding?` |
+| `file_read` | Read file content (windowed: line limit **and** token budget, whichever binds; message reports a resumable `offset`) | `path`, `offset?`, `limit?` |
 | `file_write` | Write file | `path`, `content` |
 | `file_list` | List directory | `path`, `recursive?` |
 | `file_delete` | Delete file/dir | `path` |
