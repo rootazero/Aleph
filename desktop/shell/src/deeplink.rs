@@ -31,10 +31,11 @@ pub fn setup(app: &AppHandle) {
 /// to the Panel as an `aleph:deep-link` DOM event for it to route.
 fn handle_url(app: &AppHandle, url: &str) {
     // URLs commonly carry auth codes / tokens in the query (e.g.
-    // `aleph://oauth?code=...&state=...`) which must never reach an
-    // info-level log. Strip the query and fragment so the log only
-    // records "what scheme did the user invoke", and drop to debug
-    // for the full URL behind a feature most operators never enable.
+    // `aleph://oauth?code=...&state=...`) or in the path
+    // (`aleph://connect/<token>`) which must never reach an info-level log.
+    // Strip query, fragment and path so the log only records "what scheme
+    // did the user invoke", and drop to debug for the full URL behind a
+    // feature most operators never enable.
     tracing::info!("deep link received: {}", redacted_for_log(url));
     if tracing::level_filters::LevelFilter::current() >= tracing::level_filters::LevelFilter::DEBUG
     {
@@ -50,15 +51,22 @@ fn handle_url(app: &AppHandle, url: &str) {
     }
 }
 
-/// Return the URL with query string and fragment stripped, so secrets
-/// carried in either segment never reach an info-level log. Falls back to
-/// the input unchanged when parsing fails.
+/// Return the URL with query string and fragment stripped, and any non-empty
+/// path redacted — secrets ride in the query (`aleph://oauth?code=…`) but a
+/// path-style link (`aleph://connect/<token>`) would leak just the same. The
+/// action name of an `aleph://` link lives in the host, so the path carries
+/// no logging value. Falls back to the input unchanged when parsing fails.
 fn redacted_for_log(url: &str) -> String {
     match url::Url::parse(url) {
         Ok(u) => {
             let mut s = u.clone();
             s.set_query(None);
             s.set_fragment(None);
+            if s.path_segments()
+                .is_some_and(|mut p| p.any(|seg| !seg.is_empty()))
+            {
+                s.set_path("(redacted)");
+            }
             s.to_string()
         }
         Err(_) => {
@@ -101,5 +109,21 @@ mod tests {
         // A raw newline would terminate a JS string literal; it must be escaped.
         assert!(!js.contains('\n'));
         assert!(js.contains("\\n"));
+    }
+
+    #[test]
+    fn redacted_for_log_strips_query_fragment_and_path() {
+        // Query/fragment secrets (the documented oauth shape).
+        assert_eq!(
+            redacted_for_log("aleph://oauth?code=secret&state=s#frag"),
+            "aleph://oauth"
+        );
+        // Path-carried tokens must not survive either.
+        assert_eq!(
+            redacted_for_log("aleph://connect/aleph-dt-secret"),
+            "aleph://connect/(redacted)"
+        );
+        // A bare link keeps no redaction marker.
+        assert_eq!(redacted_for_log("aleph://open"), "aleph://open");
     }
 }

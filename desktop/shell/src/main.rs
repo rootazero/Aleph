@@ -42,7 +42,7 @@ use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 /// The loopback Gateway origin. In the full app the bundled daemon serves it;
 /// in both variants the `Local` connection target resolves here.
-const PANEL_URL: &str = "http://127.0.0.1:18790";
+pub(crate) const PANEL_URL: &str = "http://127.0.0.1:18790";
 
 /// How often the daemon health supervisor probes `/ready`. Full-app-only.
 #[cfg(feature = "embedded-core")]
@@ -381,12 +381,15 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .initialization_script(external_link::CLICK_INTERCEPTOR_JS)
         // Intercept the banner's sentinel control links (apply / dismiss)
         // before the external-link guard: perform the shell action and cancel
-        // the navigation so the reserved path never loads. Everything else
-        // falls through to the normal internal/external routing.
+        // the navigation so the reserved path never loads. The sentinel is
+        // honoured only from the Panel's own origin (see
+        // `update::control_action`) — a foreign page forging the path is
+        // refused. Everything else falls through to the normal
+        // internal/external routing.
         .on_navigation({
             let handle = app.clone();
             move |url| {
-                if let Some(action) = update::control_action(url) {
+                if let Some(action) = update::control_action(url, &connection::load_target()) {
                     update::handle_control(&handle, action);
                     return false;
                 }

@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _ = WindowsPim::default();
+        let _ = WindowsPim;
     }
 
     #[test]

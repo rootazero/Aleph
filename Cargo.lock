@@ -268,7 +268,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tokio",
- "tokio-tungstenite 0.21.0",
+ "tokio-tungstenite 0.26.2",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -292,6 +292,7 @@ dependencies = [
  "image",
  "serde_json",
  "tokio",
+ "tracing",
  "windows 0.58.0",
 ]
 

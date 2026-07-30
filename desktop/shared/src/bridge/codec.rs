@@ -12,8 +12,11 @@ pub fn encode<T: Serialize>(msg: &T) -> Result<String> {
 }
 
 pub fn decode_line<T: DeserializeOwned>(line: &str) -> Result<T> {
+    // Deliberately no `raw={line}` in the error: a bridge line can carry OCR
+    // text, window titles, or PIM data, and this error is logged at warn level
+    // by the reader loop. The raw line stays available at trace level there.
     serde_json::from_str(line.trim_end_matches('\n'))
-        .map_err(|e| DesktopError::BridgeFailed(format!("decode: {e} raw={line:?}")))
+        .map_err(|e| DesktopError::BridgeFailed(format!("decode: {e}")))
 }
 
 #[cfg(test)]

@@ -64,21 +64,29 @@ async fn session(
     app: &AppHandle,
     target: &crate::connection::ConnectionTarget,
 ) -> Result<(), String> {
+    // NOTE (cert trust): `connect_async` validates `wss://` with the platform
+    // TLS roots (native-tls, same stack as shared/client). It does NOT take
+    // part in the workspace TOFU pin (`cert_trust::TrustStore`), which today
+    // only hooks the webview's certificate challenge — so against a
+    // self-signed remote Gateway this bridge fails the TLS handshake while the
+    // Panel itself connects fine. CA-issued certificates work. Integrating
+    // the WS client with TrustStore is deliberately deferred; see
+    // `cert_trust/` for the pin model.
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(target))
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
     // The Gateway rejects any first frame that is not `connect`.
-    ws.send(Message::Text(connect_request(target)))
+    ws.send(Message::Text(connect_request(target).into()))
         .await
         .map_err(|e| format!("connect send failed: {e}"))?;
-    ws.send(Message::Text(subscribe_request()))
+    ws.send(Message::Text(subscribe_request().into()))
         .await
         .map_err(|e| format!("subscribe send failed: {e}"))?;
 
     while let Some(frame) = ws.next().await {
         match frame.map_err(|e| format!("stream error: {e}"))? {
-            Message::Text(text) => match serde_json::from_str::<Value>(&text) {
+            Message::Text(text) => match serde_json::from_str::<Value>(text.as_str()) {
                 Ok(value) => {
                     // A JSON-RPC error on our own `connect`/`subscribe` means the
                     // Gateway refused to authorize this bridge — typically a
@@ -98,9 +106,15 @@ async fn session(
                     handle_message(app, &value);
                 }
                 Err(e) => {
+                    // A malformed frame may still carry event payload (approval
+                    // titles/bodies, run summaries) — keep the raw text out of
+                    // the warn log; it is available at trace level only.
                     tracing::warn!(
-                        "notification bridge: failed to parse JSON frame: {e}; raw={text:?}"
+                        frame_len = text.len(),
+                        head = &text[..text.len().min(80)],
+                        "notification bridge: failed to parse JSON frame: {e}"
                     );
+                    tracing::trace!(raw = text.as_str(), "notification bridge: raw bad frame");
                 }
             },
             Message::Close(_) => return Ok(()),

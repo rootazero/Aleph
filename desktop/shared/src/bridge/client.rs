@@ -119,7 +119,9 @@ pub struct SwiftBridge {
 }
 
 struct BridgeProcess {
-    #[allow(dead_code)] // held to keep the subprocess alive via Drop.
+    #[allow(dead_code)] // never read, but load-bearing: the spawn sets
+    // `kill_on_drop(true)`, so dropping this handle (state-slot reset, bridge
+    // teardown) is what kills the helper subprocess.
     child: Child,
     stdin: ChildStdin,
 }
@@ -160,7 +162,12 @@ impl SwiftBridge {
         let mut cmd = Command::new(&self.binary_path);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // Kill the helper when its `Child` handle is dropped (state-slot
+            // reset, bridge teardown) — otherwise a superseded helper outlives
+            // the bridge as an orphan. Same idiom as
+            // `script_exec::output_capped`.
+            .kill_on_drop(true);
 
         // Place the helper in its own process group so it inherits the
         // parent's controlling terminal signals (SIGTERM/SIGKILL on
@@ -231,7 +238,11 @@ impl SwiftBridge {
                         // Notifications handled by later stages — ignore for now.
                     }
                     Err(err) => {
-                        tracing::warn!(target: "bridge", "decode failed: {err}; raw={line:?}");
+                        // No raw line at warn level — it may carry OCR text,
+                        // window titles, or PIM data. Trace keeps it for
+                        // debugging.
+                        tracing::warn!(target: "bridge", "decode failed: {err}");
+                        tracing::trace!(target: "bridge", "undecodable bridge line: {line:?}");
                     }
                 }
             }
@@ -466,19 +477,24 @@ impl SwiftBridge {
             let (tx2, rx2) = oneshot::channel();
             self.inflight.register(retry_id, tx2).await;
 
-            {
+            let retry_write = {
                 let mut guard = self.state.lock().await;
-                let proc = guard.as_mut().ok_or_else(|| {
-                    DesktopError::BridgeFailed("bridge not running after retry".into())
-                })?;
-                proc.stdin
-                    .write_all(retry_line.as_bytes())
-                    .await
-                    .map_err(|e| DesktopError::BridgeFailed(format!("write stdin retry: {e}")))?;
-                proc.stdin
-                    .flush()
-                    .await
-                    .map_err(|e| DesktopError::BridgeFailed(format!("flush stdin retry: {e}")))?;
+                match guard.as_mut() {
+                    None => Err(DesktopError::BridgeFailed(
+                        "bridge not running after retry".into(),
+                    )),
+                    Some(proc) => {
+                        let r = proc.stdin.write_all(retry_line.as_bytes()).await;
+                        let r = r.and(proc.stdin.flush().await);
+                        r.map_err(|e| DesktopError::BridgeFailed(format!("write stdin retry: {e}")))
+                    }
+                }
+            };
+            if let Err(e) = retry_write {
+                // `retry_id` was registered above; cancel it so the slot does
+                // not leak (same cleanup as the timeout path in `await_reply`).
+                self.inflight.cancel(retry_id).await;
+                return Err(e);
             }
 
             let raw = self.await_reply(retry_id, rx2, timeout, method).await?;

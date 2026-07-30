@@ -56,10 +56,11 @@ pub fn is_password_like(role: &str, labels: &[&str]) -> bool {
         return true;
     }
     // "pin" only as a whole word — "spinner", "pinned" and "shipping" are not
-    // credential fields.
+    // credential fields. "otp" and "2fa" get the same whole-word treatment
+    // ("otpauth", "2factor" are not the label a challenge field carries).
     haystack
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|w| w == "pin")
+        .any(|w| matches!(w, "pin" | "otp" | "2fa"))
 }
 
 #[cfg(test)]
@@ -117,6 +118,18 @@ mod tests {
         assert!(is_password_like("AXTextField", &["Enter PIN", "", ""]));
         assert!(is_password_like("AXTextField", &["card-pin-entry"]));
         for benign in ["Spinner value", "Pinned tabs", "Shipping address"] {
+            assert!(
+                !is_password_like("AXTextField", &[benign, "", ""]),
+                "{benign:?} is not a credential field"
+            );
+        }
+    }
+
+    #[test]
+    fn otp_and_2fa_match_only_as_whole_words() {
+        assert!(is_password_like("AXTextField", &["Enter OTP", "", ""]));
+        assert!(is_password_like("AXTextField", &["2FA code", "", ""]));
+        for benign in ["otpauth-migration", "Desktop wallpaper"] {
             assert!(
                 !is_password_like("AXTextField", &[benign, "", ""]),
                 "{benign:?} is not a credential field"

@@ -380,26 +380,41 @@ mod imp {
 
     /// RAII COM apartment guard. `CoInitializeEx` may return `S_FALSE` if the
     /// thread was already initialized — harmless; we still balance with
-    /// `CoUninitialize` on drop.
-    struct ComGuard;
+    /// `CoUninitialize` on drop. A failure HRESULT (`RPC_E_CHANGED_MODE`, when
+    /// someone else already put this thread in an STA) added no reference, so
+    /// drop must not uninitialize — these run on long-lived `spawn_blocking`
+    /// pool threads, and an unbalanced `CoUninitialize` would tear down an
+    /// apartment owned by other code. UIA still works from an STA, so the
+    /// guard continues in that case.
+    struct ComGuard {
+        initialized: bool,
+    }
 
     impl ComGuard {
         fn new() -> Self {
             pin_mta();
-            // SAFETY: documented COM init; ignoring the HRESULT is correct here
-            // (S_OK and S_FALSE are both success states for our purposes).
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            // SAFETY: documented COM init. Only a success HRESULT (S_OK or
+            // S_FALSE) recorded a reference for us to balance on drop.
+            let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            let initialized = hr.is_ok();
+            if !initialized {
+                tracing::debug!(
+                    hresult = ?hr,
+                    "CoInitializeEx(MTA) failed; thread stays in a foreign apartment, \
+                     skipping CoUninitialize on drop"
+                );
             }
-            Self
+            Self { initialized }
         }
     }
 
     impl Drop for ComGuard {
         fn drop(&mut self) {
-            // SAFETY: balances the `CoInitializeEx` in `new`. The apartment
-            // itself survives this thanks to `pin_mta`.
-            unsafe { CoUninitialize() };
+            if self.initialized {
+                // SAFETY: balances the successful `CoInitializeEx` in `new`. The
+                // apartment itself survives this thanks to `pin_mta`.
+                unsafe { CoUninitialize() };
+            }
         }
     }
 

@@ -20,8 +20,9 @@ mod screenshot;
 mod window_capture;
 
 pub use screenshot::{
-    capture_screen_png, is_degenerate, list_displays, process_screenshot, take_screenshot,
-    take_screenshot_display, take_screenshot_window, DEFAULT_SCREENSHOT_MAX_BYTES,
+    capture_screen_png, is_degenerate, list_displays, process_screenshot,
+    process_screenshot_with_scale, take_screenshot, take_screenshot_display,
+    take_screenshot_window, DEFAULT_SCREENSHOT_MAX_BYTES,
 };
 
 #[cfg(windows)]

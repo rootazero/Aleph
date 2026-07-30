@@ -179,6 +179,21 @@ impl ConnectionTarget {
             }
         }
     }
+
+    /// Whether `url` sits on the exact origin (scheme + host + port) the Panel
+    /// is served from for this target — the loopback default for Local, the
+    /// configured URL for Remote. The update sentinel guard
+    /// (`update::control_action`) honours shell-control navigations only from
+    /// this origin, so a foreign page cannot drive shell actions.
+    pub fn serves_origin(&self, url: &Url) -> bool {
+        match self {
+            // `crate::PANEL_URL` is already exactly the loopback origin's
+            // serialization (http scheme, non-default port), so a string
+            // compare is a parsed-origin compare without parsing a constant.
+            Self::Local => url.origin().unicode_serialization() == crate::PANEL_URL,
+            Self::Remote(target) => url.origin() == target.origin(),
+        }
+    }
 }
 
 /// Detect whether the raw user input already contains an explicit port number.
@@ -456,6 +471,23 @@ mod tests {
     fn ipv6_without_port_gets_default_port() {
         let t = ConnectionTarget::parse("http://[::1]").unwrap();
         assert_eq!(t.to_persisted(), "http://[::1]:18790");
+    }
+
+    #[test]
+    fn serves_origin_matches_only_the_target_origin() {
+        let local = ConnectionTarget::Local;
+        assert!(local.serves_origin(&Url::parse("http://127.0.0.1:18790/chat").unwrap()));
+        assert!(local.serves_origin(&Url::parse("http://127.0.0.1:18790").unwrap()));
+        // A foreign origin, another loopback port, and an opaque (non-http)
+        // origin are all not the Panel origin.
+        assert!(!local.serves_origin(&Url::parse("http://evil.com/").unwrap()));
+        assert!(!local.serves_origin(&Url::parse("http://127.0.0.1:9999/").unwrap()));
+        assert!(!local.serves_origin(&Url::parse("tauri://localhost/index.html").unwrap()));
+
+        let remote = ConnectionTarget::parse("https://gw.example.com:8443").unwrap();
+        assert!(remote.serves_origin(&Url::parse("https://gw.example.com:8443/x").unwrap()));
+        assert!(!remote.serves_origin(&Url::parse("http://gw.example.com:8443/").unwrap()));
+        assert!(!remote.serves_origin(&Url::parse("https://gw.example.com:443/").unwrap()));
     }
 
     #[test]
