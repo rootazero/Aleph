@@ -63,9 +63,22 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "slider",
 ];
 
-/// Check whether a tool name belongs to the Chrome `DevTools` MCP toolset.
-fn is_devtools_tool(name: &str) -> bool {
-    DEVTOOLS_TOOLS.contains(&name)
+/// The bare `DevTools` tool name behind `name`, or `None` when this isn't one.
+///
+/// **MCP tools register server-qualified as `{server}__{tool}`** (see
+/// `mcp_adapter`), so matching the bare names in [`DEVTOOLS_TOOLS`] against the
+/// registered name never succeeded — the entire compressor was unreachable in
+/// production, silently, for every one of these tools. Stripping the prefix is
+/// the whole fix.
+///
+/// It also widens the match from "the Chrome DevTools MCP" to "any MCP server
+/// exposing these names", which is correct: all seven are browser-automation
+/// verbs, and the compression each one gets (base64 → marker, interactive-node
+/// filtering, entry caps) follows from the *shape* of that output, not from which
+/// server produced it.
+fn devtools_tool_name(name: &str) -> Option<&str> {
+    let bare = name.rsplit("__").next().unwrap_or(name);
+    DEVTOOLS_TOOLS.contains(&bare).then_some(bare)
 }
 
 /// Compress a `DevTools` tool output using a type-specific strategy.
@@ -74,9 +87,9 @@ fn is_devtools_tool(name: &str) -> bool {
 /// tailored compression that preserves actionable information while
 /// drastically reducing token count.
 pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
-    if !is_devtools_tool(tool_name) {
+    let Some(tool_name) = devtools_tool_name(tool_name) else {
         return output.to_owned();
-    }
+    };
     match tool_name {
         "take_snapshot" => compress_snapshot(output),
         "take_screenshot" => compress_screenshot(output),
@@ -287,16 +300,43 @@ fn compress_generic(output: &str, max_bytes: usize) -> String {
 mod tests {
     use super::*;
 
-    // --- is_devtools_tool ---
+    // --- devtools_tool_name ---
 
     #[test]
     fn test_is_devtools_tool() {
-        assert!(is_devtools_tool("take_snapshot"));
-        assert!(is_devtools_tool("click"));
-        assert!(is_devtools_tool("lighthouse_audit"));
-        assert!(!is_devtools_tool("bash"));
-        assert!(!is_devtools_tool("web_search"));
-        assert!(!is_devtools_tool(""));
+        assert_eq!(devtools_tool_name("take_snapshot"), Some("take_snapshot"));
+        assert_eq!(devtools_tool_name("click"), Some("click"));
+        assert_eq!(
+            devtools_tool_name("lighthouse_audit"),
+            Some("lighthouse_audit")
+        );
+        assert_eq!(devtools_tool_name("bash"), None);
+        assert_eq!(devtools_tool_name("web_search"), None);
+        assert_eq!(devtools_tool_name(""), None);
+    }
+
+    /// The regression that made this whole module unreachable: MCP tools arrive
+    /// server-qualified, so the bare-name table never matched a real call.
+    #[test]
+    fn server_qualified_mcp_names_are_recognized() {
+        assert_eq!(
+            devtools_tool_name("chrome_devtools__take_snapshot"),
+            Some("take_snapshot")
+        );
+        assert_eq!(
+            devtools_tool_name("chrome-devtools__list_console_messages"),
+            Some("list_console_messages")
+        );
+        assert_eq!(devtools_tool_name("some_server__bash"), None);
+
+        // …and the compression actually runs for a qualified name now.
+        let base64 = format!("{}+/{}=", "iVBORw0KGgo".repeat(200), "A".repeat(100));
+        let compressed = compress_tool_output("chrome_devtools__take_screenshot", &base64);
+        assert!(
+            compressed.len() < 200,
+            "qualified screenshot must be compressed, got {} chars",
+            compressed.len()
+        );
     }
 
     // --- passthrough ---

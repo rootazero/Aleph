@@ -36,22 +36,33 @@ impl fmt::Display for CatalogError {
 impl std::error::Error for CatalogError {}
 
 /// Result of one sync into the cache.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SyncReport {
     pub synced: usize,
     pub failed: Vec<String>,
+    /// The artifact's `generated_at`, when the fetch got far enough to parse a
+    /// manifest — catalog freshness, so "0 synced" can be told apart from
+    /// "synced a stale catalog".
+    pub generated_at: Option<String>,
+}
+
+/// One normalized artifact: entries plus the manifest facts callers report on.
+struct Ingested {
+    entries: Vec<ExtensionEntry>,
+    generated_at: Option<String>,
 }
 
 /// Thin, stateless client for the single published Aleph Hub catalog artifact.
 #[derive(Clone)]
 pub struct AlephHubCatalog {
     id: String,
-    /// Retained for future display / diagnostics; not read during ingestion today.
-    #[allow(dead_code)]
+    /// Human display name of this source. Becomes an entry's `via` (→ the
+    /// Panel's `source_label`) when the wire declares no upstream provenance.
     name: String,
     artifact_url: String,
-    /// Retained for future per-source trust policy; not used during ingestion today.
-    #[allow(dead_code)]
+    /// Trust ceiling for this source: every entry's wire-declared `trust_tier`
+    /// is clamped to it, so `official` is a property of the source rather than
+    /// an entry's self-assertion.
     trust_tier: TrustTier,
     http: reqwest::Client,
 }
@@ -73,9 +84,10 @@ impl AlephHubCatalog {
         }
     }
 
-    /// Parse + normalize an artifact body (no network) — schema check, injection
-    /// scan (warn-only), then `into_entry`.
-    fn ingest(&self, body: &str) -> Result<Vec<ExtensionEntry>, CatalogError> {
+    /// Parse + normalize an artifact body (no network) — schema check,
+    /// structural integrity gate, injection scan (warn-only), `into_entry`, then
+    /// the per-source trust clamp.
+    fn ingest(&self, body: &str) -> Result<Ingested, CatalogError> {
         let art: HubCatalogArtifact =
             serde_json::from_str(body).map_err(|e| CatalogError::Parse(e.to_string()))?;
         if art.manifest.schema_version > SUPPORTED_SCHEMA_VERSION {
@@ -84,19 +96,36 @@ impl AlephHubCatalog {
                 art.manifest.schema_version, SUPPORTED_SCHEMA_VERSION
             )));
         }
+        // Reject before anything reaches the cache: the slot is replace-based, so
+        // a partial artifact would wipe the last-good slice.
+        art.validate().map_err(CatalogError::Schema)?;
         let mut out = Vec::with_capacity(art.entries.len());
         for he in &art.entries {
             let findings = scan_for_injection(&format!("{} {}", he.name, he.description));
             if !findings.is_empty() {
                 tracing::warn!(hub = %self.id, id = %he.id, ?findings, "hub entry injection findings");
             }
-            out.push(he.into_entry(&art.manifest.hub_id));
+            let mut entry = he.into_entry(&art.manifest.hub_id);
+            entry.trust_tier = entry.trust_tier.clamped_to(self.trust_tier);
+            // No wire-declared upstream provenance → label the entry with this
+            // source's human name (the Panel renders `via` as `source_label`).
+            if he.via.is_none() {
+                entry.via = Some(self.name.clone());
+            }
+            out.push(entry);
         }
-        Ok(out)
+        Ok(Ingested {
+            entries: out,
+            generated_at: art.manifest.generated_at,
+        })
     }
 
     /// Fetch the artifact over HTTP and normalize it.
     pub async fn fetch(&self) -> Result<Vec<ExtensionEntry>, CatalogError> {
+        self.fetch_ingested().await.map(|i| i.entries)
+    }
+
+    async fn fetch_ingested(&self) -> Result<Ingested, CatalogError> {
         let resp = self
             .http
             .get(&self.artifact_url)
@@ -119,27 +148,31 @@ impl AlephHubCatalog {
     /// An empty-but-valid response (transient publish glitch) is treated as a
     /// non-fatal no-op — the last-good cache is preserved rather than wiped.
     pub async fn sync_into(&self, cache: &CatalogCache) -> SyncReport {
-        match self.fetch().await {
-            Ok(entries) if !entries.is_empty() => {
-                let synced = entries.len();
-                match cache.replace_source(&self.id, &entries).await {
+        match self.fetch_ingested().await {
+            Ok(ing) if !ing.entries.is_empty() => {
+                let synced = ing.entries.len();
+                match cache.replace_source(&self.id, &ing.entries).await {
                     Ok(()) => SyncReport {
                         synced,
                         failed: Vec::new(),
+                        generated_at: ing.generated_at,
                     },
                     Err(e) => SyncReport {
                         synced: 0,
                         failed: vec![format!("cache write: {e}")],
+                        generated_at: ing.generated_at,
                     },
                 }
             }
-            Ok(_) => SyncReport {
+            Ok(ing) => SyncReport {
                 synced: 0,
                 failed: vec!["empty catalog; kept last-good cache".into()],
+                generated_at: ing.generated_at,
             },
             Err(e) => SyncReport {
                 synced: 0,
                 failed: vec![e.to_string()],
+                generated_at: None,
             },
         }
     }
@@ -156,15 +189,18 @@ mod tests {
       "install_spec":{"type":"mcp_stdio","command":"npx","args":["@acme/foo"],"env":[]},
       "via":"clawhub"}]}"#;
 
-    #[test]
-    fn ingest_populates_via_and_install_spec() {
-        let c = AlephHubCatalog::new(
+    fn client() -> AlephHubCatalog {
+        AlephHubCatalog::new(
             ALEPH_HUB_ID,
             ALEPH_HUB_NAME,
             "http://unused",
             TrustTier::Verified,
-        );
-        let entries = c.ingest(FIXTURE).unwrap();
+        )
+    }
+
+    #[test]
+    fn ingest_populates_via_and_install_spec() {
+        let entries = client().ingest(FIXTURE).unwrap().entries;
         assert_eq!(entries.len(), 1);
         let e = &entries[0];
         assert_eq!(e.source_id, "aleph-hub");
@@ -175,19 +211,54 @@ mod tests {
     }
 
     #[test]
-    fn ingest_falls_back_to_hub_id_when_via_absent() {
+    fn ingest_falls_back_to_source_display_name_when_via_absent() {
         let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},
           "entries":[{"id":"aleph-hub:x","kind":"mcp","category":"other","name":"X","description":"d",
           "repo_url":"https://github.com/x/x","trust_tier":"verified",
           "install_spec":{"type":"mcp_stdio","command":"c","args":[],"env":[]}}]}"#;
-        let c = AlephHubCatalog::new(
-            ALEPH_HUB_ID,
-            ALEPH_HUB_NAME,
-            "http://unused",
-            TrustTier::Verified,
+        let e = &client().ingest(body).unwrap().entries[0];
+        // The Panel renders `via` as `source_label`, a human label — so the
+        // fallback is the source's display name, not its machine id.
+        assert_eq!(e.via.as_deref(), Some(ALEPH_HUB_NAME));
+    }
+
+    #[test]
+    fn ingest_clamps_entry_trust_to_source_ceiling() {
+        let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},
+          "entries":[{"id":"aleph-hub:x","kind":"mcp","category":"other","name":"X","description":"d",
+          "repo_url":null,"trust_tier":"official",
+          "install_spec":{"type":"mcp_stdio","command":"c","args":[],"env":[]}}]}"#;
+        // Source ceiling is Verified, so a self-declared `official` entry lands Verified.
+        let e = &client().ingest(body).unwrap().entries[0];
+        assert_eq!(e.trust_tier, TrustTier::Verified);
+        // An Official source may publish Official entries.
+        let official = AlephHubCatalog::new("h", "H", "http://unused", TrustTier::Official);
+        assert_eq!(
+            official.ingest(body).unwrap().entries[0].trust_tier,
+            TrustTier::Official
         );
-        let e = &c.ingest(body).unwrap()[0];
-        assert_eq!(e.via.as_deref(), Some("aleph-hub")); // fallback to hub_id
+    }
+
+    #[test]
+    fn ingest_rejects_truncated_artifact_before_the_cache() {
+        let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub","entry_count":9},
+          "entries":[{"id":"aleph-hub:x","kind":"mcp","category":"other","name":"X","description":"d",
+          "repo_url":null,"trust_tier":"verified",
+          "install_spec":{"type":"mcp_stdio","command":"c","args":[],"env":[]}}]}"#;
+        assert!(matches!(
+            client().ingest(body),
+            Err(CatalogError::Schema(_))
+        ));
+    }
+
+    #[test]
+    fn ingest_surfaces_generated_at_as_freshness() {
+        let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub","generated_at":"2026-07-30T00:00:00Z"},
+          "entries":[]}"#;
+        assert_eq!(
+            client().ingest(body).unwrap().generated_at.as_deref(),
+            Some("2026-07-30T00:00:00Z")
+        );
     }
 
     #[test]
@@ -195,6 +266,21 @@ mod tests {
         let body = r#"{"manifest":{"schema_version":999,"hub_id":"h","name":"H"},"entries":[]}"#;
         let c = AlephHubCatalog::new("h", "H", "http://unused", TrustTier::Community);
         assert!(matches!(c.ingest(body), Err(CatalogError::Schema(_))));
+    }
+
+    /// A wire entry claiming the `local:` installed-id namespace is rejected —
+    /// those ids address real backend objects through `extensions.toggle` /
+    /// `.uninstall`.
+    #[test]
+    fn ingest_rejects_reserved_local_id() {
+        let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},
+          "entries":[{"id":"local:mcp:github","kind":"mcp","category":"other","name":"X","description":"d",
+          "repo_url":null,"trust_tier":"verified",
+          "install_spec":{"type":"mcp_stdio","command":"c","args":[],"env":[]}}]}"#;
+        assert!(matches!(
+            client().ingest(body),
+            Err(CatalogError::Schema(_))
+        ));
     }
 
     #[test]
@@ -209,13 +295,7 @@ mod tests {
     #[test]
     fn ingest_empty_entries_returns_ok_empty_vec() {
         let body = r#"{"manifest":{"schema_version":1,"hub_id":"aleph-hub","name":"Aleph Hub"},"entries":[]}"#;
-        let c = AlephHubCatalog::new(
-            ALEPH_HUB_ID,
-            ALEPH_HUB_NAME,
-            "http://unused",
-            TrustTier::Verified,
-        );
-        let entries = c.ingest(body).unwrap();
+        let entries = client().ingest(body).unwrap().entries;
         assert!(
             entries.is_empty(),
             "expected empty vec from empty entries array"

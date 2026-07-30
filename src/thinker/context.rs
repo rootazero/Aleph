@@ -217,6 +217,14 @@ pub struct ResolvedContext {
     /// router). [`VoiceContext::Off`] keeps the section absent — the prompt is
     /// byte-identical for non-voice turns.
     pub voice: VoiceContext,
+    /// Domain-vocabulary hint (`[voice] vocabulary`) carried alongside
+    /// [`Self::voice`], rendered by `VoiceModeLayer` on ASR-transcribed turns
+    /// only: the same term list that biased the recognizer is shown to the
+    /// model so it repairs misrecognized words toward the configured terms
+    /// (one dictionary, two consumers). `None` when no vocabulary is
+    /// configured or the turn is not voice — the layer then emits the plain
+    /// repair rule, keeping the prompt byte-identical.
+    pub voice_vocabulary: Option<String>,
     /// Active execution-permission tier (Ask / Auto / Full), rendered by
     /// `OperatingEnvelopeLayer` (priority 1758, **Dynamic**) as the
     /// `Approval mode:` line. This is the
@@ -274,6 +282,7 @@ impl ContextAggregator {
             strategy: None,
             strategy_guardrails: None,
             voice: VoiceContext::Off,
+            voice_vocabulary: None,
             approval_tier: None,
             session_mode: None,
         }

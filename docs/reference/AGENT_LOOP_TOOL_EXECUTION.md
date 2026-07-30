@@ -223,9 +223,12 @@ consumer must be migrated before the file can be deleted.
 6. Post-hooks (`AfterToolCall` observers) — inject context, modify output
 7. Failure hooks (`AfterToolCallFailure` observers) — fire on error outcomes
 
-Also handles: output compression (`compress_tool_output`), token-budget truncation
-(head+tail), disk offloading via `ToolResultStore`, file-read tracking via `FileContentTracker`,
-and `RwLock<String>`-guarded session_id updates.
+Also handles: output compression (`compress_tool_output`), ingress hygiene
+(`tool_output::hygiene::clean_result_value` — content-type reduction + error
+distillation, applied to the tool's *structured value* before it is flattened;
+see FEATURE_LOCATOR §3.14), token-budget truncation (head+tail), disk offloading
+via `ToolResultStore`, file-read tracking via `FileContentTracker`, and
+`RwLock<String>`-guarded session_id updates.
 
 **ToolService-layer responsibilities (candidate to move):** At first glance, stages 2–4 resemble
 the ToolService decorator chain (`PermissionLayer`, `ContextRuleLayer`, `TimeoutLayer`). However,

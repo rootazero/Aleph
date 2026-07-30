@@ -5,10 +5,13 @@ use crate::domain::skill::SkillId;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::skills::{ensure_shared_system_initialized, shared_system};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::hub::cache::CatalogCache;
+use crate::hub::types::ExtensionKind;
 use crate::mcp::manager::McpManagerHandle;
 use crate::skill::SkillConfigUpdate;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 pub struct ToggleParams {
@@ -85,6 +88,7 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
 pub async fn handle_uninstall(
     req: JsonRpcRequest,
     mcp: Option<McpManagerHandle>,
+    cache: Arc<CatalogCache>,
 ) -> JsonRpcResponse {
     let p: UninstallParams = match parse_params(&req) {
         Ok(p) => p,
@@ -114,8 +118,28 @@ pub async fn handle_uninstall(
         other => Err(format!("unknown kind: {other}")),
     };
     match result {
-        Ok(()) => JsonRpcResponse::success(req.id, json!({ "ok": true })),
+        Ok(()) => {
+            // Drop the provenance row so a later hand-rolled reinstall of the
+            // same name cannot inherit the removed copy's version and light a
+            // false update badge. Best-effort: never fails a completed removal.
+            if let Some(k) = origin_kind(kind) {
+                if let Err(e) = cache.forget_installed_origin(k, backend).await {
+                    tracing::warn!(id = %p.id, error = %e, "failed to clear install origin");
+                }
+            }
+            JsonRpcResponse::success(req.id, json!({ "ok": true }))
+        }
         Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
+    }
+}
+
+/// Map a façade id's `kind` segment onto the ledger's `ExtensionKind`.
+fn origin_kind(kind: &str) -> Option<ExtensionKind> {
+    match kind {
+        "mcp" => Some(ExtensionKind::Mcp),
+        "plugin" => Some(ExtensionKind::Plugin),
+        "skill" => Some(ExtensionKind::Skill),
+        _ => None,
     }
 }
 

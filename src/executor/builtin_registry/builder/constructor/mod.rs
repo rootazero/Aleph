@@ -211,6 +211,19 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Hub catalog search (requires CatalogCache). The only way a model can
+        // discover the `entry_id` that resolve-spec / install-run require; the
+        // optional MCP handle is used solely to resolve installed-state.
+        let hub_catalog_search_tool = if let Some(ref cache) = config.catalog_cache {
+            info!("Creating HubCatalogSearchTool");
+            Some(crate::builtin_tools::hub::HubCatalogSearchTool {
+                cache: Arc::clone(cache),
+                mcp: config.hub_mcp_handle.clone(),
+            })
+        } else {
+            None
+        };
+
         // Store resolve-spec tool (requires CatalogCache)
         let hub_resolve_spec_tool = if let Some(ref cache) = config.catalog_cache {
             info!("Creating HubResolveSpecTool");
@@ -791,6 +804,21 @@ impl BuiltinToolRegistry {
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_sync");
 
+            let td = crate::builtin_tools::hub::HubCatalogSearchTool {
+                cache: cache.clone(),
+                mcp: config.hub_mcp_handle.clone(),
+            }
+            .definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for hub_catalog_search");
+
             let td = crate::builtin_tools::hub::HubResolveSpecTool {
                 cache: cache.clone(),
             }
@@ -975,6 +1003,7 @@ impl BuiltinToolRegistry {
             list_models_tool,
             doctor_tool,
             vault_store_tool,
+            hub_catalog_search_tool,
             hub_catalog_sync_tool,
             hub_resolve_spec_tool,
             hub_install_run_tool,

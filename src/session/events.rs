@@ -81,8 +81,6 @@ pub struct ToolOutputMetadata {
     #[serde(default)]
     pub latency_ms: u64,
     #[serde(default)]
-    pub truncated: bool,
-    #[serde(default)]
     pub cost_cents: Option<u64>,
     /// Out-of-band image payloads carried alongside the (text) `value`.
     ///

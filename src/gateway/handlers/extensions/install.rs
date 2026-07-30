@@ -88,23 +88,33 @@ pub fn split_fields(
     (secret, plain)
 }
 
-/// Required env fields (McpStdio) that are absent or blank in `values`.
+/// Config fields the spec requires that are absent or blank in `values`.
+///
+/// Covers both spec shapes that declare config, matching
+/// `InstallSpec::requires_config`: stdio `env` entries flagged `required`, and
+/// remote `headers` flagged `secret` (a secret header is auth material — the
+/// endpoint is unusable without it, which is exactly why `requires_config`
+/// counts it).
 pub fn missing_required(spec: &InstallSpec, values: &Map<String, Value>) -> Vec<String> {
-    let mut missing = Vec::new();
-    if let InstallSpec::McpStdio { env, .. } = spec {
-        for e in env {
-            if e.required {
-                let filled = values
-                    .get(&e.name)
-                    .and_then(value_to_string)
-                    .is_some_and(|s| !s.trim().is_empty());
-                if !filled {
-                    missing.push(e.name.clone());
-                }
-            }
-        }
+    let filled = |name: &str| {
+        values
+            .get(name)
+            .and_then(value_to_string)
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+    match spec {
+        InstallSpec::McpStdio { env, .. } => env
+            .iter()
+            .filter(|e| e.required && !filled(&e.name))
+            .map(|e| e.name.clone())
+            .collect(),
+        InstallSpec::McpRemote { headers, .. } => headers
+            .iter()
+            .filter(|h| h.secret && !filled(&h.name))
+            .map(|h| h.name.clone())
+            .collect(),
+        InstallSpec::OciImage { .. } | InstallSpec::GitDir { .. } => Vec::new(),
     }
-    missing
 }
 
 // --------------------------------------------------------------------------
@@ -254,8 +264,11 @@ pub async fn handle_install(
         Ok(o) => o,
         Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     };
-    // (7) post-install verify + (8) respond with the approved pin record.
-    let verify = verify_install(&outcome, mcp.as_ref()).await;
+    // (7) record provenance: which catalog entry, at what version and spec, this
+    // install came from.
+    crate::hub::origin::record_install(&cache, &entry, &spec, &outcome).await;
+    // (8) post-install verify + (9) respond with the approved pin record.
+    let verify = verify_after_install(&outcome, mcp.as_ref()).await;
     JsonRpcResponse::success(
         req.id,
         json!({
@@ -276,37 +289,28 @@ fn outcome_json(o: &InstallOutcome) -> Value {
     }
 }
 
-/// Confirm the install took effect. Tolerant of `add_server` having already
-/// auto-started the MCP server: success is "server is listed", regardless of
-/// whether the explicit `start_server` returned an already-running error.
-async fn verify_install(outcome: &InstallOutcome, mcp: Option<&McpManagerHandle>) -> Value {
+/// Confirm the install took effect, then report the verdict from the single
+/// verifier (`hub::verify::verify_install`, shared with `hub_install_verify`).
+///
+/// Only the *nudges* live here — they are side effects the pure verifier must
+/// not perform: start the MCP server (tolerating "already running", since
+/// `add_server` auto-starts) and reload the extension manager so a freshly
+/// copied plugin/skill is on disk *and* loaded before we look.
+async fn verify_after_install(outcome: &InstallOutcome, mcp: Option<&McpManagerHandle>) -> Value {
     match outcome {
         InstallOutcome::Mcp { id } => {
-            let Some(mcp) = mcp else {
-                return json!({ "ok": false, "error": "mcp manager unavailable" });
-            };
-            let start_err = mcp.start_server(id).await.err().map(|e| e.to_string());
-            match mcp.list_servers().await {
-                Ok(servers) => match servers.iter().find(|s| &s.id == id) {
-                    Some(info) => json!({ "ok": true, "tool_count": info.tool_count }),
-                    None => json!({
-                        "ok": false,
-                        "error": start_err.unwrap_or_else(|| "server not listed after start".into()),
-                    }),
-                },
-                Err(e) => json!({ "ok": false, "error": e.to_string() }),
+            if let Some(mcp) = mcp {
+                let _ = mcp.start_server(id).await;
             }
         }
         InstallOutcome::Plugin { .. } | InstallOutcome::Skill { .. } => {
-            match crate::extension::try_extension_manager() {
-                Some(mgr) => {
-                    let _ = mgr.reload().await;
-                    json!({ "ok": true })
-                }
-                None => json!({ "ok": false, "error": "extension manager unavailable" }),
+            if let Some(mgr) = crate::extension::try_extension_manager() {
+                let _ = mgr.reload().await;
             }
         }
     }
+    let report = crate::hub::verify::verify_install(outcome, mcp).await;
+    serde_json::to_value(&report).unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() }))
 }
 
 #[cfg(test)]
@@ -355,6 +359,44 @@ mod tests {
         let mut ok = Map::new();
         ok.insert("TOKEN".into(), Value::String("real".into()));
         assert!(missing_required(&stdio_spec(), &ok).is_empty());
+    }
+
+    /// Regression: `missing_required` only looked at stdio `env`, so a remote
+    /// entry whose auth header was left blank installed "successfully" and then
+    /// 401'd. A secret header is auth material — `requires_config` already counts
+    /// it, so the gate must too.
+    #[test]
+    fn missing_required_covers_remote_secret_headers() {
+        let spec = InstallSpec::McpRemote {
+            url: "https://x".into(),
+            transport: McpTransport::StreamableHttp,
+            headers: vec![
+                HeaderDecl {
+                    name: "Authorization".into(),
+                    secret: true,
+                },
+                HeaderDecl {
+                    name: "X-Region".into(),
+                    secret: false,
+                },
+            ],
+        };
+        // Nothing supplied → the secret header is missing; the plain one is not.
+        assert_eq!(
+            missing_required(&spec, &Map::new()),
+            vec!["Authorization".to_string()]
+        );
+        // Blank counts as missing.
+        let mut blank = Map::new();
+        blank.insert("Authorization".into(), Value::String("  ".into()));
+        assert_eq!(
+            missing_required(&spec, &blank),
+            vec!["Authorization".to_string()]
+        );
+        // Supplied → satisfied.
+        let mut filled = Map::new();
+        filled.insert("Authorization".into(), Value::String("Bearer z".into()));
+        assert!(missing_required(&spec, &filled).is_empty());
     }
 
     #[test]

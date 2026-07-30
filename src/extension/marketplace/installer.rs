@@ -201,7 +201,23 @@ pub fn verify_plugin_integrity(
     let Some(expected) = expected_hash else {
         return Ok(()); // No hash to verify
     };
+    let actual = directory_digest(source_path)?;
+    if actual != expected {
+        return Err(format!(
+            "Plugin integrity check failed: expected {expected}, got {actual}"
+        ));
+    }
+    Ok(())
+}
 
+/// SHA-256 over a directory tree: every file's repo-relative path and bytes, in
+/// sorted order, `.git` excluded. Symlinks are neither hashed nor copied (see
+/// `copy_dir_recursive`), so the digest covers exactly what an install writes.
+///
+/// Path separators are normalized to `/` so the digest a publisher computes on
+/// one OS matches what a client computes on another — without that, every
+/// hash-pinned install fails on Windows and only on Windows.
+pub fn directory_digest(source_path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -231,20 +247,14 @@ pub fn verify_plugin_integrity(
                 entry.path().display()
             )
         })?;
-        hasher.update(relative.to_string_lossy().as_bytes());
+        let portable = relative.to_string_lossy().replace('\\', "/");
+        hasher.update(portable.as_bytes());
         let content = std::fs::read(entry.path())
             .map_err(|e| format!("Failed to read {}: {}", entry.path().display(), e))?;
         hasher.update(&content);
     }
 
-    let actual = format!("{:x}", hasher.finalize());
-    if actual != expected {
-        return Err(format!(
-            "Plugin integrity check failed: expected {expected}, got {actual}"
-        ));
-    }
-
-    Ok(())
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 // =============================================================================
@@ -408,6 +418,23 @@ mod tests {
         let expected = format!("{:x}", hasher.finalize());
 
         assert!(verify_plugin_integrity(tmp.path(), Some(&expected)).is_ok());
+    }
+
+    /// A nested path must fold into the digest with `/` separators on every OS,
+    /// or a hash computed by the publisher can never match on Windows.
+    #[test]
+    fn directory_digest_uses_portable_path_separators() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub").join("f.txt"), "x").unwrap();
+
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"sub/f.txt");
+        hasher.update(b"x");
+        let expected = format!("{:x}", hasher.finalize());
+
+        assert_eq!(directory_digest(tmp.path()).unwrap(), expected);
     }
 
     #[test]

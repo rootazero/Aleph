@@ -697,7 +697,7 @@ impl McpManagerActor {
 
                 // Resolve `{{secret:NAME}}` env references into this child's
                 // env only — never the daemon's own process env.
-                let resolved_env = super::secret_resolver::resolve_secret_env(
+                let resolved_env = super::secret_resolver::resolve_secret_map(
                     &config.env,
                     self.secret_resolver.as_deref(),
                 )
@@ -734,8 +734,18 @@ impl McpManagerActor {
                     _ => TransportPreference::Auto,
                 };
 
-                let remote_config =
+                // Resolve `{{secret:NAME}}` header references (Authorization,
+                // API keys) the same way stdio env is resolved — the plaintext
+                // only ever exists in this request's header map.
+                let resolved_headers = super::secret_resolver::resolve_secret_map(
+                    &config.headers,
+                    self.secret_resolver.as_deref(),
+                )
+                .await;
+
+                let mut remote_config =
                     McpRemoteServerConfig::new(&config.id, url).with_transport(transport);
+                remote_config.headers = resolved_headers;
 
                 let remote_config = if let Some(timeout) = config.timeout_seconds {
                     remote_config.with_timeout(timeout)

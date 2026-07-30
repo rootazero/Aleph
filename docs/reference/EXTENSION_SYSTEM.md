@@ -1404,6 +1404,7 @@ The Gateway's HTTP server routes requests to the appropriate plugin handler.
 
 ## See Also
 
+- [Aleph Hub](ALEPH_HUB.md) - Extension **distribution**: catalog contract, trust rails, install pipeline (this document covers the **runtime** that loads what the Hub installs)
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Tool System](TOOL_SYSTEM.md) - How tools work
 - [Gateway](GATEWAY.md) - Plugin RPC methods

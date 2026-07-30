@@ -6,10 +6,12 @@
 //! reframes the whole reply contract for the ear instead of the eye.
 //!
 //! The guidance is *built from* [`VoiceContext`] rather than a fixed string, so
-//! it adapts to what the turn actually knows. Today two signals drive it: the
-//! reply is spoken (always, when active), and whether the user's message arrived
-//! as ASR-transcribed speech (adds a transcription-repair instruction). The
-//! builder is the seam where further spoken-context signals attach.
+//! it adapts to what the turn actually knows. Three signals drive it: the reply
+//! is spoken (always, when active), whether the user's message arrived as
+//! ASR-transcribed speech (adds a transcription-repair instruction), and the
+//! session's domain-vocabulary hint (narrows that repair toward the configured
+//! terms — the same list that biased the recognizer). The builder is the seam
+//! where further spoken-context signals attach.
 
 use crate::thinker::context::VoiceContext;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -31,7 +33,15 @@ pub struct VoiceModeLayer;
 /// spoke, so the text it sees is speech-to-text output that may be garbled. This
 /// is the one idea worth porting from reference voice agents; Aleph already
 /// computes the signal, this layer is where it finally changes behavior.
-fn build_voice_guidelines(voice: VoiceContext) -> String {
+///
+/// `vocabulary` is the session's `[voice] vocabulary` hint (already rendered
+/// by `VoiceSection::vocabulary_hint`, the same string that biases the
+/// recognizer). On transcribed turns it is appended to the repair rule so the
+/// model steers misrecognized words toward the configured domain terms —
+/// FluidVoice's one-dictionary-two-consumers pattern, closing the loop
+/// between ASR bias and LLM-side repair. It is ignored on spoken-only turns:
+/// typed input carries no recognition errors for the list to repair.
+fn build_voice_guidelines(voice: VoiceContext, vocabulary: Option<&str>) -> String {
     // One owned String built once per voice turn; non-voice turns never call
     // this, keeping the prompt byte-identical when voice is off.
     let mut s = String::with_capacity(512);
@@ -57,6 +67,14 @@ errors or missing words. Infer the intended meaning and silently repair obvious 
 slips; if the intent is genuinely unclear, ask one short spoken clarifying question rather \
 than guessing.\n",
         );
+        if let Some(terms) = vocabulary {
+            // The recognizer was biased with this exact list; the model gets
+            // it too, so a garbled domain word is repaired toward the
+            // configured term instead of a plausible-sounding guess.
+            s.push_str("Domain vocabulary for this conversation: ");
+            s.push_str(terms);
+            s.push_str(". Prefer these exact terms when repairing misrecognized words.\n");
+        }
     }
     s
 }
@@ -83,7 +101,10 @@ impl PromptLayer for VoiceModeLayer {
         // channel `StandingGoalLayer` / `ExecutionPlanLayer` use).
         let voice = input.context.map_or(VoiceContext::Off, |ctx| ctx.voice);
         if voice.is_active() {
-            output.push_str(&build_voice_guidelines(voice));
+            let vocabulary = input
+                .context
+                .and_then(|ctx| ctx.voice_vocabulary.as_deref());
+            output.push_str(&build_voice_guidelines(voice, vocabulary));
             output.push('\n');
         }
     }
@@ -104,6 +125,12 @@ mod tests {
             &SecurityContext::permissive(),
         );
         ctx.voice = voice;
+        ctx
+    }
+
+    fn ctx_with_vocabulary(voice: VoiceContext, vocabulary: &str) -> ResolvedContext {
+        let mut ctx = ctx_with_voice(voice);
+        ctx.voice_vocabulary = Some(vocabulary.to_string());
         ctx
     }
 
@@ -186,5 +213,36 @@ mod tests {
         let spoken = render(&ctx_with_voice(VoiceContext::Spoken));
         let transcribed = render(&ctx_with_voice(VoiceContext::SpokenTranscribed));
         assert!(transcribed.starts_with(spoken.trim_end()));
+    }
+
+    #[test]
+    fn transcribed_turn_lists_domain_vocabulary() {
+        // One dictionary, two consumers: the same `[voice] vocabulary` hint
+        // that biased the recognizer is shown to the model so it repairs
+        // misrecognized words toward the configured terms.
+        let out = render(&ctx_with_vocabulary(
+            VoiceContext::SpokenTranscribed,
+            "Aleph, Leptos",
+        ));
+        assert!(out.contains("Domain vocabulary for this conversation: Aleph, Leptos."));
+        assert!(out.contains("Prefer these exact terms when repairing misrecognized words"));
+    }
+
+    #[test]
+    fn spoken_only_turn_ignores_vocabulary() {
+        // Typed input has no recognition errors for the list to repair —
+        // the vocabulary must not bloat a spoken-only turn's prompt.
+        let out = render(&ctx_with_vocabulary(VoiceContext::Spoken, "Aleph, Leptos"));
+        assert!(out.contains("## Voice Mode"));
+        assert!(!out.contains("Domain vocabulary"));
+    }
+
+    #[test]
+    fn transcribed_without_vocabulary_keeps_plain_repair_rule() {
+        // No configured vocabulary → the repair rule renders exactly as
+        // before (byte-identical prompt for unconfigured deployments).
+        let out = render(&ctx_with_voice(VoiceContext::SpokenTranscribed));
+        assert!(out.contains("transcribed from speech"));
+        assert!(!out.contains("Domain vocabulary"));
     }
 }

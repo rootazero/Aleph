@@ -192,6 +192,40 @@ pub fn estimate_tokens_smart(content: &str) -> usize {
     estimate_tokens_aware(content, DEFAULT_PROSE_RATIO)
 }
 
+/// How many characters of text shaped like `sample` fit in `budget_tokens` —
+/// the inverse of [`estimate_tokens_smart`].
+///
+/// Producers that must *emit* text under a token budget (a windowed file read,
+/// a head/tail truncation) need this direction, and doing the arithmetic at the
+/// call site is how char and byte units get mixed up. Content-aware by
+/// construction: the same budget buys ~2.5× more characters of source than of
+/// CJK prose, which is exactly why a fixed "50 KB per read" limit cannot honour
+/// a token budget for both.
+#[must_use]
+pub fn chars_for_token_budget(sample: &str, budget_tokens: usize) -> usize {
+    let ratio = detect_content_ratio(sample).max(1.0);
+    ((budget_tokens as f64) * ratio) as usize
+}
+
+/// How many characters of *tool-result payload* fit in `budget_tokens` once the
+/// result has been flattened to JSON.
+///
+/// A tool producer that must size its own output against the result budget has
+/// to measure the string the budget is actually enforced against, and that is
+/// **not** its own payload: `Value::to_string()` emits compact single-line JSON,
+/// so [`looks_like_code`] sees one line containing `{`, scores a 1.0 indicator
+/// ratio, and charges [`CODE_RATIO`] — *unconditionally, whatever the payload
+/// is*. Sizing a window with [`chars_for_token_budget`] on the raw content
+/// therefore over-allocates by 1.4x for prose or CSV (3.5 vs 2.5) and the
+/// enforcement step downstream then cuts the difference out of the middle.
+///
+/// Callers should still leave a margin on top of this for the escaping
+/// (`\n` -> `\\n`, `"` -> `\\"`) and the surrounding envelope fields.
+#[must_use]
+pub fn chars_for_result_token_budget(budget_tokens: usize) -> usize {
+    ((budget_tokens as f64) * CODE_RATIO) as usize
+}
+
 /// Estimates token count using content-aware ratio detection with an explicit
 /// prose baseline.
 ///

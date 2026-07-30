@@ -15,19 +15,41 @@ The context budget system manages token usage across agent turns using a three-t
 │  file_op_supersede → tool_result_pruning → image_stripping  │
 │        → structured/ (content-type-aware reduction)         │
 ├─────────────────────────────────────────────────────────────┤
-│                    TIER 1: Inline                           │
-│   Per-tool result size limit + ToolResultStore overflow     │
+│                    TIER 1: Inline (ingress)                 │
+│  compress → hygiene (ANSI strip → structured/ → distill)    │
+│      → persist original + inline signal / marker / truncate  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+`structured/` appears in both Tier 1 and Tier 2: the same content-type router
+serves the ingress cleaner and the stale-result pruning pass, which is why it
+lives in `src/tool_output/structured/` rather than under `context/budget/`.
 
 ## Tier 1: Inline Result Limiting
 
 Applied at tool-execution time, before anything reaches the history.
 Each tool declares an optional per-result size limit
-(`ToolDefinition.max_result_tokens`, falling back to the global default);
-oversized results are persisted whole to the `ToolResultStore` (on-disk +
-FTS-indexed via `ContentIndex`) and replaced in context by a
-`[Full output persisted]` marker that `ctx_search` can drill back into.
+(`ToolDefinition.max_result_tokens`, falling back to the global default).
+
+When a result exceeds it, `tool_output::hygiene::clean_result_value` first
+cleans the tool's **structured value** field-wise — ANSI strip, then
+content-type reduction (`structured/`), then error/path distillation. This has
+to happen before the value is flattened: `Value::to_string()` escapes every
+newline and collapses the result onto one line, which blinds both
+content-aware cleaners (see the ⚠️ note in the root `CLAUDE.md`).
+
+`apply_result_budget` then persists the **untouched original** to the
+`ToolResultStore` (on-disk + FTS-indexed via `ContentIndex`) and puts the
+reduced signal inline above a `[Full output persisted]` marker, so the model
+sees the failing test / compile error immediately and can still `ctx_search`
+the dropped detail. Output the router could not classify keeps the older
+marker-only shape — with no idea what the signal is, a head/tail slice would
+just be a guess.
+
+Two producers cap themselves so they never reach this cascade: `file_read`
+sizes its window against `READ_WINDOW_TOKENS`, and `file_ops`
+`list`/`search`/`stats` cap their entry lists (aggregates stay exact). See
+FEATURE_LOCATOR §3.14 and §3.4.
 See [AGENT_LOOP_TOOL_EXECUTION.md](./AGENT_LOOP_TOOL_EXECUTION.md) for the
 execution pipeline (grouping/cascade semantics live there, not here).
 
@@ -82,10 +104,14 @@ Located in `src/context/budget/cheap_passes/`:
 - **HistoricalImageStrippingStage** (`image_stripping.rs`) — drops
   `ContentBlock::Image` blocks from every message preceding the newest
   image-bearing turn (outside the fresh tail), ~1500 tokens per image.
-- **structured/** — content-type-aware tool-result reduction (JSON `Value`
-  factorization etc.); routes by detected content shape, falls back to
-  first-line truncation when the structured form isn't smaller. See
-  FEATURE_LOCATOR §2.7.
+- **structured/** (`src/tool_output/structured/`) — content-type-aware
+  tool-result reduction (log / search / diff / json); tries each candidate
+  shape in order and falls back to first-line truncation when none produces a
+  meaningful shrink. Shared with the Tier 1 ingress cleaner. `Some(Reduction)`
+  guarantees the body is smaller **in bytes** (central
+  `is_meaningful_shrink`) — line counts do not bound context, since one kept
+  200 KB minified line is a 94 % line reduction and a 1 % token reduction. See
+  FEATURE_LOCATOR §2.7 and §3.14.
 
 ## Tier 3: LLM Compactor
 
