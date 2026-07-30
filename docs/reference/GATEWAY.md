@@ -609,10 +609,52 @@ logging, a correlation feature.
 ### Channel webhook ingestion
 
 Channels that receive over HTTP POST (`generic webhook`, and future ones)
-return a handler from `Channel::webhook_handler()`. `initialize_channels`
-collects those after every channel has started and hands the resulting router
-to `GatewayServer::set_webhook_routes()`, which merges it in `build_router()`.
+return a handler from `Channel::webhook_handler()`. `build_router()` registers
+**one constant route** — `POST /webhook/{*rest}` — whose state is the shared
+`WebhookMountTable`. `ChannelRegistry` owns that table and is its only writer.
 
+- **Mounting follows the registry, not boot.** `start_channel` /
+  `restart_channel` mount; `stop_channel` / `unregister` / `register` /
+  `create_channel` unmount. So `channel.stop` and `channel.delete` really do
+  remove the endpoint (404, not 503), and a channel created at runtime is
+  reachable without restarting the daemon. The earlier version built the route
+  table once at boot: `stop` returned `"stopped"` while the endpoint kept
+  answering 200 and driving agent runs, because the route held its own
+  `Arc<Handler>` clone. The forwarder never exiting has a separate,
+  mount-independent cause: the forwarder task captures a `channel_arc` clone
+  by move and holds it for its entire — infinite — lifetime
+  (`channel_registry.rs` `start_message_forwarder`). That keeps the channel
+  instance alive, which keeps `ChannelState`'s original `Sender` alive, so
+  `RecvError::Closed` is structurally unreachable for any started channel,
+  whether or not a mount exists.
+- **⚠️ `restart_channel` does not go through `stop_channel`/`start_channel`.**
+  It calls `channel.stop()` + `channel.start()` directly, so it carries its own
+  mount refresh. A hook set that only covers start/stop leaves the pre-restart
+  handler clone in the table forever.
+- **`path` must be under `/webhook/`**, enforced by
+  `WebhookChannelConfig::validate()` and again by `WebhookMountTable::mount()`
+  (one predicate, `is_mountable_path`). Because operator-writable paths never
+  enter axum's route table, a bad path can no longer panic `Router::merge` at
+  boot, and can no longer shadow a Panel SPA path (`path = "/settings"` used to
+  turn `GET /settings` into 405). `RESERVED_ROUTE_PREFIXES` existed only to
+  guard that boot panic and was withdrawn with it.
+- **⚠️ matchit does not panic on `/webhook/foo` next to `/webhook/{*rest}`** —
+  the more specific static route just wins. A future gateway route under this
+  prefix would therefore *silently* steal a channel's webhook path. The guard
+  is a source scan in `server/mod.rs`'s own tests
+  (`build_router_registers_no_second_route_under_the_webhook_prefix`); axum
+  cannot be asked what is in its route table.
+- **Two channels, one path** → the lower `channel_id` keeps the route, warned
+  with both ids. Deterministic on purpose: `start_all` iterates a HashMap, so
+  arrival order would make route ownership a per-boot coin flip. The loser is
+  only warned — it still reports `Connected` in `channels.list` while being
+  deaf, and the `channel.start` RPC still answers `{"status":"started"}`:
+  `mount()`'s refusal `bool` is discarded at both call sites, so the operator
+  sees the `warn!` naming both ids but the RPC caller is told nothing. For
+  that one case this is a small step backwards from the deleted
+  `"restart_required"` receipt. Recorded limit, not a fix — threading the
+  refusal into the receipt changes an RPC response shape and needs its own
+  round.
 - **One port.** Webhook traffic rides the gateway's own listener, so it
   inherits `[gateway] host`, TLS, and `SecurityHeadersLayer`. `WebhookReceiver`
   deliberately owns no listener — the version that bound `0.0.0.0` itself would
@@ -626,10 +668,14 @@ to `GatewayServer::set_webhook_routes()`, which merges it in `build_router()`.
   `src/gateway/inbound_router/dedup.rs`, whose window is **5 minutes**; a
   captured signed request replayed after that re-triggers an agent run. This
   is posture, not a known gap requiring action.
-- **`path` is operator-writable**, so a collision with a gateway route would
-  panic `Router::merge` at boot. `is_reserved_route()` in `server/mod.rs` skips
-  those with a warning. Add every new gateway route to
-  `RESERVED_ROUTE_PREFIXES` in the same edit.
+- **Check order is deliberate**: lookup → 404, signature → 403, channel status
+  → 503, then parse and forward. Signature comes *before* status so an
+  unauthenticated caller learns only whether a mount exists at that path,
+  never the mounted channel's status.
+  The status check is depth only, for a channel that moved itself to
+  `Error`/`Connecting` without any RPC; `try_read` fails **open** on
+  contention, because a momentary write-lock holder is not evidence the
+  channel is down.
 - ⚠️ The sink is the channel's **own** `ChannelState::sender()`, not the
   registry's. Going direct to the registry bypasses
   `start_message_forwarder`, the only place inbound traffic stamps

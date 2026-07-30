@@ -20,7 +20,9 @@ pub struct WebhookChannelConfig {
     /// URL to POST outbound messages to
     pub callback_url: String,
 
-    /// URL path to receive inbound webhooks on (default: "/webhook/generic")
+    /// URL path to receive inbound webhooks on. Must be under `/webhook/`
+    /// (default: `/webhook/generic`) — that prefix is the single route all
+    /// channel webhook traffic enters through.
     #[serde(default = "default_path")]
     pub path: String,
 
@@ -60,8 +62,17 @@ impl WebhookChannelConfig {
         if self.callback_url.is_empty() {
             return Err("callback_url is required".to_string());
         }
-        if !self.path.starts_with('/') {
-            return Err("path must start with '/'".to_string());
+        // All channel webhook traffic enters through one constant route,
+        // `{WEBHOOK_ROUTE_PREFIX}/{{*rest}}`, so a path outside that prefix is
+        // unreachable. Reject it here rather than warn at mount time: a channel
+        // that starts, reports Connected, and cannot receive is the failure
+        // shape this whole subsystem was rewired to remove.
+        if !crate::gateway::webhook_receiver::is_mountable_path(&self.path) {
+            return Err(format!(
+                "path must be \"{}/<name>\" (got {:?})",
+                crate::gateway::webhook_receiver::WEBHOOK_ROUTE_PREFIX,
+                self.path
+            ));
         }
         Ok(())
     }
@@ -139,7 +150,7 @@ mod tests {
         let config = WebhookChannelConfig {
             secret: "my-secret".to_string(),
             callback_url: "https://example.com/callback".to_string(),
-            path: "/my/custom/path".to_string(),
+            path: "/webhook/my/custom/path".to_string(),
             ..Default::default()
         };
         assert!(config.validate().is_ok());
@@ -204,5 +215,47 @@ mod tests {
         assert_eq!(config.callback_url, "https://example.com/callback");
         assert_eq!(config.path, "/webhook/myapp");
         assert_eq!(config.allowed_senders, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn validate_requires_the_shared_webhook_prefix() {
+        // A path outside the prefix cannot be reached behind the single
+        // `/webhook/{*rest}` route. Failing `start()` here is the honest
+        // outcome: accepting it would give back a channel that reports
+        // Connected and is deaf — the exact shape this work removes.
+        let base = WebhookChannelConfig {
+            secret: "s".to_string(),
+            callback_url: "http://127.0.0.1:1/cb".to_string(),
+            path: String::new(),
+            allowed_senders: vec![],
+        };
+
+        for bad in ["/settings", "/", "webhook/generic", "/webhook", "/webhook/"] {
+            let cfg = WebhookChannelConfig {
+                path: bad.to_string(),
+                ..base.clone()
+            };
+            let err = cfg
+                .validate()
+                .expect_err(&format!("{bad} must be rejected"));
+            assert!(
+                err.contains("/webhook/"),
+                "the error must name the required prefix, got: {err}"
+            );
+        }
+
+        // The default and any sub-path under the prefix are fine.
+        assert!(WebhookChannelConfig {
+            path: "/webhook/generic".to_string(),
+            ..base.clone()
+        }
+        .validate()
+        .is_ok());
+        assert!(WebhookChannelConfig {
+            path: "/webhook/team/alerts".to_string(),
+            ..base
+        }
+        .validate()
+        .is_ok());
     }
 }
