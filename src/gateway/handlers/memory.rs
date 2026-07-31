@@ -29,13 +29,6 @@ pub struct MemoryEntry {
     pub timestamp: i64,
 }
 
-/// Window memory info
-#[derive(Debug, Clone, Serialize)]
-pub struct WindowMemoryInfo {
-    pub window_title: String,
-    pub memory_count: i64,
-}
-
 /// Memory statistics
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryStats {
@@ -465,18 +458,6 @@ pub async fn handle_compress(
 
 // ============================================================================
 // App List
-// ============================================================================
-
-/// List windows that have associated memories.
-///
-/// Window-anchored memory was a pre-notes-era concept; the notes-based model
-/// has no per-window grouping, so this list is always empty. Kept as a
-/// successful empty response for backward compatibility with older clients.
-pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    let windows: Vec<WindowMemoryInfo> = Vec::new();
-    JsonRpcResponse::success(request.id, json!({ "windows": windows }))
-}
-
 // ============================================================================
 // List Corrections
 // ============================================================================

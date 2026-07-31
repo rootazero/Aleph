@@ -278,7 +278,6 @@ impl HandlerRegistry {
         // No context needed — the handlers reach the extension manager
         // via the process-global accessor.
         registry.register("hooks.list", hooks_admin::handle_hooks_list);
-        registry.register("hooks.registry", hooks_admin::handle_hooks_registry);
         registry.register("hooks.add", hooks_admin::handle_hooks_add);
         registry.register("hooks.remove", hooks_admin::handle_hooks_remove);
         registry.register("hooks.reload", hooks_admin::handle_hooks_reload);
@@ -304,11 +303,7 @@ impl HandlerRegistry {
         registry.register("plugin.update", plugins::handle_update);
         registry.register("plugin.enable", plugins::handle_enable);
         registry.register("plugin.disable", plugins::handle_disable);
-        registry.register("plugin.load", plugins::handle_load);
-        registry.register("plugin.unload", plugins::handle_unload);
         registry.register("plugin.reload", plugins::handle_reload);
-        registry.register("plugin.callTool", plugins::handle_call_tool);
-        registry.register("plugin.executeCommand", plugins::handle_execute_command);
 
         // Plugin marketplace handlers
         registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);
