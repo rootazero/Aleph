@@ -107,6 +107,15 @@ pub struct SpawnerBase {
     /// including 0/1, which DISABLES the parallel fast path. `None` (tests /
     /// legacy callers) falls back to the config default.
     pub parallel_tool_concurrency: Option<usize>,
+    /// The runner's `[context_budget]` config, inherited so the child gets its
+    /// OWN budget + compactor + preflight pipeline. `None` (tests / legacy
+    /// callers / `[context_budget]` disabled) leaves the child unmanaged,
+    /// matching the main harness under the same config.
+    ///
+    /// The config travels, never a built `ContextBudget`: the instance carries
+    /// per-run calibration and circuit-breaker counters that must not be shared
+    /// between the parent and a child (nor between two concurrent children).
+    pub context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -428,15 +437,18 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             base.default_max_iterations.unwrap_or(0),
         ));
 
+        let (context_budget, context_compactor, preflight_pipeline) =
+            build_context_triple(base.context_budget_config.as_ref(), &llm);
+
         let deps = HarnessDeps {
             session: base.session.clone(),
             tools: scoped_tools,
             llm,
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
             verifier_chain: None,
-            context_budget: None,
-            context_compactor: None,
-            preflight_pipeline: None,
+            context_budget,
+            context_compactor,
+            preflight_pipeline,
             // Stage A (P1) — inherited from parent SpawnerBase. VESR v1.1 (b):
             // when routing capture is on, this is the child's own OutcomeObserver
             // wrapping that sink; otherwise the raw sink (unchanged).
@@ -711,6 +723,54 @@ fn ephemeral_for(agent_id: &str) -> SessionKey {
         agent_id: agent_id.to_string(),
         ephemeral_id: format!("sub-{nonce}"),
     }
+}
+
+/// Build a child's context-management triple — budget, LLM compactor, cheap-pass
+/// preflight pipeline — from the runner's `[context_budget]` config.
+///
+/// All three used to be hardcoded `None` here (the only fields in the
+/// `HarnessDeps` literal with no comment saying why), so a subagent ran with NO
+/// context management at all: `build_prompt` replays the whole child log every
+/// turn, nothing ever compacted it, and when the provider finally answered
+/// `prompt_too_long` the reactive drain found no compactor, marked the rescue
+/// exhausted and killed the run. Read-heavy research children are exactly the
+/// ones that hit that wall.
+///
+/// The child builds its OWN instances, never the parent's: `ContextBudget`
+/// carries per-run tokenizer calibration and circuit-breaker counters, and the
+/// compactor must summarise through the CHILD's provider — sharing either would
+/// cross-contaminate a parent and its concurrently-running children.
+///
+/// All-or-nothing by construction, which is the gating `HarnessDeps` documents
+/// (`preflight_pipeline` is `None` exactly when `context_compactor` is): a
+/// compactor without a preflight pipeline would pay for LLM summarisation where
+/// free structural pruning was available.
+type ContextTriple = (
+    Option<Arc<tokio::sync::Mutex<crate::context::budget::ContextBudget>>>,
+    Option<Arc<crate::context::compact::compactor::ContextCompactor>>,
+    Option<Arc<crate::context::budget::preflight::PreflightPipeline>>,
+);
+
+fn build_context_triple(
+    cfg: Option<&crate::context::budget::ContextBudgetConfig>,
+    llm: &Arc<dyn AiProvider>,
+) -> ContextTriple {
+    use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
+    let Some(cfg) = cfg else {
+        return (None, None, None);
+    };
+    let budget = Arc::new(tokio::sync::Mutex::new(
+        crate::context::budget::ContextBudget::new(cfg),
+    ));
+    let compactor = Arc::new(ContextCompactor::new(
+        llm.clone(),
+        CompactorConfig {
+            fresh_tail: cfg.fresh_tail_count,
+            ..CompactorConfig::default()
+        },
+    ));
+    let pipeline = Arc::new(crate::context::budget::preflight::default_pipeline(cfg));
+    (Some(budget), Some(compactor), Some(pipeline))
 }
 
 /// Whether `target` is the last `AssistantMessage` in `events` (by seq).

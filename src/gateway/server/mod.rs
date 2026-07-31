@@ -363,6 +363,13 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
+    /// Live channel webhook mount table, shared with `ChannelRegistry`.
+    ///
+    /// `build_router()` always registers the one wildcard route over this
+    /// table, so the route table does not depend on configuration — that is
+    /// what lets a channel started or created after `serve()` become
+    /// reachable without a restart. An empty table 404s every webhook path.
+    webhook_mounts: Arc<crate::gateway::webhook_receiver::WebhookMountTable>,
     /// Vault handle. Installed by [`GatewayServer::set_shared_token_manager`],
     /// which also publishes the process-global used by vault consumers
     /// (e.g. the WhatsApp vault store's crypto lookup).
@@ -428,6 +435,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
@@ -479,6 +487,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
@@ -524,6 +533,17 @@ impl GatewayServer {
     /// Idempotent — replaces any previously set admin router.
     pub fn set_admin_router(&mut self, router: Router) {
         self.admin_router = Some(router);
+    }
+
+    /// Serve channel webhook ingestion from `table`.
+    ///
+    /// Idempotent. Call order does not matter: the table is shared state, not
+    /// a snapshot, so mounts added before or after this call are both served.
+    pub fn set_webhook_mounts(
+        &mut self,
+        table: Arc<crate::gateway::webhook_receiver::WebhookMountTable>,
+    ) {
+        self.webhook_mounts = table;
     }
 
     /// Install the `SharedTokenManager` (vault handle). Also publishes the
@@ -690,6 +710,13 @@ impl GatewayServer {
         if let Some(admin) = self.admin_router.clone() {
             router = router.nest("/v1/admin", admin);
         }
+
+        // Channel webhook ingestion. One constant route over the shared mount
+        // table; auth is per-handler HMAC, the same posture as /metrics and
+        // /a2a — see the design spec.
+        router = router.merge(crate::gateway::webhook_receiver::WebhookReceiver::router(
+            self.webhook_mounts.clone(),
+        ));
 
         router.layer(SecurityHeadersLayer::new())
     }
@@ -943,6 +970,7 @@ mod tests {
     use super::super::middleware::MiddlewareChain;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn test_process_valid_request() {
@@ -1013,6 +1041,175 @@ mod tests {
         assert!(super::insecure_exposure_refused(false, false, true, false).is_none());
         // Non-loopback plaintext but explicitly allowed ⇒ allowed.
         assert!(super::insecure_exposure_refused(false, false, false, true).is_none());
+    }
+
+    #[tokio::test]
+    async fn webhook_prefix_is_always_routed_and_404s_when_nothing_is_mounted() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // The route is a constant, present with or without configured
+        // channels. That is what lets a channel created at runtime become
+        // reachable without a restart.
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = GatewayServer::new(addr);
+        let router = server.build_router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/none")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 404 from the dispatcher — NOT 405 from the SPA fallback. A 405 here
+        // would mean the wildcard route is missing and the request fell through.
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn set_webhook_mounts_makes_a_mounted_path_reachable() {
+        use crate::gateway::channel::{ChannelId, ChannelState, ChannelStatus};
+        use crate::gateway::webhook_receiver::{WebhookMountTable, WebhookReceiver};
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let state = ChannelState::new(8);
+        state.set_status(ChannelStatus::Connected).await;
+        let _rx = state.inbound_subscribe();
+
+        let table = Arc::new(WebhookMountTable::new());
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mut server = GatewayServer::new(addr);
+        server.set_webhook_mounts(Arc::clone(&table));
+        let router = server.build_router();
+
+        // Mounted AFTER build_router: the router holds the table, not a snapshot.
+        table
+            .mount(crate::gateway::webhook_receiver::WebhookMount {
+                handler: Arc::new(AlwaysOkHandler),
+                inbound: state.sender(),
+                status: state.status_handle(),
+                channel_id: ChannelId::new("probe"),
+            })
+            .await;
+
+        let body = br#"{"text":"hi"}"#.to_vec();
+        let sig = WebhookReceiver::compute_signature("probe-secret", &body);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/probe")
+                    .header("x-webhook-signature", sig)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn panel_spa_paths_are_untouched_by_the_webhook_route() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // Confining webhooks to one prefix is what makes SPA shadowing
+        // unexpressible: `path = "/settings"` can no longer become a real
+        // POST-only route that turns `GET /settings` into 405.
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = GatewayServer::new(addr);
+        let router = server.build_router();
+
+        for path in ["/", "/settings"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{path} must still reach the Panel fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn build_router_registers_no_second_route_under_the_webhook_prefix() {
+        // matchit lets `/webhook/foo` coexist with `/webhook/{*rest}` — the more
+        // specific static route simply wins, with NO panic. So a future gateway
+        // route under this prefix would silently steal a channel's webhook path.
+        // axum cannot be asked what is in its route table, so scan the source of
+        // the only function that builds it.
+        //
+        // Boundary: this scans only `server/mod.rs`. A `/webhook/...` route
+        // registered in a router merged in from another file (`openai_routes`,
+        // `a2a_routes`, `artifact_routes`, `control_plane`, the `/v1/admin`
+        // nest) would NOT be caught — none exists today.
+        //
+        // The needles use the escaped-quote form (`.route(\"` here vs `.route("`
+        // in the scanned text) precisely so the test does not match its own
+        // source — correct but fragile; do not "clean up" that escaping.
+        let src = include_str!("mod.rs");
+        for (idx, line) in src.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or(line);
+            let offends = code.contains(".route(\"/webhook")
+                || code.contains(".nest(\"/webhook")
+                || code.contains(".nest_service(\"/webhook");
+            assert!(
+                !offends,
+                "server/mod.rs:{} registers a route under {}; channel webhooks \
+                 must enter only through WebhookReceiver::router()",
+                idx + 1,
+                crate::gateway::webhook_receiver::WEBHOOK_ROUTE_PREFIX
+            );
+        }
+    }
+
+    /// Minimal `WebhookHandler` for router-level assertions: fixed secret,
+    /// fixed path, produces no inbound messages so no subscriber is needed.
+    struct AlwaysOkHandler;
+
+    #[async_trait::async_trait]
+    impl crate::gateway::webhook_receiver::WebhookHandler for AlwaysOkHandler {
+        fn verify(&self, headers: &axum::http::HeaderMap, body: &[u8]) -> bool {
+            let sig = headers
+                .get("x-webhook-signature")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            crate::gateway::webhook_receiver::WebhookReceiver::verify_signature(
+                "probe-secret",
+                body,
+                sig,
+            )
+        }
+
+        async fn handle(
+            &self,
+            _headers: &axum::http::HeaderMap,
+            _body: axum::body::Bytes,
+        ) -> crate::gateway::channel::ChannelResult<Vec<crate::gateway::channel::InboundMessage>>
+        {
+            Ok(vec![])
+        }
+
+        fn path(&self) -> &str {
+            "/webhook/probe"
+        }
     }
 }
 

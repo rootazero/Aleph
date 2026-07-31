@@ -62,6 +62,26 @@ Subagents inherit the following from their parent via `SpawnerBase`:
 - `fallback_llm` (Stage A, 2026-05-08) — Stage 5b single-step fallback
 - `stall_config`, `consecutive_failure_cap`, `turn_timeout` (Stage A) — P0 stability triple
 - `trace_sink` (Stage A) — observability sink
+- `context_budget_config` (2026-07-29) — the `[context_budget]` config, from which the
+  spawner builds the child's **own** budget + compactor + preflight pipeline
+
+The context triple deserves its own note, because it was missing for a long time and
+failed loudly rather than gracefully. `context_budget`, `context_compactor` and
+`preflight_pipeline` were hardcoded `None` in the spawner's `HarnessDeps` literal — the
+only three fields there with no comment saying why — so a subagent ran with **no context
+management at all**: `build_prompt` replays the entire child session log every turn,
+nothing ever compacted it, and when the provider finally answered `prompt_too_long` the
+reactive rescue found no compactor, marked itself exhausted, and killed the whole child
+run (`TerminateReason::ReactiveCompactExhausted`). Read-heavy research subagents are
+exactly the ones that hit that wall.
+
+The **config** is what travels, never a built instance: `ContextBudget` carries per-run
+tokenizer calibration and circuit-breaker counters, and `ContextCompactor` must summarise
+through the *child's* provider — sharing either would cross-contaminate a parent and its
+concurrently-running children. Construction is a single point
+(`subagent_spawner::build_context_triple`) and is all-or-nothing, which is the gating
+`HarnessDeps` documents: a compactor without a preflight pipeline would pay for LLM
+summarisation where free structural pruning was available.
 
 Per the P1 zero-override decision, subagents do not currently support per-agent overrides for these fields. `AgentDef` may be extended with `Option<T>` overrides in P4 if needed, with full backward compatibility.
 

@@ -37,7 +37,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-global-shortcut = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "macros"] }
-tokio-tungstenite = "0.21"
+# Same TLS stack as shared/client + interfaces/cli (native-tls) — without a TLS
+# feature `connect_async("wss://…")` fails outright, which used to kill desktop
+# notifications for every remote https Gateway.
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 futures-util = "0.3"
 serde_json = { workspace = true }
 tracing = { workspace = true }

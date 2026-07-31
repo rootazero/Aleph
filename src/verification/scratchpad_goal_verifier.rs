@@ -9,7 +9,7 @@
 //! The *cross-turn* half — a persistent standing goal that survives across
 //! turns/sessions with lifecycle + budget, and an opt-in autonomous
 //! continuation driver — lives in the `src/goal/` subsystem (`goal` tool +
-//! `StandingGoalLayer` + `src/tasks/goal_pursuit.rs`), not here. See
+//! `StandingGoalLayer` + `src/goal/pursuit.rs`), not here. See
 //! docs/superpowers/specs/2026-06-08-standing-goal-design.md.
 //!
 //! ## Why this is a structural watchdog, not a `JudgeVerifier` (R7 / R10)

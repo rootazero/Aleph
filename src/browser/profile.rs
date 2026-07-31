@@ -1,4 +1,4 @@
-// Browser profile configuration, state machine, and system-level config.
+// Browser profile configuration and system-level config.
 
 use std::collections::HashMap;
 
@@ -35,10 +35,6 @@ pub struct ProfileConfig {
     /// Which browser engine to use.
     #[serde(default)]
     pub browser: BrowserType,
-
-    /// CDP debugging port.
-    #[serde(default = "default_cdp_port")]
-    pub cdp_port: u16,
 
     /// Profile-level override for headless (None = follow global `playwright_cli.headless`).
     #[serde(default)]
@@ -81,10 +77,6 @@ pub struct ProfileConfig {
     pub tab_idle_timeout_secs: u64,
 }
 
-const fn default_cdp_port() -> u16 {
-    18800
-}
-
 const fn default_idle_timeout() -> u64 {
     1800
 }
@@ -101,7 +93,6 @@ impl Default for ProfileConfig {
     fn default() -> Self {
         Self {
             browser: BrowserType::default(),
-            cdp_port: default_cdp_port(),
             headless: None,
             color: None,
             proxy: None,
@@ -112,33 +103,6 @@ impl Default for ProfileConfig {
             max_tabs_per_profile: default_max_tabs(),
             tab_idle_timeout_secs: default_tab_idle_timeout(),
         }
-    }
-}
-
-/// Runtime state of a browser profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProfileState {
-    /// No browser process running.
-    Idle,
-    /// Browser process is being launched.
-    Starting,
-    /// Browser process is running with the given PID and CDP port.
-    Running { pid: u32, port: u16 },
-    /// Browser process is being shut down.
-    Stopping,
-}
-
-impl ProfileState {
-    /// Whether the profile can transition to Starting.
-    #[must_use]
-    pub const fn can_start(&self) -> bool {
-        matches!(self, Self::Idle)
-    }
-
-    /// Whether the browser process is currently running.
-    #[must_use]
-    pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running { .. })
     }
 }
 
@@ -247,7 +211,6 @@ mod tests {
     fn test_profile_config_defaults() {
         let config = ProfileConfig::default();
         assert_eq!(config.browser, BrowserType::Chromium);
-        assert_eq!(config.cdp_port, 18800);
         assert_eq!(config.headless, None);
         assert!(config.color.is_none());
         assert!(config.proxy.is_none());
@@ -257,31 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_state_can_start() {
-        assert!(ProfileState::Idle.can_start());
-        assert!(!ProfileState::Starting.can_start());
-        assert!(!(ProfileState::Running { pid: 1, port: 9222 }).can_start());
-        assert!(!ProfileState::Stopping.can_start());
-    }
-
-    #[test]
-    fn test_profile_state_is_running() {
-        assert!(!ProfileState::Idle.is_running());
-        assert!(!ProfileState::Starting.is_running());
-        assert!((ProfileState::Running {
-            pid: 42,
-            port: 18800
-        })
-        .is_running());
-        assert!(!ProfileState::Stopping.is_running());
-    }
-
-    #[test]
     fn test_browser_system_config_toml_deserialization() {
         let toml_str = r##"
 [profiles.work]
 browser = "chrome"
-cdp_port = 19000
 headless = true
 color = "#ff0000"
 proxy = "socks5://127.0.0.1:1080"
@@ -290,7 +232,6 @@ idle_timeout_secs = 3600
 
 [profiles.personal]
 browser = "brave"
-cdp_port = 19001
 
 [policy]
 block_private = true
@@ -307,7 +248,6 @@ args = ["./mcp-server.js"]
         // Work profile
         let work = config.profiles.get("work").unwrap();
         assert_eq!(work.browser, BrowserType::Chrome);
-        assert_eq!(work.cdp_port, 19000);
         assert_eq!(work.headless, Some(true));
         assert_eq!(work.color.as_deref(), Some("#ff0000"));
         assert_eq!(work.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
@@ -317,7 +257,6 @@ args = ["./mcp-server.js"]
         // Personal profile
         let personal = config.profiles.get("personal").unwrap();
         assert_eq!(personal.browser, BrowserType::Brave);
-        assert_eq!(personal.cdp_port, 19001);
         assert_eq!(personal.headless, None); // default
         assert_eq!(personal.idle_timeout_secs, 1800); // default
 

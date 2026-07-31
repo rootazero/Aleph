@@ -26,14 +26,6 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
-    BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool, BrowserHoverTool,
-    BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool,
-    BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
-    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
-    BrowserUploadTool, BrowserWaitForTool,
-};
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
@@ -371,7 +363,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "session_compact",
-        description: "Compact the current conversation, dropping the oldest messages",
+        description: "Compact the current conversation: summarize the older turns, keep the recent ones",
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
@@ -594,31 +586,36 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Extract text and structured data from documents",
         requires_config: true, // Requires media_pipeline
     },
-    // Store tools — require CatalogCache + marketplace configs
+    // Aleph Hub tools — require CatalogCache
+    BuiltinToolDefinition {
+        name: "hub_catalog_search",
+        description: "Search or browse the Aleph Hub catalog of installable extensions; returns the entry_id that hub_resolve_spec and hub_install_run require, plus installed / update-available / config / consent state per hit.",
+        requires_config: true, // Requires CatalogCache
+    },
     BuiltinToolDefinition {
         name: "hub_catalog_sync",
-        description: "Sync all extension sources into the local catalog cache and refresh functional categories.",
-        requires_config: true, // Requires CatalogCache + marketplace configs
+        description: "Refresh the local cache from the published Aleph Hub catalog. Keeps the last-good cache on failure.",
+        requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_resolve_spec",
-        description: "Resolve the install spec for a catalog entry by its id, routing through the matching source provider.",
-        requires_config: true, // Requires CatalogCache + marketplace configs
+        description: "Resolve the install spec for a catalog entry by its id from the local catalog cache.",
+        requires_config: true, // Requires CatalogCache
     },
     BuiltinToolDefinition {
         name: "hub_install_run",
-        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the store UI; OCI is rejected.",
+        description: "Install a catalog entry by id (trust-gated). Clean specs install directly; ack-required specs bounce to the user for consent via the Extensions UI; OCI is rejected.",
         requires_config: true, // Requires CatalogCache + marketplace configs + vault
     },
     BuiltinToolDefinition {
         name: "hub_install_verify",
-        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins: checks the artifact is present on disk.",
+        description: "Verify that a just-installed extension is healthy. For MCP servers: checks the server is running and exposes ≥1 tool. For plugins and skills: checks the artifact is present on disk.",
         requires_config: true, // Requires live McpManagerHandle for MCP verification
     },
     BuiltinToolDefinition {
         name: "hub_fetch_docs",
-        description: "Fetch a URL (README/manifest) for the long-tail install path and scan for prompt-injection. SCAFFOLD — not wired to any install surface.",
-        requires_config: false, // No CatalogCache needed; HTTP-only scaffold
+        description: "Fetch a text document (README / manifest) over HTTP with SSRF protection and a 64 KiB cap, and scan it for prompt-injection patterns before returning it.",
+        requires_config: false, // No CatalogCache needed; HTTP-only
     },
     // Team management tools — require TeamStore
     BuiltinToolDefinition {
@@ -1082,50 +1079,19 @@ pub fn create_tool_boxed(
         // Session collaboration tools require SessionCoordinator / SessionStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "session_collaborate" | "session_turn" | "session_read" => None,
-        // Browser tools — create ProfileManager from config or use default
+        // Browser tools are intentionally NOT built here (same rationale as
+        // goal/loop below): they require the live `ProfileManager` plus the
+        // approval policy and vision bridge wired by the BuiltinToolRegistry
+        // constructor. This session-less path would produce tools without the
+        // approval gate — a security-relevant half-assembly — so they fall
+        // through to `None`.
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
         | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
         | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
-        | "browser_profile" => {
-            let manager = config
-                .and_then(|cfg| cfg.browser_profile_manager.clone())
-                .unwrap_or_else(|| {
-                    Arc::new(crate::browser::manager::ProfileManager::new(
-                        crate::browser::profile::BrowserSystemConfig::default(),
-                    ))
-                });
-            match name {
-                "browser_open" => Some(Box::new(BrowserOpenTool::new(manager))),
-                "browser_click" => Some(Box::new(BrowserClickTool::new(manager))),
-                "browser_type" => Some(Box::new(BrowserTypeTool::new(manager))),
-                "browser_screenshot" => Some(Box::new(BrowserScreenshotTool::new(manager))),
-                "browser_snapshot" => Some(Box::new(BrowserSnapshotTool::new(manager))),
-                "browser_navigate" => Some(Box::new(BrowserNavigateTool::new(manager))),
-                "browser_tabs" => Some(Box::new(BrowserTabsTool::new(manager))),
-                "browser_select" => Some(Box::new(BrowserSelectTool::new(manager))),
-                "browser_evaluate" => Some(Box::new(BrowserEvaluateTool::new(manager))),
-                "browser_fill_form" => Some(Box::new(BrowserFillFormTool::new(manager))),
-                "browser_press_key" => Some(Box::new(BrowserPressKeyTool::new(manager))),
-                "browser_wait_for" => Some(Box::new(BrowserWaitForTool::new(manager))),
-                "browser_console" => Some(Box::new(BrowserConsoleTool::new(manager))),
-                "browser_hover" => Some(Box::new(BrowserHoverTool::new(manager))),
-                "browser_scroll" => Some(Box::new(BrowserScrollTool::new(manager))),
-                "browser_pdf" => Some(Box::new(BrowserPdfTool::new(manager))),
-                "browser_network" => Some(Box::new(BrowserNetworkTool::new(manager))),
-                "browser_dialog" => Some(Box::new(BrowserDialogTool::new(manager))),
-                "browser_drag" => Some(Box::new(BrowserDragTool::new(manager))),
-                "browser_upload" => Some(Box::new(BrowserUploadTool::new(manager))),
-                "browser_resize" => Some(Box::new(BrowserResizeTool::new(manager))),
-                "browser_emulate" => Some(Box::new(BrowserEmulateTool::new(manager))),
-                "browser_cookies" => Some(Box::new(BrowserCookiesTool::new(manager))),
-                "browser_session" => Some(Box::new(BrowserSessionTool::new(manager))),
-                "browser_profile" => Some(Box::new(BrowserProfileTool::new(manager))),
-                _ => None,
-            }
-        }
+        | "browser_profile" => None,
         // Skill management tools — always available
         // Phase 2: share the process-wide initialized SkillSystem so
         // skill_status/install/manage see the same registry as the gateway.
@@ -1287,21 +1253,22 @@ mod tests {
         // Test tool requiring config (should return None without config)
         assert!(create_tool_boxed("image_generate", None).is_none());
 
-        // Test browser tools (always available, no config required)
-        assert!(create_tool_boxed("browser_open", None).is_some());
-        assert!(create_tool_boxed("browser_click", None).is_some());
-        assert!(create_tool_boxed("browser_type", None).is_some());
-        assert!(create_tool_boxed("browser_screenshot", None).is_some());
-        assert!(create_tool_boxed("browser_snapshot", None).is_some());
-        assert!(create_tool_boxed("browser_navigate", None).is_some());
-        assert!(create_tool_boxed("browser_tabs", None).is_some());
-        assert!(create_tool_boxed("browser_select", None).is_some());
-        assert!(create_tool_boxed("browser_evaluate", None).is_some());
-        assert!(create_tool_boxed("browser_fill_form", None).is_some());
-        assert!(create_tool_boxed("browser_press_key", None).is_some());
-        assert!(create_tool_boxed("browser_wait_for", None).is_some());
-        assert!(create_tool_boxed("browser_console", None).is_some());
-        assert!(create_tool_boxed("browser_profile", None).is_some());
+        // Test browser tools (require the live wiring from the registry
+        // constructor — see the browser_* arm above — so None here)
+        assert!(create_tool_boxed("browser_open", None).is_none());
+        assert!(create_tool_boxed("browser_click", None).is_none());
+        assert!(create_tool_boxed("browser_type", None).is_none());
+        assert!(create_tool_boxed("browser_screenshot", None).is_none());
+        assert!(create_tool_boxed("browser_snapshot", None).is_none());
+        assert!(create_tool_boxed("browser_navigate", None).is_none());
+        assert!(create_tool_boxed("browser_tabs", None).is_none());
+        assert!(create_tool_boxed("browser_select", None).is_none());
+        assert!(create_tool_boxed("browser_evaluate", None).is_none());
+        assert!(create_tool_boxed("browser_fill_form", None).is_none());
+        assert!(create_tool_boxed("browser_press_key", None).is_none());
+        assert!(create_tool_boxed("browser_wait_for", None).is_none());
+        assert!(create_tool_boxed("browser_console", None).is_none());
+        assert!(create_tool_boxed("browser_profile", None).is_none());
     }
 
     #[test]

@@ -403,13 +403,13 @@ impl HandlerRegistry {
             )
         });
 
-        // Session compact (requires SessionStore — placeholder)
+        // Session compact — no SessionStore needed: manual compaction operates
+        // on the session *event log* (the source the prompt is rebuilt from),
+        // resolved from the process-wide handles, not on the `messages` read
+        // projection. So it is registered for real here rather than as a
+        // "wire in Gateway startup" placeholder.
         registry.register("session.compact", |req| async move {
-            JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                "session.compact requires SessionStore — wire in Gateway startup".to_string(),
-            )
+            session::handle_compact_db(req).await
         });
 
         // Session truncate (requires SessionStore — placeholder)

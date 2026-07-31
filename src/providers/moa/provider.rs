@@ -18,7 +18,7 @@ use crate::harness::TraceSink;
 use crate::providers::adapter::{ProviderResponse, RequestPayload, TokenUsage};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::session_moa_handle::SessionMoaPref;
-use crate::providers::{AiProvider, MeteringProvider, ModelOverrideProvider};
+use crate::providers::{AiProvider, DeltaSink, MeteringProvider, ModelOverrideProvider};
 use crate::sync_primitives::{Arc, Mutex};
 
 use super::advisor_health::AdvisorHealth;
@@ -223,10 +223,19 @@ impl MoaProvider {
     }
 }
 
-impl AiProvider for MoaProvider {
-    fn process<'a>(
+impl MoaProvider {
+    /// The MoA turn, shared by the batched and streaming entry points.
+    ///
+    /// `sink` is threaded to the AGGREGATOR call only — the advisors are a
+    /// side channel whose text never reaches the user, and their fan-out
+    /// finishes before the acting model is dialled at all. With `Some(sink)`
+    /// the aggregator streams its deltas live exactly as it would without the
+    /// facade in front of it; with `None` this is the historical one-shot path,
+    /// byte-identical.
+    fn run_turn<'a>(
         &'a self,
         payload: RequestPayload<'a>,
+        sink: Option<&'a dyn DeltaSink>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         // Own the borrowed payload fields (FailoverProvider pattern) so the
         // async block can rebuild sub-request payloads freely.
@@ -400,7 +409,19 @@ impl AiProvider for MoaProvider {
                 .with_max_tokens(max_tokens)
                 .with_tool_choice(tool_choice)
                 .with_metadata(metadata);
-            let agg_result = self.aggregator.process(agg_payload).await;
+            let agg_result = match sink {
+                // Live deltas: the aggregator IS the acting model, so its
+                // stream is the user-visible answer. Delegating (rather than
+                // exposing `as_http_provider`) keeps the fan-out in the path —
+                // forwarding the inner HttpProvider would let the caller stream
+                // AROUND the facade and the advisors would never run.
+                Some(sink) => {
+                    self.aggregator
+                        .execute_streaming_dyn(agg_payload, sink)
+                        .await
+                }
+                None => self.aggregator.process(agg_payload).await,
+            };
 
             // Round-2 B3: the heavy turn trace fires AFTER the aggregator so
             // it records the full turn (hermes parity: advisor I/O + the
@@ -429,6 +450,37 @@ impl AiProvider for MoaProvider {
             }
             agg_result
         })
+    }
+}
+
+impl AiProvider for MoaProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.run_turn(payload, None)
+    }
+
+    /// Same turn, with the aggregator's deltas forwarded live.
+    ///
+    /// Without this override the facade fell to the trait default (call
+    /// `process`, then replay the finished response), so **turning MoA on
+    /// silently turned live streaming off** — the user went from watching the
+    /// answer type to one batch dump at the end of the turn, with nothing
+    /// anywhere saying why.
+    fn execute_streaming_dyn<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+        sink: &'a dyn DeltaSink,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.run_turn(payload, Some(sink))
+    }
+
+    /// A decorator stack is only as streaming-capable as its weakest link, and
+    /// the aggregator is the only link here that talks to a model. Advisors do
+    /// not stream by construction — their text is a side channel.
+    fn supports_streaming(&self) -> bool {
+        self.aggregator.supports_streaming()
     }
 
     fn name(&self) -> &str {
@@ -465,9 +517,10 @@ impl AiProvider for MoaProvider {
         self.aggregator.serving_provider_hint()
     }
 
-    // as_http_provider stays the default `None` — forwarding the aggregator's
-    // HttpProvider would let think.rs stream AROUND the facade and advisors
-    // would never run. The production failover path is `None` today anyway.
+    // `as_http_provider` stays the default `None` — forwarding the aggregator's
+    // HttpProvider would let a caller stream AROUND the facade and the advisors
+    // would never run. Streaming is served by `execute_streaming_dyn` above,
+    // which keeps the fan-out in the path and hands the sink to the aggregator.
 }
 
 #[cfg(test)]
@@ -665,6 +718,109 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         // Parallel: two 150ms advisors must not take 300ms serially.
         assert!(start.elapsed() < Duration::from_millis(280));
+    }
+
+    /// A streaming-capable aggregator whose `execute_streaming_dyn` emits the
+    /// answer one word at a time, so the facade's delegation is observable.
+    struct StreamingAggregator;
+    impl AiProvider for StreamingAggregator {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async { Ok(ProviderResponse::text_only("final answer".into())) })
+        }
+        fn execute_streaming_dyn<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+            sink: &'a dyn DeltaSink,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                sink.on_delta(&crate::providers::ProviderDelta::TextDelta("final ".into()))
+                    .await;
+                sink.on_delta(&crate::providers::ProviderDelta::TextDelta("answer".into()))
+                    .await;
+                Ok(ProviderResponse::text_only("final answer".into()))
+            })
+        }
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &str {
+            "streaming-aggregator"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    #[derive(Default)]
+    struct CollectingSink(Mutex<Vec<String>>);
+    #[async_trait::async_trait]
+    impl DeltaSink for CollectingSink {
+        async fn on_delta(&self, delta: &crate::providers::ProviderDelta) {
+            if let crate::providers::ProviderDelta::TextDelta(t) = delta {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(t.clone());
+            }
+        }
+    }
+
+    /// Turning MoA on must not silently turn live streaming off. Before the
+    /// facade overrode the streaming seam it fell to the trait default (call
+    /// `process`, replay at the end), so a MoA session went from watching the
+    /// answer type to one batch dump — with nothing saying why. The fan-out
+    /// still runs: the sink reaches the AGGREGATOR, not around the facade.
+    #[tokio::test]
+    async fn streaming_delegates_to_the_aggregator_with_the_fanout_intact() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let advisor: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            text: "advice".into(),
+            delay: None,
+            calls: calls.clone(),
+        });
+        let p = make_provider(
+            vec![(advisor, "a:1")],
+            Arc::new(StreamingAggregator),
+            MoaFanout::PerIteration,
+            30,
+        );
+        assert!(
+            p.supports_streaming(),
+            "the facade must report the aggregator's streaming capability",
+        );
+        let msgs = user_msgs("go");
+        let sink = CollectingSink::default();
+        let resp = p
+            .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+            .await
+            .unwrap();
+        assert_eq!(resp.text_content(), "final answer");
+        assert_eq!(
+            sink.0.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            vec!["final ".to_string(), "answer".to_string()],
+            "aggregator deltas must reach the caller's sink live",
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the advisor fan-out must still run on the streaming path",
+        );
+    }
+
+    /// The capability bit is a promise about the OUTERMOST provider: a
+    /// non-streaming aggregator must not be advertised as streaming.
+    #[tokio::test]
+    async fn non_streaming_aggregator_is_not_advertised_as_streaming() {
+        let p = make_provider(
+            vec![],
+            Arc::new(MockProvider::new("ok")),
+            MoaFanout::PerIteration,
+            30,
+        );
+        assert!(!p.supports_streaming());
     }
 
     #[tokio::test]

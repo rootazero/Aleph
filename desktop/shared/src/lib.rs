@@ -15,10 +15,15 @@
 //! - [`AccessibilityCapability`] — AX tree queries (macOS AX, Windows UIA, Linux AT-SPI2)
 //! - [`PowerCapability`] — sleep inhibition (via the `power()` accessor)
 //!
-//! Real platform API calls never live here: each platform crate
-//! (`desktop-macos`, `desktop-linux`, `desktop-windows`) implements
-//! [`DesktopPlatform`] and reaches the OS through the [`bridge`] JSON-RPC IPC
-//! layer (R1 brain–limb separation).
+//! This crate holds the capability *contracts* plus the implementation that
+//! is shared across platforms. Shared does not mean API-free: where one crate
+//! wraps an OS facility uniformly it is called directly from here — `enigo`
+//! for input (`action`), `xcap` for capture (`perception`), Win32 in the
+//! `win_*` modules — alongside per-OS arms under `cfg`. What lives in the
+//! platform crates (`desktop-macos`, `desktop-linux`, `desktop-windows`) is
+//! the genuinely platform-specialized remainder and the assembly of
+//! [`DesktopPlatform`], including the macOS [`bridge`] JSON-RPC helper (R1
+//! brain–limb separation).
 
 pub mod action;
 pub mod automation_types;

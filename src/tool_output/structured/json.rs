@@ -25,6 +25,11 @@ const MAX_STRING_CHARS: usize = 200;
 /// marker element. The head of a result list carries the shape; the tail is
 /// usually homogeneous repetition.
 const MAX_ARRAY_ELEMS: usize = 8;
+/// Objects wider than this keep N keys plus a `"…": "(+M more keys)"` marker
+/// entry — short scalars first (see [`shrink`]). Generous compared to the array
+/// cap because an object's key set *is* its shape, and short scalars like
+/// `error` / `status` / `message` are exactly what must survive.
+const MAX_OBJECT_KEYS: usize = 48;
 /// Defensive recursion bound: beyond this depth a subtree collapses to a
 /// placeholder rather than recursing further (guards against adversarial /
 /// cyclic-looking deeply nested input — `serde_json` itself caps parse depth,
@@ -61,19 +66,25 @@ pub(super) fn looks_like_json(lines: &[&str]) -> bool {
 /// reduced form is not actually smaller than the input.
 pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
     let trimmed = text.trim();
-    let value: Value = serde_json::from_str(trimmed).ok()?;
-
-    let (reduced, changed) = shrink(&value, 0);
-    if !changed {
-        return None;
-    }
-    let body = serde_json::to_string_pretty(&reduced).ok()?;
-    // Pretty-printing can re-inflate a densely packed blob; only keep the
-    // reduction when it genuinely shrinks the payload (the caller also guards
-    // on tokens, this guards on bytes so a no-win never emits a header).
-    if body.len() >= trimmed.len() {
-        return None;
-    }
+    let body = match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => {
+            let (reduced, changed) = shrink(&value, 0);
+            if !changed {
+                return None;
+            }
+            serde_json::to_string_pretty(&reduced).ok()?
+        }
+        // Not one document — try ndjson / JSONL, which is what `rg --json`,
+        // `docker events` and `kubectl -o json --watch` all emit. The cheap
+        // `looks_like_json` gate (first line `{`, last line `}`) matches these,
+        // so before this arm existed they claimed the JSON slot, failed to parse,
+        // and — because `reduce` dispatched on one kind only — got no reduction
+        // from any reducer at all.
+        Err(_) => reduce_jsonl(trimmed)?,
+    };
+    // Whether the result is actually smaller is decided centrally, by
+    // `Reduction::is_meaningful_shrink`; a local `>=` check here once let a
+    // 91-byte saving on a 91 KB document pass as a reduction.
     // JSON tallies are chars, not lines: the body is re-pretty-printed, so
     // its line count is unrelated to the input's (a dense blob re-renders as
     // dozens of lines and the old "kept 43/1 lines" header lied). See the
@@ -88,14 +99,60 @@ pub(super) fn reduce_json(text: &str) -> Option<Reduction> {
     })
 }
 
+/// Max records kept from a JSONL / ndjson stream, plus a tail marker. The head
+/// of such a stream carries its shape; `rg --json` in particular repeats one
+/// record type per hit.
+const MAX_JSONL_RECORDS: usize = 12;
+
+/// Reduce a newline-delimited JSON stream: every non-empty line must parse on its
+/// own, or this isn't JSONL and we decline. Each kept record goes through the
+/// same [`shrink`] used for a single document, re-emitted one compact record per
+/// line so the result is still machine-readable.
+fn reduce_jsonl(trimmed: &str) -> Option<String> {
+    let mut records = Vec::new();
+    let mut total = 0usize;
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(line).ok()?;
+        total += 1;
+        if records.len() < MAX_JSONL_RECORDS {
+            let (reduced, _) = shrink(&value, 0);
+            records.push(serde_json::to_string(&reduced).ok()?);
+        }
+    }
+    if total < 2 {
+        return None; // a single record is just a document; not our case
+    }
+    let mut body = records.join("\n");
+    if total > records.len() {
+        body.push_str(&format!("\n…(+{} more records)", total - records.len()));
+    }
+    Some(body)
+}
+
+/// A leaf that is cheap to keep and usually the answer: a bounded string, a
+/// number, a bool, or null. These are the `error` / `status` / `message` / id
+/// fields the module doc promises survive untouched.
+fn is_short_scalar(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.chars().count() <= MAX_STRING_CHARS,
+        Value::Number(_) | Value::Bool(_) | Value::Null => true,
+        _ => false,
+    }
+}
+
 /// Recursively shrink a JSON value, returning the reduced value and whether
 /// anything was actually dropped.
 ///
 /// - Strings over [`MAX_STRING_CHARS`] are head-truncated with a char count.
 /// - Arrays over [`MAX_ARRAY_ELEMS`] keep their head plus an omission marker.
-/// - Objects keep every key (the key set is the structural signal — short
-///   scalars like `error`/`status`/`message` survive untouched) and recurse
-///   into each value.
+/// - Objects keep up to [`MAX_OBJECT_KEYS`] keys (the key set is the structural
+///   signal) and recurse into each value. When the cap binds, short scalars like
+///   `error` / `status` / `message` are admitted first — `serde_json::Map` is a
+///   `BTreeMap` here, so taking the first N would take the alphabetically-first N.
 /// - Numbers / booleans / null are already tiny and pass through unchanged.
 fn shrink(value: &Value, depth: usize) -> (Value, bool) {
     if depth >= MAX_DEPTH {
@@ -131,12 +188,47 @@ fn shrink(value: &Value, depth: usize) -> (Value, bool) {
             (Value::Array(out), changed)
         }
         Value::Object(map) => {
-            let mut changed = false;
+            // Keys are the structural signal, so they are kept — but not without
+            // limit. A document that is large because it is *wide* (a lockfile,
+            // `cargo metadata`, `npm ls --json`, a locale bundle: thousands of
+            // short keys, no leaf over MAX_STRING_CHARS) set `changed = false`
+            // all the way up and so was the one class of oversized JSON the
+            // reducer structurally refused to touch. Cap parallel to the array
+            // arm above.
+            //
+            // Which keys survive is chosen, not incidental. `serde_json::Map` is a
+            // `BTreeMap` unless the `preserve_order` feature is on — it isn't here
+            // — so `iter()` yields *alphabetical* order, and a plain `take(N)`
+            // dropped `status`, `message` and `error` from any wide object purely
+            // because those names sort late. Short scalars go first: they are the
+            // salient fields this reducer exists to preserve, and they are nearly
+            // free.
+            let mut changed = map.len() > MAX_OBJECT_KEYS;
             let mut out = serde_json::Map::new();
+            if map.len() > MAX_OBJECT_KEYS {
+                for (k, v) in map.iter().filter(|(_, v)| is_short_scalar(v)) {
+                    if out.len() >= MAX_OBJECT_KEYS {
+                        break;
+                    }
+                    out.insert(k.clone(), v.clone());
+                }
+            }
             for (k, v) in map {
+                if out.len() >= MAX_OBJECT_KEYS {
+                    break;
+                }
+                if out.contains_key(k) {
+                    continue;
+                }
                 let (nv, c) = shrink(v, depth + 1);
                 changed |= c;
                 out.insert(k.clone(), nv);
+            }
+            if map.len() > out.len() {
+                out.insert(
+                    "…".to_string(),
+                    Value::String(format!("(+{} more keys)", map.len() - out.len())),
+                );
             }
             (Value::Object(out), changed)
         }
@@ -225,5 +317,40 @@ mod tests {
     fn malformed_json_returns_none() {
         let s = "{\n  not really: json,\n  missing quotes,\n  trailing,\n  a,\n  b,\n  c,\n  d\n}";
         assert!(reduce_json(s).is_none());
+    }
+
+    /// `serde_json::Map` is a `BTreeMap` here (no `preserve_order` feature), so a
+    /// plain `take(N)` kept the alphabetically-first keys and dropped exactly the
+    /// salient scalars the module doc promises to preserve.
+    #[test]
+    fn the_object_cap_keeps_salient_scalars_not_the_alphabetically_first_keys() {
+        let mut obj = serde_json::Map::new();
+        // 200 bulky keys that all sort before "status"/"message".
+        for i in 0..200 {
+            obj.insert(
+                format!("aaa_bucket_{i:03}"),
+                serde_json::json!({ "nested": "x".repeat(40) }),
+            );
+        }
+        obj.insert("status".into(), serde_json::json!("failed"));
+        obj.insert("message".into(), serde_json::json!("connection refused"));
+        obj.insert("error".into(), serde_json::json!("ECONNREFUSED"));
+        obj.insert("retries".into(), serde_json::json!(3));
+
+        let (reduced, changed) = shrink(&Value::Object(obj), 0);
+        assert!(changed, "a 204-key object must count as reduced");
+        let out = reduced.as_object().expect("still an object");
+        for key in ["status", "message", "error", "retries"] {
+            assert!(
+                out.contains_key(key),
+                "the salient scalar {key:?} must survive the cap; got keys: {:?}",
+                out.keys().take(8).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(out["status"], serde_json::json!("failed"));
+        assert!(
+            out.contains_key("…"),
+            "the omission marker must say how many keys were dropped"
+        );
     }
 }

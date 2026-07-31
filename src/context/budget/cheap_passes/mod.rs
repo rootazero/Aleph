@@ -9,13 +9,14 @@
 //! historical image stripping are cheap deterministic transforms that
 //! deliver consistent savings without LLM cost.
 //!
-//! [`structured`] adds headroom's content-type routing on top of the pruning
-//! stage: stale logs/search-results/diffs are reduced to their signal rather
-//! than truncated to a single line.
+//! The content-type router these stages lean on lives in
+//! [`crate::tool_output::structured`] — it is shared with the *ingress* cleaner
+//! in [`crate::tools::result_processing`], so it belongs to the tool-output
+//! module rather than to this pipeline. Stale logs/search-results/diffs are
+//! reduced to their signal here rather than truncated to a single line.
 
 pub mod file_op_supersede;
 pub mod image_stripping;
-pub mod structured;
 pub mod tool_result_pruning;
 
 pub use file_op_supersede::FileOpSupersedeStage;

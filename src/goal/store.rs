@@ -27,10 +27,14 @@ const BUSY_RETRY_DELAY_MS: u64 = 30_000;
 /// marker dedups it. Unlike a Fire continuation (an LLM turn, bounded by
 /// `PENDING_STALE_GRACE_MS`), a gate can be a `cargo test`/`just verify`-class
 /// command lasting minutes, so it gets its own longer grace before a presumed-
-/// dead gate task is re-arbitrated. A marker stranded by a mid-gate status
+/// dead gate task is re-arbitrated — 15 minutes, since a full-repo verify on a
+/// large workspace legitimately outlasts the old 5-minute value and a
+/// re-entering hook would otherwise spawn a SECOND concurrent gate (the CAS
+/// write-back makes that wasteful, not corrupting, but the dedup promise is
+/// the point of the marker). A marker stranded by a mid-gate status
 /// change still self-heals at the shorter Fire-path grace once the goal leaves
 /// `Complete`.
-const GATE_STALE_GRACE_MS: u64 = 300_000;
+const GATE_STALE_GRACE_MS: u64 = 900_000;
 
 /// Outcome of [`GoalStore::try_claim_continuation`] — the single atomic decision
 /// the post-run continuation hook acts on. Mirrors `looping::TickDecision`.
@@ -68,6 +72,21 @@ pub enum RearmDecision {
     Exhausted { note: String },
     /// Goal gone, terminal, or already re-claimed — drop this continuation.
     Drop,
+}
+
+/// Outcome of [`GoalStore::commit_field_update`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldUpdate {
+    /// The update committed as computed (live status still matched the
+    /// snapshot the caller derived the update from).
+    Committed,
+    /// The goal vanished between the caller's read and the write — nothing
+    /// was persisted.
+    Gone,
+    /// The non-lifecycle fields committed, but a concurrent lifecycle
+    /// transition won the read→write gap; the caller's status write (and its
+    /// lifecycle companions) was superseded by the live status carried here.
+    StatusSuperseded(GoalStatus),
 }
 
 pub struct GoalStore {
@@ -200,12 +219,19 @@ impl GoalStore {
     /// has self-reported `complete` under one, this returns
     /// [`ContinuationDecision::AwaitingGate`] and writes nothing — gate
     /// arbitration is the caller's (it is async, and must not run under the lock).
+    ///
+    /// `workspace` is the claiming run's project root, recorded on the goal so
+    /// later hook-less wakes can rebuild the continuation in the same project.
+    /// `None` means "no workspace information" (the wake service re-claiming a
+    /// goal it only knows from the store) — the stored value is KEPT, so the
+    /// wake pipeline never wipes what the post-run hook recorded.
     pub fn try_claim_continuation(
         &self,
         session_id: &str,
         tokens_total: Option<u64>,
         now_ms: u64,
         gate_configured: bool,
+        workspace: Option<&str>,
     ) -> Result<ContinuationDecision> {
         let conn = self.lock();
         let Some(current) = Self::get_locked(&conn, session_id)? else {
@@ -259,7 +285,18 @@ impl GoalStore {
             (Some(_), false, true, Some(total)) => current.clone().with_baseline(total, now_ms),
             _ => current.clone(),
         };
-        let baseline_seeded = goal.baseline_captured != current.baseline_captured;
+        // Record the claiming run's project root so a hook-less wake (task
+        // settle / boot re-arm / periodic recheck) can rebuild the
+        // continuation in the same workspace. `None` = the claim carries no
+        // workspace info (wake-service claims) → keep the stored value.
+        let goal = match workspace {
+            Some(ws) if goal.workspace.as_deref() != Some(ws) => {
+                goal.with_workspace(Some(ws.to_string()))
+            }
+            _ => goal,
+        };
+        let dirty = goal.baseline_captured != current.baseline_captured
+            || goal.workspace != current.workspace;
         // Budget enforcement needs the live total; without one (or without a
         // budget at all) pass 0 so only the iteration/deadline caps apply.
         let tokens_now = if goal.token_budget.is_some() {
@@ -276,7 +313,7 @@ impl GoalStore {
         // second claim can race it.
         if let Some(wake) = goal.pending_continuation_ms {
             if now_ms < wake.saturating_add(PENDING_STALE_GRACE_MS) {
-                if baseline_seeded {
+                if dirty {
                     Self::put_locked(&conn, &goal)?; // persist the seeded baseline
                 }
                 return Ok(ContinuationDecision::Idle);
@@ -332,7 +369,7 @@ impl GoalStore {
             // barrier that is neither runnable nor exhausted (e.g. status not
             // Active): stay parked. Exhaustion for a task barrier is arbitrated
             // when the barrier clears.
-            if baseline_seeded {
+            if dirty {
                 Self::put_locked(&conn, &goal)?;
             }
             return Ok(ContinuationDecision::Idle);
@@ -367,7 +404,7 @@ impl GoalStore {
             )?;
             Ok(ContinuationDecision::Exhausted { note })
         } else {
-            if baseline_seeded {
+            if dirty {
                 Self::put_locked(&conn, &goal)?;
             }
             Ok(ContinuationDecision::Idle)
@@ -468,8 +505,11 @@ impl GoalStore {
     /// Block a goal that is still being actively pursued (a continuation run
     /// failed), in one guard: never clobber a goal the failed run had already
     /// marked complete/blocked, or one the user cleared meanwhile. Clears the
-    /// pending marker so no in-flight continuation resurrects it. `false` = there
-    /// was nothing left to block.
+    /// pending marker so no in-flight continuation resurrects it, and drops any
+    /// wait barrier — a blocked goal is no longer waiting on anything (the wake
+    /// service only ever looks at Active goals, so the leftover barrier could
+    /// only render as a self-contradictory "parked (waiting)" on a Blocked row).
+    /// `false` = there was nothing left to block.
     pub fn block_if_active(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
@@ -479,6 +519,7 @@ impl GoalStore {
                     &live
                         .with_status(GoalStatus::Blocked, now_ms)
                         .with_note(Some(note.to_string()), now_ms)
+                        .without_wait(now_ms)
                         .with_pending_continuation(None),
                 )?;
                 Ok(true)
@@ -490,10 +531,13 @@ impl GoalStore {
     /// Like [`Self::block_if_active`], but scoped to goals whose recovery
     /// actually hung on a crashed autonomous run — used by
     /// `ResumeCoordinator::abandon`. Blocks ONLY an Active-pursuit goal that is
-    /// NOT parked on a task barrier: a passive/interactive goal never depends
+    /// NOT parked on ANY wait barrier: a passive/interactive goal never depends
     /// on the continuation chain (its "recovery" is the user talking again),
-    /// and a task-barrier-parked goal is woken by `GoalWakeService`, not by the
-    /// abandoned run — blocking either would wrongly kill a healthy pursuit.
+    /// and a parked goal — task-barrier OR deadline-timer — is woken by
+    /// `GoalWakeService` (`rearm_parked_goals` replays the stored timer marker
+    /// on boot), not by the abandoned run. Blocking either would wrongly kill a
+    /// healthy pursuit: the wake service filters on `is_active()`, so a blocked
+    /// parked goal would be skipped forever with its barrier stranded.
     /// `false` = nothing eligible to block.
     pub fn block_if_abandonable(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
         let conn = self.lock();
@@ -501,7 +545,7 @@ impl GoalStore {
             Some(live)
                 if live.is_active()
                     && matches!(live.pursuit, crate::goal::PursuitMode::Active { .. })
-                    && live.waiting_on_task.is_none() =>
+                    && !live.has_wait_barrier() =>
             {
                 Self::put_locked(
                     &conn,
@@ -522,8 +566,9 @@ impl GoalStore {
     /// `Blocked` means the pursuit hit something it cannot get past and wants
     /// user guidance, `Paused` means a human is holding it deliberately and
     /// will resume it. Clears the pending-continuation marker so no in-flight
-    /// continuation resurrects it, exactly as blocking does. `false` = there was
-    /// nothing active to pause.
+    /// continuation resurrects it, exactly as blocking does, and drops any wait
+    /// barrier (a held pursuit is not waiting; resume re-parks explicitly if
+    /// still needed). `false` = there was nothing active to pause.
     pub fn pause_if_active(&self, session_id: &str, note: &str, now_ms: u64) -> Result<bool> {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
@@ -533,6 +578,7 @@ impl GoalStore {
                     &live
                         .with_status(GoalStatus::Paused, now_ms)
                         .with_note(Some(note.to_string()), now_ms)
+                        .without_wait(now_ms)
                         .with_pending_continuation(None),
                 )?;
                 Ok(true)
@@ -578,6 +624,7 @@ impl GoalStore {
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
                     .with_note(Some(note.to_string()), now_ms)
+                    .without_wait(now_ms)
                     .with_pending_continuation(None),
             )?;
             paused.push(session);
@@ -736,9 +783,23 @@ impl GoalStore {
     /// hands the pursuit iterations it already spent. Merging by owner makes that
     /// unrepresentable (loop's `commit_field_update` parity, one field wider).
     ///
-    /// Returns `false` — a no-op — when the goal vanished since the read, so the
-    /// caller reports that honestly instead of silently re-creating it.
-    pub fn commit_field_update(&self, next: &Goal) -> Result<bool> {
+    /// Lifecycle CAS — `expected_status` is the status in the snapshot the tool
+    /// derived `next` from. When the LIVE status no longer matches it, a
+    /// concurrent lifecycle transition (exhaustion block, failure block, a
+    /// remote pause from another session, a gate-confirmed complete) won the
+    /// read→write gap, and writing the snapshot's stale lifecycle cluster back
+    /// would RESURRECT the goal: the next post_run would re-block it and push a
+    /// duplicate "⏹ cap reached" to the user's channel, or the tool's stale
+    /// `Active` would silently undo a deliberate remote pause (loop's
+    /// `commit_field_update` keeps live `status`/`stop_reason` for the same
+    /// reason). On a mismatch the whole lifecycle cluster (status, note,
+    /// gate_outcome, completed_at_ms, wait-barrier fields) is taken from the
+    /// live row; the remaining field updates still commit, and the outcome
+    /// tells the caller its status write was superseded.
+    ///
+    /// [`FieldUpdate::Gone`] — a no-op — when the goal vanished since the read,
+    /// so the caller reports that honestly instead of silently re-creating it.
+    pub fn commit_field_update(&self, next: &Goal, expected_status: GoalStatus) -> Result<FieldUpdate> {
         let conn = self.lock();
         match Self::get_locked(&conn, &next.session_id)? {
             Some(live) => {
@@ -752,10 +813,27 @@ impl GoalStore {
                 // registered between the tool's read and this write must
                 // survive it.
                 merged.budget_members = live.budget_members;
+                // The claiming run's project root is likewise pipeline-owned:
+                // a tool update must never roll it back to the snapshot's.
+                merged.workspace = live.workspace.clone();
+                let outcome = if live.status == expected_status {
+                    FieldUpdate::Committed
+                } else {
+                    // A concurrent lifecycle transition won the gap — keep its
+                    // verdict (and the note explaining it) over the snapshot's.
+                    merged.status = live.status;
+                    merged.note = live.note.clone();
+                    merged.gate_outcome = live.gate_outcome;
+                    merged.completed_at_ms = live.completed_at_ms;
+                    merged.waiting_until_ms = live.waiting_until_ms;
+                    merged.waiting_on_task = live.waiting_on_task.clone();
+                    merged.waiting_reason = live.waiting_reason.clone();
+                    FieldUpdate::StatusSuperseded(live.status)
+                };
                 Self::put_locked(&conn, &merged)?;
-                Ok(true)
+                Ok(outcome)
             }
-            None => Ok(false),
+            None => Ok(FieldUpdate::Gone),
         }
     }
 
@@ -806,7 +884,7 @@ mod tests {
             wake_ms,
             prompt,
         } = store
-            .try_claim_continuation("sess-wait", None, 1_000, false)
+            .try_claim_continuation("sess-wait", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("a parked timer barrier must claim its wake");
@@ -826,7 +904,7 @@ mod tests {
         // marker in the future).
         assert!(matches!(
             store
-                .try_claim_continuation("sess-wait", None, 30_000, false)
+                .try_claim_continuation("sess-wait", None, 30_000, false, None)
                 .unwrap(),
             ContinuationDecision::Idle
         ));
@@ -835,7 +913,7 @@ mod tests {
         // lazily cleared on the NEXT claim after the wake elapsed.
         assert!(store.confirm_fire("sess-wait", 61_000).unwrap());
         let ContinuationDecision::Fire { delay_ms, .. } = store
-            .try_claim_continuation("sess-wait", None, 62_000, false)
+            .try_claim_continuation("sess-wait", None, 62_000, false, None)
             .unwrap()
         else {
             panic!("post-wake claim proceeds normally");
@@ -855,7 +933,7 @@ mod tests {
         store.put(&g).unwrap();
         // Parking run's post_run claims the timer (pending marker = wake).
         let ContinuationDecision::Fire { wake_ms, .. } = store
-            .try_claim_continuation("sess-unpark", None, 1_000, false)
+            .try_claim_continuation("sess-unpark", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("timer claim");
@@ -886,7 +964,7 @@ mod tests {
         );
         // Now the un-parking run's post_run claims a fresh IMMEDIATE continuation.
         let ContinuationDecision::Fire { delay_ms, .. } = store
-            .try_claim_continuation("sess-unpark", None, 2_000, false)
+            .try_claim_continuation("sess-unpark", None, 2_000, false, None)
             .unwrap()
         else {
             panic!("un-parked pursuit must resume immediately, not wait out the old wake");
@@ -910,7 +988,7 @@ mod tests {
         // A parked timer with no runway must Block now, not arm a timer that
         // would only wake into an immediate Block.
         let ContinuationDecision::Exhausted { note } = store
-            .try_claim_continuation("sess-noroom", None, 1_000, false)
+            .try_claim_continuation("sess-noroom", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("exhausted timer park must block, not park forever");
@@ -932,7 +1010,7 @@ mod tests {
 
         assert!(matches!(
             store
-                .try_claim_continuation("sess-task", None, 999_999, false)
+                .try_claim_continuation("sess-task", None, 999_999, false, None)
                 .unwrap(),
             ContinuationDecision::Idle
         ));
@@ -943,7 +1021,7 @@ mod tests {
         assert!(store.clear_wait_barrier("sess-task", 2_000).unwrap());
         assert!(matches!(
             store
-                .try_claim_continuation("sess-task", None, 2_000, false)
+                .try_claim_continuation("sess-task", None, 2_000, false, None)
                 .unwrap(),
             ContinuationDecision::Fire { .. }
         ));
@@ -998,8 +1076,12 @@ mod tests {
             .register_budget_member("sess-merge", "agent:child:main", 42, 2)
             .unwrap());
         // Tool commits its (member-less) snapshot — the live member survives.
+        let snap_status = tool_snapshot.status;
         let next = tool_snapshot.with_note(Some("tool note".into()), 3);
-        assert!(store.commit_field_update(&next).unwrap());
+        assert_eq!(
+            store.commit_field_update(&next, snap_status).unwrap(),
+            FieldUpdate::Committed
+        );
         let live = store.get("sess-merge").unwrap().unwrap();
         assert_eq!(live.budget_members.len(), 1, "enrollment owned by the seam");
         assert_eq!(live.note.as_deref(), Some("tool note"));
@@ -1086,7 +1168,7 @@ mod tests {
         store.put(&pursuing("s", 5)).unwrap();
 
         let first = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = first else {
             panic!("expected Fire, got {first:?}");
@@ -1097,7 +1179,7 @@ mod tests {
         // claim another one (and must not spend another iteration).
         assert_eq!(
             store
-                .try_claim_continuation("s", None, 1_100, false)
+                .try_claim_continuation("s", None, 1_100, false, None)
                 .unwrap(),
             ContinuationDecision::Idle
         );
@@ -1107,7 +1189,7 @@ mod tests {
         assert!(store.confirm_fire("s", wake_ms).unwrap());
         assert!(matches!(
             store
-                .try_claim_continuation("s", None, 1_200, false)
+                .try_claim_continuation("s", None, 1_200, false, None)
                 .unwrap(),
             ContinuationDecision::Fire { .. }
         ));
@@ -1119,7 +1201,7 @@ mod tests {
         let (store, _d) = temp_store();
         store.put(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("expected Fire");
@@ -1129,7 +1211,7 @@ mod tests {
         let past_grace = wake_ms + PENDING_STALE_GRACE_MS + 1;
         assert!(matches!(
             store
-                .try_claim_continuation("s", None, past_grace, false)
+                .try_claim_continuation("s", None, past_grace, false, None)
                 .unwrap(),
             ContinuationDecision::Fire { .. }
         ));
@@ -1142,7 +1224,7 @@ mod tests {
         let (store, _d) = temp_store();
         store.put(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("expected Fire");
@@ -1160,7 +1242,7 @@ mod tests {
         let (store, _d) = temp_store();
         store.put(&pursuing("s", 5)).unwrap();
         let ContinuationDecision::Fire { wake_ms, .. } = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("expected Fire");
@@ -1177,7 +1259,7 @@ mod tests {
         // The re-armed step is gated against fan-out exactly like a fresh claim.
         assert_eq!(
             store
-                .try_claim_continuation("s", None, 2_100, false)
+                .try_claim_continuation("s", None, 2_100, false, None)
                 .unwrap(),
             ContinuationDecision::Idle
         );
@@ -1190,7 +1272,7 @@ mod tests {
         g.continuations_used = 2;
         store.put(&g).unwrap();
         let ContinuationDecision::Exhausted { note } = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("expected Exhausted");
@@ -1211,7 +1293,7 @@ mod tests {
         // arbitration owns the terminal transition, so the iteration is NOT
         // spent and the status is untouched — only the marker moves.
         let d = store
-            .try_claim_continuation("s", None, 1_000, true)
+            .try_claim_continuation("s", None, 1_000, true, None)
             .unwrap();
         assert!(matches!(d, ContinuationDecision::AwaitingGate(_)));
         let stored = store.get("s").unwrap().unwrap();
@@ -1223,7 +1305,7 @@ mod tests {
         // fresh marker suppresses a SECOND concurrent gate command.
         assert_eq!(
             store
-                .try_claim_continuation("s", None, 1_500, true)
+                .try_claim_continuation("s", None, 1_500, true, None)
                 .unwrap(),
             ContinuationDecision::Idle
         );
@@ -1231,7 +1313,7 @@ mod tests {
         // Past the gate grace the gate task is presumed dead → re-arbitrate.
         assert!(matches!(
             store
-                .try_claim_continuation("s", None, 1_000 + GATE_STALE_GRACE_MS + 1, true)
+                .try_claim_continuation("s", None, 1_000 + GATE_STALE_GRACE_MS + 1, true, None)
                 .unwrap(),
             ContinuationDecision::AwaitingGate(_)
         ));
@@ -1285,14 +1367,18 @@ mod tests {
         assert_eq!(snapshot.pending_continuation_ms, None);
         // …a continuation is claimed in the gap…
         let ContinuationDecision::Fire { wake_ms, .. } = store
-            .try_claim_continuation("s", None, 1_000, false)
+            .try_claim_continuation("s", None, 1_000, false, None)
             .unwrap()
         else {
             panic!("expected Fire");
         };
         // …and the tool writes its (stale) snapshot back.
+        let snap_status = snapshot.status;
         let edited = snapshot.with_note(Some("user note".into()), 2_000);
-        assert!(store.commit_field_update(&edited).unwrap());
+        assert_eq!(
+            store.commit_field_update(&edited, snap_status).unwrap(),
+            FieldUpdate::Committed
+        );
         let live = store.get("s").unwrap().unwrap();
         assert_eq!(live.note.as_deref(), Some("user note"), "the edit landed");
         assert_eq!(
@@ -1309,12 +1395,152 @@ mod tests {
         let g = pursuing("s", 5);
         store.put(&g).unwrap();
         store.delete("s").unwrap();
-        assert!(!store.commit_field_update(&g).unwrap());
+        assert_eq!(
+            store.commit_field_update(&g, g.status).unwrap(),
+            FieldUpdate::Gone
+        );
         assert!(
             store.get("s").unwrap().is_none(),
             "a cleared goal must not be re-created by a losing update"
         );
     }
+
+    #[test]
+    fn commit_field_update_status_cas_keeps_a_concurrent_block() {
+        let (store, _d) = temp_store();
+        store.put(&pursuing("s", 5)).unwrap();
+        // Tool snapshots an Active goal…
+        let snapshot = store.get("s").unwrap().unwrap();
+        // …a continuation failure blocks it in the read→write gap…
+        assert!(store.block_if_active("s", "boom", 500).unwrap());
+        // …and the tool commits its stale (still-Active) snapshot with a lesson.
+        let edited = snapshot.clone().with_lesson_appended("lesson".into(), 1_000);
+        assert_eq!(
+            store.commit_field_update(&edited, snapshot.status).unwrap(),
+            FieldUpdate::StatusSuperseded(GoalStatus::Blocked)
+        );
+        let live = store.get("s").unwrap().unwrap();
+        assert_eq!(
+            live.status,
+            GoalStatus::Blocked,
+            "the concurrent block must not be overwritten by a stale snapshot"
+        );
+        assert_eq!(live.note.as_deref(), Some("boom"));
+        assert!(
+            live.lessons.iter().any(|l| l == "lesson"),
+            "non-lifecycle fields still commit"
+        );
+    }
+
+    #[test]
+    fn commit_field_update_applies_a_status_change_when_the_cas_holds() {
+        let (store, _d) = temp_store();
+        store.put(&pursuing("s", 5)).unwrap();
+        let snapshot = store.get("s").unwrap().unwrap();
+        let paused = snapshot.with_status(GoalStatus::Paused, 500);
+        assert_eq!(
+            store.commit_field_update(&paused, GoalStatus::Active).unwrap(),
+            FieldUpdate::Committed
+        );
+        assert_eq!(
+            store.get("s").unwrap().unwrap().status,
+            GoalStatus::Paused
+        );
+    }
+
+    #[test]
+    fn block_if_abandonable_exempts_parked_goals_of_both_barrier_kinds() {
+        let (store, _d) = temp_store();
+        // A deadline-timer-parked pursuit recovers via GoalWakeService, not the
+        // abandoned run — blocking it would strand the barrier forever.
+        store.put(&pursuing("sess-timer", 5).with_wait_until(9_999, None, 1)).unwrap();
+        assert!(!store
+            .block_if_abandonable("sess-timer", "abandoned", 100)
+            .unwrap());
+        assert_eq!(
+            store.get("sess-timer").unwrap().unwrap().status,
+            GoalStatus::Active
+        );
+        // Same for a task-barrier-parked pursuit.
+        store.put(&pursuing("sess-task", 5).with_wait_on_task("t".into(), None, 1)).unwrap();
+        assert!(!store
+            .block_if_abandonable("sess-task", "abandoned", 100)
+            .unwrap());
+        assert_eq!(
+            store.get("sess-task").unwrap().unwrap().status,
+            GoalStatus::Active
+        );
+        // An unparked active pursuit IS abandonable — its recovery hung on the
+        // crashed run.
+        store.put(&pursuing("sess-live", 5)).unwrap();
+        assert!(store
+            .block_if_abandonable("sess-live", "abandoned", 100)
+            .unwrap());
+        assert_eq!(
+            store.get("sess-live").unwrap().unwrap().status,
+            GoalStatus::Blocked
+        );
+        // A passive goal is never abandonable (its recovery is the user).
+        store.put(&Goal::new("sess-passive", "obj", 0, 1)).unwrap();
+        assert!(!store
+            .block_if_abandonable("sess-passive", "abandoned", 100)
+            .unwrap());
+    }
+
+    #[test]
+    fn block_and_pause_drop_the_wait_barrier() {
+        let (store, _d) = temp_store();
+        store.put(&pursuing("s-block", 5).with_wait_until(9_999, None, 1)).unwrap();
+        assert!(store.block_if_active("s-block", "boom", 100).unwrap());
+        assert!(
+            !store.get("s-block").unwrap().unwrap().has_wait_barrier(),
+            "a blocked goal is no longer waiting on anything"
+        );
+        store.put(&pursuing("s-pause", 5).with_wait_on_task("t".into(), None, 1)).unwrap();
+        assert!(store.pause_if_active("s-pause", "hold", 100).unwrap());
+        let paused = store.get("s-pause").unwrap().unwrap();
+        assert!(!paused.has_wait_barrier());
+        assert_eq!(paused.status, GoalStatus::Paused);
+    }
+
+    #[test]
+    fn claim_records_workspace_and_tool_updates_preserve_it() {
+        let (store, _d) = temp_store();
+        store.put(&pursuing("s", 5)).unwrap();
+        // A post-run claim records the originating run's project root.
+        let d = store
+            .try_claim_continuation("s", None, 1_000, false, Some("/proj/x"))
+            .unwrap();
+        assert!(matches!(d, ContinuationDecision::Fire { .. }));
+        assert_eq!(
+            store.get("s").unwrap().unwrap().workspace.as_deref(),
+            Some("/proj/x")
+        );
+        // A wake-service re-claim (no workspace info) must NOT wipe it.
+        let live = store.get("s").unwrap().unwrap();
+        assert!(store.confirm_fire("s", live.pending_continuation_ms.unwrap()).unwrap());
+        let d = store
+            .try_claim_continuation("s", None, 2_000, false, None)
+            .unwrap();
+        assert!(matches!(d, ContinuationDecision::Fire { .. }));
+        assert_eq!(
+            store.get("s").unwrap().unwrap().workspace.as_deref(),
+            Some("/proj/x"),
+            "hook-less claims keep the recorded workspace"
+        );
+        // …nor may a tool field update roll it back.
+        let snapshot = store.get("s").unwrap().unwrap();
+        let edited = snapshot.with_note(Some("n".into()), 3_000);
+        assert_eq!(
+            store.commit_field_update(&edited, GoalStatus::Active).unwrap(),
+            FieldUpdate::Committed
+        );
+        assert_eq!(
+            store.get("s").unwrap().unwrap().workspace.as_deref(),
+            Some("/proj/x")
+        );
+    }
+
 
     #[test]
     fn block_if_active_never_clobbers_a_terminal_goal() {

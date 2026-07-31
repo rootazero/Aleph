@@ -1,6 +1,6 @@
 //! Pure gate functions for the loop continuation hook. No I/O, no `LoopState`
 //! mutation — the execution engine calls these to decide whether to re-fire a
-//! loop and how long to wait. Mirrors `tasks::goal_pursuit` but clock-gated.
+//! loop and how long to wait. Mirrors `goal::pursuit` but clock-gated.
 
 use crate::looping::types::{fmt_duration_ms, Cadence, LoopState};
 

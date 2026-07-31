@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use super::path_utils::{check_and_resolve_path, path_is_denied, resolve_for_removal};
-use super::types::{FileInfo, FileOpsOutput};
+use super::types::{FileInfo, FileOpsOutput, DEFAULT_ENTRY_LIMIT};
 use crate::builtin_tools::error::ToolError;
 use crate::tools::path_locks::{lock_path, lock_path_pair};
 
@@ -17,6 +17,7 @@ pub async fn execute_list(
     path: &Path,
     denied_paths: &[String],
     output_dir_override: Option<&std::path::Path>,
+    limit: Option<usize>,
 ) -> Result<FileOpsOutput, ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
@@ -65,13 +66,21 @@ pub async fn execute_list(
         _ => a.name.cmp(&b.name),
     });
 
+    // Cap after sorting so the kept entries are the deterministic head of a
+    // stable order, not whatever `read_dir` happened to yield first.
+    let cap = limit.unwrap_or(DEFAULT_ENTRY_LIMIT).max(1);
     let count = files.len();
-    info!(path = %canonical.display(), count, "Listed directory");
+    files.truncate(cap);
+    info!(path = %canonical.display(), count, shown = files.len(), "Listed directory");
 
     Ok(FileOpsOutput {
         success: true,
         operation: "list".to_string(),
-        message: format!("Listed {} items in {}", count, canonical.display()),
+        message: format!(
+            "Listed {count} items in {}{}",
+            canonical.display(),
+            super::search::entry_cap_note_with(count, files.len(), cap, " to see the rest")
+        ),
         files: Some(files),
         bytes_written: None,
         items_affected: Some(count),

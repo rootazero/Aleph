@@ -498,6 +498,11 @@ fn is_uniform(img: &image::DynamicImage) -> bool {
 /// - `quality` — JPEG quality 1–100; ignored for PNG.
 /// - `max_bytes` — Optional encoded-size budget; `None` disables the budget loop.
 ///
+/// The output's `scale_factor` is `None` — this entry point takes raw bytes,
+/// which carry no display metadata. Callers re-encoding a [`Screenshot`] from
+/// [`take_screenshot`] should use [`process_screenshot_with_scale`] so the
+/// display's backing scale survives the re-encode.
+///
 /// # Errors
 ///
 /// - [`DesktopError::ScreenCapture`] if decoding, resizing, or encoding fails.
@@ -508,6 +513,28 @@ pub fn process_screenshot(
     format: &str,
     quality: u8,
     max_bytes: Option<usize>,
+) -> Result<Screenshot> {
+    process_screenshot_with_scale(
+        raw_image, max_width, max_height, format, quality, max_bytes, None,
+    )
+}
+
+/// [`process_screenshot`] plus `scale_factor` passthrough: the value is
+/// copied verbatim onto the output [`Screenshot`] (including through the
+/// budget re-encode loop), so a consumer of a re-encoded capture keeps the
+/// points-to-pixels ratio [`take_screenshot`] reported.
+///
+/// # Errors
+///
+/// - [`DesktopError::ScreenCapture`] if decoding, resizing, or encoding fails.
+pub fn process_screenshot_with_scale(
+    raw_image: &[u8],
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+    format: &str,
+    quality: u8,
+    max_bytes: Option<usize>,
+    scale_factor: Option<f64>,
 ) -> Result<Screenshot> {
     debug!(
         "Processing screenshot: max={}x{}, format={}, quality={}, max_bytes={:?}",
@@ -550,7 +577,7 @@ pub fn process_screenshot(
     // truncates it) is strictly worse than a lossy JPEG it can.
     if let Some(limit) = max_bytes {
         if encoded.len() > limit {
-            return fit_within_budget(img, quality, limit);
+            return fit_within_budget(img, quality, limit, scale_factor);
         }
     }
 
@@ -569,7 +596,7 @@ pub fn process_screenshot(
         width,
         height,
         format: out_format.to_string(),
-        scale_factor: None,
+        scale_factor,
     })
 }
 
@@ -589,10 +616,14 @@ fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>> {
 /// worst-case dense screenshot already at the minimum legible size — the
 /// smallest encoding produced is returned anyway: a slightly oversized but
 /// *valid* JPEG always beats a truncated, undecodable one.
+///
+/// `scale_factor` is passed through to the output untouched (see
+/// [`process_screenshot_with_scale`]).
 fn fit_within_budget(
     img: image::DynamicImage,
     requested_quality: u8,
     max_bytes: usize,
+    scale_factor: Option<f64>,
 ) -> Result<Screenshot> {
     /// Quality ladder, descending — capped at the caller's requested quality.
     const QUALITY_LADDER: &[u8] = &[82, 68, 55, 44];
@@ -617,7 +648,7 @@ fn fit_within_budget(
             let encoded = encode_jpeg(&current, q)?;
             let (w, h) = (current.width(), current.height());
             if encoded.len() <= max_bytes {
-                return Ok(jpeg_screenshot(encoded, w, h));
+                return Ok(jpeg_screenshot(encoded, w, h, scale_factor));
             }
             let is_smaller = match &smallest {
                 Some((best, _, _)) => encoded.len() < best.len(),
@@ -645,17 +676,22 @@ fn fit_within_budget(
         w,
         h,
     );
-    Ok(jpeg_screenshot(bytes, w, h))
+    Ok(jpeg_screenshot(bytes, w, h, scale_factor))
 }
 
 /// Wrap raw JPEG bytes into a base64 [`Screenshot`].
-fn jpeg_screenshot(bytes: Vec<u8>, width: u32, height: u32) -> Screenshot {
+fn jpeg_screenshot(
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    scale_factor: Option<f64>,
+) -> Screenshot {
     Screenshot {
         image_base64: general_purpose::STANDARD.encode(bytes),
         width,
         height,
         format: "jpeg".to_string(),
-        scale_factor: None,
+        scale_factor,
     }
 }
 
@@ -892,6 +928,29 @@ mod budget_tests {
         .expect("processing should succeed");
         assert_eq!(out.width, 800);
         assert_eq!(out.height, 400); // aspect ratio preserved
+    }
+
+    #[test]
+    fn scale_factor_passes_through_plain_and_budget_paths() {
+        // Plain path: no resize, no budget pressure.
+        let png = png_bytes(&solid_image(64, 64));
+        let out = process_screenshot_with_scale(&png, None, None, "png", 90, None, Some(2.0))
+            .expect("processing should succeed");
+        assert_eq!(out.scale_factor, Some(2.0));
+
+        // Budget path: the JPEG re-encode loop must not drop it either.
+        let png = png_bytes(&noisy_image(1600, 1600));
+        let out =
+            process_screenshot_with_scale(&png, None, None, "png", 90, Some(60_000), Some(2.0))
+                .expect("processing should succeed");
+        assert_eq!(out.format, "jpeg");
+        assert_eq!(out.scale_factor, Some(2.0));
+
+        // The legacy entry point keeps reporting "unknown".
+        let png = png_bytes(&solid_image(64, 64));
+        let out = process_screenshot(&png, None, None, "png", 90, None)
+            .expect("processing should succeed");
+        assert_eq!(out.scale_factor, None);
     }
 }
 

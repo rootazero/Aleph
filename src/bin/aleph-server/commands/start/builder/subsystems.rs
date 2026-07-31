@@ -432,6 +432,32 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
+            // The generic factory hardcodes the id "webhook"; rebuild with the
+            // real instance id so the registry keys the channel correctly
+            // (two webhook sections would otherwise both register as
+            // ChannelId("webhook") and the second silently overwrites the
+            // first in the registry's HashMap) and per-channel policy
+            // (busy_input_mode, permission_level, tool_permissions, ...),
+            // which is looked up by this same runtime id, actually applies.
+            if inst.channel_type == "webhook" {
+                match serde_json::from_value::<
+                    alephcore::gateway::interfaces::webhook::WebhookChannelConfig,
+                >(config_with_secrets.clone())
+                {
+                    Ok(wh_config) => {
+                        let wh_channel =
+                            alephcore::gateway::interfaces::webhook::WebhookChannel::new(
+                                &inst.id, wh_config,
+                            );
+                        channel = Box::new(wh_channel);
+                    }
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "webhook channel config parse failed; keeping generic channel with hardcoded id"
+                    ),
+                }
+            }
+
             let channel_id = channel_registry.register(channel).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
@@ -484,6 +510,23 @@ pub(in crate::commands::start) async fn initialize_channels(
         if !daemon {
             println!("LinkManager started (external bridge plugins)");
             println!();
+        }
+    }
+
+    // Hand the registry's live webhook mount table to the HTTP surface.
+    //
+    // The registry is the single writer (`start_channel` / `stop_channel` /
+    // `restart_channel` / `register` / `create_channel` / `unregister`), so
+    // this is a one-time handoff of a shared handle — not a snapshot. Order
+    // does not matter: mounts made by the `start_all` above are already in the
+    // table, and anything started later through `channel.start` lands in the
+    // same table the router is reading.
+    {
+        let mounts = channel_registry.webhook_mounts();
+        let count = mounts.mounted_count().await;
+        server.set_webhook_mounts(mounts);
+        if !daemon && count > 0 {
+            println!("  Gateway: {count} webhook ingestion route(s) mounted");
         }
     }
 

@@ -20,16 +20,49 @@ pub enum InstallStep {
     Configure,
     Installing,
     Done,
+    /// Installed, but post-install verification said the artifact is not healthy
+    /// (MCP server not running or exposing zero tools; artifact missing on disk).
+    /// Held open for the user instead of flashing the success toast.
+    DoneUnhealthy,
     Failed,
 }
 
+/// Pure: `verify.ok` from an install result's verify payload. An absent or
+/// unrecognised shape counts as healthy — never cry wolf over a payload we do
+/// not understand.
+#[must_use]
+pub fn verify_ok(verify: &Value) -> bool {
+    verify.get("ok").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// Human-readable reason from a failed verify payload.
+#[must_use]
+pub fn verify_detail(verify: &Value) -> Option<String> {
+    verify
+        .get("detail")
+        .or_else(|| verify.get("error"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
 /// Pure: route an `extensions.install` result to its next UI step.
+///
+/// A `Done` whose verification failed routes to `DoneUnhealthy`: the backend runs
+/// a real post-install check (server up, ≥1 tool, artifact on disk) and its
+/// verdict used to be carried to the Panel and dropped — every install read as
+/// "Installed ✓" even when the server never came up.
 #[must_use]
 pub fn next_step(result: &InstallResult) -> InstallStep {
     match result {
         InstallResult::NeedsAck { .. } => InstallStep::Trust,
         InstallResult::Missing { .. } => InstallStep::Configure,
-        InstallResult::Done { .. } => InstallStep::Done,
+        InstallResult::Done { verify, .. } => {
+            if verify_ok(verify) {
+                InstallStep::Done
+            } else {
+                InstallStep::DoneUnhealthy
+            }
+        }
     }
 }
 
@@ -49,7 +82,13 @@ fn drive_install(state: DashboardState, store: StoreState, id: String, ack: bool
                     InstallResult::Missing { missing } => {
                         store.install_missing.set(missing.clone());
                     }
-                    InstallResult::Done { .. } => {}
+                    InstallResult::Done { verify, .. } => {
+                        store.install_warning.set(if verify_ok(verify) {
+                            None
+                        } else {
+                            Some(verify_detail(verify).unwrap_or_default())
+                        });
+                    }
                 }
                 store.install_step.set(next_step(&result));
                 store.installing.set(false);
@@ -90,10 +129,19 @@ pub fn InstallFlow() -> impl IntoView {
         }
     });
 
+    // Unhealthy is still installed, so the cards must flip — but the panel stays
+    // open for the user to read the reason (no `Hidden` write here).
+    Effect::new(move || {
+        if store.install_step.get() == InstallStep::DoneUnhealthy {
+            load_catalog(state, store, i18n, true);
+        }
+    });
+
     let close = move || {
         store.install_step.set(InstallStep::Hidden);
         store.disclosure.set(None);
         store.install_error.set(None);
+        store.install_warning.set(None);
     };
 
     // Trust "Continue" → re-install with the in-flight id and ack=true.
@@ -179,6 +227,31 @@ pub fn InstallFlow() -> impl IntoView {
             </div>
         </Show>
 
+        // Installed-but-unhealthy — held open with the verifier's reason, so a
+        // server that never came up is not reported as a plain success.
+        <Show when=move || store.install_step.get() == InstallStep::DoneUnhealthy>
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div class="aleph-scrim absolute inset-0 bg-black/40" on:click=move |_| close()></div>
+                <div class="glass relative w-[420px] max-w-[94vw] bg-surface-overlay/90 border border-border rounded-xl shadow-xl flex flex-col">
+                    <div class="px-5 py-4 space-y-2">
+                        <h2 class="font-serif text-lg text-warning">{t!(i18n, extensions.install_unhealthy)}</h2>
+                        <p class="text-sm text-text-secondary">{t!(i18n, extensions.install_unhealthy_hint)}</p>
+                        {move || store.install_warning.get().filter(|d| !d.is_empty()).map(|d| view! {
+                            <p class="text-xs font-mono text-text-tertiary break-words">{d}</p>
+                        })}
+                    </div>
+                    <footer class="px-5 py-3 border-t border-border flex justify-end">
+                        <button
+                            class="px-4 py-2 bg-surface-sunken text-text-secondary rounded-lg text-sm hover:bg-surface-raised"
+                            on:click=move |_| close()
+                        >
+                            {t!(i18n, extensions.cancel)}
+                        </button>
+                    </footer>
+                </div>
+            </div>
+        </Show>
+
         // Failed step — show the error with a Close
         <Show when=move || store.install_step.get() == InstallStep::Failed>
             <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -237,14 +310,59 @@ mod tests {
         };
         assert_eq!(next_step(&r), InstallStep::Configure);
     }
+    fn done_with(verify: Value) -> InstallResult {
+        InstallResult::Done {
+            outcome: Value::Null,
+            verify,
+            pin: Value::Null,
+            injection_findings: vec![],
+        }
+    }
+
     #[test]
     fn done_goes_to_done() {
-        let r = InstallResult::Done {
-            outcome: serde_json::Value::Null,
-            verify: serde_json::Value::Null,
-            pin: serde_json::Value::Null,
-            injection_findings: vec![],
+        assert_eq!(
+            next_step(&done_with(serde_json::json!({"ok": true, "detail": "running; 7 tools"}))),
+            InstallStep::Done
+        );
+    }
+
+    /// The backend really verifies the install; a failed verdict must not render
+    /// as "Installed ✓". This is the wire that used to be dropped.
+    #[test]
+    fn done_with_failed_verify_goes_to_unhealthy() {
+        let r = done_with(serde_json::json!({"ok": false, "detail": "running but exposes 0 tools"}));
+        assert_eq!(next_step(&r), InstallStep::DoneUnhealthy);
+        let InstallResult::Done { verify, .. } = &r else {
+            unreachable!()
         };
-        assert_eq!(next_step(&r), InstallStep::Done);
+        assert_eq!(
+            verify_detail(verify).as_deref(),
+            Some("running but exposes 0 tools")
+        );
+    }
+
+    /// An absent or unfamiliar verify payload (older server) is treated as
+    /// healthy — the flow must not invent a warning it cannot substantiate.
+    #[test]
+    fn unknown_verify_shape_is_treated_as_healthy() {
+        assert_eq!(next_step(&done_with(Value::Null)), InstallStep::Done);
+        assert_eq!(
+            next_step(&done_with(serde_json::json!({"something": 1}))),
+            InstallStep::Done
+        );
+        assert!(verify_ok(&Value::Null));
+        assert!(verify_detail(&Value::Null).is_none());
+    }
+
+    /// The legacy `{"ok":false,"error":...}` shape still yields a reason.
+    #[test]
+    fn verify_detail_falls_back_to_error_key() {
+        let v = serde_json::json!({"ok": false, "error": "mcp manager unavailable"});
+        assert!(!verify_ok(&v));
+        assert_eq!(
+            verify_detail(&v).as_deref(),
+            Some("mcp manager unavailable")
+        );
     }
 }

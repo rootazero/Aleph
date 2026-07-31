@@ -24,6 +24,25 @@ pub fn shared_skill_system() -> &'static SkillSystem {
     SHARED.get_or_init(SkillSystem::new)
 }
 
+static INIT_CELL: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+/// Populate the shared system from the default skill directories, once per
+/// process.
+///
+/// The latch lives here, beside the singleton it initializes, so every consumer
+/// (gateway RPC handlers, the Hub's installed-state reconciliation, tools) shares
+/// one first-init rather than each holding its own cell — the divergence this
+/// module exists to prevent, one level up.
+pub async fn ensure_shared_skill_system_initialized() {
+    let system = shared_skill_system();
+    let dirs = super::default_skill_dirs();
+    INIT_CELL
+        .get_or_init(|| async move {
+            let _ = system.init(dirs).await;
+        })
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

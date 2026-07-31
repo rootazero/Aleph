@@ -297,6 +297,16 @@ const BUDGETED: [&str; 12] = [
 /// both still said 5008), which is this file's own failure mode reappearing one
 /// layer up. The four changes, against R10's three questions:
 ///
+/// 5066 → 5062 (−4): paid down by the tool-output hygiene round. The Layer-3
+/// turn spill stopped calling `ToolResultStore::persist_if_large` directly and
+/// now reuses `result_processing::recovery_footer`, which offloads *and* indexes
+/// *and* appends the `ctx_search` hint — the same recovery handle Layer 2 emits.
+/// The spill previously handed the model a marker over an unindexed blob, so the
+/// only way back to the output was re-reading the whole file. Folding the two
+/// call sites into one closure paid for the change and −4 besides; the dead
+/// `ToolOutputMetadata.truncated` write went with it (write-only field, cut).
+/// Down-only ratchet: no 3-question answer required.
+///
 ///   - **`think.rs`, grace-turn wall-clock cap (+~14).** `race_llm_call`'s
 ///     timeout arm exists only when `deps.turn_timeout` is `Some`, so with turn
 ///     timeouts disabled a hung provider could hang a run that was already
@@ -332,7 +342,37 @@ const BUDGETED: [&str; 12] = [
 /// recorded because it is the *conclusion* of the answer above, not a separate
 /// cleanup. All −27 are the withdrawal: `act.rs` is otherwise byte-identical to
 /// `main`, so the figure is not padded with drive-by reformatting.
-const CEILING: usize = 5055;
+///
+/// **Round 7 (2026-07-29): 5055 → 5066 (+11).** One bug fix in, two dead enum
+/// variants out. Net +11, and here is the raise's written reason:
+///
+///   - **+~13, `guardrails.rs`: a blocked tool call now reaches the timeline.**
+///     Every other Act outcome — success, error, within-batch memo hit,
+///     cross-batch refusal — ends in `push_tool_invocation`. The tool-call
+///     guardrail's `Block` arm was the only one that did not, so a blocked call
+///     was absent from `tool_timeline` → `FlowOutcome` → `RunSummary
+///     .tool_summaries`. That list is the AUTHORITATIVE terminal state
+///     consumers reconcile against precisely because the `agent_trace` mirror
+///     is deliberately lossy (`AgentTraceEmitSink` = bounded `mpsc(256)` +
+///     `try_send`); a block was therefore the one class of call with no
+///     backstop — drop its single live frame and the Panel row stayed "running"
+///     forever. The run digest under-counted and `deps.tool_signal_sink` (the
+///     dream cycle's `insights.tools` feed) never saw the attempt either.
+///     Against R10's three questions: (1) scaffolding — it records an event
+///     that already happened, it judges nothing; (2) yes after a model upgrade
+///     — a terminal ledger is model-independent, and a stronger model's blocked
+///     calls still have to appear in it; (3) three real consumers today
+///     (`tool_summaries` / runtime footer digest / tool-signal sink).
+///   - **−2, `trace.rs`: `LoopTraceTurnOutcome::{HitLimit, Cancelled}` cut.**
+///     Zero producers — `think.rs` only ever emits `Continue` / `Stop`, because
+///     caps and cancellation are SESSION-level exits
+///     (`LoopTraceSessionOutcome`). Their only mention was the `From` arm in
+///     `gateway::trace_protocol`, translating variants nothing constructed.
+///     `LoopTraceEvent` is never deserialized in production (serialize-only,
+///     over an in-process mpsc), so nothing reads back an old blob through this
+///     enum; the protocol-side `AgentTraceTurnOutcome` keeps its wider set for
+///     stored blobs, exactly as `AgentTraceTextKind::Intermediate` does.
+const CEILING: usize = 5062;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

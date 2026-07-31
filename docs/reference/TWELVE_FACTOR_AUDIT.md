@@ -19,7 +19,7 @@
 ### F3 · Own Your Context Window — ⚠️（→ 采纳 A1）
 - 原则：显式拥有 context window 的取舍，不被默认消息格式绑架。
 - 现状：Context 层极强——三策略历史压缩、按模型窗口的压缩时机、内容类型路由缩减、FTS5 检索回注、记忆三支柱。**但宪法层无任何命名条目**（R9 仅间接相关）。
-- 锚点：`src/context/`（compact/budget/cheap_passes/structured）、`src/thinker/`。FEATURE_LOCATOR §2.1–2.8。
+- 锚点：`src/context/`（compact/budget/cheap_passes）、`src/tool_output/structured/`（类型路由缩减器，2026-07-30 迁入）、`src/thinker/`。FEATURE_LOCATOR §2.1–2.8、§3.14。
 - 缺口：实现 ✅ / 宪法 ✗ → A1 给它正式命名。
 
 ### F4 · Tools Are Structured Outputs — ✅
@@ -53,7 +53,7 @@
 ### F9 · Compact Errors Into Context — ⚠️（→ 采纳 A2）
 - 原则：把错误压缩进 context，让模型自愈。
 - 现状：**采纳侧**——错误经 §2.7 内容路由缩减、ToolError 事件、`think.rs` 有界 provider-failure drain 进 context。**禁止侧**——R10 第 5 不（不做确定性错误恢复策略选择 / hermes 式重试矩阵，有意不移植）。**这两件事的边界没有任何地方写清**，R10 易被误读成"别把错误给模型看"。
-- 锚点：`src/context/budget/cheap_passes/structured/log.rs`、`src/harness/agent/think.rs`。
+- 锚点：`src/tool_output/structured/log.rs`、`src/tool_output/hygiene.rs`（ingress 清洗，2026-07-30）、`src/harness/agent/think.rs`。
 - 缺口：纯澄清，零代码（C §读法说明）。
 
 ### F10 · Small, Focused Agents — ✅

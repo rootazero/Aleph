@@ -382,7 +382,7 @@ impl BuiltinToolRegistry {
             );
             info!("Registered session.new tool in BuiltinToolRegistry");
 
-            let tmp_compact = SessionCompactTool::new(Arc::clone(sm));
+            let tmp_compact = SessionCompactTool::new();
             let def = AlephTool::definition(&tmp_compact);
             reg(
                 tools,

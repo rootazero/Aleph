@@ -76,6 +76,9 @@ impl BrowserCookiesArgs {
             }),
             CookieAction::Set => {
                 let name = self.require_name()?;
+                // Deliberately NOT scanned by `check_input_secret_block`: a cookie
+                // value legitimately IS a credential (session id, auth token), so
+                // the form-input secret gate would false-positive on its core use.
                 let value = self
                     .value
                     .clone()
@@ -147,7 +150,16 @@ impl AlephTool for BrowserCookiesTool {
                 });
             }
         };
-        let backend = super::make_backend(&self.manager, &args.profile);
+        let backend = match super::make_backend(&self.manager, &args.profile) {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(BrowserCookiesOutput {
+                    success: false,
+                    cookies: None,
+                    message: Some(e.to_string()),
+                });
+            }
+        };
         match backend.cookies(&op).await {
             Ok(text) => {
                 let is_read = matches!(args.action, CookieAction::List | CookieAction::Get);

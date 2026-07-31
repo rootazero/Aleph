@@ -945,15 +945,33 @@ token_budget. \
                 // the store lock and keeps it, so a tool update landing while a
                 // claimed continuation fires cannot restore a stale marker (which
                 // would stall the next claim until the 60s stale grace). The claim
-                // pipeline stays the single owner of that field. `false` = the goal
-                // was cleared between this turn's read and the write.
-                if !self.store.commit_field_update(&goal)? {
-                    return Ok(GoalOutput {
-                        success: false,
-                        message: "The standing goal was cleared while this update ran — \
-                                  nothing to update. Set a new goal if you still need one."
-                            .to_string(),
-                    });
+                // pipeline stays the single owner of that field. The status CAS
+                // (`prev_status`) keeps a concurrent block/pause/complete that won
+                // the read→write gap from being overwritten by this snapshot's
+                // stale lifecycle cluster. `Gone` = the goal was cleared between
+                // this turn's read and the write.
+                match self.store.commit_field_update(&goal, prev_status)? {
+                    crate::goal::FieldUpdate::Gone => {
+                        return Ok(GoalOutput {
+                            success: false,
+                            message: "The standing goal was cleared while this update ran — \
+                                      nothing to update. Set a new goal if you still need one."
+                                .to_string(),
+                        });
+                    }
+                    crate::goal::FieldUpdate::StatusSuperseded(live_status) => {
+                        return Ok(GoalOutput {
+                            success: false,
+                            message: format!(
+                                "The goal's status changed to '{}' concurrently — that \
+                                 transition won, so your status change was dropped (other \
+                                 field updates were kept). Re-read with goal(action='get') \
+                                 and retry if still needed.",
+                                live_status.as_str()
+                            ),
+                        });
+                    }
+                    crate::goal::FieldUpdate::Committed => {}
                 }
                 // Supersede a stale timer marker left armed by a barrier this
                 // update just cleared/replaced (see `pre_wait_until` above), so

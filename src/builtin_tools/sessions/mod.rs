@@ -62,7 +62,10 @@ pub use list_tool::{SessionListRow, SessionsListArgs, SessionsListOutput, Sessio
 
 pub use send_tool::{SessionsSendArgs, SessionsSendOutput, SessionsSendStatus, SessionsSendTool};
 
-pub use compact_tool::{SessionCompactArgs, SessionCompactOutput, SessionCompactTool};
+pub use compact_tool::{
+    render as render_manual_compaction, run_manual_compaction, SessionCompactArgs,
+    SessionCompactOutput, SessionCompactTool,
+};
 pub use new_tool::{SessionNewArgs, SessionNewOutput, SessionNewTool};
 pub use set_mode_tool::{SessionSetModeArgs, SessionSetModeOutput, SessionSetModeTool};
 pub use set_topic_tool::{SessionSetTopicArgs, SessionSetTopicOutput, SessionSetTopicTool};

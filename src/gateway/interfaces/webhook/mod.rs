@@ -21,7 +21,7 @@
 //! [channels.config]
 //! secret = "my-hmac-secret"
 //! callback_url = "https://my-service.com/aleph/callback"
-//! path = "/webhook/generic"
+//! path = "/webhook/generic" # must live under /webhook/, the shared route prefix
 //! allowed_senders = []
 //! ```
 
@@ -33,8 +33,7 @@ pub use message_ops::WebhookMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, InboundMessageSender,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use crate::sync_primitives::Arc;
@@ -130,23 +129,6 @@ impl WebhookChannel {
         }
     }
 
-    /// Get a clone of the inbound message sender.
-    ///
-    /// This sender should be passed to `WebhookReceiver::start()` so that
-    /// incoming webhook messages are forwarded into the channel's inbound queue.
-    #[must_use]
-    pub fn inbound_sender(&self) -> InboundMessageSender {
-        self.channel_state.sender()
-    }
-
-    /// Get the webhook handler for registration with `WebhookReceiver`.
-    ///
-    /// Returns `None` if `start()` has not been called yet.
-    #[must_use]
-    pub fn webhook_handler(&self) -> Option<Arc<GenericWebhookHandler>> {
-        self.handler.clone()
-    }
-
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
@@ -195,6 +177,10 @@ impl Channel for WebhookChannel {
         self.handler = None;
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
+    }
+
+    fn webhook_handler(&self) -> Option<Arc<dyn WebhookHandler>> {
+        self.handler.clone().map(|h| h as Arc<dyn WebhookHandler>)
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
@@ -613,5 +599,28 @@ mod tests {
 
         channel.stop().await.unwrap();
         assert!(channel.webhook_handler().is_none());
+    }
+
+    #[tokio::test]
+    async fn webhook_handler_is_none_before_start_and_some_after() {
+        let config = WebhookChannelConfig {
+            secret: "test-secret".to_string(),
+            callback_url: "http://127.0.0.1:9/sink".to_string(),
+            path: "/webhook/generic".to_string(),
+            allowed_senders: Vec::new(),
+        };
+        let mut channel = WebhookChannel::new("wh1", config);
+
+        // Before start there is no handler to mount.
+        assert!(
+            crate::gateway::channel::Channel::webhook_handler(&channel).is_none(),
+            "handler must not exist before start()"
+        );
+
+        channel.start().await.expect("start");
+
+        let handler = crate::gateway::channel::Channel::webhook_handler(&channel)
+            .expect("handler must exist after start()");
+        assert_eq!(handler.path(), "/webhook/generic");
     }
 }

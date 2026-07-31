@@ -111,7 +111,7 @@ The Gateway is Aleph's control plane, providing:
 | `session.get` | Get session info | `session_key` |
 | `session.list` | List all sessions | `filter?` |
 | `session.history` | Get message history | `session_key`, `limit?` |
-| `session.compact` | Compress session | `session_key` |
+| `session.compact` | Summarize older turns and drop them from the live context (`context::compact::manual`; soft-retires the event log, deletes nothing) | `session_key`, `instructions?` |
 | `session.delete` | Delete session | `session_key` |
 
 ### Config Methods
@@ -329,17 +329,29 @@ channel's declared `BusyInputMode`:
 
 Anything that cannot be delivered inline joins its session's **FIFO wait lane**.
 All three surfaces share the one lane — the inbound router (channels) and both
-`aleph-server` RPC handlers (`agent.run`, `chat.send`) call
-`busy_queue::register` on the arrival path and `busy_queue::deliver_with_ticket`
-inside the spawned delivery task.
+`aleph-server` RPC handlers (`agent.run`, `chat.send`, via
+`busy_queue::spawn_queued_run`) call `busy_queue::register` on the arrival path
+and `busy_queue::deliver_with_ticket` inside the spawned delivery task.
 
 Invariants worth preserving:
 
 - **Ticket is taken synchronously on the arrival path**, before the delivery task
   is spawned. Registering inside the task makes lane order follow task
   scheduling instead of arrival order.
+- **The lane is a waiting room, not a run registry.** `deliver_with_ticket`
+  holds its ticket across the whole `attempt()`, and `attempt()` *is* the agent
+  run — so `SessionRunRegistry::try_claim` calls `busy_queue::mark_admitted` to
+  withdraw the ticket the moment the run is admitted (the exact mirror of
+  `release` → `notify_slot_free`). Without it the running message sits at the
+  head of its own lane for the run's entire lifetime, every follow-up parks
+  behind the very run it wants to change, and `Steer` / `Interrupt` — which only
+  mean anything *while* a sibling runs — silently degrade to `Queue`. The same
+  root cause made `/stop` count the message it was stopping among the "queued
+  messages dropped" and inflated `busy_queue.total_waiting` by one per busy
+  session. FIFO constrains only the messages that are still waiting.
 - **Waiters do not poll.** They park on a per-session `Notify` fired by
-  `SessionRunRegistry::release` (the authoritative slot-free edge) and by ticket
+  `SessionRunRegistry::release` (the authoritative slot-free edge),
+  `mark_admitted` (the symmetric "the lane just got shorter" edge), and ticket
   departures. `busy_queue_wake_fallback_secs` is a missed-signal safety net, not
   the delivery latency.
 - **`TicketGuard` is the only way in or out.** Its `Drop` is load-bearing: a
@@ -593,6 +605,82 @@ logging, a correlation feature.
 > cloned per connection. Building it per-connection previously reinstalled the
 > global request-state registry on every connect, zeroing the `/metrics`
 > request-lifecycle counters and undercounting in-flight requests.
+
+### Channel webhook ingestion
+
+Channels that receive over HTTP POST (`generic webhook`, and future ones)
+return a handler from `Channel::webhook_handler()`. `build_router()` registers
+**one constant route** — `POST /webhook/{*rest}` — whose state is the shared
+`WebhookMountTable`. `ChannelRegistry` owns that table and is its only writer.
+
+- **Mounting follows the registry, not boot.** `start_channel` /
+  `restart_channel` mount; `stop_channel` / `unregister` / `register` /
+  `create_channel` unmount. So `channel.stop` and `channel.delete` really do
+  remove the endpoint (404, not 503), and a channel created at runtime is
+  reachable without restarting the daemon. The earlier version built the route
+  table once at boot: `stop` returned `"stopped"` while the endpoint kept
+  answering 200 and driving agent runs, because the route held its own
+  `Arc<Handler>` clone. The forwarder never exiting has a separate,
+  mount-independent cause: the forwarder task captures a `channel_arc` clone
+  by move and holds it for its entire — infinite — lifetime
+  (`channel_registry.rs` `start_message_forwarder`). That keeps the channel
+  instance alive, which keeps `ChannelState`'s original `Sender` alive, so
+  `RecvError::Closed` is structurally unreachable for any started channel,
+  whether or not a mount exists.
+- **⚠️ `restart_channel` does not go through `stop_channel`/`start_channel`.**
+  It calls `channel.stop()` + `channel.start()` directly, so it carries its own
+  mount refresh. A hook set that only covers start/stop leaves the pre-restart
+  handler clone in the table forever.
+- **`path` must be under `/webhook/`**, enforced by
+  `WebhookChannelConfig::validate()` and again by `WebhookMountTable::mount()`
+  (one predicate, `is_mountable_path`). Because operator-writable paths never
+  enter axum's route table, a bad path can no longer panic `Router::merge` at
+  boot, and can no longer shadow a Panel SPA path (`path = "/settings"` used to
+  turn `GET /settings` into 405). `RESERVED_ROUTE_PREFIXES` existed only to
+  guard that boot panic and was withdrawn with it.
+- **⚠️ matchit does not panic on `/webhook/foo` next to `/webhook/{*rest}`** —
+  the more specific static route just wins. A future gateway route under this
+  prefix would therefore *silently* steal a channel's webhook path. The guard
+  is a source scan in `server/mod.rs`'s own tests
+  (`build_router_registers_no_second_route_under_the_webhook_prefix`); axum
+  cannot be asked what is in its route table.
+- **Two channels, one path** → the lower `channel_id` keeps the route, warned
+  with both ids. Deterministic on purpose: `start_all` iterates a HashMap, so
+  arrival order would make route ownership a per-boot coin flip. The loser is
+  only warned — it still reports `Connected` in `channels.list` while being
+  deaf, and the `channel.start` RPC still answers `{"status":"started"}`:
+  `mount()`'s refusal `bool` is discarded at both call sites, so the operator
+  sees the `warn!` naming both ids but the RPC caller is told nothing. For
+  that one case this is a small step backwards from the deleted
+  `"restart_required"` receipt. Recorded limit, not a fix — threading the
+  refusal into the receipt changes an RPC response shape and needs its own
+  round.
+- **One port.** Webhook traffic rides the gateway's own listener, so it
+  inherits `[gateway] host`, TLS, and `SecurityHeadersLayer`. `WebhookReceiver`
+  deliberately owns no listener — the version that bound `0.0.0.0` itself would
+  have opened a LAN surface regardless of the configured host.
+- **Auth is per-handler HMAC**, not the login wall — an external platform
+  cannot present a device token. Same posture as `/health`, `/metrics`, `/a2a`:
+  no transport-level auth, no rate limiter (that lives in `MiddlewareChain`,
+  on the JSON-RPC/WS path only). The signature also binds no timestamp or
+  nonce (unlike Stripe/GitHub's `t=…,v1=…`), so replay protection is
+  incidental — it comes only from inbound dedup at
+  `src/gateway/inbound_router/dedup.rs`, whose window is **5 minutes**; a
+  captured signed request replayed after that re-triggers an agent run. This
+  is posture, not a known gap requiring action.
+- **Check order is deliberate**: lookup → 404, signature → 403, channel status
+  → 503, then parse and forward. Signature comes *before* status so an
+  unauthenticated caller learns only whether a mount exists at that path,
+  never the mounted channel's status.
+  The status check is depth only, for a channel that moved itself to
+  `Error`/`Connecting` without any RPC; `try_read` fails **open** on
+  contention, because a momentary write-lock holder is not evidence the
+  channel is down.
+- ⚠️ The sink is the channel's **own** `ChannelState::sender()`, not the
+  registry's. Going direct to the registry bypasses
+  `start_message_forwarder`, the only place inbound traffic stamps
+  `health.record_event()` — the channel would receive while health monitoring
+  reported it dead.
 
 ---
 

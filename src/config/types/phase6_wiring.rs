@@ -150,6 +150,22 @@ pub struct ContextBudgetToml {
     /// default (every model inherits the global thresholds).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_thresholds: Vec<ModelThresholdToml>,
+    /// Verbatim tail budget, in tokens, for **user-driven** `/compact` (pi's
+    /// `keepRecentTokens`; its default is 20 000 too). Everything older than
+    /// this is summarized into a single `[Context Summary]` and stops being
+    /// replayed; the tail is kept word-for-word.
+    ///
+    /// A token budget rather than a message count on purpose: the retired
+    /// `KeepLastN{50}` rule was wrong in both directions — fifty `file_read`
+    /// results can be 200k tokens, and fifty one-line turns are a few hundred.
+    ///
+    /// Unset uses `manual::DEFAULT_KEEP_TOKENS`. Values outside
+    /// `[2_000, 400_000]` are clamped: below the floor a compaction would eat
+    /// the turn that asked for it, above the ceiling the command would be a
+    /// silent no-op. Independent of the automatic in-turn compaction above,
+    /// which is pressure-driven and never touches the stored log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_compact_keep_tokens: Option<usize>,
 }
 
 /// One `[[context_budget.model_thresholds]]` entry: a per-model override of the
@@ -347,6 +363,7 @@ critical_threshold = 0.85
                 critical_threshold: Some(0.85),
                 summary_model: None,
                 model_thresholds: Vec::new(),
+                manual_compact_keep_tokens: None,
             })
         );
     }

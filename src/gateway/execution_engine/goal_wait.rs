@@ -37,19 +37,13 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 
 use super::execute::{notify_origin, spawn_continuation_run, ContinuationKind};
+use super::goal_continuation::{now_ms, origin_of};
 use super::{ContinuationDeps, UNATTENDED_KEY};
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::goal::{ContinuationDecision, Goal};
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
-
-/// Wall-clock now (Unix epoch ms).
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
 
 pub struct GoalWakeService {
     deps: ContinuationDeps,
@@ -120,9 +114,17 @@ impl GoalWakeService {
         let Some(store) = crate::goal::global() else {
             return;
         };
-        let parked: Vec<Goal> = store
-            .list_all()
-            .unwrap_or_default()
+        let goals = match store.list_all() {
+            Ok(g) => g,
+            // A read failure must not silently drop every wake for this
+            // settle event — log it so the loss is diagnosable.
+            Err(e) => {
+                warn!(error = %e, task = %task_id,
+                    "goal wake: failed to list goals for task-barrier wake; skipping this event");
+                return;
+            }
+        };
+        let parked: Vec<Goal> = goals
             .into_iter()
             .filter(|g| g.is_active() && g.waiting_on_task.as_deref() == Some(task_id))
             .collect();
@@ -204,7 +206,14 @@ impl GoalWakeService {
                 let Some(store) = crate::goal::global() else {
                     continue;
                 };
-                let goals = store.list_all().unwrap_or_default();
+                let goals = match store.list_all() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        warn!(error = %e,
+                            "goal wake: failed to list goals on periodic recheck; retrying next tick");
+                        continue;
+                    }
+                };
                 for goal in goals {
                     if goal.is_active()
                         && matches!(goal.pursuit, crate::goal::PursuitMode::Active { .. })
@@ -285,8 +294,8 @@ impl GoalWakeService {
         let gate_configured = self.deps.gate.is_some() || goal.gate_command.is_some();
         // No live token count here (no completing run): a token budget goes
         // unenforced for THIS claim; the next post_run re-enforces it.
-        let decision = match store.try_claim_continuation(&session, None, now_ms(), gate_configured)
-        {
+        let decision =
+            match store.try_claim_continuation(&session, None, now_ms(), gate_configured, None) {
             Ok(d) => d,
             Err(e) => {
                 warn!(session = %session, error = %e, "goal wake: claim failed");
@@ -335,6 +344,10 @@ impl GoalWakeService {
             return;
         };
         let policy_meta = wake_identity(&agent, &key).await;
+        // Rebuild the wake run in the project the last claiming run recorded
+        // (the post-run hook writes it into the goal row); `None` falls back
+        // to the agent workspace exactly as before.
+        let workspace = goal.workspace.as_ref().map(std::path::PathBuf::from);
         spawn_continuation_run(
             self.deps.registry.clone(),
             self.deps.adapter.clone(),
@@ -342,25 +355,12 @@ impl GoalWakeService {
             session,
             prompt,
             policy_meta,
-            None,
+            workspace,
             self.deps.event_bus.clone(),
             Some(delay_ms),
             ContinuationKind::Goal { wake_ms },
         );
     }
-}
-
-/// Resolve the session's origin route for a notice (mirror of
-/// `goal_continuation::origin_of`, private there).
-async fn origin_of(
-    agent: &Arc<AgentInstance>,
-    session_key: &SessionKey,
-) -> Option<super::execute::OriginRoute> {
-    let reg = crate::gateway::event_emitter::origin_fanout::channel_registry()?;
-    agent
-        .origin_route(session_key)
-        .await
-        .map(|(ch, conv)| (reg, ch, conv))
 }
 
 /// Fail-closed identity for a wake run with no completing run to inherit from.

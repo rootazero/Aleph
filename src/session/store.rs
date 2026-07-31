@@ -82,6 +82,36 @@ pub trait SessionEventStore: Send + Sync + 'static {
         from_seq: EventSeq,
     ) -> Result<usize, SessionError>;
 
+    /// Retire every event with `seq <= through_seq` — the head-side mirror of
+    /// [`retire_from`], and the primitive behind manual `/compact`.
+    ///
+    /// Two deliberate differences from [`retire_from`]:
+    ///
+    /// 1. **The BM25 mirror is kept.** `retire_from` backs `chat.clear` /
+    ///    `chat.rewind`, where leaving the content searchable would hand the
+    ///    model the very turns the user just erased. Compaction is the
+    ///    opposite intent: the turns leave the *live prompt* but must stay
+    ///    recallable, so `recall_events` can still surface a detail the
+    ///    summary abstracted away. Deleting the FTS rows here would make the
+    ///    "compaction is not a net loss" contract false.
+    /// 2. **No default `Ok(0)`.** A store that cannot retire must say so
+    ///    rather than silently report a compaction that did not happen — the
+    ///    caller appends its summary first and treats this error as
+    ///    "summary recorded, context unchanged".
+    ///
+    /// Idempotent, like its mirror: already-retired events keep their original
+    /// timestamp and are not counted again.
+    async fn retire_through(
+        &self,
+        session_id: &SessionId,
+        through_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        let _ = (session_id, through_seq);
+        Err(SessionError::Storage(
+            "this event store does not support head-side retirement (manual compaction)".into(),
+        ))
+    }
+
     /// True when the event at `seq` exists and has been retired.
     ///
     /// The `messages` projection is drained asynchronously, so an event can be
@@ -447,6 +477,35 @@ impl SessionEventStore for SqliteEventStore {
         conn.execute_batch("COMMIT")
             .map_err(|e| SessionError::Storage(format!("retire_from COMMIT failed: {e}")))?;
         Ok(retired)
+    }
+
+    async fn retire_through(
+        &self,
+        session_id: &SessionId,
+        through_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        // An out-of-range `through_seq` must not widen the range past what the
+        // caller asked for. Unlike `retire_from`'s lower bound, saturating an
+        // upper bound HIGH is the widening direction, so clamp to i64::MAX only
+        // because no stored seq can exceed it — the range is still exactly
+        // "everything at or below the requested boundary".
+        let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
+        let at = crate::session::events::now_ms();
+
+        let conn = self.conn.lock().await;
+        // Single statement, so no explicit transaction: unlike `retire_from`
+        // there is no paired FTS delete to keep atomic — the BM25 mirror is
+        // deliberately preserved (see the trait doc).
+        //
+        // `retired_at IS NULL` makes this idempotent: re-compacting the same
+        // prefix matches nothing and reports 0 newly-retired events.
+        conn.execute(
+            "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
+            params![session_key, through_val, at],
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))
     }
 
     async fn is_retired(
@@ -1327,6 +1386,95 @@ mod tests {
         let live = store.load_all_events(&sid).await.unwrap();
         assert_eq!(live.len(), 1, "only the post-clear event is live");
         assert_eq!(live[0].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn retire_through_drops_the_prefix_and_keeps_the_tail() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for (seq, text) in [(1u64, "oldest"), (2, "middle"), (3, "newest")] {
+            store
+                .append(&sid, seq, &user_message(tid, text, at), at)
+                .await
+                .unwrap();
+        }
+
+        let retired = store.retire_through(&sid, 2).await.unwrap();
+        assert_eq!(retired, 2);
+
+        let live = store.load_all_events(&sid).await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].seq, 3, "only the tail survives the head retirement");
+        // Idempotent, exactly like its `retire_from` mirror.
+        assert_eq!(store.retire_through(&sid, 2).await.unwrap(), 0);
+        // Seq allocation is unaffected — the rows are still there.
+        assert_eq!(store.load_head_seq(&sid).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn retire_through_keeps_the_search_index_unlike_clear() {
+        // The one deliberate asymmetry with `retire_from`: `chat.clear` must
+        // erase content from the BM25 mirror, compaction must NOT — the turns
+        // leave the live prompt but stay recallable. Losing this makes the
+        // "compaction is not a net loss" contract false.
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 1, &user_message(tid, "peregrine falcon", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid, 2, &user_message(tid, "kept turn", at), at)
+            .await
+            .unwrap();
+
+        store.retire_through(&sid, 1).await.unwrap();
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
+        assert!(
+            !store
+                .search_events(&sid, "peregrine", 5)
+                .await
+                .unwrap()
+                .is_empty(),
+            "compacted content must remain searchable"
+        );
+
+        // Contrast: `retire_from` (clear/rewind) DOES purge the mirror.
+        store.retire_from(&sid, 1).await.unwrap();
+        assert!(
+            store
+                .search_events(&sid, "peregrine", 5)
+                .await
+                .unwrap()
+                .is_empty(),
+            "cleared content must not remain searchable"
+        );
+    }
+
+    #[tokio::test]
+    async fn retire_through_does_not_touch_other_sessions() {
+        let store = make_store();
+        let sid_a = SessionKey::ephemeral("keep-a");
+        let sid_b = SessionKey::ephemeral("compact-b");
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid_a, 1, &user_message(tid, "a", at), at)
+            .await
+            .unwrap();
+        store
+            .append(&sid_b, 1, &user_message(tid, "b", at), at)
+            .await
+            .unwrap();
+
+        store.retire_through(&sid_b, 1).await.unwrap();
+
+        assert_eq!(store.load_all_events(&sid_a).await.unwrap().len(), 1);
+        assert!(store.load_all_events(&sid_b).await.unwrap().is_empty());
     }
 
     #[tokio::test]

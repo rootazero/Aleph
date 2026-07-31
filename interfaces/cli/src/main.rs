@@ -333,7 +333,9 @@ async fn dispatch_session(
         }
         SessionAction::Delete { key } => session::delete(server_url, &key, config, json).await,
         SessionAction::Usage { key } => session::usage(server_url, &key, config, json).await,
-        SessionAction::Compact { key } => session::compact(server_url, &key, config, json).await,
+        SessionAction::Compact { key, instructions } => {
+            session::compact(server_url, &key, instructions.as_deref(), config, json).await
+        }
         SessionAction::Truncate { key, keep } => {
             session::truncate(server_url, &key, keep, config, json).await
         }

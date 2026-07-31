@@ -29,10 +29,13 @@ const RELEASES_URL: &str = "https://github.com/rootazero/Aleph/releases/latest";
 /// Reserved shell-control paths the in-window update banner navigates to. The
 /// `on_navigation` guard (`main.rs`) intercepts and cancels these, so they
 /// never actually load — the Panel/daemon never serve the `/__aleph-shell/`
-/// prefix. Matching on the path (not the host) keeps the callback working
-/// whether the Panel is served from loopback (full app) or a remote Gateway
-/// (Panel-lite): Tauri IPC is loopback-scoped and unavailable from a remote
-/// origin, so this navigation channel is the only origin-independent one.
+/// prefix. A sentinel is honoured only when it also comes from the origin the
+/// Panel is actually served from (loopback for the full app, the configured
+/// Gateway for Panel-lite) — path matching alone would let any rendered link
+/// (e.g. an LLM-generated markdown link to `https://evil.com/__aleph-shell/
+/// update/apply`) trigger a download + install + restart. Tauri IPC is
+/// loopback-scoped and unavailable from a remote origin, so this navigation
+/// channel remains the only one that works for both variants.
 const APPLY_PATH: &str = "/__aleph-shell/update/apply";
 const DISMISS_PATH: &str = "/__aleph-shell/update/dismiss";
 
@@ -46,15 +49,22 @@ pub enum UpdateControl {
     Dismiss,
 }
 
-/// Recognise a banner control link by its path. Returns `None` for ordinary
-/// Panel routes and external links, which must pass through to
-/// `external_link::route`.
-pub fn control_action(url: &Url) -> Option<UpdateControl> {
-    match url.path() {
-        APPLY_PATH => Some(UpdateControl::Apply),
-        DISMISS_PATH => Some(UpdateControl::Dismiss),
-        _ => None,
-    }
+/// Recognise a banner control link. Returns `None` for ordinary Panel routes
+/// and external links, which must pass through to `external_link::route` —
+/// and for sentinel paths arriving from any origin other than the Panel's own
+/// (`target`), so a drive-by link on a foreign page cannot apply or dismiss
+/// an update. The banner's relative `location.href` navigations resolve to
+/// exactly the Panel origin, so legitimate controls are unaffected.
+pub fn control_action(
+    url: &Url,
+    target: &crate::connection::ConnectionTarget,
+) -> Option<UpdateControl> {
+    let action = match url.path() {
+        APPLY_PATH => UpdateControl::Apply,
+        DISMISS_PATH => UpdateControl::Dismiss,
+        _ => return None,
+    };
+    target.serves_origin(url).then_some(action)
 }
 
 /// The injected banner as a JS template. Placeholders (`__MSG__`, `__LABEL__`,
@@ -209,6 +219,30 @@ impl Updater {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(item);
     }
+
+    /// Take the in-flight apply latch. `true` if this caller now owns the
+    /// apply slot; `false` if an apply is already running.
+    fn try_begin_apply(&self) -> bool {
+        let mut applying = self
+            .applying
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *applying {
+            return false;
+        }
+        *applying = true;
+        true
+    }
+
+    /// Release the apply latch so a later attempt can run. Called when the
+    /// apply task ends — without it a single failed Apply would latch the
+    /// flag forever and brick "Restart to update" for the rest of the session.
+    fn end_apply(&self) {
+        *self
+            .applying
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
 }
 
 /// Whether Tauri's bundled updater can self-install on this platform/install.
@@ -268,80 +302,86 @@ pub fn apply_staged_update(app: &AppHandle) {
     // downloaders race and a second installer races past the first restart.
     {
         let updater = app.state::<Updater>();
-        let mut applying = updater
-            .applying
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *applying {
+        if !updater.try_begin_apply() {
             tracing::debug!("apply_staged_update already in flight — ignoring duplicate");
             return;
         }
-        *applying = true;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        // Package-manager installs (Linux .deb / .rpm) can't be self-installed
-        // by Tauri's updater — point the user at the right path instead of
-        // attempting a download_and_install that would fail.
-        if !updater_can_self_install() {
-            notify(
-                &app,
-                "Update via your package manager",
-                &format!(
-                    "Aleph was installed with your system package manager. Update \
-                     with apt / dnf, or download the latest release from {RELEASES_URL}."
-                ),
-            );
+        // The latch is released when the task ends, whatever happens inside —
+        // every early return, a failed download, a failed install — so one
+        // failed Apply does not brick the action for the rest of the session.
+        // On success `app.restart()` exits the process before this line runs,
+        // which is fine: a fresh process starts unlatched.
+        apply_inner(&app).await;
+        app.state::<Updater>().end_apply();
+    });
+}
+
+/// The body of an Apply, run as a background task by [`apply_staged_update`].
+async fn apply_inner(app: &AppHandle) {
+    // Package-manager installs (Linux .deb / .rpm) can't be self-installed
+    // by Tauri's updater — point the user at the right path instead of
+    // attempting a download_and_install that would fail.
+    if !updater_can_self_install() {
+        notify(
+            app,
+            "Update via your package manager",
+            &format!(
+                "Aleph was installed with your system package manager. Update \
+                 with apt / dnf, or download the latest release from {RELEASES_URL}."
+            ),
+        );
+        return;
+    }
+    notify(
+        app,
+        "Updating Aleph",
+        "Downloading the update — Aleph will restart shortly.",
+    );
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::error!("updater unavailable: {e}");
             return;
         }
-        notify(
-            &app,
-            "Updating Aleph",
-            "Downloading the update — Aleph will restart shortly.",
-        );
-        let updater = match app.updater() {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::error!("updater unavailable: {e}");
-                return;
-            }
-        };
-        let update = match updater.check().await {
-            Ok(Some(u)) => u,
-            Ok(None) => {
-                tracing::info!("nothing to apply — already up to date");
-                return;
-            }
-            Err(e) => {
-                tracing::error!("update re-check failed: {e}");
-                notify(&app, "Update failed", "Could not reach the update server.");
-                return;
-            }
-        };
-        // Download first while the daemon is still running; the installer will
-        // try to overwrite aleph-server.exe, which Windows locks while it is
-        // executing. We stop the daemon only once the package is local so the
-        // service interruption is as short as possible.
-        let bytes = match update.download(|_, _| {}, || {}).await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!("update download failed: {e}");
-                notify(&app, "Update failed", "Could not download the update.");
-                return;
-            }
-        };
-        stop_daemon_for_update().await;
-        match update.install(&bytes) {
-            Ok(()) => {
-                tracing::info!("update installed — restarting");
-                app.restart();
-            }
-            Err(e) => {
-                tracing::error!("update install failed: {e}");
-                notify(&app, "Update failed", "Could not install the update.");
-            }
+    };
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            tracing::info!("nothing to apply — already up to date");
+            return;
         }
-    });
+        Err(e) => {
+            tracing::error!("update re-check failed: {e}");
+            notify(app, "Update failed", "Could not reach the update server.");
+            return;
+        }
+    };
+    // Download first while the daemon is still running; the installer will
+    // try to overwrite aleph-server.exe, which Windows locks while it is
+    // executing. We stop the daemon only once the package is local so the
+    // service interruption is as short as possible.
+    let bytes = match update.download(|_, _| {}, || {}).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("update download failed: {e}");
+            notify(app, "Update failed", "Could not download the update.");
+            return;
+        }
+    };
+    stop_daemon_for_update().await;
+    match update.install(&bytes) {
+        Ok(()) => {
+            tracing::info!("update installed — restarting");
+            app.restart();
+        }
+        Err(e) => {
+            tracing::error!("update install failed: {e}");
+            notify(app, "Update failed", "Could not install the update.");
+        }
+    }
 }
 
 /// Stop the bundled `aleph-server` so the installer can replace its binary.
@@ -504,35 +544,72 @@ mod tests {
     }
 
     #[test]
-    fn control_action_recognises_the_apply_sentinel() {
-        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply").unwrap();
-        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+    fn apply_latch_refuses_a_concurrent_apply_and_releases() {
+        let updater = Updater::default();
+        assert!(updater.try_begin_apply());
+        assert!(
+            !updater.try_begin_apply(),
+            "a second concurrent apply must be refused"
+        );
+        updater.end_apply();
+        assert!(
+            updater.try_begin_apply(),
+            "the latch must be re-takable once the failed apply ends"
+        );
     }
 
     #[test]
-    fn control_action_recognises_the_dismiss_sentinel_on_any_origin() {
-        // Remote origin (Panel-lite pointed at a LAN Gateway) must match too —
-        // control_action keys off the path, not the host.
+    fn control_action_recognises_the_apply_sentinel_on_the_panel_origin() {
+        let target = crate::connection::ConnectionTarget::Local;
+        let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply").unwrap();
+        assert_eq!(control_action(&url, &target), Some(UpdateControl::Apply));
+    }
+
+    #[test]
+    fn control_action_recognises_the_dismiss_sentinel_on_the_remote_origin() {
+        // Panel-lite pointed at a LAN Gateway: the Panel (and the banner) is
+        // served from that origin, so the sentinel must match there.
+        let target = crate::connection::ConnectionTarget::parse("http://box.lan:9000").unwrap();
         let url = Url::parse("http://box.lan:9000/__aleph-shell/update/dismiss").unwrap();
-        assert_eq!(control_action(&url), Some(UpdateControl::Dismiss));
+        assert_eq!(control_action(&url, &target), Some(UpdateControl::Dismiss));
+    }
+
+    #[test]
+    fn control_action_rejects_the_sentinel_on_a_foreign_origin() {
+        // The drive-by case: a rendered link (e.g. LLM markdown) pointing the
+        // webview at the sentinel path on an attacker's origin must NOT act.
+        let local = crate::connection::ConnectionTarget::Local;
+        let evil_apply = Url::parse("http://evil.com/__aleph-shell/update/apply").unwrap();
+        assert_eq!(control_action(&evil_apply, &local), None);
+        let remote = crate::connection::ConnectionTarget::parse("http://box.lan:9000").unwrap();
+        assert_eq!(control_action(&evil_apply, &remote), None);
+        // A different port on the same host is a different origin — no piggy-back.
+        let other_port = Url::parse("http://box.lan:9001/__aleph-shell/update/apply").unwrap();
+        assert_eq!(control_action(&other_port, &remote), None);
     }
 
     #[test]
     fn control_action_ignores_ordinary_urls() {
+        let target = crate::connection::ConnectionTarget::Local;
         for u in [
             "http://127.0.0.1:18790/",
             "http://127.0.0.1:18790/chat",
             "https://github.com/rootazero/Aleph/releases/latest",
             "tauri://localhost/index.html",
         ] {
-            assert_eq!(control_action(&Url::parse(u).unwrap()), None, "{u}");
+            assert_eq!(
+                control_action(&Url::parse(u).unwrap(), &target),
+                None,
+                "{u}"
+            );
         }
     }
 
     #[test]
     fn control_action_matches_apply_even_with_query() {
+        let target = crate::connection::ConnectionTarget::Local;
         let url = Url::parse("http://127.0.0.1:18790/__aleph-shell/update/apply?v=1").unwrap();
-        assert_eq!(control_action(&url), Some(UpdateControl::Apply));
+        assert_eq!(control_action(&url, &target), Some(UpdateControl::Apply));
     }
 
     #[test]

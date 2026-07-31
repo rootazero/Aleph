@@ -79,6 +79,79 @@ fn sck_region_rect(
     })
 }
 
+/// Clamp `region` to a `display_width`×`display_height` display, in the
+/// region's own unit (physical pixels — see [`crate::ScreenRegion`]).
+///
+/// The x11grab / wf-recorder / gdigrab backends splice the region straight
+/// into the recorder's argv, so an absurd region (e.g. `u32::MAX` from a
+/// model hallucinating geometry) would have ffmpeg try to allocate a frame
+/// buffer that size. `x`/`y` must land inside the display; `width`/`height`
+/// shrink to the space remaining past the origin. `None` when nothing
+/// intersects — the caller treats that as "no usable region" and records
+/// full-screen instead (the same fallback `resolve_region_target` in
+/// `screenshot.rs` uses for an off-display region). Pure so it is
+/// unit-testable without a display (mirrors `sck_region_rect`).
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+fn clamp_region_to_display(
+    region: &crate::ScreenRegion,
+    display_width: u32,
+    display_height: u32,
+) -> Option<crate::ScreenRegion> {
+    if region.x >= display_width || region.y >= display_height {
+        return None; // origin past the display — no intersection
+    }
+    let width = region.width.min(display_width - region.x);
+    let height = region.height.min(display_height - region.y);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(crate::ScreenRegion {
+        x: region.x,
+        y: region.y,
+        width,
+        height,
+    })
+}
+
+/// Primary display size in physical pixels, via the same `xcap` enumeration
+/// `screenshot.rs` already uses (no new dependency, R3).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn primary_display_size() -> Option<(u32, u32)> {
+    let monitors = xcap::Monitor::all().ok()?;
+    let monitor = monitors
+        .iter()
+        .find(|m| m.is_primary().unwrap_or(false))
+        .or(monitors.first())?;
+    Some((monitor.width().ok()?, monitor.height().ok()?))
+}
+
+/// Clamp `config.region` against the primary display, in place.
+///
+/// A region that does not intersect the display at all is dropped (`None` →
+/// full-screen) rather than turned into an error: recording the whole screen
+/// when handed a nonsense rectangle beats recording nothing, and matches the
+/// screenshot path's fall-back-to-primary convention. If the display size
+/// cannot be determined the region is left untouched — no worse than the
+/// pre-clamp behaviour.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn clamp_config_region(config: &mut crate::screen_types::ScreenRecordConfig) {
+    let Some(region) = config.region else {
+        return;
+    };
+    let Some((w, h)) = primary_display_size() else {
+        debug!("screen_record: display size unknown; region left unclamped");
+        return;
+    };
+    let clamped = clamp_region_to_display(&region, w, h);
+    if clamped != Some(region) {
+        debug!(
+            "screen_record: region {}x{}+{},{} clamped to {clamped:?} against a {w}x{h} display",
+            region.width, region.height, region.x, region.y
+        );
+    }
+    config.region = clamped;
+}
+
 /// Confirm a recording actually produced a non-empty file. `timed_out` is the
 /// delegate-wait timeout flag. A timeout, a missing file, or a zero-byte file
 /// is a failure — the `SCRecordingOutput` path previously returned `Ok` in all
@@ -729,7 +802,8 @@ const FFMPEG_RECORD_OVERHEAD: std::time::Duration = std::time::Duration::from_se
 pub fn screen_record(
     config: &crate::screen_types::ScreenRecordConfig,
 ) -> Result<crate::screen_types::ScreenRecordResult> {
-    let config = config.clone().clamped();
+    let mut config = config.clone().clamped();
+    clamp_config_region(&mut config);
 
     let display = std::env::var("DISPLAY").ok().filter(|d| !d.is_empty());
     let backend = pick_record_backend(
@@ -970,7 +1044,8 @@ pub fn screen_record(
 ) -> Result<crate::screen_types::ScreenRecordResult> {
     use crate::script_exec::hidden_std_command;
 
-    let config = config.clone().clamped();
+    let mut config = config.clone().clamped();
+    clamp_config_region(&mut config);
 
     let audio_device = if config.with_audio {
         match std::env::var("ALEPH_AUDIO_DEVICE") {
@@ -1264,6 +1339,90 @@ mod tests {
         let args = build_gdigrab_args(&cfg, Some("Microphone (Realtek Audio)"), "C:/tmp/a.mp4");
         assert!(args.iter().any(|a| a == "dshow"));
         assert!(args.iter().any(|a| a == "audio=Microphone (Realtek Audio)"));
+    }
+
+    // ── Region clamping ─────────────────────────────────────────────────
+
+    #[test]
+    fn clamp_region_inside_display_is_unchanged() {
+        let r = ScreenRegion {
+            x: 10,
+            y: 20,
+            width: 640,
+            height: 480,
+        };
+        assert_eq!(super::clamp_region_to_display(&r, 1920, 1080), Some(r));
+    }
+
+    #[test]
+    fn clamp_region_overflow_shrinks_to_remaining_space() {
+        let r = ScreenRegion {
+            x: 1900,
+            y: 1000,
+            width: 300,
+            height: 300,
+        };
+        assert_eq!(
+            super::clamp_region_to_display(&r, 1920, 1080),
+            Some(ScreenRegion {
+                x: 1900,
+                y: 1000,
+                width: 20,
+                height: 80,
+            })
+        );
+    }
+
+    #[test]
+    fn clamp_region_absurd_size_is_bounded_to_the_display() {
+        // The defect this guards: u32::MAX width/height spliced into ffmpeg's
+        // -video_size made it try to allocate a gigantic frame buffer.
+        let r = ScreenRegion {
+            x: 0,
+            y: 0,
+            width: u32::MAX,
+            height: u32::MAX,
+        };
+        assert_eq!(
+            super::clamp_region_to_display(&r, 1920, 1080),
+            Some(ScreenRegion {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            })
+        );
+    }
+
+    #[test]
+    fn clamp_region_origin_off_display_is_none() {
+        let r = ScreenRegion {
+            x: 1920,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(super::clamp_region_to_display(&r, 1920, 1080), None);
+    }
+
+    #[test]
+    fn clamp_region_zero_result_is_none() {
+        // Zero-width request, and a zero-sized display, both leave nothing to
+        // record — the caller falls back to full-screen.
+        let r = ScreenRegion {
+            x: 10,
+            y: 10,
+            width: 0,
+            height: 50,
+        };
+        assert_eq!(super::clamp_region_to_display(&r, 1920, 1080), None);
+        let r = ScreenRegion {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(super::clamp_region_to_display(&r, 0, 0), None);
     }
 
     // `region` is in PHYSICAL PIXELS; the display args are POINTS; scale=2 → the

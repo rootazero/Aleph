@@ -43,6 +43,19 @@ See `src/session/events.rs::SessionEvent` (`#[non_exhaustive]` enum). Variants c
 
 A read-side projection helper `src/session/projection.rs::project_messages` turns an event range into `Vec<ProjectedMessage>` for consumers that want a classic message-history view rather than raw events.
 
+## Soft retirement (`retired_at`)
+
+Events are never deleted. The `retired_at` column takes them out of the **live conversation** — every live reader (`load_all_events`, `load_events_range`, `load_run_markers`, `search_events`) filters `retired_at IS NULL` — while the rows, and therefore seq allocation, stay intact. Two mirrored primitives, with one deliberate asymmetry:
+
+| | range | BM25 mirror (`session_events_fts`) | driven by |
+|---|---|---|---|
+| `retire_from(from_seq)` | `seq >= from_seq` (tail) | **deleted**, in the same transaction | `chat.clear` / `chat.rewind` |
+| `retire_through(through_seq)` | `seq <= through_seq` (head) | **kept** | manual `/compact` (`context::compact::manual`) |
+
+The asymmetry is the point. Clearing is erasure: leaving the content searchable would let `recall_events` hand the model the very turns the user just wiped. Compaction is *relocation*: the turns leave the live prompt but must stay recallable, which is what makes "compaction is not a net loss" true. Regression: `store.rs::retire_through_keeps_the_search_index_unlike_clear`.
+
+`retire_through` has no `Ok(0)` default — a store that cannot retire must say so, because its caller has already appended the summary and needs to report "summary recorded, context unchanged" rather than a compaction that silently did nothing.
+
 ## `wake(session_id)` semantics
 
 1. Shut down the old actor (if any); grace period 5s.

@@ -57,7 +57,11 @@ async fn live_tokens(
 }
 
 /// Resolve the session's bound origin channel for a stop/halt notice (R5).
-async fn origin_of(agent: &Arc<AgentInstance>, session_key: &SessionKey) -> Option<OriginRoute> {
+/// Shared with `goal_wait` (wake-side notices go to the same origin).
+pub(super) async fn origin_of(
+    agent: &Arc<AgentInstance>,
+    session_key: &SessionKey,
+) -> Option<OriginRoute> {
     let reg = crate::gateway::event_emitter::origin_fanout::channel_registry()?;
     agent
         .origin_route(session_key)
@@ -71,9 +75,10 @@ async fn origin_of(agent: &Arc<AgentInstance>, session_key: &SessionKey) -> Opti
 ///
 /// `policy_meta` is `execute::carry_policy_metadata` of the completing run: the
 /// continuation this hook spawns must be no more privileged than the
-/// conversation it continues. `workspace` is that run's project root, which is
-/// persisted nowhere (`goal::types` does not carry it) — pass it down or the
-/// continuation silently falls back to the agent workspace.
+/// conversation it continues. `workspace` is that run's project root — passed
+/// to the spawned continuation AND recorded on the goal row by the claim
+/// pipeline, so hook-less wakes (`GoalWakeService`) rebuild the run in the
+/// same project instead of silently falling back to the agent workspace.
 pub(super) async fn post_run(
     deps: &ContinuationDeps,
     session_manager: &SessionManager,
@@ -101,8 +106,18 @@ pub(super) async fn post_run(
     let gate_configured = deps.gate.is_some() || peek.gate_command.is_some();
     let tokens = live_tokens(session_manager, session_key, &peek).await;
     let now = now_ms();
+    // The claiming run's project root, recorded by the claim so hook-less
+    // wakes (task-settle / boot re-arm) can rebuild the continuation in the
+    // same project instead of falling back to the agent workspace.
+    let workspace_str = workspace.map(|p| p.to_string_lossy().into_owned());
 
-    let decision = match store.try_claim_continuation(&session, tokens, now, gate_configured) {
+    let decision = match store.try_claim_continuation(
+        &session,
+        tokens,
+        now,
+        gate_configured,
+        workspace_str.as_deref(),
+    ) {
         Ok(d) => d,
         Err(e) => {
             warn!(error = %e, session = %session,
@@ -394,17 +409,22 @@ pub(super) async fn block_goal_on_failure(
         // failed run had already marked complete/blocked, nor one the user
         // cleared while the failure landed.
         match store.block_if_active(session, &note, now_ms()) {
-            Ok(true) => clear_goal_welded_strategy(session),
-            Ok(false) => {} // nothing left to block.
+            Ok(true) => {
+                clear_goal_welded_strategy(session);
+                // Notify ONLY when a goal was actually blocked: when the failed
+                // run had already terminated its own goal (or the user cleared
+                // it), a "pursuit halted" push would be a false alarm.
+                notify_origin(
+                    origin,
+                    format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
+                )
+                .await;
+            }
+            Ok(false) => {} // nothing left to block — stay silent.
             Err(e) => warn!(error = %e, session = %session,
                 "goal pursuit: failed to persist failure block"),
         }
     }
-    notify_origin(
-        origin,
-        format!("⚠️ Autonomous pursuit of your standing goal halted: {reason}"),
-    )
-    .await;
 }
 
 /// A claimed continuation lost the session run-slot (`AgentBusy`) — a scheduling

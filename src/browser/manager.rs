@@ -14,9 +14,7 @@ use super::error::BrowserError;
 use super::network_policy::{BrowserSsrfGuard, PolicyViolation};
 use super::playwright_cli::PlaywrightCliDriver;
 use super::playwright_cli_backend::PlaywrightCliBackend;
-use super::profile::{
-    BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
-};
+use super::profile::{BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig};
 use super::tab_registry::{parse_tab_ids, TabRegistry};
 
 /// Manages the lifecycle of browser profiles.
@@ -33,7 +31,6 @@ pub struct ProfileManager {
 
 struct ManagedProfile {
     config: ProfileConfig,
-    state: ProfileState,
     last_activity: std::time::Instant,
 }
 
@@ -41,7 +38,6 @@ impl ProfileManager {
     #[must_use]
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_guard = Arc::new(BrowserSsrfGuard::new(config.policy.clone()));
-        let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
         let playwright_cli_driver =
             Arc::new(PlaywrightCliDriver::new(config.playwright_cli.clone()));
 
@@ -53,7 +49,6 @@ impl ProfileManager {
                 "default".into(),
                 ManagedProfile {
                     config: ProfileConfig::default(),
-                    state: ProfileState::Idle,
                     last_activity: std::time::Instant::now(),
                 },
             );
@@ -63,7 +58,6 @@ impl ProfileManager {
                     name.clone(),
                     ManagedProfile {
                         config: profile_config.clone(),
-                        state: ProfileState::Idle,
                         last_activity: std::time::Instant::now(),
                     },
                 );
@@ -80,7 +74,6 @@ impl ProfileManager {
                         color: Some("#00AA00".into()),
                         ..Default::default()
                     },
-                    state: ProfileState::Idle,
                     last_activity: std::time::Instant::now(),
                 },
             );
@@ -97,11 +90,22 @@ impl ProfileManager {
                         color: Some("#00AA00".into()),
                         ..Default::default()
                     },
-                    state: ProfileState::Idle,
                     last_activity: std::time::Instant::now(),
                 },
             );
         }
+
+        // The Chrome MCP driver consults the profile map when it has to launch
+        // Chrome itself (engine preference, proxy, user-data-dir, extra args).
+        // Hand it the merged set — including the auto-injected "default"/"user"
+        // entries above — so its view matches what the manager routes on.
+        let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(
+            config.chrome_mcp.clone(),
+            profiles
+                .iter()
+                .map(|(name, p)| (name.clone(), p.config.clone()))
+                .collect(),
+        ));
 
         Self {
             profiles: RwLock::new(profiles),
@@ -115,9 +119,9 @@ impl ProfileManager {
     }
 
     /// Spawn the idle-profile reaper on a background tokio task, at most once
-    /// per `ProfileManager` instance. The reaper sweeps every `interval_secs`,
-    /// tears down Chrome MCP sessions whose profile is past its idle timeout,
-    /// and resets state to `Idle`. Idempotent — subsequent calls are no-ops.
+    /// per `ProfileManager` instance. The reaper sweeps every `interval_secs`
+    /// and tears down Chrome MCP sessions whose profile is past its idle
+    /// timeout. Idempotent — subsequent calls are no-ops.
     pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
         if self.idle_reaper_started.swap(true, Ordering::AcqRel) {
             return;
@@ -143,21 +147,6 @@ impl ProfileManager {
         });
     }
 
-    /// Get the shared Chrome MCP driver instance.
-    pub fn get_chrome_mcp_driver(&self) -> Arc<ChromeMcpDriver> {
-        self.chrome_mcp_driver.clone()
-    }
-
-    /// Get the shared Playwright CLI driver instance.
-    pub fn get_playwright_cli_driver(&self) -> Arc<PlaywrightCliDriver> {
-        self.playwright_cli_driver.clone()
-    }
-
-    /// Get the shared SSRF guard (Arc-wrapped for cheap cloning).
-    pub fn get_ssrf_guard(&self) -> Arc<BrowserSsrfGuard> {
-        self.ssrf_guard.clone()
-    }
-
     /// Route a profile to its appropriate `BrowserBackend` instance.
     ///
     /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
@@ -166,9 +155,6 @@ impl ProfileManager {
         let cfg = self
             .get_config(profile_name)
             .ok_or_else(|| BrowserError::ProfileNotFound(profile_name.into()))?;
-        if matches!(self.get_state(profile_name), Some(ProfileState::Stopping)) {
-            return Err(BrowserError::ProfileBusy(profile_name.into()));
-        }
         match cfg.driver {
             BrowserDriver::Managed => {
                 let headless = cfg.headless.unwrap_or(self.config.playwright_cli.headless);
@@ -187,34 +173,49 @@ impl ProfileManager {
         }
     }
 
-    /// Resolve the effective headless flag for a profile: profile-level override
-    /// falls back to the global `playwright_cli.headless` default.
-    pub fn resolve_headless(&self, profile_name: &str) -> bool {
-        self.get_config(profile_name)
-            .and_then(|c| c.headless)
-            .unwrap_or(self.config.playwright_cli.headless)
-    }
-
     /// Sweep idle profiles: tear down Chrome MCP sessions for `ExistingSession`
-    /// profiles past their `idle_timeout_secs`, then reset state to `Idle`.
+    /// profiles past their `idle_timeout_secs`. Liveness comes from the
+    /// driver's session map (the only place a session actually exists).
     /// Returns the number of profiles reaped (best-effort; safe to call any time).
     pub async fn reap_idle(&self) -> usize {
-        let idle = self.idle_profiles();
+        let idle = self.idle_existing_session_profiles();
         let mut reaped = 0;
         for name in idle {
-            if let Some(BrowserDriver::ExistingSession) = self.get_driver(&name) {
-                self.chrome_mcp_driver.destroy_session(&name).await;
-            }
-            // Atomically check-and-set state inside a single write lock.
-            let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
-            if let Some(profile) = profiles.get_mut(&name) {
-                if profile.state.is_running() {
-                    profile.state = ProfileState::Idle;
-                    reaped += 1;
-                }
-            }
+            self.chrome_mcp_driver.destroy_session(&name).await;
+            reaped += 1;
         }
         reaped
+    }
+
+    /// Whether the profile currently has a live browser session, derived from
+    /// the real session-tracking surfaces rather than a state flag:
+    /// - `ExistingSession` → a Chrome MCP session exists in the driver.
+    /// - `Managed` → the tab registry has tracked tabs for the profile.
+    ///   Approximation: a managed session exists if tabs were used; the
+    ///   registry is reconciled against the live browser on each reaper sweep.
+    pub fn session_active(&self, name: &str) -> bool {
+        match self.get_driver(name) {
+            Some(BrowserDriver::ExistingSession) => self.chrome_mcp_driver.has_session(name),
+            Some(BrowserDriver::Managed) => self.tab_registry.has_tabs(name),
+            None => false,
+        }
+    }
+
+    /// `ExistingSession` profiles that have a live Chrome MCP session AND have
+    /// been idle longer than their configured timeout. Only these are reaped —
+    /// a session that no longer exists needs no teardown, and recent activity
+    /// protects live sessions.
+    fn idle_existing_session_profiles(&self) -> Vec<String> {
+        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+        profiles
+            .iter()
+            .filter(|(name, p)| {
+                p.config.driver == BrowserDriver::ExistingSession
+                    && is_idle(p.last_activity, p.config.idle_timeout_secs)
+                    && self.chrome_mcp_driver.has_session(name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Record activity on a specific tab so its idle timer resets. No-op for
@@ -300,19 +301,13 @@ impl ProfileManager {
         result
     }
 
-    /// List all profiles with their current state.
-    pub fn list_profiles(&self) -> Vec<(String, ProfileState)> {
+    /// List all profiles with derived session liveness (see [`Self::session_active`]).
+    pub fn list_profiles(&self) -> Vec<(String, bool)> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         profiles
-            .iter()
-            .map(|(name, p)| (name.clone(), p.state.clone()))
+            .keys()
+            .map(|name| (name.clone(), self.session_active(name)))
             .collect()
-    }
-
-    /// Get the current state of a named profile.
-    pub fn get_state(&self, name: &str) -> Option<ProfileState> {
-        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
-        profiles.get(name).map(|p| p.state.clone())
     }
 
     /// Get the configuration of a named profile.
@@ -332,6 +327,14 @@ impl ProfileManager {
         self.ssrf_guard.check_navigation(url).await
     }
 
+    /// Scan `text` about to be typed into a page form for an embedded
+    /// credential (the form-input leg of the secret-egress boundary; mirrors
+    /// [`Self::redact_content`]'s delegation pattern). Returns the matched rule
+    /// name when the input must be refused, `None` when clean or the flag is off.
+    pub fn check_input_secret(&self, text: &str) -> Option<String> {
+        self.ssrf_guard.check_input(text)
+    }
+
     /// Redact embedded credentials from page-derived `text` before it is
     /// returned to the LLM (the OUT half of the secret-egress boundary). Used by
     /// the content-read tools (snapshot / console / network / evaluate) via the
@@ -349,32 +352,17 @@ impl ProfileManager {
         }
     }
 
-    /// Update the state of a named profile.
-    pub fn set_state(&self, profile_name: &str, state: ProfileState) {
-        let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(profile) = profiles.get_mut(profile_name) {
-            profile.state = state;
-        }
-    }
-
     /// Test-only: whether any tabs are tracked for a profile.
     #[cfg(test)]
     pub(crate) fn has_tracked_tabs(&self, profile: &str) -> bool {
         self.tab_registry.has_tabs(profile)
     }
+}
 
-    /// Returns profiles that have been idle longer than their configured timeout.
-    pub fn idle_profiles(&self) -> Vec<String> {
-        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
-        profiles
-            .iter()
-            .filter(|(_, p)| {
-                p.state.is_running()
-                    && p.last_activity.elapsed().as_secs() > p.config.idle_timeout_secs
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
+/// Whether `last_activity` is older than `timeout_secs`. Pure helper so the
+/// reaper's timeout filter is unit-testable without a live session.
+fn is_idle(last_activity: std::time::Instant, timeout_secs: u64) -> bool {
+    last_activity.elapsed().as_secs() > timeout_secs
 }
 
 #[cfg(test)]
@@ -390,7 +378,7 @@ mod tests {
         config.profiles.insert(
             "work".into(),
             ProfileConfig {
-                cdp_port: 18801,
+                color: Some("#FF0000".into()),
                 ..Default::default()
             },
         );
@@ -416,46 +404,26 @@ mod tests {
     }
 
     #[test]
-    fn test_get_profile_state() {
+    fn test_get_profile_state_removed_in_favor_of_session_active() {
         let config = BrowserSystemConfig::default();
         let manager = ProfileManager::new(config);
-        let state = manager.get_state("default");
-        assert_eq!(state, Some(ProfileState::Idle));
+        // No browser has been used → both profiles report inactive.
+        assert!(!manager.session_active("default"));
+        assert!(!manager.session_active("user"));
+        assert!(!manager.session_active("nonexistent"));
+
+        // Managed approximation: tracked tabs imply a live session.
+        manager.touch_tab("default", "1");
+        assert!(manager.session_active("default"));
     }
 
     #[test]
-    fn test_profile_state_transitions() {
-        let config = BrowserSystemConfig::default();
-        let manager = ProfileManager::new(config);
-
-        // Initially Idle
-        assert_eq!(manager.get_state("default"), Some(ProfileState::Idle));
-
-        // Can transition to Running
-        manager.set_state(
-            "default",
-            ProfileState::Running {
-                pid: 1234,
-                port: 18800,
-            },
-        );
-        assert_eq!(
-            manager.get_state("default"),
-            Some(ProfileState::Running {
-                pid: 1234,
-                port: 18800,
-            })
-        );
-
-        // Activity recording doesn't error
-        manager.record_activity("default");
-
-        // No idle profiles (just recorded activity)
-        assert!(manager.idle_profiles().is_empty());
-
-        // Back to Idle
-        manager.set_state("default", ProfileState::Idle);
-        assert_eq!(manager.get_state("default"), Some(ProfileState::Idle));
+    fn test_is_idle_timeout_filter() {
+        let now = std::time::Instant::now();
+        assert!(!is_idle(now, 1800));
+        assert!(is_idle(now - std::time::Duration::from_secs(1801), 1800));
+        // Boundary: elapsed must strictly exceed the timeout.
+        assert!(!is_idle(now, 0));
     }
 
     #[test]
@@ -552,6 +520,14 @@ mod tests {
         manager.touch_tab("default", "1");
         assert_eq!(manager.reap_idle_tabs().await, 0);
         assert!(!manager.has_tracked_tabs("default"));
+    }
+
+    #[tokio::test]
+    async fn test_reap_idle_fresh_manager_is_noop() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        // No live sessions exist → nothing to tear down.
+        assert_eq!(manager.reap_idle().await, 0);
     }
 
     #[test]

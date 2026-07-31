@@ -10,6 +10,11 @@
 pub mod compactor;
 pub mod directive;
 pub mod fit;
+/// User-driven `/compact`: summarize the conversation prefix and soft-retire it
+/// from the event log. Orthogonal to the pressure-driven in-turn compaction in
+/// [`compactor`] — that one produces a transient summary for one prompt, this
+/// one edits what every future prompt is rebuilt from.
+pub mod manual;
 /// Verbatim re-attachment of the user's own turns at every compaction drain
 /// site — private to the compaction module, which owns all four of them.
 mod plan_carry;

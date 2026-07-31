@@ -173,6 +173,59 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
         .count()
 }
 
+/// How far back [`read_steering_events`] reads before falling back to the whole
+/// log.
+///
+/// [`count_pending_steering`] only looks back to the last assistant message, so
+/// a trailing window answers it exactly in every realistic session — a burst
+/// deeper than this is already an order of magnitude past any sane
+/// `max_pending_steering`.
+pub(super) const STEERING_TAIL_EVENTS: u64 = 256;
+
+/// Read the events [`count_pending_steering`] needs, bounded.
+///
+/// `get_events(.., None, None)` is a full-table scan plus one `serde_json` parse
+/// per event, and — now that the wait lane lets follow-ups reach the engine
+/// mid-run at all — steering runs it once per follow-up message. On a long-lived
+/// session that is megabytes of allocation to answer a question about the last
+/// handful of events.
+///
+/// The window is trailing, so the answer is exact unless it happens to contain
+/// no assistant message; in that case we re-read in full rather than guess (a
+/// truncated view would read as "no burst pending" and quietly disable both the
+/// coalescing rule and the backpressure cap). Any read error yields `None`, and
+/// callers fail open exactly as they did against the single full read.
+async fn read_steering_events(
+    orchestrator: &Orchestrator,
+    session_id: &SessionId,
+) -> Option<Vec<SessionEventRecord>> {
+    let head = orchestrator
+        .session_service
+        .attach(session_id.clone())
+        .await
+        .ok()?
+        .head_seq;
+    let from = head.saturating_sub(STEERING_TAIL_EVENTS);
+    if from > 0 {
+        let tail = orchestrator
+            .session_service
+            .get_events(session_id, Some(from), None)
+            .await
+            .ok()?;
+        if tail
+            .iter()
+            .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        {
+            return Some(tail);
+        }
+    }
+    orchestrator
+        .session_service
+        .get_events(session_id, None, None)
+        .await
+        .ok()
+}
+
 /// Metadata key counting consecutive post-run steering rescues on a session.
 /// Carried on the rescue `RunRequest` so a pathological injector that keeps
 /// landing messages in the teardown window cannot chain rescues forever.
@@ -228,11 +281,7 @@ pub(super) async fn build_steering_rescue_request(
     };
     let orchestrator = orchestrator.get()?;
     let session_id: SessionId = request.session_key.clone();
-    let events = orchestrator
-        .session_service
-        .get_events(&session_id, None, None)
-        .await
-        .ok()?;
+    let events = read_steering_events(orchestrator, &session_id).await?;
     if count_pending_steering(&events) == 0 {
         return None;
     }
@@ -354,14 +403,10 @@ pub(super) async fn try_inject_steering(
     // and coalescing-aware (Hermes / Pi / OpenSquilla parity), then decide from
     // that single snapshot. Fail open: a transient read error falls back to the
     // legacy always-inject-with-preamble path, never dropping the message.
-    let pending = match orchestrator
-        .session_service
-        .get_events(&session_id, None, None)
+    let pending = read_steering_events(orchestrator, &session_id)
         .await
-    {
-        Ok(events) => count_pending_steering(&events),
-        Err(_) => 0,
-    };
+        .as_deref()
+        .map_or(0, count_pending_steering);
 
     // Bound: cap the un-consumed steering burst. Past the cap, reject so the
     // busy wait lane redelivers once the loop drains the burst or goes idle —

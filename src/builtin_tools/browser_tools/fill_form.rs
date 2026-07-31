@@ -73,6 +73,20 @@ impl AlephTool for BrowserFillFormTool {
     type Output = BrowserFillFormOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Input-side secret scan runs BEFORE the approval check: deterministic
+        // policy beats interactive approval (and is cheaper). Every field value
+        // is scanned — a single credential-shaped value anywhere in the batch
+        // refuses the whole fill.
+        for field in &args.fields {
+            if let Some(message) = super::check_input_secret_block(&self.manager, &field.value) {
+                return Ok(BrowserFillFormOutput {
+                    success: false,
+                    filled_count: 0,
+                    message: Some(message),
+                });
+            }
+        }
+
         let fill_target = format!(
             "{} field(s): {}",
             args.fields.len(),
@@ -203,5 +217,63 @@ mod tests {
         // Empty fields: get_active_tab fails, returns success: false
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fill_form_blocks_secret_value() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserFillFormTool::new(manager);
+
+        let result = tool
+            .call(BrowserFillFormArgs {
+                profile: "default".into(),
+                fields: vec![
+                    FormField {
+                        selector: None,
+                        ref_id: Some("e1".into()),
+                        value: "Alice".into(),
+                    },
+                    FormField {
+                        selector: None,
+                        ref_id: Some("e2".into()),
+                        value: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.filled_count, 0);
+        let message = result.message.unwrap();
+        assert!(message.contains("Blocked"), "expected refusal: {message}");
+        // The refusal names the rule but never echoes the secret value.
+        assert!(!message.contains("sk-ant-api03"));
+    }
+
+    #[tokio::test]
+    async fn test_fill_form_clean_values_not_blocked() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserFillFormTool::new(manager);
+
+        let result = tool
+            .call(BrowserFillFormArgs {
+                profile: "default".into(),
+                fields: vec![FormField {
+                    selector: None,
+                    ref_id: Some("e1".into()),
+                    value: "alice@example.com".into(),
+                }],
+            })
+            .await
+            .unwrap();
+
+        // Clean input passes the secret scan and reaches the backend, which
+        // degrades gracefully without a running browser.
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(!message.contains("Blocked"), "clean input blocked: {message}");
     }
 }

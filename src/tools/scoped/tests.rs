@@ -2565,3 +2565,145 @@ async fn empty_deferred_set_is_byte_identical() {
     let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
     assert!(names.contains(&"alpha".to_string()));
 }
+
+// -------------------------------------------------------------------------
+// Ingress hygiene (Layer 2) — end-to-end through the real dispatch seam
+// -------------------------------------------------------------------------
+
+/// A tool shaped exactly like `bash`: a typed struct whose `stdout` field holds
+/// the multi-line log. That shape is the whole point — `Value::to_string()`
+/// escapes its newlines, so anything downstream that reasons about lines sees
+/// one line.
+struct FailingTestRunner;
+
+#[async_trait::async_trait]
+impl LoopTool for FailingTestRunner {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "runs a test suite"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        let mut log = String::from("$ cargo test --lib\n\nrunning 2001 tests\n");
+        for i in 0..2000 {
+            log.push_str(&format!("test suite::case_{i} ... ok\n"));
+        }
+        log.push_str("test suite::the_broken_one ... FAILED\n\nfailures:\n\n");
+        log.push_str("---- suite::the_broken_one stdout ----\n");
+        log.push_str("thread 'suite::the_broken_one' panicked at src/widget.rs:42:9:\n");
+        log.push_str("  assertion `left == right` failed\n    left: 1\n   right: 2\n\n");
+        log.push_str("failures:\n    suite::the_broken_one\n\n");
+        log.push_str("test result: FAILED. 2000 passed; 1 failed; 0 ignored\n");
+        LoopToolResult::Success {
+            output: json!({
+                "success": false,
+                "exit_code": 101,
+                "stdout": log,
+                "stderr": "",
+                "language": "shell",
+            }),
+        }
+    }
+}
+
+fn hygiene_store(name: &str) -> StdArc<crate::tools::result_store::ToolResultStore> {
+    let base = std::env::temp_dir()
+        .join("aleph_test_scoped_hygiene")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    StdArc::new(crate::tools::result_store::ToolResultStore::with_dir_for_tests(base))
+}
+
+/// The round's headline behaviour, asserted where it actually has to hold.
+///
+/// A failing `cargo test` run is the single most common oversized tool result in
+/// this repo. Before ingress hygiene the model received the first ~400 characters
+/// of the **JSON envelope** (`{"success":false,"exit_code":101,"stdout":"\n
+/// running 2001 tests\ntest suite::case_0 ... ok\n…`) above a persist marker: the
+/// panic, the assertion diff and the name of the failing test were all gone, so
+/// the only available next move was to re-run the suite.
+#[tokio::test]
+async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_head() {
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(FailingTestRunner));
+    let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
+        .with_result_store(hygiene_store("failing_test_run"));
+
+    let out = svc.execute("bash", json!({})).await.expect("tool succeeds");
+    let text = out.value.as_str().expect("layer 2 flattens to text");
+
+    // The three things the model needs to act, none of which survived before.
+    assert!(
+        text.contains("the_broken_one"),
+        "the failing test's name must reach the model:\n{text}"
+    );
+    assert!(
+        text.contains("src/widget.rs:42:9") || text.contains("panicked"),
+        "the panic location must reach the model:\n{text}"
+    );
+    assert!(
+        text.contains("2000 passed; 1 failed"),
+        "the verdict line must reach the model:\n{text}"
+    );
+
+    // The passing-test noise is what paid for it.
+    assert!(
+        !text.contains("case_500"),
+        "2000 passing-test lines must not be inlined:\n{}",
+        &text[..text.len().min(400)]
+    );
+
+    // Still recoverable: the untouched original is offloaded, not the reduction.
+    assert!(
+        text.contains("[Full output persisted: "),
+        "the recovery handle must be present:\n{text}"
+    );
+
+    // And the result is genuinely smaller than what the tool produced.
+    let tokens = crate::context::budget::pressure::estimate_tokens_smart(text);
+    assert!(
+        tokens < 8_000,
+        "the model-facing result must land inside bash's declared budget, got {tokens}"
+    );
+}
+
+/// The no-op guarantee: a small result is passed through byte-for-byte, so the
+/// overwhelming majority of tool calls are unaffected by any of this.
+#[tokio::test]
+async fn a_small_result_is_untouched_by_ingress_hygiene() {
+    struct Tiny;
+    #[async_trait::async_trait]
+    impl LoopTool for Tiny {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn description(&self) -> &str {
+            "tiny"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _i: Value, _c: CancellationToken) -> LoopToolResult {
+            LoopToolResult::Success {
+                output: json!({ "stdout": "error: one line\n", "exit_code": 1 }),
+            }
+        }
+    }
+    let mut registry = LoopToolRegistry::new();
+    registry.register(Box::new(Tiny));
+    let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
+        .with_result_store(hygiene_store("small_untouched"));
+
+    let out = svc.execute("bash", json!({})).await.unwrap();
+    let text = out.value.as_str().unwrap();
+    assert_eq!(
+        text,
+        json!({ "stdout": "error: one line\n", "exit_code": 1 }).to_string(),
+        "under-budget results must be byte-identical"
+    );
+}

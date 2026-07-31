@@ -78,11 +78,28 @@ impl AlephTool for BrowserTabsTool {
     type Output = BrowserTabsOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let backend = super::make_backend(&self.manager, &args.profile);
+        let backend = match super::make_backend(&self.manager, &args.profile) {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(BrowserTabsOutput {
+                    success: false,
+                    tabs: None,
+                    message: Some(e.to_string()),
+                });
+            }
+        };
 
         match args.action {
             TabAction::List => match backend.list_tabs().await {
                 Ok(tabs_text) => {
+                    // `list` is a content read like any other: tab URLs are
+                    // site-controlled and can embed credentials (session ids,
+                    // OAuth codes in query strings), so route the raw listing
+                    // through the shared egress chokepoint — size budget,
+                    // credential redaction, injection-boundary fencing —
+                    // before parsing. Fence / truncation-marker lines don't
+                    // match the "N: URL" shape and are skipped by the parser.
+                    let tabs_text = super::redact_and_wrap(&self.manager, &tabs_text);
                     // Parse "N: URL [selected]" or "Tab N: URL" lines into TabInfo structs.
                     let mut tab_infos: Vec<TabInfo> = tabs_text
                         .lines()
@@ -218,8 +235,7 @@ mod tests {
             .unwrap();
 
         // Switch now routes to backend.switch_tab() — without a running browser
-        // (or on the Playwright CLI backend which has no active-page notion) the
-        // call fails gracefully rather than lying about success.
+        // the call fails gracefully rather than lying about success.
         assert!(!result.success);
         assert!(result.message.is_some());
     }

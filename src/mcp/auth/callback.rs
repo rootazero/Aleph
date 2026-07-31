@@ -27,6 +27,11 @@ pub const DEFAULT_CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 /// OAuth callback result
 #[derive(Debug, Clone)]
 pub struct CallbackResult {
+    /// The authorization server's issuer identifier, when it sent one.
+    ///
+    /// RFC 9207. Carried through to token exchange, which refuses to redeem the
+    /// code if this does not match the issuer recorded when the flow began.
+    pub iss: Option<String>,
     /// Authorization code
     pub code: String,
     /// State parameter (for CSRF verification)
@@ -244,7 +249,10 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
     )
     .await;
 
-    Some(CallbackResult { code, state })
+    // Optional per RFC 9207; validated at token exchange when present.
+    let iss = params.get("iss").map(|s| url_decode(s));
+
+    Some(CallbackResult { iss, code, state })
 }
 
 /// Simple URL decoding (percent-decoding)
@@ -407,6 +415,7 @@ mod tests {
     #[test]
     fn test_callback_result_structure() {
         let result = CallbackResult {
+            iss: None,
             code: "test_code".to_string(),
             state: "test_state".to_string(),
         };

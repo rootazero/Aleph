@@ -5,5 +5,5 @@
 mod connection;
 mod runtime;
 
-pub use connection::McpServerConnection;
+pub use connection::{ChangedLists, McpServerConnection};
 pub use runtime::{check_runtime, RuntimeKind};

@@ -839,14 +839,19 @@ impl super::DesktopTool {
                             // legibility complaints from the LLM consumer. PNG
                             // is unaffected (lossless regardless of quality).
                             let quality_u8 = (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
+                            // The re-encode must not drop what `take_screenshot`
+                            // reported: the points-to-pixels ratio survives via
+                            // the `_with_scale` entry point.
+                            let scale_factor = s.scale_factor;
                             match tokio::task::spawn_blocking(move || {
-                                aleph_desktop::perception::process_screenshot(
+                                aleph_desktop::perception::process_screenshot_with_scale(
                                     &raw_bytes,
                                     max_w,
                                     max_h,
                                     &out_fmt,
                                     quality_u8,
                                     Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
+                                    scale_factor,
                                 )
                             })
                             .await

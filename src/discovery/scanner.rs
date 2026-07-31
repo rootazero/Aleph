@@ -493,8 +493,8 @@ mod tests {
         std::fs::create_dir_all(claude_home.join("skills")).unwrap();
 
         let scanner = {
-            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
-            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            let _env =
+                crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, &home);
             DirectoryScanner::new(&DiscoveryConfig {
                 working_dir: temp.path().to_path_buf(),
                 scan_claude_dirs: true,

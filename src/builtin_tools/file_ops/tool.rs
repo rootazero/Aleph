@@ -99,7 +99,9 @@ impl FileOpsTool {
         let output_dir_ref = output_dir.as_deref();
 
         let result = match args.operation {
-            FileOperation::List => execute_list(path, &self.denied_paths, output_dir_ref).await,
+            FileOperation::List => {
+                execute_list(path, &self.denied_paths, output_dir_ref, args.limit).await
+            }
             FileOperation::Move => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for move operation".to_string())
@@ -140,7 +142,14 @@ impl FileOpsTool {
                 let pattern = args.pattern.ok_or_else(|| {
                     ToolError::InvalidArgs("Pattern required for search operation".to_string())
                 })?;
-                execute_search(path, &pattern, &self.denied_paths, output_dir_ref).await
+                execute_search(
+                    path,
+                    &pattern,
+                    &self.denied_paths,
+                    output_dir_ref,
+                    args.limit,
+                )
+                .await
             }
             FileOperation::BatchMove => {
                 let pattern = args.pattern.ok_or_else(|| {
@@ -172,6 +181,7 @@ impl FileOpsTool {
                     args.pattern.as_deref(),
                     &self.denied_paths,
                     output_dir_ref,
+                    args.limit,
                 )
                 .await
             }
@@ -218,9 +228,14 @@ impl AlephTool for FileOpsTool {
 - delete: Delete file or directory
 - mkdir: Create directory
 - search: Search files by glob pattern (e.g., "*.pdf", "**/*.jpg")
-- stats: Recursive line/byte counts. Returns per-file FileInfo {size, lines} plus an aggregate {total_files, total_lines, total_bytes}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
+- stats: Recursive line/byte counts. Returns an aggregate {total_files, total_lines, total_bytes} plus per-file FileInfo {size, lines}. Use this to answer "how many lines / files / bytes are in this directory" — DO NOT loop over file_read for that.
 - batch_move: Move ALL files matching a pattern to destination (e.g., pattern="*.jpg" moves all JPGs)
 - organize: Auto-organize files by type into categorized folders (Images, Documents, Videos, Audio, Archives, Code, Others)
+
+LISTING LIMITS (list / search / stats):
+- At most 500 entries are returned by default; `limit` raises it. The `message` says when the cap was reached and what to pass.
+- `stats` aggregates over EVERY match regardless of the cap, so its totals are exact even when the per-file list is capped.
+- Recursive walks skip generated/VCS directories (.git, node_modules, target, dist, build, .venv, __pycache__, …). Name one in `pattern` to include it, e.g. pattern="target/**/*.rs".
 
 PATH RESOLUTION:
 - Relative paths → resolved against the active workspace scope; rejected if no scope is set

@@ -22,7 +22,7 @@
 
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop_windows::WindowsAccessibility;
-use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryTreeParams};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryFocusedParams, QueryTreeParams};
 
 /// Count nodes and how many of them carry each property, depth-first.
 #[derive(Default, Debug)]
@@ -66,9 +66,12 @@ async fn the_cached_walk_returns_populated_nodes() {
         .query_tree(QueryTreeParams {
             pid: None,
             max_depth: 8,
+            // 0 lets the implementation apply its default node budget.
+            max_nodes: 0,
         })
         .await
         .expect("query_tree failed")
+        .element
         .expect("no tree for the foreground window");
     let elapsed = started.elapsed();
 
@@ -108,7 +111,10 @@ async fn the_cached_walk_returns_populated_nodes() {
 #[ignore = "needs an interactive desktop session with a focused control"]
 async fn the_focused_element_is_enriched() {
     let ax = WindowsAccessibility::new();
-    let focused = ax.query_focused().await.expect("query_focused failed");
+    let focused = ax
+        .query_focused(QueryFocusedParams::default())
+        .await
+        .expect("query_focused failed");
     let Some(el) = focused else {
         println!("nothing focused; skipping");
         return;

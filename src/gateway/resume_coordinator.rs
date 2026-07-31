@@ -349,7 +349,7 @@ impl ResumeCoordinator {
                          after a restart ({reason}) and was abandoned."
                     );
                     if goal_blocked {
-                        text.push_str(" Its standing goal was paused — re-set it to continue.");
+                        text.push_str(" Its standing goal was blocked — re-set it to continue.");
                     }
                     let msg = crate::gateway::channel::OutboundMessage::text(conversation, text);
                     if let Err(e) = reg

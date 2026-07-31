@@ -1061,6 +1061,45 @@ impl ScopedToolService {
         let explicit = self.inner.max_result_tokens_for(name);
         let budget = crate::tools::result_processing::resolve_result_budget(name, explicit);
 
+        // Ingress hygiene — the local clean/trim/summarise pass, applied only
+        // when the result is already over the tool's declared budget so the
+        // common case stays byte-for-byte identical.
+        //
+        // It has to run on `out.value` rather than on `compressed`: flattening a
+        // typed tool result with `Value::to_string()` escapes every newline and
+        // collapses the whole thing onto one line, which blinds both
+        // content-aware cleaners (`structured::classify` needs lines;
+        // `distill_output` iterates `text.lines()`). See `tool_output::hygiene`.
+        //
+        // `reduced_from` hands Layer 2 the untouched original so the offloaded
+        // blob — the model's way back to the dropped detail — is the full output,
+        // not the reduction.
+        let mut model_facing = compressed;
+        let mut reduced_from: Option<String> = None;
+        if let Some(limit) = budget {
+            if crate::context::budget::pressure::estimate_tokens_smart(&model_facing) > limit {
+                let mut cleaned = out.value.clone();
+                let reductions = crate::tool_output::hygiene::clean_result_value(&mut cleaned);
+                if !reductions.is_empty() {
+                    let flattened = match &cleaned {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    for r in &reductions {
+                        tracing::debug!(
+                            tool = name,
+                            field = %r.field,
+                            method = ?r.method,
+                            tokens_before = r.tokens_before,
+                            tokens_after = r.tokens_after,
+                            "ingress hygiene reduced a tool-result field"
+                        );
+                    }
+                    reduced_from = Some(std::mem::replace(&mut model_facing, flattened));
+                }
+            }
+        }
+
         // Generate a per-call file name suffix so concurrent calls to the
         // same tool do not collide on disk. The LLM correlates the result
         // through the surrounding conversation history, not the path.
@@ -1069,15 +1108,11 @@ impl ScopedToolService {
         let processed = crate::tools::result_processing::apply_result_budget(
             &call_id,
             name,
-            &compressed,
+            &model_facing,
             self.result_store.as_deref(),
             budget,
+            reduced_from.as_deref(),
         );
-
-        // Mark `metadata.truncated` whenever Layer 2 shortened the text.
-        if processed.persisted_path.is_some() || processed.text.contains("[output truncated") {
-            out.metadata.truncated = true;
-        }
 
         // Extension hooks observe large tool results offloaded to disk.
         if let Some(ref path) = processed.persisted_path {
@@ -1104,10 +1139,10 @@ impl ScopedToolService {
     /// model can pattern-match consistently with `tool_error` outputs
     /// from other channels.
     ///
-    /// The untrusted body is also length-bounded first: unlike success
-    /// output, errors bypass the Layer 2 result budget entirely (they never
-    /// reach `apply_layer_two`), so an upstream that embeds a whole HTML
-    /// error page or a giant stack trace would otherwise ride into the
+    /// The untrusted body is also cleaned first (see [`clean_error_body`]):
+    /// unlike success output, errors bypass the Layer 2 result budget entirely
+    /// (they never reach `apply_layer_two`), so an upstream that embeds a whole
+    /// HTML error page or a giant stack trace would otherwise ride into the
     /// model's context verbatim on every subsequent turn.
     fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
         use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
@@ -1118,7 +1153,7 @@ impl ScopedToolService {
             ToolError::Execution { name: n, cause } => ToolError::Execution {
                 name: n,
                 cause: wrap_external_content(
-                    &bound_error_body(&cause),
+                    &clean_error_body(&cause),
                     ContentSource::ToolError {
                         tool: name.to_string(),
                     },
@@ -1127,7 +1162,7 @@ impl ScopedToolService {
             ToolError::Transport { name: n, cause } => ToolError::Transport {
                 name: n,
                 cause: wrap_external_content(
-                    &bound_error_body(&cause),
+                    &clean_error_body(&cause),
                     ContentSource::ToolError {
                         tool: name.to_string(),
                     },
@@ -1150,6 +1185,36 @@ const ERROR_BODY_MAX_CHARS: usize = 4000;
 /// the tail carries the summary/caused-by chain — keep both, elide the middle.
 const ERROR_BODY_HEAD_CHARS: usize = 2600;
 const ERROR_BODY_TAIL_CHARS: usize = 1200;
+
+/// Clean an untrusted tool-error body before it is fenced and shown.
+///
+/// The error channel bypasses `apply_layer_two` entirely, so until now it was
+/// the one text path reaching the model with **no** ANSI stripping and **no**
+/// distillation — and a head+tail bound drops the middle, which for a stack
+/// trace or a compiler run is exactly where the failure is named. Order matters:
+/// strip escapes, then try to distil the salient error/path lines (which is the
+/// whole point of an error body), and only bound head/tail when there is nothing
+/// to distil.
+fn clean_error_body(body: &str) -> String {
+    let stripped = crate::tool_output::sanitize::sanitize_command_output(body);
+    // Only reshape what would otherwise be cut. An error body that already fits
+    // reaches the model verbatim, exactly as before — distilling it would replace
+    // the actual message with a digest of the lines that merely *look* like
+    // errors, and unlike success output an error is never persisted, so there is
+    // no way back to what was dropped.
+    if stripped.chars().count() <= ERROR_BODY_MAX_CHARS {
+        return stripped.into_owned();
+    }
+    if let Some(digest) = crate::tool_output::distill::distill_output(&stripped) {
+        if digest.error_count > 0 {
+            let rendered = digest.render(digest.salient.len());
+            if rendered.chars().count() <= ERROR_BODY_MAX_CHARS {
+                return rendered;
+            }
+        }
+    }
+    bound_error_body(&stripped).into_owned()
+}
 
 /// Bound an error body to [`ERROR_BODY_MAX_CHARS`], keeping head + tail with
 /// an explicit elision marker. Char-based (never splits a UTF-8 code point).

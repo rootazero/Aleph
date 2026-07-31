@@ -82,7 +82,9 @@ impl LinuxPim {
     fn find_next_from_line(content: &str, from_pos: usize) -> Option<usize> {
         let bytes = content.as_bytes();
         let mut i = from_pos;
-        while i + 6 < bytes.len() {
+        // The probe reads up to `bytes[i + 5]`, so a separator in the last 6
+        // bytes of the file is in range.
+        while i + 5 < bytes.len() {
             if bytes[i] == b'\n'
                 && bytes[i + 1] == b'F'
                 && bytes[i + 2] == b'r'
@@ -266,14 +268,13 @@ impl PimCapability for LinuxPim {
     }
 
     async fn mail_get(&self, message_id: &str) -> Result<MailMessageDetail> {
-        let parts: Vec<&str> = message_id.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err(DesktopError::PlatformError(format!(
-                "Invalid message_id format: {message_id}"
-            )));
-        }
-        let folder_id = parts[0];
-        let offset: usize = parts[1].parse().map_err(|_| {
+        // Split from the right: `folder_id` is an mbox relative path and may
+        // itself contain `:` (legal in Linux file names); only the trailing
+        // numeric offset is ours.
+        let (folder_id, offset_str) = message_id.rsplit_once(':').ok_or_else(|| {
+            DesktopError::PlatformError(format!("Invalid message_id format: {message_id}"))
+        })?;
+        let offset: usize = offset_str.parse().map_err(|_| {
             DesktopError::PlatformError(format!("Invalid offset in message_id: {message_id}"))
         })?;
 
@@ -315,5 +316,37 @@ mod tests {
     #[test]
     fn create_default() {
         let _pim = LinuxPim;
+    }
+
+    #[test]
+    fn find_from_line_separator_at_end_of_file() {
+        // The "\nFrom " separator sits in the final 6 bytes of the content;
+        // the scan must still reach it.
+        let content = "From a@b Sat Jan  1 00:00:00 2022\nbody\nFrom ";
+        let idx = LinuxPim::find_next_from_line(content, 1);
+        assert_eq!(idx, Some(content.len() - 5));
+    }
+
+    #[tokio::test]
+    async fn mail_get_folder_id_with_colon() {
+        // `folder_id` is an mbox relative path and may itself contain ':'; the
+        // split must happen at the trailing offset, not the folder's colon, so
+        // the lookup reports the full folder id rather than a bad offset.
+        let pim = LinuxPim::new();
+        let err = pim.mail_get("Inbox:sub:42").await.unwrap_err();
+        assert!(
+            err.to_string().contains("Folder not found: Inbox:sub"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_get_message_id_without_colon() {
+        let pim = LinuxPim::new();
+        let err = pim.mail_get("no-colon-here").await.unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid message_id format"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -552,13 +552,14 @@ impl AlephTool for DesktopSom {
         let out_fmt = args.format.clone().unwrap_or_else(|| "png".to_string());
         let max_w = args.max_width;
         let processed = match tokio::task::spawn_blocking(move || {
-            aleph_desktop::perception::process_screenshot(
+            aleph_desktop::perception::process_screenshot_with_scale(
                 &annotated,
                 max_w,
                 None,
                 &out_fmt,
                 90,
                 Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
+                Some(scale),
             )
         })
         .await

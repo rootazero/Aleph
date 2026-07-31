@@ -389,6 +389,12 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec![
                 "file_write".into(),
                 "file_edit".into(),
+                // Whole Hub family, read-only members included — the verifier
+                // stays on the work it was asked to check. `denied_tools` is an
+                // exact-match list, so a new hub tool must be added here or it
+                // silently becomes reachable through the `*` allow; the
+                // `verify_denies_every_hub_tool` test enforces that.
+                "hub_catalog_search".into(),
                 "hub_catalog_sync".into(),
                 "hub_fetch_docs".into(),
                 "hub_resolve_spec".into(),
@@ -792,6 +798,7 @@ mod tests {
 
         // Hub tools are demoted to the main loop; the read-only verifier still denies them.
         let hub_tools = [
+            "hub_catalog_search",
             "hub_catalog_sync",
             "hub_fetch_docs",
             "hub_resolve_spec",
@@ -811,6 +818,28 @@ mod tests {
 
         // Unrelated tools must still be allowed on main.
         assert!(main.is_tool_allowed("flow_run"));
+    }
+
+    /// Drift guard: `denied_tools` is an exact-match list, so a Hub tool added to
+    /// the family without being added to `verify`'s deny list would silently
+    /// become reachable through its `*` allow. Derive the expectation from the
+    /// single source that already enumerates the family.
+    #[test]
+    fn verify_denies_every_hub_tool() {
+        let agents = builtin_agents();
+        let verify = agents.iter().find(|a| a.id == "verify").unwrap();
+        let family = crate::executor::TOOL_CATEGORIES
+            .iter()
+            .find(|c| c.id == "extensions_store")
+            .expect("extensions_store tool category");
+        assert!(!family.tools.is_empty());
+        for name in family.tools {
+            assert!(
+                !verify.is_tool_allowed(name),
+                "verify must deny every Hub tool; '{name}' is in the extensions_store group but \
+                 not in verify's denied_tools"
+            );
+        }
     }
 
     #[test]

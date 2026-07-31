@@ -34,6 +34,7 @@ use tokio::sync::broadcast;
 
 use crate::gateway::cancellation::CancellationToken;
 use crate::gateway::channel_approval::ChannelApprovalCapability;
+use crate::gateway::webhook_receiver::WebhookHandler;
 
 /// Result type for channel operations
 pub type ChannelResult<T> = Result<T, ChannelError>;
@@ -771,6 +772,27 @@ pub trait Channel: Send + Sync {
     /// Returns the channel's approval delivery capability if supported.
     /// Channels that don't support approval delivery return `None`.
     fn approval_capability(&self) -> Option<Arc<dyn ChannelApprovalCapability>> {
+        None
+    }
+
+    /// Webhook ingestion handler for channels that receive over HTTP POST.
+    ///
+    /// A channel returning `Some` gets its `path()` mounted on the gateway's
+    /// shared webhook mount table by `ChannelRegistry` at every lifecycle
+    /// point (start/restart/stop/unregister); `None` (the default) means the
+    /// channel receives some other way — a poll loop, a socket, a bridge.
+    ///
+    /// Two facts an implementor must know:
+    ///
+    /// 1. `path()` must be under `/webhook/` (the shared route prefix,
+    ///    `WEBHOOK_ROUTE_PREFIX`). Anything else is refused by
+    ///    `WebhookMountTable::mount`, leaving the channel Connected-but-deaf.
+    /// 2. ⚠️ The mount is sampled at the instant `start()` returns
+    ///    (`channel_registry.rs` `start_channel`). A handler that only
+    ///    materialises *later* — e.g. after an async connect completes — is
+    ///    never mounted: the channel reports `Connected` while deaf, which is
+    ///    exactly the advertised-but-disabled failure this design removed.
+    fn webhook_handler(&self) -> Option<Arc<dyn WebhookHandler>> {
         None
     }
 

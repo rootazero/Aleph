@@ -52,6 +52,7 @@ mod tests {
             destination: None,
             pattern: None,
             create_parents: true,
+            limit: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -106,6 +107,7 @@ mod tests {
             destination: None,
             pattern: None,
             create_parents: true,
+            limit: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -129,6 +131,7 @@ mod tests {
             destination: Some(to.to_string_lossy().to_string()),
             pattern: None,
             create_parents: true,
+            limit: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -153,6 +156,7 @@ mod tests {
             destination: None,
             pattern: Some("*.txt".to_string()),
             create_parents: true,
+            limit: None,
         };
 
         let result = AlephTool::call(&tool, args).await.unwrap();
@@ -174,6 +178,7 @@ mod tests {
             destination: None,
             pattern: None,
             create_parents: true,
+            limit: None,
         };
 
         let result = AlephTool::call(&tool, args).await;

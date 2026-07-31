@@ -12,9 +12,9 @@ use tokio::process::Command;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::RwLock;
 
-use super::discovery::find_chromium;
+use super::discovery::{find_chromium, find_chromium_preferred};
 use super::error::BrowserError;
-use super::profile::ChromeMcpConfig;
+use super::profile::{ChromeMcpConfig, ProfileConfig};
 use crate::mcp::{ExternalServerConfig, McpClient};
 use crate::sync_primitives::Mutex;
 use crate::utils::no_window::NoWindow;
@@ -29,7 +29,12 @@ struct ChromeMcpSession {
 /// browser's hostname resolution to a pre-validated set of IPs (DNS
 /// rebinding defense). Baseline flags stay identical whether or not a
 /// pin is supplied.
-fn chrome_launch_args(pin: Option<&str>) -> Vec<String> {
+///
+/// When the launching profile is known, its `proxy` / `user_data_dir` are
+/// appended next, and `extra_args` go LAST so a user-supplied flag always
+/// wins over a config-derived one (Chrome honors the last occurrence of a
+/// repeated switch).
+fn chrome_launch_args(pin: Option<&str>, profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
@@ -38,6 +43,15 @@ fn chrome_launch_args(pin: Option<&str>) -> Vec<String> {
     if let Some(p) = pin {
         args.push(p.to_string());
     }
+    if let Some(cfg) = profile_cfg {
+        if let Some(proxy) = &cfg.proxy {
+            args.push(format!("--proxy-server={proxy}"));
+        }
+        if let Some(dir) = &cfg.user_data_dir {
+            args.push(format!("--user-data-dir={dir}"));
+        }
+        args.extend(cfg.extra_args.iter().cloned());
+    }
     args
 }
 
@@ -45,6 +59,11 @@ fn chrome_launch_args(pin: Option<&str>) -> Vec<String> {
 pub struct ChromeMcpDriver {
     sessions: RwLock<HashMap<String, Arc<ChromeMcpSession>>>,
     config: ChromeMcpConfig,
+    /// Per-profile browser configuration (engine preference, proxy,
+    /// user-data-dir, extra launch args), consulted when Aleph has to launch
+    /// Chrome itself. Profiles absent from this map launch with baseline
+    /// flags and the default browser discovery order.
+    profiles: HashMap<String, ProfileConfig>,
     /// Prevents concurrent Chrome launches from racing.
     chrome_launch_lock: tokio::sync::Mutex<()>,
     /// Per-profile serialization locks. Page selection in chrome-devtools-mcp
@@ -66,10 +85,11 @@ pub struct ChromeMcpDriver {
 
 impl ChromeMcpDriver {
     #[must_use]
-    pub fn new(config: ChromeMcpConfig) -> Self {
+    pub fn new(config: ChromeMcpConfig, profiles: HashMap<String, ProfileConfig>) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
+            profiles,
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
             pending_launch_pins: Mutex::new(HashMap::new()),
@@ -263,14 +283,21 @@ impl ChromeMcpDriver {
             ));
         }
 
-        let chrome_path = find_chromium()?;
+        // A configured profile pins both the engine we look for and the
+        // launch flags we pass; an unknown profile falls back to the plain
+        // discovery order and baseline flags.
+        let profile_cfg = self.profiles.get(profile_name);
+        let chrome_path = match profile_cfg {
+            Some(cfg) => find_chromium_preferred(&cfg.browser)?,
+            None => find_chromium()?,
+        };
         tracing::info!(
             "Launching Chrome with remote debugging: {}",
             chrome_path.display()
         );
 
         let pin = self.take_pending_launch_pin(profile_name);
-        let args = chrome_launch_args(pin.as_deref());
+        let args = chrome_launch_args(pin.as_deref(), profile_cfg);
 
         let mut cmd = Command::new(&chrome_path);
         for a in &args {
@@ -377,6 +404,16 @@ impl ChromeMcpDriver {
         }
     }
 
+    /// Whether a live session exists for `profile_name`. Best-effort: returns
+    /// `false` on lock contention rather than awaiting — intended for the
+    /// idle reaper and liveness reporting, where a skipped sweep is harmless.
+    pub fn has_session(&self, profile_name: &str) -> bool {
+        match self.sessions.try_read() {
+            Ok(sessions) => sessions.contains_key(profile_name),
+            Err(_) => false,
+        }
+    }
+
     /// Destroy a session (for cleanup after transport errors).
     pub async fn destroy_session(&self, profile_name: &str) {
         let session = {
@@ -396,11 +433,15 @@ impl ChromeMcpDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::profile::BrowserType;
+
+    fn test_driver() -> ChromeMcpDriver {
+        ChromeMcpDriver::new(ChromeMcpConfig::default(), HashMap::new())
+    }
 
     #[test]
     fn test_chrome_mcp_driver_new() {
-        let config = ChromeMcpConfig::default();
-        let driver = ChromeMcpDriver::new(config);
+        let driver = test_driver();
         let sessions = driver.sessions.try_read().unwrap();
         assert!(sessions.is_empty());
     }
@@ -409,7 +450,7 @@ mod tests {
     fn chrome_launch_args_includes_pin_arg_when_provided() {
         // Baseline flags are present and the pin arg is appended verbatim.
         let pin = "--host-resolver-rules=\"MAP foo 1.2.3.4\"";
-        let args = chrome_launch_args(Some(pin));
+        let args = chrome_launch_args(Some(pin), None);
         assert!(
             args.iter().any(|a| a == pin),
             "pin arg must be passed through verbatim — args = {args:?}"
@@ -420,7 +461,7 @@ mod tests {
     #[test]
     fn chrome_launch_args_omits_pin_arg_when_none() {
         // Without a pin, no --host-resolver-rules flag reaches Chrome.
-        let args = chrome_launch_args(None);
+        let args = chrome_launch_args(None, None);
         assert!(
             !args.iter().any(|a| a.contains("--host-resolver-rules")),
             "no pin → no --host-resolver-rules — args = {args:?}"
@@ -429,8 +470,67 @@ mod tests {
     }
 
     #[test]
+    fn chrome_launch_args_wires_profile_proxy_and_user_data_dir() {
+        let cfg = ProfileConfig {
+            proxy: Some("socks5://127.0.0.1:1080".into()),
+            user_data_dir: Some("/tmp/aleph-profile".into()),
+            ..Default::default()
+        };
+        let args = chrome_launch_args(None, Some(&cfg));
+        assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:1080".to_string()));
+        assert!(args.contains(&"--user-data-dir=/tmp/aleph-profile".to_string()));
+        // Baseline flags still lead the argv.
+        assert_eq!(args[0], "--remote-debugging-port=0");
+    }
+
+    #[test]
+    fn chrome_launch_args_appends_extra_args_last() {
+        // extra_args go last so a user flag wins over a config-derived one.
+        let cfg = ProfileConfig {
+            proxy: Some("http://proxy:8080".into()),
+            extra_args: vec!["--disable-gpu".into(), "--proxy-server=http://override:1".into()],
+            ..Default::default()
+        };
+        let args = chrome_launch_args(None, Some(&cfg));
+        let n = args.len();
+        assert_eq!(args[n - 2], "--disable-gpu");
+        assert_eq!(args[n - 1], "--proxy-server=http://override:1");
+        // Both proxy flags are present; Chrome honors the last occurrence.
+        assert!(args.contains(&"--proxy-server=http://proxy:8080".to_string()));
+    }
+
+    #[test]
+    fn chrome_launch_args_default_profile_matches_baseline() {
+        // A profile with no proxy/user-data/extra args must not change the argv.
+        assert_eq!(
+            chrome_launch_args(None, Some(&ProfileConfig::default())),
+            chrome_launch_args(None, None)
+        );
+    }
+
+    #[test]
+    fn driver_profile_lookup_prefers_configured_engine() {
+        // The profiles map is what ensure_chrome_running consults: a configured
+        // profile resolves to its config, an unknown one to None (baseline).
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".into(),
+            ProfileConfig {
+                browser: BrowserType::Brave,
+                ..Default::default()
+            },
+        );
+        let driver = ChromeMcpDriver::new(ChromeMcpConfig::default(), profiles);
+        assert_eq!(
+            driver.profiles.get("work").map(|p| &p.browser),
+            Some(&BrowserType::Brave)
+        );
+        assert!(driver.profiles.get("unknown").is_none());
+    }
+
+    #[test]
     fn chrome_mcp_driver_set_pending_launch_pin_then_take_round_trip() {
-        let driver = ChromeMcpDriver::new(ChromeMcpConfig::default());
+        let driver = test_driver();
         driver.set_pending_launch_pin(
             "user",
             Some("--host-resolver-rules=\"MAP x 1.1.1.1\"".to_string()),
@@ -446,7 +546,7 @@ mod tests {
 
     #[test]
     fn chrome_mcp_driver_set_pending_launch_pin_none_clears_value() {
-        let driver = ChromeMcpDriver::new(ChromeMcpConfig::default());
+        let driver = test_driver();
         driver.set_pending_launch_pin(
             "user",
             Some("--host-resolver-rules=\"MAP x 1.1.1.1\"".to_string()),
@@ -457,7 +557,7 @@ mod tests {
 
     #[test]
     fn chrome_mcp_driver_set_pending_launch_pin_scoped_per_profile() {
-        let driver = ChromeMcpDriver::new(ChromeMcpConfig::default());
+        let driver = test_driver();
         driver.set_pending_launch_pin("user-a", Some("PIN-A".to_string()));
         driver.set_pending_launch_pin("user-b", Some("PIN-B".to_string()));
         assert_eq!(
@@ -484,7 +584,7 @@ mod integration_tests {
     #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
     async fn test_chrome_mcp_list_tools() {
         let config = ChromeMcpConfig::default();
-        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         // Ensure session is created
         driver
             .ensure_session("user")
@@ -504,7 +604,7 @@ mod integration_tests {
     #[ignore]
     async fn test_chrome_mcp_list_tabs_raw() {
         let config = ChromeMcpConfig::default();
-        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         driver.ensure_session("user").await.expect("session");
         let sessions = driver.sessions.read().await;
         let session = sessions.get("user").expect("session");
@@ -532,7 +632,7 @@ mod integration_tests {
     #[ignore]
     async fn test_chrome_mcp_list_tabs() {
         let config = ChromeMcpConfig::default();
-        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         let backend = ChromeMcpBackend::new(
             driver,
             "user".to_string(),
@@ -555,7 +655,7 @@ mod integration_tests {
     #[ignore]
     async fn test_chrome_mcp_snapshot() {
         let config = ChromeMcpConfig::default();
-        let driver = Arc::new(ChromeMcpDriver::new(config));
+        let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         let backend = ChromeMcpBackend::new(
             driver,
             "user".to_string(),

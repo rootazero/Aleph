@@ -39,7 +39,7 @@ pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, Ski
 pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
 pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;
-pub use shared::shared_skill_system;
+pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 pub use usage::{SkillState, UsageStats, UsageStore};
@@ -861,8 +861,8 @@ mod tests {
         std::fs::create_dir_all(&global_claude).unwrap();
 
         let dirs = {
-            let _aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&aleph_home);
-            let _home = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(&home);
+            let _env =
+                crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, &home);
             default_skill_dirs()
         };
 
@@ -1123,8 +1123,8 @@ Content."#,
         std::os::unix::fs::symlink(&real_skills, &link).unwrap();
         let via_link = link.join("SKILL.md");
 
-        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire_and_set(tmp.path());
-        let _aleph_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&real_aleph);
+        let _env =
+            crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&real_aleph, tmp.path());
 
         let via_link_result = guess_source(&via_link);
         let direct_result = guess_source(&real_skills.join("SKILL.md"));

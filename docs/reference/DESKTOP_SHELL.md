@@ -148,10 +148,14 @@ the supervisor simply keeps retrying until the daemon comes up.
 ### OS notifications
 
 `notify.rs` opens its own WebSocket to the daemon's EventBus, sends the
-mandatory `connect` handshake, subscribes to `approval.requested` and
-`agent.ask.user`, and raises a native notification per event. It is the last
+mandatory `connect` handshake, subscribes to `surface.notify` and
+`surface.approval`, and raises a native notification per event. It is the last
 mile of R5 ("AI comes to you") — pure I/O, forwarding events without
-interpreting them.
+interpreting them. Remote `wss://` targets validate with the platform TLS
+roots (native-tls); the bridge does **not** take part in the workspace TOFU
+pin (`cert_trust::TrustStore` hooks only the webview's certificate challenge),
+so a self-signed remote Gateway fails this bridge's handshake while the Panel
+itself connects fine — CA-issued certificates work.
 
 **Design note — deviation from the plan's tentative wording.** The plan
 floated having the Panel itself call a Tauri notification plugin, and flagged
@@ -178,9 +182,14 @@ a desktop notification, the tray/macOS-menu update item (relabelled "Restart
 to update to vX.Y.Z"), and a **non-modal in-window top banner** with a
 "Restart to update" button. The banner is injected into the webview by the
 shell (`update.rs::show_update_banner`); its button calls back through a
-same-origin sentinel navigation (`/__aleph-shell/update/apply` | `/dismiss`)
-that the `on_navigation` guard intercepts — an origin-independent channel that
-works for the loopback full app and a remote-pointed Panel-lite alike. The
+sentinel navigation (`/__aleph-shell/update/apply` | `/dismiss`)
+that the `on_navigation` guard intercepts — a channel that works for the
+loopback full app and a remote-pointed Panel-lite alike, but which is honored
+**only from the origin the Panel is actually served from**
+(`ConnectionTarget::serves_origin`): a foreign page forging the path (e.g. a
+rendered markdown link to `http://evil.com/__aleph-shell/update/apply`) is
+refused, while the banner's own relative navigations resolve to exactly the
+serving origin. The
 banner is dismissible per session (`×`) and re-appears on the next launch; the
 tray/menu item is the always-available fallback. Applying (any surface)
 downloads, installs, and restarts the app — and with it the bundled

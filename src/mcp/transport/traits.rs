@@ -109,14 +109,41 @@ pub trait McpTransport: Send + Sync + std::any::Any {
         ))
     }
 
-    /// Record the protocol version negotiated during `initialize`.
+    /// Send a request together with extra HTTP headers derived from the tool's
+    /// `inputSchema` (`x-mcp-header` parameter mirroring, spec rev 2026-07-28).
     ///
-    /// Per the Streamable HTTP spec (rev 2025-03-26+), every request after the
-    /// handshake must echo the negotiated `MCP-Protocol-Version`, which may be
-    /// older than the revision the client proposed. Header-bearing transports
-    /// (HTTP) override this to capture the value; transports that send no such
-    /// header ignore it.
-    fn set_protocol_version(&self, _version: &str) {
+    /// Only the caller knows the schema, so the headers cannot be derived
+    /// inside the transport the way `Mcp-Method` and `Mcp-Name` are. The
+    /// default drops them and sends the request unchanged, which is what the
+    /// spec prescribes for non-HTTP transports: "clients using other transports
+    /// (e.g., stdio) MAY ignore `x-mcp-header` annotations entirely".
+    async fn send_request_with_headers(
+        &self,
+        request: &JsonRpcRequest,
+        _extra_headers: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
+        self.send_request(request).await
+    }
+
+    /// Whether this transport mirrors tool parameters into HTTP headers.
+    ///
+    /// Gates the spec requirement that a client exclude tools whose
+    /// `x-mcp-header` annotations are malformed. A transport that never sends
+    /// those headers has nothing to get wrong, so dropping such a tool there
+    /// would remove a working tool for no benefit.
+    fn mirrors_param_headers(&self) -> bool {
+        false
+    }
+
+    /// Record which protocol dialect this connection speaks.
+    ///
+    /// Determined once, before any other request: either from the `initialize`
+    /// handshake (legacy) or from the `server/discover` probe (modern). The
+    /// Streamable HTTP transport is the one that cares — it echoes the version
+    /// on `MCP-Protocol-Version`, and the era decides whether session handling
+    /// applies at all, since revision 2026-07-28 removed protocol-level
+    /// sessions. Transports that carry no headers ignore it.
+    fn set_dialect(&self, _dialect: &crate::mcp::modern::McpDialect) {
         // Default no-op; only the Streamable HTTP transport carries the header.
     }
 

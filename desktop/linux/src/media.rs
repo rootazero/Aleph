@@ -243,24 +243,33 @@ impl MediaCapability for LinuxMedia {
         let args = snap_args(&device, qv, &out_str);
 
         // A single frame: no capture window of its own, just the overhead budget.
-        run_ffmpeg(&args, ffmpeg_deadline(0.0)).await.map_err(|e| {
-            DesktopError::PlatformError(format!("camera_snap from {device} failed: {e}"))
-        })?;
+        // A failed ffmpeg can still have written a partial output file, so the
+        // temp path is cleaned up on this path too.
+        if let Err(e) = run_ffmpeg(&args, ffmpeg_deadline(0.0)).await {
+            let _ = tokio::fs::remove_file(&out_str).await;
+            return Err(DesktopError::PlatformError(format!(
+                "camera_snap from {device} failed: {e}"
+            )));
+        }
 
-        // Read the JPEG, derive dimensions, base64-encode, then clean up.
-        let bytes = tokio::task::spawn_blocking(move || std::fs::read(&out))
+        // Read the JPEG, derive dimensions, base64-encode, then clean up. The
+        // temp file is removed unconditionally: a read failure must not leave
+        // `aleph-media-*.jpg` behind in the temp dir.
+        let read_result = tokio::task::spawn_blocking(move || std::fs::read(&out))
             .await
-            .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))?
-            .map_err(|e| {
-                DesktopError::PlatformError(format!("Failed to read captured frame: {e}"))
-            })?;
+            .map_err(|e| DesktopError::PlatformError(format!("task join error: {e}")))
+            .and_then(|r| {
+                r.map_err(|e| {
+                    DesktopError::PlatformError(format!("Failed to read captured frame: {e}"))
+                })
+            });
+        let _ = tokio::fs::remove_file(&out_str).await;
+        let bytes = read_result?;
 
         let (width, height) = image::load_from_memory(&bytes).map_or((0, 0), |img| {
             use image::GenericImageView as _;
             img.dimensions()
         });
-
-        let _ = tokio::fs::remove_file(&out_str).await;
 
         Ok(CameraSnapResult {
             image_base64: general_purpose::STANDARD.encode(&bytes),

@@ -53,6 +53,19 @@ pub enum HistoryNav {
     Refresh,
 }
 
+/// Condition a `wait_for` call polls for on a tab (openclaw parity:
+/// text / selector / url). Internal to the backend contract — the tool layer
+/// builds one from its args, so no serde derives are needed here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitCondition {
+    /// The rendered page text contains this substring.
+    Text(String),
+    /// A CSS selector matches at least one element.
+    Selector(String),
+    /// The tab's current URL contains this substring.
+    UrlContains(String),
+}
+
 /// Options for taking a screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotOpts {

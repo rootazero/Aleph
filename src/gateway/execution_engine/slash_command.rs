@@ -411,6 +411,20 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
         "session_rename" => serde_json::json!({
             "topic": args_str,
         }),
+        // `/compact [instructions]` — the trailing free text steers what the
+        // summary must preserve (codex passes its `/compact` input straight to
+        // the summarizer; pi documents `/compact [instructions]`; kimi-cli
+        // threads a `custom_instruction`). Without this arm the generic
+        // `{input, query, args}` fallback below silently dropped it: none of
+        // those keys exist on `SessionCompactArgs`, and serde ignores unknown
+        // fields, so the user's directive vanished with no error.
+        "session_compact" => {
+            if args_str.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "instructions": args_str })
+            }
+        }
         // URL-based tools
         "browser_open" | "web_fetch" => serde_json::json!({
             "url": args_str,

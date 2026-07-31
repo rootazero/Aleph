@@ -183,6 +183,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "hub_catalog_search" => Box::pin(async move {
+                let tool = self
+                    .hub_catalog_search_tool
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("hub_catalog_search not configured"))?;
+                tool.call_json(arguments).await
+            }),
             "hub_catalog_sync" => Box::pin(async move {
                 let tool = self
                     .hub_catalog_sync_tool

@@ -329,25 +329,14 @@ pub struct DeleteResult {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone)]
-pub enum CompactStrategy {
-    KeepLastN { n: usize },
-}
-
-#[derive(Debug, Clone)]
-pub struct CompactResult {
-    pub compacted: bool,
-    pub deleted: usize,
-}
-
-/// Default retention for the user-facing `/compact` command and the
-/// `session.compact` RPC: keep this many most-recent messages, dropping the
-/// older ones. The transcript is a working buffer — the memory layer's
-/// hierarchical summaries (`SessionCompactor::post_turn_compress`) already
-/// distilled the dropped turns into recallable notes, so this trim is not a
-/// context loss. Single-sourced so the `session_compact` tool and the
-/// `session.compact` RPC handler can never diverge on the retention count.
-pub const SESSION_COMPACT_KEEP_LAST_N: usize = 50;
+// `CompactStrategy` / `CompactResult` / `SESSION_COMPACT_KEEP_LAST_N` are gone
+// with the `SessionStore::compact` they described. Their story was
+// "keep the 50 most recent messages, the memory layer distilled the rest" —
+// but they operated on the `messages` READ PROJECTION, not on `session_events`,
+// which is what the prompt is rebuilt from. So the trim deleted the user's
+// scrollback and freed zero context. User-driven `/compact` now lives in
+// `context::compact::manual`, keyed off a token budget instead of a message
+// count, and soft-retires the event log rather than deleting rows.
 
 /// Outcome of `SessionStore::truncate_messages`.
 #[derive(Debug, Clone, Default)]
