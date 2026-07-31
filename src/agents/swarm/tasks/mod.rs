@@ -328,7 +328,6 @@ pub fn paused_from(metadata: &serde_json::Value) -> Option<&str> {
 pub struct CoordTaskFilter {
     pub team_id: Option<String>,
     pub status: Option<CoordTaskStatus>,
-    pub owner: Option<AgentId>,
 }
 
 // ---------------------------------------------------------------------------

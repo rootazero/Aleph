@@ -233,11 +233,6 @@ pub(super) async fn list_tasks(
         idx += 1;
     }
 
-    if let Some(ref owner) = filter.owner {
-        where_clauses.push(format!("t.owner = ?{idx}"));
-        values.push(Box::new(owner.clone()));
-    }
-
     let where_sql = if where_clauses.is_empty() {
         String::new()
     } else {
