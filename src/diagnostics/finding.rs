@@ -51,6 +51,11 @@ pub struct Finding {
     /// Populated only after a `Fix`-posture run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_outcome: Option<RepairOutcome>,
+    /// Machine-readable labels for cross-finding aggregation (e.g. the
+    /// total-outage gate counts `provider-reachable` tags instead of string
+    /// matching on titles). Empty for most findings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 impl Finding {
@@ -65,6 +70,7 @@ impl Finding {
             fix_hint: None,
             repairable: false,
             repair_outcome: None,
+            tags: Vec::new(),
         }
     }
 
@@ -83,6 +89,7 @@ impl Finding {
             fix_hint: None,
             repairable: false,
             repair_outcome: None,
+            tags: Vec::new(),
         }
     }
 
@@ -104,6 +111,19 @@ impl Finding {
     pub fn with_repair(mut self, outcome: RepairOutcome) -> Self {
         self.repair_outcome = Some(outcome);
         self
+    }
+
+    /// Attach a machine-readable tag (builder style).
+    #[must_use]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    /// Whether this finding carries the given tag.
+    #[must_use]
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
     }
 
     #[must_use]
@@ -137,5 +157,26 @@ mod tests {
         assert!(f.is_problem());
         assert!(f.repairable);
         assert_eq!(f.fix_hint.as_deref(), Some("turn it off and on"));
+    }
+
+    #[test]
+    fn tags_default_empty_and_compose() {
+        let f = Finding::ok("core/x", "fine", "all good");
+        assert!(f.tags.is_empty());
+        assert!(!f.has_tag("provider-reachable"));
+
+        let f = f.with_tag("provider-reachable").with_tag("second");
+        assert!(f.has_tag("provider-reachable"));
+        assert!(f.has_tag("second"));
+        assert!(!f.has_tag("missing"));
+
+        // Empty tags stay out of the serialized payload entirely.
+        let bare = serde_json::to_value(Finding::ok("core/x", "fine", "all good")).unwrap();
+        assert!(bare.get("tags").is_none());
+        let tagged = serde_json::to_value(&f).unwrap();
+        assert_eq!(
+            tagged["tags"],
+            serde_json::json!(["provider-reachable", "second"])
+        );
     }
 }

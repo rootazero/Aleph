@@ -1,13 +1,15 @@
 //! `providers/connectivity` — live LLM provider reachability.
 //!
 //! Runtime sibling of the path-based core checks. The `aleph doctor` CLI
-//! already probes providers through the `providers.healthcheck` RPC, but the
-//! LLM-facing `doctor` tool could not — so after the `[f]` AI-repair flow
-//! fixed a provider credential (via `vault_store` / `self_config`), the agent
-//! had no way to verify the provider was actually reachable again. This check
-//! closes that loop: it reuses the same probe as the RPC handler
-//! ([`crate::providers::probe::probe_provider`] — one source of truth) against
-//! the live daemon config + vault handles.
+//! consumes these findings through the daemon-side engine over the
+//! `diagnostics.run` RPC (it no longer probes `providers.healthcheck`
+//! directly), and the LLM-facing `doctor` tool runs the same check — so
+//! after the `[f]` AI-repair flow fixes a provider credential (via
+//! `vault_store` / `self_config`), the agent can verify the provider is
+//! actually reachable again. The check reuses the same bounded probe as the
+//! `providers.healthcheck` RPC handler
+//! ([`crate::providers::probe::probe_provider_bounded`] — one source of truth)
+//! against the live daemon config + vault handles.
 //!
 //! Read-only and **non-repairable**: an unreachable provider is a credential
 //! or network condition; the fix is an LLM/user action (store a fresh key,
@@ -18,8 +20,6 @@
 //! (`super::super`) — the offline `default_registry()` stays path-only so
 //! `aleph-server doctor` keeps working without network access.
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use futures::future::join_all;
 use tokio::sync::RwLock;
@@ -27,15 +27,19 @@ use tokio::sync::RwLock;
 use crate::config::{Config, ProviderConfig};
 use crate::diagnostics::check::{HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
+use crate::diagnostics::redact::redact_secrets;
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::probe::{probe_provider, provider_vault_key};
+use crate::providers::probe::{probe_provider_bounded, provider_vault_key};
 use crate::sync_primitives::Arc;
 
 const ID: &str = "providers/connectivity";
 
-/// Per-provider probe deadline. A hung endpoint must not stall the whole
-/// doctor run (the engine awaits all checks).
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Tag on the per-provider success finding — the total-outage gate counts
+/// these (not title strings) to decide whether any probed provider answered.
+const TAG_REACHABLE: &str = "provider-reachable";
+/// Tag on per-provider failure findings (including timeouts, which the
+/// bounded probe folds into ordinary failures).
+const TAG_UNREACHABLE: &str = "provider-unreachable";
 
 pub struct ProvidersConnectivityCheck {
     config: Arc<RwLock<Config>>,
@@ -131,45 +135,45 @@ impl HealthCheck for ProvidersConnectivityCheck {
                          placeholder endpoint); credentials not verifiable here.",
                     );
                 }
-                match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(&name, runtime)).await {
-                    Ok(outcome) if outcome.success => {
-                        let lat = outcome
-                            .latency_ms
-                            .map(|m| format!(" ({m}ms)"))
-                            .unwrap_or_default();
-                        Finding::ok(ID, format!("{name}: reachable"), format!("ping ok{lat}"))
-                    }
-                    Ok(outcome) => Finding::problem(
+                let outcome = probe_provider_bounded(&name, runtime).await;
+                if outcome.success {
+                    let lat = outcome
+                        .latency_ms
+                        .map(|m| format!(" ({m}ms)"))
+                        .unwrap_or_default();
+                    Finding::ok(ID, format!("{name}: reachable"), format!("ping ok{lat}"))
+                        .with_tag(TAG_REACHABLE)
+                } else {
+                    // Provider errors can echo credentials (Authorization
+                    // headers, keyed URLs) — redact before the text reaches
+                    // findings (CLI, --json, LLM tool output).
+                    Finding::problem(
                         ID,
                         Severity::Warning,
                         format!("{name}: unreachable"),
-                        outcome
-                            .error
-                            .unwrap_or_else(|| "unknown probe error".to_string()),
+                        redact_secrets(
+                            &outcome
+                                .error
+                                .unwrap_or_else(|| "unknown probe error".to_string()),
+                        ),
                     )
-                    .with_fix_hint(unreachable_hint(&name)),
-                    Err(_) => Finding::problem(
-                        ID,
-                        Severity::Warning,
-                        format!("{name}: probe timed out"),
-                        format!("no response within {}s", PROBE_TIMEOUT.as_secs()),
-                    )
-                    .with_fix_hint(unreachable_hint(&name)),
+                    .with_fix_hint(unreachable_hint(&name))
+                    .with_tag(TAG_UNREACHABLE)
                 }
             });
 
         let mut findings = join_all(futures).await;
         findings.sort_by(|a, b| a.title.cmp(&b.title));
 
-        // Total-outage gate: if every PROBED provider failed (no `: reachable`
-        // finding emitted) the operator has zero working LLM access — a
-        // doctor-gating Error, not a pile of per-provider Warnings whose
-        // aggregate still exits `ok`. Disabled and probe-skipped providers
-        // short-circuit before the probe, so the absence of any `: reachable`
-        // finding when at least one provider was actually probed means a
-        // complete outage. Matched on the `: reachable` suffix (not `contains`)
-        // so `unreachable` titles do not count as reachable.
-        if probed_count > 0 && !findings.iter().any(|f| f.title.ends_with(": reachable")) {
+        // Total-outage gate: if every PROBED provider failed (no
+        // `provider-reachable` finding emitted) the operator has zero working
+        // LLM access — a doctor-gating Error, not a pile of per-provider
+        // Warnings whose aggregate still exits `ok`. Disabled and
+        // probe-skipped providers short-circuit before the probe, so the
+        // absence of any reachable tag when at least one provider was
+        // actually probed means a complete outage. Counted by TAG, not by
+        // title string, so reworded titles can't silently break the gate.
+        if total_outage(probed_count, &findings) {
             findings.insert(
                 0,
                 Finding::problem(
@@ -187,6 +191,12 @@ impl HealthCheck for ProvidersConnectivityCheck {
         }
         findings
     }
+}
+
+/// Total-outage decision: at least one provider was actually probed and none
+/// of them answered (no finding carries the `provider-reachable` tag).
+fn total_outage(probed_count: usize, findings: &[Finding]) -> bool {
+    probed_count > 0 && !findings.iter().any(|f| f.has_tag(TAG_REACHABLE))
 }
 
 /// Route the LLM (or user) to the tools that can actually fix an unreachable
@@ -241,5 +251,28 @@ mod tests {
         assert!(hint.contains("ai:openai"));
         assert!(hint.contains("self_config"));
         assert!(hint.contains("re-run doctor"));
+    }
+
+    #[test]
+    fn outage_gate_counts_reachable_tags_not_titles() {
+        let reachable =
+            vec![Finding::ok(ID, "openai: reachable", "ping ok").with_tag(TAG_REACHABLE)];
+        let unreachable =
+            vec![
+                Finding::problem(ID, Severity::Warning, "openai: unreachable", "boom")
+                    .with_tag(TAG_UNREACHABLE),
+            ];
+        // A reachable provider suppresses the gate, whatever its title says.
+        assert!(!total_outage(1, &reachable));
+        // All probed providers failed → total outage.
+        assert!(total_outage(1, &unreachable));
+        assert!(total_outage(3, &unreachable));
+        // Nothing was actually probed (all disabled/skipped) → never an outage.
+        assert!(!total_outage(0, &unreachable));
+        assert!(!total_outage(0, &[]));
+        // A finding whose TITLE happens to end in ": reachable" but carries
+        // no tag must not suppress the gate (the old string-match bug).
+        let title_only = vec![Finding::ok(ID, "openai: reachable", "ping ok")];
+        assert!(total_outage(1, &title_only));
     }
 }

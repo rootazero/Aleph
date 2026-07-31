@@ -10,9 +10,17 @@
 //! direction stays `gateway → providers` / `diagnostics → providers` (P1) —
 //! core modules never reach into gateway handler internals.
 
+use std::time::Duration;
+
 use crate::config::ProviderConfig;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+
+/// Per-provider probe deadline, shared by every probe call site (the
+/// `providers.healthcheck` / `providers.test` RPC handlers, the config
+/// patcher's post-patch verification, and the `providers/connectivity`
+/// doctor check). A hung endpoint must not stall any of them.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Result of one connectivity probe. The gateway maps this onto its
 /// wire-stable `TestResult`; diagnostics folds it into `Finding`s.
@@ -62,5 +70,46 @@ pub async fn probe_provider(label: &str, provider_config: ProviderConfig) -> Pro
             error: Some(format!("{e}")),
             latency_ms: Some(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
+    }
+}
+
+/// [`probe_provider`] wrapped in the shared [`PROBE_TIMEOUT`] deadline.
+///
+/// A timeout is reported as an ordinary failed probe (clear `error`, no
+/// latency) so callers need no `tokio::time::timeout` boilerplate of their
+/// own — every surface should call this variant, not the raw probe.
+pub async fn probe_provider_bounded(label: &str, provider_config: ProviderConfig) -> ProbeOutcome {
+    match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(label, provider_config)).await {
+        Ok(outcome) => outcome,
+        Err(_) => ProbeOutcome {
+            success: false,
+            error: Some(format!(
+                "probe timed out after {}s",
+                PROBE_TIMEOUT.as_secs()
+            )),
+            latency_ms: None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bounded_probe_reports_provider_creation_failure() {
+        // An unknown provider label fails inside `create_provider` — long
+        // before any network I/O — so this exercises the bounded wrapper's
+        // pass-through path without depending on the network.
+        let outcome =
+            probe_provider_bounded("no-such-provider", ProviderConfig::test_config("test-model"))
+                .await;
+        assert!(!outcome.success);
+        assert!(outcome.error.is_some());
+    }
+
+    #[test]
+    fn shared_timeout_is_ten_seconds() {
+        assert_eq!(PROBE_TIMEOUT, Duration::from_secs(10));
     }
 }

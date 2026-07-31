@@ -84,6 +84,12 @@ cargo test -p alephcore --lib test_name  # Single test
 just test-all                          # All tests (core + desktop + proptest)
 ```
 
+**内存受限机器（<16GB）**：alephcore lib test 单 rustc 进程可吃 8GB+（已被 OOM killer 击杀过，报错伪装成「could not compile; N warnings emitted」）。限流编译：
+
+```bash
+CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=1 cargo test -p alephcore --lib
+```
+
 ---
 
 ## Code Style
@@ -134,7 +140,7 @@ pkill -f "target/release/aleph-server" 2>/dev/null
 pkill -f "target/debug/aleph-server" 2>/dev/null
 sleep 2
 ```
-Multiple processes → HMAC failure → **vault data loss**.
+Multiple processes → HMAC failure → **vault data loss**. Runtime sentinel: doctor's `core/duplicate-instance` check (`src/diagnostics/checks/duplicate_instance.rs`) warns when other live `aleph-server` processes exist.
 
 ---
 

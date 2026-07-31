@@ -18,7 +18,7 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::probe::probe_provider;
+use crate::providers::probe::probe_provider_bounded;
 
 // ============================================================================
 // List
@@ -562,8 +562,10 @@ pub async fn handle_test(
         effort: None,
     };
 
-    // Probe connectivity (shared with the bulk `providers.healthcheck` probe).
-    let result = TestResult::from(probe_provider("test", provider_config).await);
+    // Probe connectivity (shared with the bulk `providers.healthcheck` probe),
+    // bounded by the shared per-provider deadline so a hung endpoint can't
+    // stall the RPC.
+    let result = TestResult::from(probe_provider_bounded("test", provider_config).await);
 
     // On success, persist verified=true and reset health. Only `providers.test`
     // mutates state; the bulk healthcheck is read-only.
@@ -593,9 +595,10 @@ pub async fn handle_test(
     JsonRpcResponse::success(request.id, json!(result))
 }
 
-// Probe logic lives in `crate::providers::probe::probe_provider` — the single
-// source of truth shared with the diagnostics engine's connectivity check.
-// This module maps its `ProbeOutcome` onto the wire-stable `TestResult`.
+// Probe logic lives in `crate::providers::probe::probe_provider_bounded` — the
+// single source of truth (probe + shared timeout) shared with the diagnostics
+// engine's connectivity check. This module maps its `ProbeOutcome` onto the
+// wire-stable `TestResult`.
 
 /// `providers.healthcheck` — concurrently probe every configured provider.
 ///
@@ -636,14 +639,16 @@ pub async fn handle_healthcheck(
                     error: None,
                 };
             }
-            let result = probe_provider(&name, runtime).await;
+            let result = probe_provider_bounded(&name, runtime).await;
             ProviderHealthRow {
                 name,
                 enabled,
                 ok: result.success,
                 skipped: false,
                 latency_ms: result.latency_ms,
-                error: result.error,
+                error: result
+                    .error
+                    .map(|error| crate::diagnostics::redact_secrets(&error)),
             }
         });
 

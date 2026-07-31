@@ -383,8 +383,8 @@ impl ConfigPatcher {
     /// Probe the provider(s) touched by a `providers.*` patch to confirm the
     /// new credentials/endpoint are actually reachable.
     ///
-    /// Single source of truth: [`crate::providers::probe::probe_provider`] —
-    /// the same probe the `providers.healthcheck` RPC and the
+    /// Single source of truth: [`crate::providers::probe::probe_provider_bounded`]
+    /// — the same bounded probe the `providers.healthcheck` RPC and the
     /// `providers/connectivity` doctor check use, so the verdict never drifts
     /// between surfaces. Returns:
     /// - `Skipped` — non-provider path, no vault wired, or no matching enabled
@@ -392,7 +392,7 @@ impl ConfigPatcher {
     /// - `Passed` — every probed provider answered;
     /// - `Failed` — one or more were unreachable, with a joined reason.
     async fn run_provider_health_check(&self, path: &str) -> HealthCheckResult {
-        use crate::providers::probe::{probe_provider, provider_vault_key};
+        use crate::providers::probe::{probe_provider_bounded, provider_vault_key};
 
         let mut segments = path.split('.');
         if segments.next() != Some("providers") {
@@ -429,24 +429,28 @@ impl ConfigPatcher {
             return HealthCheckResult::Skipped;
         }
 
-        // Per-provider deadline so a hung endpoint can't stall the patch return.
-        const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-        let mut failures: Vec<String> = Vec::new();
-        for (name, runtime) in probes {
-            match tokio::time::timeout(PROBE_TIMEOUT, probe_provider(&name, runtime)).await {
-                Ok(outcome) if outcome.success => {}
-                Ok(outcome) => failures.push(format!(
-                    "{name}: {}",
-                    outcome
-                        .error
-                        .unwrap_or_else(|| "unknown probe error".to_string())
-                )),
-                Err(_) => failures.push(format!(
-                    "{name}: timed out after {}s",
-                    PROBE_TIMEOUT.as_secs()
-                )),
-            }
-        }
+        // Probe all affected providers concurrently (bounded per provider so a
+        // hung endpoint can't stall the patch return). `join_all` preserves
+        // input order, so the joined failure text stays deterministic.
+        let futures = probes.into_iter().map(|(name, runtime)| async move {
+            let outcome = probe_provider_bounded(&name, runtime).await;
+            (name, outcome)
+        });
+        let failures: Vec<String> = futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .filter_map(|(name, outcome)| {
+                if outcome.success {
+                    return None;
+                }
+                // Provider errors can echo credentials — redact before the
+                // reason is returned to the caller (tool output / RPC payload).
+                let reason = outcome
+                    .error
+                    .unwrap_or_else(|| "unknown probe error".to_string());
+                Some(format!("{name}: {}", crate::diagnostics::redact::redact_secrets(&reason)))
+            })
+            .collect();
 
         if failures.is_empty() {
             HealthCheckResult::Passed
