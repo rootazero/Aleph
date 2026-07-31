@@ -115,6 +115,15 @@ rust-version = "1.95"
 [lib]
 crate-type = ["rlib", "cdylib"]
 name = "alephcore"
+# `--benches` selects every target with `bench = true`, and the lib defaults to
+# true — so `cargo bench --benches` was building the lib as a *bench harness*,
+# compiling all ~14.6k `#[cfg(test)]` tests under the bench profile. That is the
+# memory hog the CI comment blamed on bare `cargo bench`, and it survived the
+# switch to `--benches` because the flag never excluded the lib in the first
+# place. There are no `#[bench]` fns in the lib (the four benches/ targets are
+# `harness = false` criterion binaries), so opting out costs nothing. Does not
+# affect `cargo test --lib`, which selects the lib explicitly.
+bench = false
 
 [features]
 default = []

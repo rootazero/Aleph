@@ -94,7 +94,16 @@ jobs:
       # `--features test-helpers` gates `providers::recording_mock`, which three
       # targets declare through `required-features`. Without it cargo *skips*
       # them rather than failing, which is the same silence in a second costume.
+      #
+      # Full debuginfo is what makes this step's link phase expensive: 132
+      # targets each embedding the whole crate come to ~4.5 GB of binaries
+      # locally, and the hosted Linux/Windows runners die mid-link with
+      # "runner has received a shutdown signal" (exit 143) while the far larger
+      # macOS runner completes. `line-tables-only` keeps the file/line a panic
+      # needs to be diagnosable and drops the rest.
       - name: Run integration tests
+        env:
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test -p alephcore --features test-helpers --tests
 
   lint:
@@ -194,13 +203,14 @@ jobs:
         # bench targets unoptimised: cheap, low-memory, and sufficient for a
         # build check.
         #
-        # `--benches` restricts the selection to the `[[bench]]` targets. Bare
-        # `cargo bench` *also* builds the lib as a test harness (the lib target
-        # defaults to `bench = true`), so it was compiling all ~14.6k
-        # `#[cfg(test)]` tests under the bench profile — the actual memory hog,
-        # and pure waste here since the Test jobs already build that harness.
-        # The log confirms it: the last thing it emitted before exit 143 was
-        # warnings from `src/config/tests/dispatcher.rs`.
+        # The lib is kept out of the selection by `bench = false` in its
+        # `[lib]` section, NOT by `--benches`: that flag selects every target
+        # with `bench = true`, which the lib defaults to. Without the manifest
+        # opt-out this step still compiled all ~14.6k `#[cfg(test)]` tests as a
+        # bench harness — the actual memory hog, and pure waste since the Test
+        # jobs already build that harness. The log said so plainly: the last
+        # thing it emitted before exit 143 was warnings from
+        # `src/config/tests/dispatcher.rs`, which is `#[cfg(test)]` code.
         env:
           CARGO_PROFILE_BENCH_OPT_LEVEL: "0"
           CARGO_PROFILE_BENCH_DEBUG: "0"
