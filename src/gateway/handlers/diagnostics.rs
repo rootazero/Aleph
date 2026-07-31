@@ -122,7 +122,10 @@ mod tests {
         }))
         .unwrap();
         assert!(params.fix);
-        assert_eq!(params.only.as_deref(), Some(&["core/data-dir".to_string()][..]));
+        assert_eq!(
+            params.only.as_deref(),
+            Some(&["core/data-dir".to_string()][..])
+        );
         assert_eq!(params.skip, vec!["core/stale-lock".to_string()]);
     }
 }

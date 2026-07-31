@@ -23,7 +23,11 @@ pub async fn handle_doctor_command(
         Posture::Inspect
     };
 
-    let only_ref = if only.is_empty() { None } else { Some(only.as_slice()) };
+    let only_ref = if only.is_empty() {
+        None
+    } else {
+        Some(only.as_slice())
+    };
     let report = engine.run_with_filter(posture, only_ref, &skip).await;
 
     if json {

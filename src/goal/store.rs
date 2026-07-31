@@ -799,7 +799,11 @@ impl GoalStore {
     ///
     /// [`FieldUpdate::Gone`] — a no-op — when the goal vanished since the read,
     /// so the caller reports that honestly instead of silently re-creating it.
-    pub fn commit_field_update(&self, next: &Goal, expected_status: GoalStatus) -> Result<FieldUpdate> {
+    pub fn commit_field_update(
+        &self,
+        next: &Goal,
+        expected_status: GoalStatus,
+    ) -> Result<FieldUpdate> {
         let conn = self.lock();
         match Self::get_locked(&conn, &next.session_id)? {
             Some(live) => {
@@ -1414,7 +1418,9 @@ mod tests {
         // …a continuation failure blocks it in the read→write gap…
         assert!(store.block_if_active("s", "boom", 500).unwrap());
         // …and the tool commits its stale (still-Active) snapshot with a lesson.
-        let edited = snapshot.clone().with_lesson_appended("lesson".into(), 1_000);
+        let edited = snapshot
+            .clone()
+            .with_lesson_appended("lesson".into(), 1_000);
         assert_eq!(
             store.commit_field_update(&edited, snapshot.status).unwrap(),
             FieldUpdate::StatusSuperseded(GoalStatus::Blocked)
@@ -1439,13 +1445,12 @@ mod tests {
         let snapshot = store.get("s").unwrap().unwrap();
         let paused = snapshot.with_status(GoalStatus::Paused, 500);
         assert_eq!(
-            store.commit_field_update(&paused, GoalStatus::Active).unwrap(),
+            store
+                .commit_field_update(&paused, GoalStatus::Active)
+                .unwrap(),
             FieldUpdate::Committed
         );
-        assert_eq!(
-            store.get("s").unwrap().unwrap().status,
-            GoalStatus::Paused
-        );
+        assert_eq!(store.get("s").unwrap().unwrap().status, GoalStatus::Paused);
     }
 
     #[test]
@@ -1453,7 +1458,9 @@ mod tests {
         let (store, _d) = temp_store();
         // A deadline-timer-parked pursuit recovers via GoalWakeService, not the
         // abandoned run — blocking it would strand the barrier forever.
-        store.put(&pursuing("sess-timer", 5).with_wait_until(9_999, None, 1)).unwrap();
+        store
+            .put(&pursuing("sess-timer", 5).with_wait_until(9_999, None, 1))
+            .unwrap();
         assert!(!store
             .block_if_abandonable("sess-timer", "abandoned", 100)
             .unwrap());
@@ -1462,7 +1469,9 @@ mod tests {
             GoalStatus::Active
         );
         // Same for a task-barrier-parked pursuit.
-        store.put(&pursuing("sess-task", 5).with_wait_on_task("t".into(), None, 1)).unwrap();
+        store
+            .put(&pursuing("sess-task", 5).with_wait_on_task("t".into(), None, 1))
+            .unwrap();
         assert!(!store
             .block_if_abandonable("sess-task", "abandoned", 100)
             .unwrap());
@@ -1490,13 +1499,17 @@ mod tests {
     #[test]
     fn block_and_pause_drop_the_wait_barrier() {
         let (store, _d) = temp_store();
-        store.put(&pursuing("s-block", 5).with_wait_until(9_999, None, 1)).unwrap();
+        store
+            .put(&pursuing("s-block", 5).with_wait_until(9_999, None, 1))
+            .unwrap();
         assert!(store.block_if_active("s-block", "boom", 100).unwrap());
         assert!(
             !store.get("s-block").unwrap().unwrap().has_wait_barrier(),
             "a blocked goal is no longer waiting on anything"
         );
-        store.put(&pursuing("s-pause", 5).with_wait_on_task("t".into(), None, 1)).unwrap();
+        store
+            .put(&pursuing("s-pause", 5).with_wait_on_task("t".into(), None, 1))
+            .unwrap();
         assert!(store.pause_if_active("s-pause", "hold", 100).unwrap());
         let paused = store.get("s-pause").unwrap().unwrap();
         assert!(!paused.has_wait_barrier());
@@ -1518,7 +1531,9 @@ mod tests {
         );
         // A wake-service re-claim (no workspace info) must NOT wipe it.
         let live = store.get("s").unwrap().unwrap();
-        assert!(store.confirm_fire("s", live.pending_continuation_ms.unwrap()).unwrap());
+        assert!(store
+            .confirm_fire("s", live.pending_continuation_ms.unwrap())
+            .unwrap());
         let d = store
             .try_claim_continuation("s", None, 2_000, false, None)
             .unwrap();
@@ -1532,7 +1547,9 @@ mod tests {
         let snapshot = store.get("s").unwrap().unwrap();
         let edited = snapshot.with_note(Some("n".into()), 3_000);
         assert_eq!(
-            store.commit_field_update(&edited, GoalStatus::Active).unwrap(),
+            store
+                .commit_field_update(&edited, GoalStatus::Active)
+                .unwrap(),
             FieldUpdate::Committed
         );
         assert_eq!(
@@ -1540,7 +1557,6 @@ mod tests {
             Some("/proj/x")
         );
     }
-
 
     #[test]
     fn block_if_active_never_clobbers_a_terminal_goal() {

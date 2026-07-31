@@ -274,6 +274,9 @@ mod tests {
         // degrades gracefully without a running browser.
         assert!(!result.success);
         let message = result.message.unwrap();
-        assert!(!message.contains("Blocked"), "clean input blocked: {message}");
+        assert!(
+            !message.contains("Blocked"),
+            "clean input blocked: {message}"
+        );
     }
 }

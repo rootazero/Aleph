@@ -353,7 +353,10 @@ mod tests {
             let (subs, _) = engine_hints(&BrowserType::Chrome);
             let ordered = prefer_paths(paths, subs);
             assert!(
-                ordered[0].to_string_lossy().to_ascii_lowercase().contains("chrome"),
+                ordered[0]
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("chrome"),
                 "Chrome hint should lead with a Chrome path, got {}",
                 ordered[0].display()
             );

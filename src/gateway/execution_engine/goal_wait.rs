@@ -296,12 +296,12 @@ impl GoalWakeService {
         // unenforced for THIS claim; the next post_run re-enforces it.
         let decision =
             match store.try_claim_continuation(&session, None, now_ms(), gate_configured, None) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(session = %session, error = %e, "goal wake: claim failed");
-                return;
-            }
-        };
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(session = %session, error = %e, "goal wake: claim failed");
+                    return;
+                }
+            };
         match decision {
             ContinuationDecision::Fire {
                 delay_ms,

@@ -488,7 +488,10 @@ mod tests {
         // extra_args go last so a user flag wins over a config-derived one.
         let cfg = ProfileConfig {
             proxy: Some("http://proxy:8080".into()),
-            extra_args: vec!["--disable-gpu".into(), "--proxy-server=http://override:1".into()],
+            extra_args: vec![
+                "--disable-gpu".into(),
+                "--proxy-server=http://override:1".into(),
+            ],
             ..Default::default()
         };
         let args = chrome_launch_args(None, Some(&cfg));

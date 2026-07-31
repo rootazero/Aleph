@@ -129,9 +129,7 @@ mod tests {
             .call(BrowserDialogArgs {
                 profile: "default".into(),
                 action: DialogAction::Accept,
-                prompt_text: Some(
-                    "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
-                ),
+                prompt_text: Some("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into()),
             })
             .await
             .unwrap();
@@ -160,6 +158,9 @@ mod tests {
         // which degrades gracefully without a running browser.
         assert!(!result.success);
         let message = result.message.unwrap();
-        assert!(!message.contains("Blocked"), "clean prompt blocked: {message}");
+        assert!(
+            !message.contains("Blocked"),
+            "clean prompt blocked: {message}"
+        );
     }
 }

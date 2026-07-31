@@ -101,9 +101,11 @@ mod tests {
         // An unknown provider label fails inside `create_provider` — long
         // before any network I/O — so this exercises the bounded wrapper's
         // pass-through path without depending on the network.
-        let outcome =
-            probe_provider_bounded("no-such-provider", ProviderConfig::test_config("test-model"))
-                .await;
+        let outcome = probe_provider_bounded(
+            "no-such-provider",
+            ProviderConfig::test_config("test-model"),
+        )
+        .await;
         assert!(!outcome.success);
         assert!(outcome.error.is_some());
     }

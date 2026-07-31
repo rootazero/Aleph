@@ -248,7 +248,10 @@ mod tests {
         assert!(!result.success);
         assert!(!result.found);
         assert!(
-            result.message.as_deref().is_some_and(|m| m.contains("exactly one")),
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("exactly one")),
             "got: {:?}",
             result.message
         );
@@ -259,10 +262,7 @@ mod tests {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserWaitForTool::new(manager);
-        let result = tool
-            .call(args(Some("t"), Some("#x"), None))
-            .await
-            .unwrap();
+        let result = tool.call(args(Some("t"), Some("#x"), None)).await.unwrap();
         assert!(!result.success);
         assert!(
             result

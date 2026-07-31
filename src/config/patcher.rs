@@ -448,7 +448,10 @@ impl ConfigPatcher {
                 let reason = outcome
                     .error
                     .unwrap_or_else(|| "unknown probe error".to_string());
-                Some(format!("{name}: {}", crate::diagnostics::redact::redact_secrets(&reason)))
+                Some(format!(
+                    "{name}: {}",
+                    crate::diagnostics::redact::redact_secrets(&reason)
+                ))
             })
             .collect();
 

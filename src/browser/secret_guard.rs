@@ -166,7 +166,8 @@ mod tests {
 
     #[test]
     fn scan_text_detects_api_key_in_form_input() {
-        let hit = scan_text_for_secrets("password is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789");
+        let hit =
+            scan_text_for_secrets("password is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789");
         assert_eq!(hit.as_deref(), Some("api_key"));
     }
 
