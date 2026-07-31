@@ -1055,7 +1055,7 @@ mod tests {
         let m = store
             .add_member(NewTeamMember::for_acp_session(
                 team.id.clone(),
-                "claude_code",
+                "claude-code",
                 "/work/proj",
                 Some("review-bot".into()),
                 "reviewer",
@@ -1064,10 +1064,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(m.kind, TeamMemberKind::AcpSession);
-        assert_eq!(m.acp_harness_id.as_deref(), Some("claude_code"));
+        assert_eq!(m.acp_harness_id.as_deref(), Some("claude-code"));
         assert_eq!(m.acp_cwd.as_deref(), Some("/work/proj"));
         assert_eq!(m.acp_session_name.as_deref(), Some("review-bot"));
-        assert_eq!(m.agent_id, "acp:claude_code:/work/proj:review-bot");
+        assert_eq!(m.agent_id, "acp:claude-code:/work/proj:review-bot");
 
         let members = store.get_members(&team.id).await.unwrap();
         let fetched = members
