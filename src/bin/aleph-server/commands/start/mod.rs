@@ -1459,6 +1459,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // after the registry, so we late-bind it now. Both `Arc`s are cheap clones.
     if let Some(tool_registry) = agent_result.tool_registry.as_ref() {
         BuiltinToolRegistry::set_config_patcher(tool_registry.as_ref(), config_patcher.clone());
+
+        // Give `self_config` the same `ConfigChanged` broadcast the RPC
+        // `config.patch` handler emits, so LLM-driven writes (update_config /
+        // rollback) don't leave connected Panels rendering stale config.
+        let bus = event_bus.clone();
+        BuiltinToolRegistry::set_config_broadcaster(
+            tool_registry.as_ref(),
+            Arc::new(move |path: &str, sections: &[String]| {
+                if let Err(e) = alephcore::gateway::handlers::config::broadcast_config_changed(
+                    &bus, path, sections,
+                ) {
+                    tracing::warn!(error = %e, "Failed to broadcast ConfigChanged for self_config write");
+                }
+            }),
+        );
     }
 
     // Panel voice channel — native capture (record_start/stop) + TTS playback

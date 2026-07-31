@@ -27,6 +27,13 @@ use super::error::ToolError;
 /// Maximum size for identity file content (1 MB)
 const MAX_FILE_CONTENT_SIZE: usize = 1024 * 1024;
 
+/// Broadcast hook fired after a successful tool-driven config change
+/// (`update_config` / `rollback_config`) so connected Panels refetch.
+/// Receives the dot-path and the applied top-level sections; the bound
+/// closure emits the same `ConfigChanged` event as the RPC `config.patch`
+/// handler (see `gateway::handlers::config::broadcast_config_changed`).
+pub type ConfigBroadcaster = Arc<dyn Fn(&str, &[String]) + Send + Sync>;
+
 // =============================================================================
 // Args
 // =============================================================================
@@ -125,6 +132,10 @@ pub struct SelfConfigTool {
     // shape silently never received the patcher in production because the
     // boot path clones the registry Arc before injecting it.
     config_patcher: Arc<std::sync::OnceLock<Arc<ConfigPatcher>>>,
+    // Same late-binding shape as `config_patcher` (`OnceLock` behind `Arc`):
+    // the event bus exists only after the registry is shared, so the broadcast
+    // hook is injected post-construction through `&self`.
+    config_broadcaster: Arc<std::sync::OnceLock<ConfigBroadcaster>>,
 }
 
 impl SelfConfigTool {
@@ -138,6 +149,7 @@ impl SelfConfigTool {
             agent_id,
             config: None,
             config_patcher: Arc::new(std::sync::OnceLock::new()),
+            config_broadcaster: Arc::new(std::sync::OnceLock::new()),
         })
     }
 
@@ -158,6 +170,22 @@ impl SelfConfigTool {
     /// when the cell is already populated).
     pub fn set_patcher(&self, patcher: Arc<ConfigPatcher>) {
         let _ = self.config_patcher.set(patcher);
+    }
+
+    /// Late-bind the `ConfigChanged` broadcast hook after construction.
+    /// Called from `BuiltinToolRegistry::set_config_broadcaster` once the
+    /// gateway event bus exists. Idempotent like `set_patcher`: a second set
+    /// silently no-ops.
+    pub fn set_config_broadcaster(&self, broadcaster: ConfigBroadcaster) {
+        let _ = self.config_broadcaster.set(broadcaster);
+    }
+
+    /// Fire the broadcast hook if one is bound. Unbound in tests and offline
+    /// construction — then a tool-driven write simply notifies nobody.
+    fn broadcast_config_changed(&self, path: &str, applied_sections: &[String]) {
+        if let Some(broadcast) = self.config_broadcaster.get() {
+            broadcast(path, applied_sections);
+        }
     }
 }
 
@@ -450,6 +478,14 @@ impl SelfConfigTool {
                     }
                 }
 
+                // Notify connected Panels — the same `ConfigChanged` event the
+                // RPC `config.patch` handler broadcasts — so an LLM-driven
+                // change doesn't leave them rendering stale config. A no-op
+                // patch (empty diff) notifies nobody, mirroring the RPC skip.
+                if !dry_run && result.success && !result.diff.is_empty() {
+                    self.broadcast_config_changed(config_path, &result.applied_sections);
+                }
+
                 // Classify when this change actually takes effect so the agent
                 // gets a deterministic "what happens next" signal instead of
                 // having to recall the prose rules scattered through the /self
@@ -599,6 +635,12 @@ impl SelfConfigTool {
                     ) {
                         handle.store(&cfg.read().await.route);
                     }
+
+                    // Notify connected Panels (same `ConfigChanged` event as
+                    // the RPC path — see update_config). A restored snapshot
+                    // can touch any section, so no single-section hint is sent.
+                    let path = format!("rollback→{}", result.restored_from);
+                    self.broadcast_config_changed(&path, &[]);
                 }
 
                 let mode = if dry_run { "preview" } else { "applied" };
@@ -797,6 +839,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             config: None,
             config_patcher: Arc::new(std::sync::OnceLock::new()),
+            config_broadcaster: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -977,6 +1020,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             config: None,
             config_patcher: Arc::new(std::sync::OnceLock::new()),
+            config_broadcaster: Arc::new(std::sync::OnceLock::new()),
         };
 
         let result = AlephTool::call(
@@ -1067,5 +1111,161 @@ mod tests {
         assert_eq!(data["mode"], "always_local");
         assert_eq!(data["allow_cloud_escalation"], true);
         assert!(result.message.contains("always_local"));
+    }
+
+    /// Helper: build a `ConfigPatcher` wired to a temp config file (mirrors
+    /// `config::patcher::tests::setup_patcher`) plus a tool bound to it.
+    fn tool_with_patcher(tmp: &TempDir) -> (SelfConfigTool, Arc<RwLock<Config>>, PathBuf) {
+        let config_path = tmp.path().join("config.toml");
+        let backup_dir = tmp.path().join("backups");
+
+        let initial_config = Config::default();
+        initial_config.save_to_file(&config_path).unwrap();
+
+        let config = Arc::new(RwLock::new(initial_config));
+        let backup = crate::config::backup::ConfigBackup::new(backup_dir, 10);
+        let patcher = Arc::new(ConfigPatcher::new(
+            Arc::clone(&config),
+            config_path.clone(),
+            backup,
+        ));
+
+        let tool = tool_with_dir(tmp.path()).with_config(Arc::clone(&config));
+        tool.set_patcher(patcher);
+        (tool, config, config_path)
+    }
+
+    fn update_general_args() -> SelfConfigArgs {
+        SelfConfigArgs::UpdateConfig {
+            config_path: "general".to_string(),
+            config_value: serde_json::json!({"language": "zh-Hans"}),
+            dry_run: false,
+            verify: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_config_applies_and_attaches_reload_impact() {
+        let tmp = TempDir::new().unwrap();
+        let (tool, _config, config_path) = tool_with_patcher(&tmp);
+
+        let result = AlephTool::call(&tool, update_general_args()).await.unwrap();
+
+        assert!(result.success, "{}", result.message);
+        // The file on disk carries the new value.
+        let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
+        assert!(
+            file_content.contains("zh-Hans"),
+            "saved file should contain the patched language value"
+        );
+        // Reload impact rides the structured data (`general` needs a restart).
+        let data = result.data.unwrap();
+        assert_eq!(data["reload_impact"]["kind"], "restart");
+        assert!(data["reload_impact"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("restart"));
+    }
+
+    #[tokio::test]
+    async fn test_rollback_restores_previous_content() {
+        let tmp = TempDir::new().unwrap();
+        let (tool, config, config_path) = tool_with_patcher(&tmp);
+
+        // Apply a change, then roll back to the pre-change snapshot.
+        let updated = AlephTool::call(&tool, update_general_args()).await.unwrap();
+        assert!(updated.success, "{}", updated.message);
+        assert_eq!(
+            config.read().await.general.language,
+            Some("zh-Hans".to_string())
+        );
+
+        let rolled = AlephTool::call(
+            &tool,
+            SelfConfigArgs::RollbackConfig {
+                timestamp: None,
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(rolled.success, "{}", rolled.message);
+
+        // In-memory and on-disk state are both back to the pre-update value.
+        assert_eq!(config.read().await.general.language, None);
+        let restored = tokio::fs::read_to_string(&config_path).await.unwrap();
+        assert!(
+            !restored.contains("zh-Hans"),
+            "rollback must restore the pre-update content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_fires_on_change_and_skips_noop() {
+        let tmp = TempDir::new().unwrap();
+        let (tool, _config, _config_path) = tool_with_patcher(&tmp);
+
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<String>)>::new()));
+        let captured = Arc::clone(&calls);
+        tool.set_config_broadcaster(Arc::new(move |path: &str, sections: &[String]| {
+            captured
+                .lock()
+                .unwrap()
+                .push((path.to_string(), sections.to_vec()));
+        }));
+
+        // First apply: a real change → broadcast fires once.
+        let first = AlephTool::call(&tool, update_general_args()).await.unwrap();
+        assert!(first.success, "{}", first.message);
+        assert_eq!(calls.lock().unwrap().len(), 1);
+
+        // Second identical apply: value-identical no-op → no broadcast.
+        let second = AlephTool::call(&tool, update_general_args()).await.unwrap();
+        assert!(second.success, "{}", second.message);
+        assert!(second.message.contains("no change applied"));
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "no-op update must not broadcast"
+        );
+
+        let captured = calls.lock().unwrap();
+        assert_eq!(captured[0].0, "general");
+        assert_eq!(captured[0].1, vec!["general".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_fires_on_rollback() {
+        let tmp = TempDir::new().unwrap();
+        let (tool, _config, _config_path) = tool_with_patcher(&tmp);
+
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let captured = Arc::clone(&calls);
+        tool.set_config_broadcaster(Arc::new(move |path: &str, _sections: &[String]| {
+            captured.lock().unwrap().push(path.to_string());
+        }));
+
+        let updated = AlephTool::call(&tool, update_general_args()).await.unwrap();
+        assert!(updated.success, "{}", updated.message);
+        assert_eq!(calls.lock().unwrap().len(), 1);
+
+        let rolled = AlephTool::call(
+            &tool,
+            SelfConfigArgs::RollbackConfig {
+                timestamp: None,
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(rolled.success, "{}", rolled.message);
+
+        let captured = calls.lock().unwrap();
+        assert_eq!(captured.len(), 2, "rollback must broadcast too");
+        assert!(
+            captured[1].starts_with("rollback→"),
+            "rollback broadcast path was: {}",
+            captured[1]
+        );
     }
 }

@@ -493,7 +493,8 @@ pub async fn handle_get_full_config(
 ///     "applied_sections": ["providers"],
 ///     "diff": [...],
 ///     "health_check": "passed",
-///     "warnings": []
+///     "warnings": [],
+///     "reload_impact": { "kind": "restart", "hint": "…" }
 ///   }
 /// }
 /// ```
@@ -554,24 +555,7 @@ pub async fn handle_patch_config(
     // nothing persisted); broadcasting ConfigChanged for it would make every
     // connected Panel needlessly refetch config. Skip the event on a no-op.
     if !result.diff.is_empty() {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let section = if result.applied_sections.len() == 1 {
-            Some(result.applied_sections[0].clone())
-        } else {
-            None
-        };
-
-        let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
-            section,
-            value: json!({ "path": path }),
-            timestamp,
-        });
-
-        if let Err(e) = event_bus.publish_json(&event) {
+        if let Err(e) = broadcast_config_changed(&event_bus, &path, &result.applied_sections) {
             return JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
@@ -586,9 +570,60 @@ pub async fn handle_patch_config(
     );
 
     match serde_json::to_value(&result) {
-        Ok(v) => JsonRpcResponse::success(req.id, v),
+        Ok(mut v) => {
+            // Attach the reload impact so Panel users get the same
+            // "takes effect live / needs restart" signal the `self_config`
+            // tool gives the agent. Absent on a no-op patch: nothing was
+            // persisted, so no reload semantics apply.
+            if !result.diff.is_empty() {
+                let impact = crate::config::ReloadImpact::classify(&path);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "reload_impact".to_string(),
+                        json!({
+                            "kind": impact,
+                            "hint": impact.user_hint_zh(),
+                        }),
+                    );
+                }
+            }
+            JsonRpcResponse::success(req.id, v)
+        }
         Err(_) => JsonRpcResponse::success(req.id, json!({"status": "ok"})),
     }
+}
+
+/// Build and publish the `ConfigChanged` event emitted after a config write.
+///
+/// Shared by the RPC `config.patch` handler above and the `self_config`
+/// tool's broadcast hook (wired in `start::register_agent_handlers`) so
+/// Panels receive the identical notification regardless of which surface
+/// drove the change. `section` is set only when exactly one top-level
+/// section was touched; a multi-section (or whole-config) change sends
+/// `None` so Panels do a full refetch.
+pub fn broadcast_config_changed(
+    event_bus: &GatewayEventBus,
+    path: &str,
+    applied_sections: &[String],
+) -> Result<(), serde_json::Error> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let section = if applied_sections.len() == 1 {
+        Some(applied_sections[0].clone())
+    } else {
+        None
+    };
+
+    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+        section,
+        value: json!({ "path": path }),
+        timestamp,
+    });
+
+    event_bus.publish_json(&event).map(|_| ())
 }
 
 // ============================================================================

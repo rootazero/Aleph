@@ -89,6 +89,12 @@ pub enum Command {
         /// Emit a machine-readable JSON envelope instead of human output.
         #[arg(long)]
         json: bool,
+        /// Run only these check ids (comma-separated, e.g. core/data-dir,core/vault).
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        /// Skip these check ids (comma-separated). Ignored when --only is given.
+        #[arg(long, value_delimiter = ',')]
+        skip: Vec<String>,
     },
     /// Inspect the assembled system-prompt size, broken down per layer.
     ///

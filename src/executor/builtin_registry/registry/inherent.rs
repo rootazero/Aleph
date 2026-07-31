@@ -51,6 +51,21 @@ impl BuiltinToolRegistry {
         tracing::info!("ConfigPatcher late-bound into self_config + moa tools");
     }
 
+    /// Late-bind the `ConfigChanged` broadcast hook into the `self_config` tool.
+    ///
+    /// Same boot-order constraint as [`Self::set_config_patcher`]: the registry
+    /// is shared via `Arc` before startup wiring runs, so the hook is injected
+    /// through `&self` into the tool's `OnceLock`. Without it, LLM-driven
+    /// config writes (`update_config` / `rollback_config`) never notify
+    /// connected Panels — only the RPC `config.patch` path broadcast.
+    pub fn set_config_broadcaster(
+        &self,
+        broadcaster: crate::builtin_tools::self_config::ConfigBroadcaster,
+    ) {
+        self.self_config_tool.set_config_broadcaster(broadcaster);
+        tracing::info!("ConfigChanged broadcaster late-bound into self_config tool");
+    }
+
     /// Extract the caller's `agent_id` for the tool call currently executing.
     ///
     /// Prefers the per-turn `TURN_CONTEXT` task-local — scoped by the dispatch

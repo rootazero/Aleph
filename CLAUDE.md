@@ -336,7 +336,7 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 ### 进程管理 (Process Management)
 
-Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子命令经 `with_policy` 走 IPC 或本地拿锁，不与服务竞争。`kill -9` 后可立即重启。Spec C 不变量与回归脚本详见 [PROCESS_MANAGEMENT.md](docs/reference/PROCESS_MANAGEMENT.md)。
+Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子命令经 `with_policy` 走 IPC 或本地拿锁，不与服务竞争。`kill -9` 后可立即重启。Spec C 不变量与回归脚本详见 [PROCESS_MANAGEMENT.md](docs/reference/PROCESS_MANAGEMENT.md)。doctor 的 `core/duplicate-instance` 检查（sysinfo 进程表）是本红线的运行时哨兵：检测到其它存活 `aleph-server` 进程即 Warning 并引用本规程——多进程竞争同一 vault → HMAC 失败 → **vault 数据丢失**。
 
 > 信任模型见上文「信任模型 = 网络边界」与 [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux)。
 

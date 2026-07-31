@@ -37,7 +37,8 @@ pub struct DoctorArgs {
 pub struct DoctorOutput {
     /// True when no unresolved problems remain (errors/warnings, minus repairs).
     pub ok: bool,
-    /// Human-readable summary block.
+    /// One-line tally — the structured `report` is the payload; duplicating
+    /// the full human render here wastes tool-output tokens.
     pub summary: String,
     /// Full structured report (posture, counts, per-check findings).
     pub report: DiagnosticReport,
@@ -90,23 +91,61 @@ impl AlephTool for DoctorTool {
         };
         let report = engine.run(posture).await;
         let ok = report.ok();
-        let summary = report.render_human();
-
-        notify_tool_result(
-            Self::NAME,
-            &format!(
-                "{} error(s), {} warning(s), {} repaired",
-                report.errors(),
-                report.warnings(),
-                report.repaired()
-            ),
-            ok,
+        let summary = format!(
+            "{} error(s), {} warning(s), {} repaired — see report.findings",
+            report.errors(),
+            report.warnings(),
+            report.repaired()
         );
+
+        notify_tool_result(Self::NAME, &summary, ok);
 
         Ok(DoctorOutput {
             ok,
             summary,
             report,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::paths::IsolatedAlephHome;
+
+    #[tokio::test]
+    async fn inspect_run_returns_structured_output() {
+        let _home = IsolatedAlephHome::new();
+        let tool = DoctorTool::default();
+        let out = tool.call(DoctorArgs { fix: false }).await.unwrap();
+
+        // Structured payload: every registered check ran and reported.
+        assert_eq!(out.report.posture, "inspect");
+        assert_eq!(out.report.checks_run, 9);
+        assert!(!out.report.findings.is_empty());
+        // Summary is a compact one-line tally, not the full human render.
+        assert!(!out.summary.contains('\n'));
+        assert!(out.summary.contains("error(s)"));
+        assert!(out.summary.len() < out.report.render_human().len());
+        assert_eq!(out.ok, out.report.ok());
+    }
+
+    #[tokio::test]
+    async fn fix_run_on_temp_home_completes() {
+        let _home = IsolatedAlephHome::new();
+        let tool = DoctorTool::default();
+        let out = tool.call(DoctorArgs { fix: true }).await.unwrap();
+
+        assert_eq!(out.report.posture, "fix");
+        // Any repair that only claimed success would have been re-flagged by
+        // the engine's post-repair revalidation.
+        assert!(
+            !out.report.findings.iter().any(|f| f.has_tag("post-repair-residual")),
+            "unexpected post-repair residual: {:?}",
+            out.report.findings
+        );
+        // The data dir the engine resolved lives under the temp ALEPH_HOME.
+        let data_dir = crate::utils::paths::get_data_dir().unwrap();
+        assert!(data_dir.exists(), "data dir must exist after a fix run");
     }
 }
