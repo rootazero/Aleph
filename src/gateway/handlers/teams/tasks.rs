@@ -64,7 +64,6 @@ pub async fn handle_list_tasks(
     let filter = CoordTaskFilter {
         team_id: Some(params.team_id.clone()),
         status: status_filter,
-        owner: params.owner.clone(),
     };
 
     match coord_store.list_tasks(filter).await {

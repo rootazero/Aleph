@@ -40,9 +40,6 @@ pub struct TeamWorkflowCanvasArgs {
     /// `teams.list_tasks`).
     #[serde(default)]
     pub status: Option<String>,
-    /// Optional owner filter for `export`.
-    #[serde(default)]
-    pub owner: Option<String>,
     /// Required for `import` — the JSON Canvas document to materialize.
     #[serde(default)]
     pub canvas: Option<Document>,
@@ -132,7 +129,6 @@ impl AlephTool for TeamWorkflowCanvasTool {
                 let filter = CoordTaskFilter {
                     team_id: Some(args.team_id.clone()),
                     status: Self::parse_status(args.status.as_deref())?,
-                    owner: args.owner.clone(),
                 };
                 let tasks = self
                     .coord_store

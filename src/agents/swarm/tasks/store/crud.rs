@@ -230,7 +230,6 @@ pub(super) async fn list_tasks(
     if let Some(ref team_id) = filter.team_id {
         where_clauses.push(format!("t.team_id = ?{idx}"));
         values.push(Box::new(team_id.clone()));
-        idx += 1;
     }
 
     let where_sql = if where_clauses.is_empty() {
