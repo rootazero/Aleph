@@ -8,7 +8,12 @@ use alephcore::diagnostics::{DiagnosticEngine, Posture};
 
 type CmdResult = Result<(), Box<dyn std::error::Error>>;
 
-pub async fn handle_doctor_command(fix: bool, json: bool) -> CmdResult {
+pub async fn handle_doctor_command(
+    fix: bool,
+    json: bool,
+    only: Vec<String>,
+    skip: Vec<String>,
+) -> CmdResult {
     let engine = DiagnosticEngine::default_registry()?;
     let posture = if fix {
         Posture::Fix
@@ -18,7 +23,8 @@ pub async fn handle_doctor_command(fix: bool, json: bool) -> CmdResult {
         Posture::Inspect
     };
 
-    let report = engine.run(posture).await;
+    let only_ref = if only.is_empty() { None } else { Some(only.as_slice()) };
+    let report = engine.run_with_filter(posture, only_ref, &skip).await;
 
     if json {
         println!("{}", report.to_json());

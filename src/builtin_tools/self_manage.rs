@@ -17,6 +17,17 @@ use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::tools::AlephTool;
 
+/// Minimal self-management guidance returned when the /self SKILL.md is
+/// missing or unreadable — the agent still gets a usable next step rather
+/// than a dead end.
+const FALLBACK_MANUAL: &str = concat!(
+    "Self-management skill not found. Basic guidance:\n\n",
+    "1. Configuration file: ~/.aleph/config.toml (hot-reload)\n",
+    "2. API keys: use vault_store tool (never write to config)\n",
+    "3. Detailed guides: call read_config_guide(topic) for domain-specific help\n",
+    "4. Topics: overview, providers, generation, channels, agents, skills, mcp, general, cron\n",
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelfManageArgs {
     /// Brief description of what the user wants to configure or manage
@@ -97,13 +108,6 @@ impl AlephTool for SelfManageTool {
                         // SKILL.md. Degrade to the same fallback guidance instead
                         // of hard-failing the tool, so the agent still gets a
                         // usable next step rather than a dead end.
-                        let fallback = concat!(
-                            "Self-management skill not found. Basic guidance:\n\n",
-                            "1. Configuration file: ~/.aleph/config.toml (hot-reload)\n",
-                            "2. API keys: use vault_store tool (never write to config)\n",
-                            "3. Detailed guides: call read_config_guide(topic) for domain-specific help\n",
-                            "4. Topics: overview, providers, generation, channels, agents, skills, mcp, general, cron\n",
-                        );
                         notify_tool_result(
                             Self::NAME,
                             &format!("using fallback guidance (SKILL.md read failed: {e})"),
@@ -111,7 +115,7 @@ impl AlephTool for SelfManageTool {
                         );
                         return Ok(SelfManageOutput {
                             success: true,
-                            manual: fallback.to_string(),
+                            manual: FALLBACK_MANUAL.to_string(),
                             hint: format!(
                                 "Now use read_config_guide(topic) for details about: {}",
                                 args.intent
@@ -122,13 +126,6 @@ impl AlephTool for SelfManageTool {
             }
             None => {
                 // Fallback: return minimal guidance if SKILL.md not found
-                let fallback = concat!(
-                    "Self-management skill not found. Basic guidance:\n\n",
-                    "1. Configuration file: ~/.aleph/config.toml (hot-reload)\n",
-                    "2. API keys: use vault_store tool (never write to config)\n",
-                    "3. Detailed guides: call read_config_guide(topic) for domain-specific help\n",
-                    "4. Topics: overview, providers, generation, channels, agents, skills, mcp, general, cron\n",
-                );
                 notify_tool_result(
                     Self::NAME,
                     "using fallback guidance (SKILL.md not found)",
@@ -136,7 +133,7 @@ impl AlephTool for SelfManageTool {
                 );
                 return Ok(SelfManageOutput {
                     success: true,
-                    manual: fallback.to_string(),
+                    manual: FALLBACK_MANUAL.to_string(),
                     hint: format!(
                         "Now use read_config_guide(topic) for details about: {}",
                         args.intent

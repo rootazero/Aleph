@@ -109,6 +109,32 @@ fn test_test_result_serialize() {
 }
 
 #[tokio::test]
+async fn test_provider_test_redacts_probe_error() {
+    let secret = "dXNlcjpwYXNzd29yZA==";
+    let request = JsonRpcRequest::with_id(
+        "providers.test",
+        Some(json!({
+            "config": {
+                "protocol": format!("Basic {secret}"),
+                "enabled": true,
+                "model": "test-model"
+            }
+        })),
+        json!(1),
+    );
+    let response = handle_test(
+        request,
+        Arc::new(RwLock::new(Config::default())),
+        test_vault(),
+    )
+    .await;
+    let result = response.result.unwrap();
+    let error = result["error"].as_str().unwrap();
+    assert!(!error.contains(secret));
+    assert!(error.contains("***"));
+}
+
+#[tokio::test]
 async fn test_healthcheck_empty_providers() {
     let config = Arc::new(RwLock::new(Config::default()));
     let vault = test_vault();
@@ -142,6 +168,21 @@ async fn test_healthcheck_skips_disabled_without_probing() {
     assert_eq!(providers[0]["skipped"], true);
     assert_eq!(providers[0]["ok"], false);
     assert!(providers[0].get("latency_ms").is_none());
+}
+
+#[tokio::test]
+async fn test_healthcheck_redacts_probe_error() {
+    let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    let mut config = config_with_provider("leaky");
+    let provider = config.providers.get_mut("leaky").unwrap();
+    provider.enabled = true;
+    provider.protocol = Some(jwt.to_string());
+    let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
+    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let result = response.result.unwrap();
+    let error = result["providers"][0]["error"].as_str().unwrap();
+    assert!(!error.contains(jwt));
+    assert!(error.contains("***"));
 }
 
 #[test]

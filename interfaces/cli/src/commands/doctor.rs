@@ -13,14 +13,19 @@
 //! battery re-runs in-process and reports the resolved/remaining delta —
 //! the verification loop the reference doctors leave to a manual re-run.
 //!
-//! Checks are grouped into four categories:
+//! Two halves, one report:
 //!
-//! - **system**:   binary location, version, sibling `aleph-server` presence
-//! - **config**:   `~/.aleph/config.toml` exists + parses
-//! - **runtime**:  Gateway daemon reachable, client/daemon version match,
-//!   per-provider live connectivity (concurrent server-side probe), MCP
-//!   servers, vault present
-//! - **sandbox**:  active sandbox profile can be summarised
+//! - **Client-side environment checks** (system / config / runtime / sandbox
+//!   categories): binary locations, `~/.aleph` layout, config file parses,
+//!   gateway reachable, client/daemon version match, MCP server count,
+//!   sandbox profile summary.
+//! - **Daemon engine battery** (`engine` / `core` / `providers` / …
+//!   categories): when the gateway is reachable the CLI calls the
+//!   `diagnostics.run` RPC and folds each returned finding into a row
+//!   (category = `check_id` prefix, severity → required mapping). The checks
+//!   themselves — core paths, vault, provider connectivity, … — live in
+//!   Core's `DiagnosticEngine`; this shell never duplicates them (R4). A
+//!   daemon that predates the method yields a single upgrade-hint info row.
 //!
 //! The plugin-specific `aleph plugin doctor` checks remain separate; this
 //! command focuses on the *host* installation rather than the
@@ -34,10 +39,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_protocol::jsonrpc::METHOD_NOT_FOUND;
 use aleph_protocol::{AgentTraceEvent, StreamEvent};
 
 use super::daemon::find_server_binary;
@@ -176,9 +182,8 @@ async fn run_all_checks(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck
 
     if gateway_reachable {
         checks.push(check_daemon_version(server_url, config).await);
-        checks.extend(check_providers(server_url, config).await);
+        checks.extend(check_daemon_diagnostics(server_url, config).await);
         checks.push(check_mcp_servers(server_url, config).await);
-        checks.push(check_vault(server_url, config).await);
     }
 
     // 4. Sandbox (independent of daemon — uses sibling binary directly)
@@ -644,82 +649,112 @@ async fn check_daemon_version(server_url: &str, config: &CliConfig) -> DoctorChe
     }
 }
 
-/// Live provider connectivity. Calls the concurrent server-side
-/// `providers.healthcheck` sweep and emits one row per provider with latency or
-/// error. Falls back to a plain count via `providers.list` when the daemon
-/// predates the healthcheck endpoint (backward compatible).
-async fn check_providers(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
-    match call_rpc(server_url, config, "providers.healthcheck").await {
-        Ok(value) => match value.get("providers").and_then(|v| v.as_array()) {
-            Some(rows) if !rows.is_empty() => rows.iter().map(provider_row_to_check).collect(),
-            Some(_) => vec![DoctorCheck::ok(
-                "runtime",
-                "providers",
-                "Configured LLM providers",
-                false,
-                "no providers configured (add one via the panel or setup)",
-            )],
-            None => check_providers_count(server_url, config).await,
-        },
-        Err(_) => check_providers_count(server_url, config).await,
+/// Run the daemon's unified diagnostic engine over `diagnostics.run` and fold
+/// the returned findings into doctor rows. This replaces the old client-side
+/// provider/vault battery: the checks (core paths, vault, provider
+/// connectivity, …) live in Core's `DiagnosticEngine` — one source of truth,
+/// and the CLI stays a pure I/O shell (R4).
+///
+/// Backward compatible: a daemon that predates the method yields a single
+/// info row advising an upgrade; the deleted battery is never resurrected.
+async fn check_daemon_diagnostics(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
+    match call_rpc(server_url, config, "diagnostics.run").await {
+        Ok(report) => report_to_checks(&report),
+        Err(e) => vec![diagnostics_error_row(&e)],
     }
 }
 
-/// Map a single `providers.healthcheck` row onto a doctor check.
-fn provider_row_to_check(row: &Value) -> DoctorCheck {
-    let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-    let row_name = format!("provider:{name}");
-    let latency = row.get("latency_ms").and_then(serde_json::Value::as_u64);
-    let lat = latency.map(|m| format!(" ({m}ms)")).unwrap_or_default();
-    let skipped = row
-        .get("skipped")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let ok = row
-        .get("ok")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let desc = "LLM provider connectivity";
-
-    if skipped {
-        DoctorCheck::ok("runtime", &row_name, desc, false, "disabled (not probed)")
-    } else if ok {
-        DoctorCheck::ok("runtime", &row_name, desc, false, format!("reachable{lat}"))
-    } else {
-        let err = row
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
-        DoctorCheck::fail(
-            "runtime",
-            &row_name,
-            desc,
-            false,
-            format!("unreachable: {err}{lat}"),
-        )
-    }
-}
-
-/// Count-only fallback for daemons without `providers.healthcheck`.
-async fn check_providers_count(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck> {
-    match call_rpc(server_url, config, "providers.list").await {
-        Ok(value) => {
-            let count = count_array_or_obj_array(&value, "providers");
-            vec![DoctorCheck::ok(
-                "runtime",
-                "providers",
-                "Configured LLM providers",
+/// One-row outcome for a failed `diagnostics.run` call: old daemons get an
+/// upgrade hint (method-not-found), everything else is a non-fatal failure.
+fn diagnostics_error_row(err: &CliError) -> DoctorCheck {
+    match err {
+        CliError::Rpc { code, message }
+            if *code == METHOD_NOT_FOUND
+                && message
+                    .strip_prefix("Method not found:")
+                    .is_some_and(|method| method.trim() == "diagnostics.run") =>
+        {
+            DoctorCheck::ok(
+                "engine",
+                "diagnostics",
+                "Daemon diagnostic engine",
                 false,
-                format!("{count} configured (connectivity probe unavailable)"),
-            )]
+                "daemon predates `diagnostics.run` — upgrade/restart the daemon \
+                 for the full diagnostic battery",
+            )
         }
-        Err(e) => vec![DoctorCheck::fail(
-            "runtime",
-            "providers",
-            "Configured LLM providers",
+        _ => DoctorCheck::fail(
+            "engine",
+            "diagnostics",
+            "Daemon diagnostic engine",
             false,
-            format!("providers.list failed: {e}"),
-        )],
+            format!("diagnostics.run failed: {err}"),
+        ),
+    }
+}
+
+/// Wire shape of one finding in the `diagnostics.run` report envelope.
+/// Mirrors Core's `diagnostics::Finding` (serde, lowercase severity) without
+/// depending on alephcore — the CLI crate is protocol-only by design.
+#[derive(Debug, Deserialize)]
+struct FindingRow {
+    check_id: String,
+    severity: String,
+    title: String,
+    detail: String,
+    fix_hint: Option<String>,
+    #[serde(default)]
+    repairable: bool,
+}
+
+/// Fold a `diagnostics.run` report envelope into doctor rows: one row per
+/// problem finding (info findings are noise — every healthy check emits one);
+/// a single summary row when the whole battery is green.
+fn report_to_checks(report: &Value) -> Vec<DoctorCheck> {
+    let findings: Vec<FindingRow> = report
+        .get("findings")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let problems: Vec<DoctorCheck> = findings
+        .iter()
+        .filter(|f| f.severity != "info")
+        .map(finding_row_to_check)
+        .collect();
+    if !problems.is_empty() {
+        return problems;
+    }
+    let checks_run = report.get("checksRun").and_then(Value::as_u64).unwrap_or(0);
+    vec![DoctorCheck::ok(
+        "engine",
+        "diagnostics",
+        "Daemon diagnostic engine",
+        false,
+        format!("{checks_run} checks passed"),
+    )]
+}
+
+/// Map one daemon finding onto a doctor check. Pure transform, host-testable.
+/// Severity → verdict: `error` fails a required check (exit code 2),
+/// `warning` fails a non-required one, `info` passes; an unknown severity
+/// fails safe as a warning.
+fn finding_row_to_check(row: &FindingRow) -> DoctorCheck {
+    let category = row.check_id.split('/').next().unwrap_or("engine");
+    let (passed, required) = match row.severity.as_str() {
+        "info" => (true, false),
+        "error" => (false, true),
+        _ => (false, false),
+    };
+    let mut message = row.detail.clone();
+    if let Some(hint) = &row.fix_hint {
+        message.push_str(&format!(" — fix: {hint}"));
+    }
+    if row.repairable {
+        message.push_str(" (mechanically repairable)");
+    }
+    if passed {
+        DoctorCheck::ok(category, &row.check_id, &row.title, required, message)
+    } else {
+        DoctorCheck::fail(category, &row.check_id, &row.title, required, message)
     }
 }
 
@@ -743,31 +778,6 @@ async fn check_mcp_servers(server_url: &str, config: &CliConfig) -> DoctorCheck 
             "Connected MCP servers",
             false,
             "no `mcp.list` endpoint (MCP not enabled — OK)",
-        ),
-    }
-}
-
-async fn check_vault(server_url: &str, config: &CliConfig) -> DoctorCheck {
-    // Vault health is probed via `secrets.list` — the live secret-store
-    // endpoint. (The old `vault.status` method was removed when key
-    // management consolidated onto the `secrets.*` RPC surface.)
-    match call_rpc(server_url, config, "secrets.list").await {
-        Ok(value) => {
-            let count = count_array_or_obj_array(&value, "secrets");
-            DoctorCheck::ok(
-                "runtime",
-                "vault",
-                "Secret vault status",
-                false,
-                format!("{count} secret(s) stored"),
-            )
-        }
-        Err(e) => DoctorCheck::fail(
-            "runtime",
-            "vault",
-            "Secret vault status",
-            false,
-            format!("secrets.list failed: {e}"),
         ),
     }
 }
@@ -851,34 +861,135 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn provider_row_reachable_passes_with_latency() {
-        let row = json!({ "name": "openai", "enabled": true, "ok": true, "skipped": false, "latency_ms": 120 });
-        let check = provider_row_to_check(&row);
+    fn finding_info_maps_to_passed_row() {
+        let row: FindingRow = serde_json::from_value(json!({
+            "check_id": "core/data-dir",
+            "severity": "info",
+            "title": "Data directory",
+            "detail": "/home/u/.aleph present",
+            "fix_hint": null,
+            "repairable": false
+        }))
+        .unwrap();
+        let check = finding_row_to_check(&row);
         assert!(check.passed);
-        assert_eq!(check.name, "provider:openai");
-        assert!(check.message.contains("reachable"));
-        assert!(check.message.contains("120ms"));
+        assert!(!check.required);
+        assert_eq!(check.category, "core");
+        assert_eq!(check.name, "core/data-dir");
+        assert_eq!(check.description, "Data directory");
+        assert_eq!(check.message, "/home/u/.aleph present");
     }
 
     #[test]
-    fn provider_row_unreachable_fails_with_error() {
-        let row = json!({ "name": "ollama", "enabled": true, "ok": false, "skipped": false, "error": "connection refused", "latency_ms": 30 });
-        let check = provider_row_to_check(&row);
+    fn finding_warning_fails_non_required() {
+        let row: FindingRow = serde_json::from_value(json!({
+            "check_id": "core/stale-lock",
+            "severity": "warning",
+            "title": "Stale lock",
+            "detail": "gateway.lock is 3 days old",
+            "fix_hint": "delete the stale lock file",
+            "repairable": true
+        }))
+        .unwrap();
+        let check = finding_row_to_check(&row);
         assert!(!check.passed);
-        assert!(
-            !check.required,
-            "provider connectivity is a warning, not fatal"
-        );
-        assert!(check.message.contains("unreachable"));
-        assert!(check.message.contains("connection refused"));
+        assert!(!check.required, "warnings are not fatal");
+        assert!(check.message.contains("gateway.lock is 3 days old"));
+        assert!(check.message.contains("fix: delete the stale lock file"));
+        assert!(check.message.contains("(mechanically repairable)"));
     }
 
     #[test]
-    fn provider_row_disabled_is_skipped_ok() {
-        let row = json!({ "name": "gemini", "enabled": false, "ok": false, "skipped": true });
-        let check = provider_row_to_check(&row);
-        assert!(check.passed);
-        assert!(check.message.contains("disabled"));
+    fn finding_error_fails_required() {
+        let row: FindingRow = serde_json::from_value(json!({
+            "check_id": "core/config-parse",
+            "severity": "error",
+            "title": "Config parse",
+            "detail": "TOML parse error at line 12",
+            "fix_hint": null,
+            "repairable": false
+        }))
+        .unwrap();
+        let check = finding_row_to_check(&row);
+        assert!(!check.passed);
+        assert!(check.required, "errors must gate the exit code");
+    }
+
+    #[test]
+    fn finding_unknown_severity_fails_safe_as_warning() {
+        let row: FindingRow = serde_json::from_value(json!({
+            "check_id": "core/x",
+            "severity": "critical",
+            "title": "t",
+            "detail": "d",
+            "fix_hint": null,
+            "repairable": false
+        }))
+        .unwrap();
+        let check = finding_row_to_check(&row);
+        assert!(!check.passed);
+        assert!(!check.required);
+    }
+
+    #[test]
+    fn report_with_problems_emits_only_problem_rows() {
+        let report = json!({
+            "ok": false,
+            "checksRun": 10,
+            "findings": [
+                { "check_id": "core/data-dir", "severity": "info", "title": "t",
+                  "detail": "fine", "repairable": false },
+                { "check_id": "providers/connectivity", "severity": "warning", "title": "t",
+                  "detail": "openai unreachable", "fix_hint": "store a fresh key",
+                  "repairable": false }
+            ]
+        });
+        let checks = report_to_checks(&report);
+        assert_eq!(checks.len(), 1, "info findings are not emitted as rows");
+        assert_eq!(checks[0].category, "providers");
+        assert!(!checks[0].passed);
+    }
+
+    #[test]
+    fn report_all_green_emits_summary_row() {
+        let report = json!({
+            "ok": true,
+            "checksRun": 10,
+            "findings": [
+                { "check_id": "core/data-dir", "severity": "info", "title": "t",
+                  "detail": "fine", "repairable": false }
+            ]
+        });
+        let checks = report_to_checks(&report);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].passed);
+        assert_eq!(checks[0].name, "diagnostics");
+        assert_eq!(checks[0].message, "10 checks passed");
+    }
+
+    #[test]
+    fn method_not_found_yields_upgrade_hint_row() {
+        let err = CliError::Rpc {
+            code: METHOD_NOT_FOUND,
+            message: "Method not found: diagnostics.run".to_string(),
+        };
+        let check = diagnostics_error_row(&err);
+        assert!(check.passed, "old daemon is an info row, not a failure");
+        assert!(check.message.contains("upgrade"));
+
+        let unrelated = CliError::Rpc {
+            code: METHOD_NOT_FOUND,
+            message: "Method not found: providers.healthcheck".to_string(),
+        };
+        let check = diagnostics_error_row(&unrelated);
+        assert!(!check.passed);
+        assert!(check.message.contains("diagnostics.run failed"));
+
+        let other = CliError::Connection("refused".to_string());
+        let check = diagnostics_error_row(&other);
+        assert!(!check.passed);
+        assert!(!check.required);
+        assert!(check.message.contains("diagnostics.run failed"));
     }
 
     #[test]

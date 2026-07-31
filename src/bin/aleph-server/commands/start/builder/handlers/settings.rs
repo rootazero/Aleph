@@ -209,6 +209,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::browser_config;
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
+    use alephcore::gateway::handlers::diagnostics;
     use alephcore::gateway::handlers::embedding_providers;
     use alephcore::gateway::handlers::execution_config;
     use alephcore::gateway::handlers::fetch_config;
@@ -239,6 +240,17 @@ pub(in crate::commands::start) fn register_config_handlers(
         handle_patch_config,
         config_patcher,
         event_bus,
+        shared_token_mgr
+    );
+
+    // Unified self-diagnosis engine over RPC — the daemon-side battery the
+    // `aleph doctor` CLI and the Panel consume instead of duplicating checks
+    // client-side. `fix=true` applies mechanical repairs only.
+    register_handler!(
+        server,
+        "diagnostics.run",
+        diagnostics::handle_run,
+        config,
         shared_token_mgr
     );
 
@@ -384,7 +396,9 @@ pub(in crate::commands::start) fn register_config_handlers(
         shared_token_mgr
     );
     // Concurrent liveness sweep over all configured providers (read-only —
-    // consumed by `aleph doctor`). Reuses the single-provider probe.
+    // Panel surface). Reuses the single-provider probe. `aleph doctor` no
+    // longer calls this directly; it consumes the same probe results via the
+    // engine's `providers/connectivity` check over `diagnostics.run`.
     register_handler!(
         server,
         "providers.healthcheck",

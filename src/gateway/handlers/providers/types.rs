@@ -46,7 +46,9 @@ impl From<crate::providers::probe::ProbeOutcome> for TestResult {
     fn from(o: crate::providers::probe::ProbeOutcome) -> Self {
         Self {
             success: o.success,
-            error: o.error,
+            error: o
+                .error
+                .map(|error| crate::diagnostics::redact_secrets(&error)),
             latency_ms: o.latency_ms,
         }
     }

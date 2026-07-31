@@ -55,6 +55,7 @@ pub mod connect;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
+pub mod diagnostics;
 pub mod discord_panel;
 pub mod echo;
 pub mod embedding_providers;
