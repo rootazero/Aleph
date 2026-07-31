@@ -77,16 +77,6 @@ impl A2AClientPool {
             None => AgentHealth::Unreachable,
         }
     }
-
-    /// Number of clients in the pool
-    pub async fn len(&self) -> usize {
-        self.clients.read().await.len()
-    }
-
-    /// Whether the pool is empty
-    pub async fn is_empty(&self) -> bool {
-        self.clients.read().await.is_empty()
-    }
 }
 
 impl Default for A2AClientPool {

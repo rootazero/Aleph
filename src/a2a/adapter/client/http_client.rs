@@ -292,12 +292,6 @@ impl A2AClient {
         self.timeout
     }
 
-    /// Check if auth token is configured
-    #[must_use]
-    pub const fn has_auth(&self) -> bool {
-        self.auth_token.is_some()
-    }
-
     /// Whether the configured auth token equals `token` (`None` = no auth).
     /// Used by the client pool to detect rotated credentials.
     pub(crate) fn auth_token_matches(&self, token: Option<&str>) -> bool {
@@ -343,14 +337,14 @@ mod tests {
     #[test]
     fn with_auth_sets_token() {
         let client = A2AClient::with_auth("http://example.com", "my-secret-token");
-        assert!(client.has_auth());
+        assert!(client.auth_token.is_some());
         assert_eq!(client.base_url(), "http://example.com");
     }
 
     #[test]
     fn new_has_no_auth() {
         let client = A2AClient::new("http://example.com");
-        assert!(!client.has_auth());
+        assert!(client.auth_token.is_none());
     }
 
     #[test]
