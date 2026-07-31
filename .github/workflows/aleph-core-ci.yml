@@ -59,21 +59,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Linking the 132 tests/ binaries needs more scratch space than a hosted
-      # runner ships with: `ld` died with `signal 7 [Bus error]` — what an
-      # mmap'd output file reports when the filesystem cannot supply the pages,
-      # i.e. the disk is full, rather than a clean ENOSPC. The preinstalled
-      # Android SDK / .NET / GHC / CodeQL images are worth ~25 GB here and
-      # nothing in this repo builds against them. `df` brackets the step so a
-      # future failure can be read off the log instead of re-derived.
-      - name: Free disk space (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
-
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -120,12 +105,17 @@ jobs:
       # targets declare through `required-features`. Without it cargo *skips*
       # them rather than failing, which is the same silence in a second costume.
       #
-      # `line-tables-only` is the other half of the disk story: on ELF the
-      # debuginfo is *inside* each of the 132 binaries, and full debuginfo is
-      # most of their ~4.5 GB. Line tables are what a panic backtrace actually
-      # reads, so this keeps CI failures diagnosable. (It measures as nothing on
-      # macOS, where debuginfo stays out in .o/dSYM — which is why it needed the
-      # `ld` bus error, not a local size check, to justify itself.)
+      # `line-tables-only` is load-bearing, not tidiness. Without it `ld` dies
+      # linking these targets with `signal 7 [Bus error]`. That is *not* the
+      # disk running out, which is the obvious reading and the wrong one: the
+      # runner had 87 GB free at the time, and a step that freed a further
+      # 17 GB changed nothing. It is memory — ld mmaps its inputs, and on ELF
+      # the debuginfo sits inside each of the 132 binaries, making up most of
+      # their ~4.5 GB. Line tables are what a panic backtrace reads, so failures
+      # stay diagnosable.
+      #
+      # This also cannot be checked locally on macOS, where debuginfo stays out
+      # in .o/dSYM and the binaries barely change size (28.46 -> 28.41 MB).
       - name: Run integration tests
         env:
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
