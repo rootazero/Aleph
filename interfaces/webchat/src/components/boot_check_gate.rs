@@ -98,6 +98,9 @@ pub fn BootCheckGate() -> impl IntoView {
                                         Some(shared_ui_logic::connection::ConnectionFailure::Timeout { .. }) => {
                                             t_string!(i18n, conn_error.timeout_title).to_string()
                                         }
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Rejected { .. }) => {
+                                            t_string!(i18n, conn_error.rejected_title).to_string()
+                                        }
                                         _ => t_string!(i18n, conn_error.unreachable_title).to_string(),
                                     }}
                                 </h2>
@@ -106,16 +109,31 @@ pub fn BootCheckGate() -> impl IntoView {
                                         Some(shared_ui_logic::connection::ConnectionFailure::Timeout { .. }) => {
                                             t_string!(i18n, conn_error.timeout_body).to_string()
                                         }
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Rejected { .. }) => {
+                                            t_string!(i18n, conn_error.rejected_body).to_string()
+                                        }
                                         _ => t_string!(i18n, conn_error.unreachable_body).to_string(),
                                     }}
                                 </p>
-                                <p class="mt-3 text-xs text-text-tertiary">
-                                    {move || t_string!(i18n, boot_gate.trouble_hint).to_string()}
-                                </p>
+                                // The generic hint ("make sure aleph-server is started and
+                                // listening") actively contradicts a refusal — the server
+                                // answered, so it is demonstrably up. Withhold it there.
+                                <Show
+                                    when=move || !matches!(
+                                        failure.get(),
+                                        Some(shared_ui_logic::connection::ConnectionFailure::Rejected { .. })
+                                    )
+                                    fallback=|| ()
+                                >
+                                    <p class="mt-3 text-xs text-text-tertiary">
+                                        {move || t_string!(i18n, boot_gate.trouble_hint).to_string()}
+                                    </p>
+                                </Show>
                                 <div class="mt-3 rounded-lg border border-danger/20 bg-danger-subtle p-3 text-xs font-mono text-danger break-all">
                                     {move || match failure.get() {
                                         Some(shared_ui_logic::connection::ConnectionFailure::Unreachable { detail })
                                         | Some(shared_ui_logic::connection::ConnectionFailure::Timeout { detail })
+                                        | Some(shared_ui_logic::connection::ConnectionFailure::Rejected { detail })
                                         | Some(shared_ui_logic::connection::ConnectionFailure::Dropped { detail })
                                         | Some(shared_ui_logic::connection::ConnectionFailure::Unknown { detail }) => detail,
                                         _ => String::new(),

@@ -6,7 +6,9 @@ pub mod reconnect;
 pub mod wasm;
 
 pub use connector::{AlephConnector, ConnectionError};
-pub use failure::{classify, ConnectionFailure, FailureStage};
+pub use failure::{
+    classify, stage_for_connect_error, ConnectionFailure, FailureStage, OriginLiveness,
+};
 pub use reconnect::ReconnectStrategy;
 
 #[cfg(feature = "wasm")]
