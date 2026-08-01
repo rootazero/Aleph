@@ -111,7 +111,7 @@ pub struct HooksManageOutput {
 }
 
 /// Hook management tool.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct HooksManageTool {
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }

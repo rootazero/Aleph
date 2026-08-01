@@ -121,6 +121,19 @@ impl BuiltinToolRegistry {
             PdfGenerateTool::new()
         };
 
+        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
+        // `~/.aleph/approval-policy.json`; with no file present it falls back to
+        // a permissive default (desktop actions Allow, shell Deny), so wiring
+        // here is byte-identical to the previous unwired (allow-all) behavior
+        // until the user supplies a policy file. Shared by DesktopTool + PimTool
+        // and the sensitive browser tools (navigate/click/type/fill_form/
+        // evaluate + open/select/dialog/drag/hover/press_key/scroll/upload/
+        // cookies), whose `Browser*` action types the policy engine already
+        // models — previously advertised but never enforced. Also gates the
+        // `hooks_manage` control-plane write below.
+        let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
+            Arc::new(crate::approval::ConfigApprovalPolicy::load());
+
         // Skill list/read tools are constructed per dispatch in
         // `registry.rs` from the active project root (round 3) — no shared
         // field needed; see the `skill_list` / `skill_read` match arms.
@@ -337,17 +350,6 @@ impl BuiltinToolRegistry {
             mp.add_provider(Box::new(crate::media::TextDocumentProvider));
             config.media_pipeline = Some(Arc::new(mp));
         }
-        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
-        // `~/.aleph/approval-policy.json`; with no file present it falls back to
-        // a permissive default (desktop actions Allow, shell Deny), so wiring
-        // here is byte-identical to the previous unwired (allow-all) behavior
-        // until the user supplies a policy file. Shared by DesktopTool + PimTool
-        // and the sensitive browser tools (navigate/click/type/fill_form/
-        // evaluate), whose `Browser*` action types the policy engine already
-        // models — previously advertised but never enforced.
-        let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
-            Arc::new(crate::approval::ConfigApprovalPolicy::load());
-
         // `[desktop] allow_global_pointer` — the one input-rail policy knob. Left
         // at its default (false), a coordinate action that names no target
         // process is refused instead of running on the global HID tap, which

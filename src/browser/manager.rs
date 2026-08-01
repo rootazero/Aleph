@@ -71,7 +71,6 @@ impl ProfileManager {
                 ManagedProfile {
                     config: ProfileConfig {
                         driver: BrowserDriver::Managed,
-                        color: Some("#00AA00".into()),
                         ..Default::default()
                     },
                     last_activity: std::time::Instant::now(),
@@ -87,7 +86,6 @@ impl ProfileManager {
                     config: ProfileConfig {
                         browser: BrowserType::Chrome,
                         driver: BrowserDriver::ExistingSession,
-                        color: Some("#00AA00".into()),
                         ..Default::default()
                     },
                     last_activity: std::time::Instant::now(),
