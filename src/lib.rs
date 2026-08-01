@@ -68,7 +68,6 @@ pub mod cluster;
 pub mod command;
 mod config;
 pub mod context;
-mod core;
 pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
@@ -264,12 +263,6 @@ pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 
 // Event handler types (for backward compatibility)
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};
-
-// Core types (for backward compatibility)
-pub use crate::core::MediaType as AttachmentMediaType;
-pub use crate::core::{
-    CapturedContext, CompressionStats, ContentEncoding, MediaAttachment, MemoryEntry,
-};
 
 // =============================================================================
 // Initialization Function
