@@ -7,8 +7,8 @@ use crate::config::types::{
     DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml,
     FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml,
     McpConfig, MediaConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
-    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, ProviderConfigEntry,
-    RoutingRuleConfig, SearchConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
+    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig,
+    RoutingRuleConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
     SecretsConfig, ShellSecurityConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
     StabilityToml, StopHookConfig, SubAgentConfig, TeamBroadcastConfigToml,
     TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
@@ -389,57 +389,6 @@ impl Config {
         }
         instances.sort_by(|a, b| a.id.cmp(&b.id));
         instances
-    }
-}
-
-// =============================================================================
-// FullConfig (UniFFI)
-// =============================================================================
-
-/// Full configuration exposed through `UniFFI`
-/// This wraps Config with a flattened provider list
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FullConfig {
-    pub default_hotkey: String,
-    pub general: GeneralConfig,
-    pub memory: MemoryConfig,
-    pub providers: Vec<ProviderConfigEntry>,
-    pub rules: Vec<RoutingRuleConfig>,
-    #[serde(default)]
-    pub behavior: Option<BehaviorConfig>,
-    #[serde(default)]
-    pub search: Option<SearchConfig>,
-    #[serde(default)]
-    pub smart_matching: SmartMatchingConfig,
-    #[serde(default)]
-    pub skills: Option<SkillsConfig>,
-    #[serde(default)]
-    pub policies: PoliciesConfig,
-}
-
-impl From<Config> for FullConfig {
-    #[allow(deprecated)]
-    fn from(config: Config) -> Self {
-        let providers = config
-            .providers
-            .into_iter()
-            .map(|(name, config)| ProviderConfigEntry { name, config })
-            .collect();
-
-        let search = config.search.map(|s| s.into());
-
-        Self {
-            default_hotkey: config.default_hotkey,
-            general: config.general,
-            memory: config.memory,
-            providers,
-            rules: config.rules,
-            behavior: config.behavior,
-            search,
-            smart_matching: config.smart_matching,
-            skills: Some(config.skills),
-            policies: config.policies,
-        }
     }
 }
 

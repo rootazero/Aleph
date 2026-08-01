@@ -2,9 +2,7 @@
 //!
 //! Contains search capability configuration:
 //! - `SearchConfigInternal`: Internal search config with `HashMap` backends
-//! - `SearchConfig`: UniFFI-compatible search config with Vec backends
 //! - `SearchBackendConfig`: Individual search backend settings
-//! - `SearchBackendEntry`: Backend with name (for `UniFFI`)
 //! - `PIIConfig`: PII scrubbing settings
 
 use schemars::JsonSchema;
@@ -74,10 +72,6 @@ pub const fn default_web_fetch_fallback() -> bool {
 }
 
 pub const fn default_search_max_results() -> usize {
-    5
-}
-
-pub const fn default_search_max_results_u64() -> u64 {
     5
 }
 
@@ -178,81 +172,4 @@ pub struct SearchBackendConfig {
     /// Whether this backend has been verified via a successful test connection
     #[serde(default)]
     pub verified: bool,
-}
-
-// =============================================================================
-// SearchBackendEntry
-// =============================================================================
-
-/// Search backend entry (name + config) - used for `UniFFI` serialization
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SearchBackendEntry {
-    pub name: String,
-    pub config: SearchBackendConfig,
-}
-
-// =============================================================================
-// SearchConfig (UniFFI)
-// =============================================================================
-
-/// Search configuration for `UniFFI` (backends as Vec instead of `HashMap`)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SearchConfig {
-    pub enabled: bool,
-    pub default_provider: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback_providers: Option<Vec<String>>,
-    #[serde(default = "default_search_max_results_u64")]
-    pub max_results: u64,
-    #[serde(default = "default_search_timeout")]
-    pub timeout_seconds: u64,
-    pub backends: Vec<SearchBackendEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pii: Option<PIIConfig>,
-    /// Mirrors [`SearchConfigInternal::web_fetch_fallback`]. `UniFFI`
-    /// surface for the panel / mobile clients.
-    #[serde(default = "default_web_fetch_fallback")]
-    pub web_fetch_fallback: bool,
-}
-
-impl From<SearchConfigInternal> for SearchConfig {
-    fn from(config: SearchConfigInternal) -> Self {
-        let backends = config
-            .backends
-            .into_iter()
-            .map(|(name, config)| SearchBackendEntry { name, config })
-            .collect();
-
-        Self {
-            enabled: config.enabled,
-            default_provider: config.default_provider,
-            fallback_providers: config.fallback_providers,
-            max_results: config.max_results.try_into().unwrap_or(u64::MAX),
-            timeout_seconds: config.timeout_seconds,
-            backends,
-            pii: config.pii,
-            web_fetch_fallback: config.web_fetch_fallback,
-        }
-    }
-}
-
-impl From<SearchConfig> for SearchConfigInternal {
-    fn from(config: SearchConfig) -> Self {
-        let backends = config
-            .backends
-            .into_iter()
-            .map(|entry| (entry.name, entry.config))
-            .collect();
-
-        Self {
-            enabled: config.enabled,
-            default_provider: config.default_provider,
-            fallback_providers: config.fallback_providers,
-            max_results: config.max_results.try_into().unwrap_or(usize::MAX),
-            timeout_seconds: config.timeout_seconds,
-            backends,
-            pii: config.pii,
-            web_fetch_fallback: config.web_fetch_fallback,
-        }
-    }
 }

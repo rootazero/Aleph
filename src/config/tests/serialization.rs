@@ -131,7 +131,7 @@ fn test_config_save_and_load() {
 }
 
 #[test]
-fn test_full_config_conversion() {
+fn test_multi_provider_config_roundtrip() {
     let mut config = Config::default();
 
     // Add providers using test_config helper
@@ -142,13 +142,10 @@ fn test_full_config_conversion() {
     provider2.protocol = Some("anthropic".to_string());
     config.providers.insert("claude".to_string(), provider2);
 
-    // Convert to FullConfig
-    let full_config: FullConfig = config.into();
-
-    // Verify conversion
-    assert_eq!(full_config.providers.len(), 2);
-    assert!(full_config.providers.iter().any(|p| p.name == "openai"));
-    assert!(full_config.providers.iter().any(|p| p.name == "claude"));
+    // Verify the providers are retained
+    assert_eq!(config.providers.len(), 2);
+    assert!(config.providers.contains_key("openai"));
+    assert!(config.providers.contains_key("claude"));
 }
 
 #[test]

@@ -4,10 +4,10 @@
 //! Types are organized by domain:
 //!
 //! - `general`: Core settings (`GeneralConfig`, `BehaviorConfig`)
-//! - `provider`: AI provider settings (`ProviderConfig`, `ProviderConfigEntry`)
+//! - `provider`: AI provider settings (`ProviderConfig`)
 //! - `routing`: Routing rules (`RoutingRuleConfig`)
 //! - `memory`: Memory/RAG settings (`MemoryConfig`)
-//! - `search`: Search capability settings (`SearchConfigInternal`, `SearchConfig`, `PIIConfig`)
+//! - `search`: Search capability settings (`SearchConfigInternal`, `PIIConfig`)
 //! - `media`: Media pipeline settings (`MediaConfig`)
 //! - `smart_flow`: Intent detection and matching (`SmartFlowConfig`, `SmartMatchingConfig`)
 //! - `tools`: Native and MCP tools (`ToolsConfig`, `UnifiedToolsConfig`)

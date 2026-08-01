@@ -2,22 +2,9 @@
 //!
 //! Contains AI provider configuration:
 //! - `ProviderConfig`: Individual provider settings (API key, model, etc.)
-//! - `ProviderConfigEntry`: Provider with name (for `UniFFI`)
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-// =============================================================================
-// ProviderConfigEntry
-// =============================================================================
-
-/// Provider config entry with name (for `UniFFI`)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderConfigEntry {
-    pub name: String,
-    #[serde(flatten)]
-    pub config: ProviderConfig,
-}
 
 // =============================================================================
 // CacheRetention
