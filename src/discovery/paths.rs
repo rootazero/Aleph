@@ -1,49 +1,35 @@
 //! Path utilities and constants for the discovery system
-//!
-//! Defines standard paths for Aleph and Claude Code compatibility.
 
 use super::{DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
 
 // =============================================================================
-// Path Constants
+// Path Constants (internal — scanner-only; not re-exported)
 // =============================================================================
 
-/// Aleph home directory name
-pub const ALEPH_HOME_DIR: &str = ".aleph";
+pub(crate) const ALEPH_HOME_DIR: &str = ".aleph";
+pub(crate) const CLAUDE_HOME_DIR: &str = ".claude";
+pub(crate) const AGENTS_DIR: &str = "agents";
+pub(crate) const PLUGINS_DIR: &str = "plugins";
+pub(crate) const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
+pub(crate) const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
+pub(crate) const SKILL_FILE: &str = "SKILL.md";
+pub(crate) const AGENT_FILE: &str = "agent.md";
+pub(crate) const MCP_CONFIG_FILE: &str = ".mcp.json";
 
-/// Claude Code home directory name
-pub const CLAUDE_HOME_DIR: &str = ".claude";
-
-/// Standard subdirectories
-pub const SKILLS_DIR: &str = "skills";
-pub const COMMANDS_DIR: &str = "commands";
-pub const AGENTS_DIR: &str = "agents";
-pub const PLUGINS_DIR: &str = "plugins";
+// =============================================================================
+// Public Path Constants
+// =============================================================================
 
 /// Configuration files
 pub const ALEPH_CONFIG_FILE: &str = "aleph.jsonc";
 pub const ALEPH_CONFIG_FILE_ALT: &str = "aleph.json";
-/// Legacy Claude plugin manifest directory (used by `LegacyAdapter`)
-pub const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
-/// Legacy Claude plugin manifest file (used by `LegacyAdapter`)
-pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
-
-/// Skill/Command definition files
-pub const SKILL_FILE: &str = "SKILL.md";
-
-/// Agent definition files
-pub const AGENT_FILE: &str = "agent.md";
-
-/// Hook configuration
-pub const MCP_CONFIG_FILE: &str = ".mcp.json";
 
 // =============================================================================
 // Path Functions
 // =============================================================================
 
-/// Get the user's home directory. Pub because `claude_home_dir` (in this
-/// module) re-exports it for the discovery crate; no external callers.
+/// Get the user's home directory. Used by `claude_home_dir` (scanner-internal).
 pub(crate) fn home_dir() -> DiscoveryResult<PathBuf> {
     crate::utils::paths::get_home_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
 }
@@ -53,8 +39,8 @@ pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
     crate::utils::paths::get_config_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
 }
 
-/// Get the Claude Code home directory (~/.claude/)
-pub fn claude_home_dir() -> DiscoveryResult<PathBuf> {
+/// Get the Claude Code home directory (~/.claude/) — scanner-internal.
+pub(crate) fn claude_home_dir() -> DiscoveryResult<PathBuf> {
     Ok(home_dir()?.join(CLAUDE_HOME_DIR))
 }
 
@@ -68,22 +54,16 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
     Ok(aleph_home_dir()?.join(PLUGINS_DIR))
 }
 
-/// Find the git root directory from a starting path
+/// Find the git root directory from a starting path.
 ///
 /// Delegates to `crate::utils::paths::find_git_root` so the two cannot drift
-/// in their `.git`/canonicalize/depth semantics. The shared implementation
-/// caps depth at 100 to prevent unbounded traversal in pathological
-/// filesystems and canonicalizes the start path so a `.git` symlink to an
-/// arbitrary directory cannot mis-report an ancestor dir as a git root.
-#[must_use]
-pub fn find_git_root(start: &Path) -> Option<PathBuf> {
+/// in their `.git`/canonicalize/depth semantics.
+pub(crate) fn find_git_root(start: &Path) -> Option<PathBuf> {
     crate::utils::paths::find_git_root(start)
 }
 
-/// Traverse upward from start to stop, finding all matching directories
-///
-/// Returns paths in order from start to stop (project-level first).
-pub fn find_upward<F>(
+/// Traverse upward from start to stop, finding all matching directories.
+pub(crate) fn find_upward<F>(
     start: &Path,
     stop: Option<&Path>,
     max_depth: usize,
@@ -96,9 +76,6 @@ where
     let mut current = start.to_path_buf();
     let mut depth = 0;
 
-    // Try to canonicalize current; track whether it succeeded.
-    // If current can't be canonicalized, we must NOT canonicalize stop either,
-    // otherwise the comparison will never match (critical bug).
     let current_canonicalized = current.canonicalize().ok();
     if let Some(ref canonical) = current_canonicalized {
         current = canonical.clone();
@@ -122,9 +99,6 @@ where
             results.push(current.clone());
         }
 
-        // Check if we've reached the stop point. When `current` has been
-        // canonicalized but `stop.canonicalize()` failed, fall back to the
-        // raw (non-canonicalized) stop path for the comparison.
         if stop.as_ref().is_some_and(|sp| &current == sp)
             || stop_raw.as_ref().is_some_and(|sr| &current == sr)
         {
@@ -134,8 +108,6 @@ where
         match current.parent() {
             Some(parent) => {
                 current = parent.to_path_buf();
-                // Only canonicalize if the start path was canonicalized,
-                // otherwise stop-path comparison will diverge.
                 if current_canonicalized.is_some() {
                     if let Ok(canonical) = current.canonicalize() {
                         current = canonical;
@@ -150,8 +122,7 @@ where
     results
 }
 
-/// Validate that a path component (filename or dirname) does not contain
-/// directory traversal or path separators.
+/// Validate that a path component does not contain traversal or separators.
 pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     if name.is_empty() {
         return Err(DiscoveryError::InvalidPath(
@@ -176,8 +147,8 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     Ok(())
 }
 
-/// Find all occurrences of a file by traversing upward
-pub fn find_file_upward(
+/// Find all occurrences of a file by traversing upward.
+pub(crate) fn find_file_upward(
     filename: &str,
     start: &Path,
     stop: Option<&Path>,
@@ -192,8 +163,8 @@ pub fn find_file_upward(
     )
 }
 
-/// Find all occurrences of a directory by traversing upward
-pub fn find_dir_upward(
+/// Find all occurrences of a directory by traversing upward.
+pub(crate) fn find_dir_upward(
     dirname: &str,
     start: &Path,
     stop: Option<&Path>,
@@ -206,70 +177,4 @@ pub fn find_dir_upward(
             .map(|dir| dir.join(dirname))
             .collect(),
     )
-}
-
-/// Ensure a directory exists, creating it if necessary
-pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
-    match std::fs::create_dir_all(path) {
-        Ok(()) => {
-            tracing::info!("Ensured directory exists: {:?}", path);
-            Ok(())
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_find_git_root() {
-        let temp = TempDir::new().unwrap();
-        // Canonicalize to handle macOS /var -> /private/var symlink
-        let temp_path = temp.path().canonicalize().unwrap();
-        let git_dir = temp_path.join(".git");
-        std::fs::create_dir(&git_dir).unwrap();
-
-        let subdir = temp_path.join("src").join("module");
-        std::fs::create_dir_all(&subdir).unwrap();
-
-        let root = find_git_root(&subdir);
-        assert_eq!(root, Some(temp_path));
-    }
-
-    #[test]
-    fn test_find_file_upward() {
-        let temp = TempDir::new().unwrap();
-        // Canonicalize to handle macOS /var -> /private/var symlink
-        let temp_path = temp.path().canonicalize().unwrap();
-
-        // Create nested structure
-        let level1 = temp_path.join("level1");
-        let level2 = level1.join("level2");
-        let level3 = level2.join("level3");
-        std::fs::create_dir_all(&level3).unwrap();
-
-        // Create config files at different levels
-        std::fs::write(temp_path.join("aleph.jsonc"), "{}").unwrap();
-        std::fs::write(level2.join("aleph.jsonc"), "{}").unwrap();
-
-        let files = find_file_upward("aleph.jsonc", &level3, Some(&temp_path), 10).unwrap();
-
-        // Should find both files, project-level first
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0], level2.join("aleph.jsonc"));
-        assert_eq!(files[1], temp_path.join("aleph.jsonc"));
-    }
-
-    #[test]
-    fn test_ensure_dir() {
-        let temp = TempDir::new().unwrap();
-        let new_dir = temp.path().join("new").join("nested").join("dir");
-
-        assert!(!new_dir.exists());
-        ensure_dir(&new_dir).unwrap();
-        assert!(new_dir.exists());
-    }
 }

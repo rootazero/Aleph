@@ -77,7 +77,7 @@ impl DirectoryScanner {
     /// 3. Project-level .claude/ directories - priority 20+
     /// 4. Project-level .aleph/ directories - priority 40+ (native, wins over
     ///    the project `.claude/` compat dirs on a name clash)
-    pub fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
+    fn get_all_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
         let mut dirs = Vec::new();
 
         // 1. Claude global (lowest priority, read-only)
@@ -290,7 +290,7 @@ impl DirectoryScanner {
     ///
     /// Also scans one level deeper for monorepo layouts where each subdirectory
     /// of a cloned repo is an individual plugin.
-    pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
+    fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
         // Only scan Aleph plugins directory (not Claude)
         self.scan_plugin_parent(
