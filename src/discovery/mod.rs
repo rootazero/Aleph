@@ -11,7 +11,7 @@ pub use paths::*;
 pub use scanner::*;
 pub use types::*;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Discovery errors

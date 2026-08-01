@@ -198,7 +198,7 @@ impl DirectoryScanner {
         let scan_dirs = self.get_all_directories()?;
 
         for scan_dir in scan_dirs {
-            if !scan_dir.exists() {
+            if !scan_dir.path.exists() {
                 continue;
             }
 
@@ -290,23 +290,6 @@ impl DirectoryScanner {
     ///
     /// Also scans one level deeper for monorepo layouts where each subdirectory
     /// of a cloned repo is an individual plugin.
-    fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        let mut discovered = Vec::new();
-        // Only scan Aleph plugins directory (not Claude)
-        self.scan_plugin_parent(
-            &self.aleph_home.join(PLUGINS_DIR),
-            &mut discovered,
-            DiscoverySource::AlephGlobal,
-            10,
-        );
-        trace!("Discovered {} plugins", discovered.len());
-        Ok(discovered)
-    }
-
-    /// Like [`Self::discover_plugins`] but also scans each `extra_parent`
-    /// plugin directory (e.g. a registered project's `.aleph/plugins`), so
-    /// project-local installs are discovered alongside the global ones. Each
-    /// parent is scanned with the same direct + monorepo-subdir logic.
     pub fn discover_plugins_with_extra(
         &self,
         extra_parents: &[PathBuf],
@@ -768,7 +751,7 @@ mod tests {
             config: DiscoveryConfig::default(),
         };
 
-        let plugins = scanner.discover_plugins().unwrap();
+        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].name, "my-plugin");
     }
@@ -801,7 +784,7 @@ mod tests {
             config: DiscoveryConfig::default(),
         };
 
-        let plugins = scanner.discover_plugins().unwrap();
+        let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
         assert_eq!(plugins.len(), 2);
         let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"diagnostics"));
@@ -841,7 +824,7 @@ mod tests {
         };
 
         // Plain discover_plugins sees only the global one.
-        assert_eq!(scanner.discover_plugins().unwrap().len(), 1);
+        assert_eq!(scanner.discover_plugins_with_extra(&[]).unwrap().len(), 1);
 
         // With the project's plugin parent, both are discovered.
         let plugins = scanner

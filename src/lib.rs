@@ -191,8 +191,8 @@ pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServer
 
 // Tool Metadata (registry)
 pub use crate::tool_metadata::{
-    ToolCatalog, ToolCategory, ToolDefinition, ToolResult, ToolSafetyLevel, ToolSource,
-    ToolSourceType, UnifiedTool,
+    ToolCatalog, ToolCategory, ToolDefinition, ToolSafetyLevel, ToolSource, ToolSourceType,
+    UnifiedTool,
 };
 
 // =============================================================================

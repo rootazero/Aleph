@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::config::RoutingRuleConfig;
 use crate::skill::SkillInfo;
 
-use super::types::ChannelType;
+use super::types::{ChannelType, UnifiedTool};
 use conflict::ConflictResolver;
 // Re-exports for external (integration test, gateway) consumers. The
 // in-crate paths use these via fully-qualified names, hence the lint

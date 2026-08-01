@@ -125,53 +125,7 @@ impl ConflictResolver {
         }
     }
 
-    /// Apply conflict resolution by renaming an existing tool
-    ///
-    /// This is called when a higher-priority tool needs to take over
-    /// a name from an existing lower-priority tool.
-    ///
-    /// # Arguments
-    ///
-    /// * `existing_id` - The ID of the existing tool to rename
-    /// * `new_name` - The new name for the existing tool
-    ///
-    /// # Returns
-    ///
-    /// `true` if the tool was found and renamed, `false` otherwise
-    pub async fn rename_existing_tool(&self, existing_id: &str, new_name: &str) -> bool {
-        let mut tools = self.tools.write().await;
-
-        if let Some(mut tool) = tools.remove(existing_id) {
-            let original_name = tool.name.clone();
-            tool.original_name = Some(original_name.clone());
-            tool.was_renamed = true;
-            tool.name = new_name.to_string();
-            tool.display_name = format!("{new_name} (renamed)");
-
-            // Update ID to reflect new name
-            let new_id = match &tool.source {
-                ToolSource::Native => format!("native:{new_name}"),
-                ToolSource::Builtin => format!("builtin:{new_name}"),
-                ToolSource::Mcp { server } => format!("mcp:{server}:{new_name}"),
-                ToolSource::Skill { id } => format!("skill:{id}"), // Keep skill ID
-                ToolSource::Custom { rule_index } => format!("custom:{rule_index}:{new_name}"),
-                ToolSource::Plugin { plugin_id } => format!("plugin:{plugin_id}:{new_name}"),
-            };
-
-            debug!(
-                "Tool conflict resolved: '{}' renamed to '{}' (priority system)",
-                original_name, new_name
-            );
-
-            tool.id = new_id.clone();
-            tools.insert(new_id, tool);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Register a tool with automatic conflict resolution
+/// Register a tool with automatic conflict resolution
     ///
     /// This is the preferred way to register tools in flat namespace mode.
     /// It automatically handles name conflicts according to priority rules.

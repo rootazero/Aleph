@@ -17,6 +17,25 @@ pub enum DiscoverySource {
     Plugin,
 }
 
+/// A directory to scan for components (scanner-internal).
+#[derive(Debug, Clone)]
+pub(crate) struct ScanDirectory {
+    pub path: PathBuf,
+    pub source: DiscoverySource,
+    pub priority: u32,
+}
+
+impl ScanDirectory {
+    #[must_use]
+    pub(crate) const fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
+        Self {
+            path,
+            source,
+            priority,
+        }
+    }
+}
+
 /// A discovered path with metadata
 #[derive(Debug, Clone)]
 pub struct DiscoveredPath {
