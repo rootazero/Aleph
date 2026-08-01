@@ -3,7 +3,6 @@
 //! Controls command risk assessment with optional custom patterns.
 //! All built-in patterns remain active as safety floor regardless of config.
 
-use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -75,36 +74,7 @@ const fn default_false() -> bool {
     false
 }
 
-impl ShellSecurityConfig {
-    /// Compile all enabled custom patterns into Regex.
-    ///
-    /// Returns `Ok(None)` if custom patterns are disabled.
-    /// Returns `Ok(Some(...))` with compiled patterns if enabled.
-    pub fn compile_patterns(&self) -> Result<Option<CompiledCustomPatterns>, regex::Error> {
-        if !self.enable_custom_patterns {
-            return Ok(None);
-        }
-
-        let compile = |patterns: &[CustomRiskPattern]| -> Result<Vec<Regex>, regex::Error> {
-            patterns
-                .iter()
-                .map(|p| crate::security::safe_regex::bounded_builder(&p.pattern).build())
-                .collect::<Result<Vec<_>, _>>()
-        };
-
-        Ok(Some(CompiledCustomPatterns {
-            blocked: compile(&self.custom_blocked)?,
-            danger: compile(&self.custom_danger)?,
-        }))
-    }
-}
-
-/// Pre-compiled custom patterns for runtime use.
-#[derive(Debug, Clone)]
-pub struct CompiledCustomPatterns {
-    pub blocked: Vec<Regex>,
-    pub danger: Vec<Regex>,
-}
+impl ShellSecurityConfig {}
 
 // =============================================================================
 // Tests
@@ -120,48 +90,6 @@ mod tests {
         assert!(!config.enable_custom_patterns);
         assert!(config.custom_blocked.is_empty());
         assert!(config.custom_danger.is_empty());
-    }
-
-    #[test]
-    fn test_compile_disabled() {
-        let config = ShellSecurityConfig::default();
-        assert!(config.compile_patterns().unwrap().is_none());
-    }
-
-    #[test]
-    fn test_compile_enabled() {
-        let config = ShellSecurityConfig {
-            enable_custom_patterns: true,
-            custom_blocked: vec![CustomRiskPattern {
-                pattern: r"^rm\s+".to_string(),
-                reason: Some("Delete".to_string()),
-            }],
-            custom_danger: vec![CustomRiskPattern {
-                pattern: r"^sudo\s+".to_string(),
-                reason: None,
-            }],
-        };
-
-        let compiled = config.compile_patterns().unwrap().unwrap();
-        assert_eq!(compiled.blocked.len(), 1);
-        assert_eq!(compiled.danger.len(), 1);
-
-        assert!(compiled.blocked[0].is_match("rm -rf /"));
-        assert!(compiled.danger[0].is_match("sudo ls"));
-    }
-
-    #[test]
-    fn test_compile_invalid_regex() {
-        let config = ShellSecurityConfig {
-            enable_custom_patterns: true,
-            custom_blocked: vec![CustomRiskPattern {
-                pattern: "[invalid".to_string(),
-                reason: None,
-            }],
-            ..Default::default()
-        };
-
-        assert!(config.compile_patterns().is_err());
     }
 
     #[test]
