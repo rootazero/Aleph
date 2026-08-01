@@ -63,8 +63,6 @@ pub enum CommandContext {
         /// Rule regex pattern
         pattern: String,
     },
-    /// No specific context (fallback)
-    None,
 }
 
 /// Unified command parser — delegates to `ToolCatalog`

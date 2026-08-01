@@ -7,6 +7,8 @@
 //! `needs_token` verdict and known close reasons ([`AUTH_KICK_REASONS`]),
 //! never on the close code alone.
 
+use super::connector::ConnectionError;
+
 /// Why a connection attempt or live connection ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionFailure {
@@ -14,6 +16,11 @@ pub enum ConnectionFailure {
     Unreachable { detail: String },
     /// WS opened but the server went silent / an RPC timed out.
     Timeout { detail: String },
+    /// Something answered the upgrade and refused it (gateway origin gate,
+    /// TLS gate, connection cap, or a proxy). The server is *up and
+    /// reachable* — the remedy is configuration, not connectivity, so this
+    /// must never be collapsed into [`Self::Unreachable`].
+    Rejected { detail: String },
     /// `connect` RPC reported `needs_token`, or the server closed us with an
     /// auth kick ([`AUTH_KICK_REASONS`]) → re-authorize at the login wall.
     AuthRequired,
@@ -26,8 +33,11 @@ pub enum ConnectionFailure {
 /// The point in the connect lifecycle a failure surfaced at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureStage {
-    /// Before the WebSocket reached OPEN (connect()/open timeout).
+    /// Before the WebSocket reached OPEN with no answer at all (open timeout,
+    /// TCP/DNS failure).
     BeforeOpen,
+    /// Before the WebSocket reached OPEN, but the peer answered and refused.
+    Rejected,
     /// After OPEN — a live socket dropped.
     AfterOpen,
     /// During the `connect` handshake RPC (transport-level error).
@@ -68,8 +78,50 @@ pub fn classify(
         FailureStage::BeforeOpen | FailureStage::Handshake => {
             ConnectionFailure::Unreachable { detail }
         }
+        FailureStage::Rejected => ConnectionFailure::Rejected { detail },
         FailureStage::RpcTimeout => ConnectionFailure::Timeout { detail },
         FailureStage::AfterOpen => ConnectionFailure::Dropped { detail },
+    }
+}
+
+/// What an independent probe of the page's own origin found after a WebSocket
+/// failed before OPEN.
+///
+/// Needed because the browser reports "TCP connection refused" and "the server
+/// answered the upgrade with 403" *identically* — `error` then `close(1006)`
+/// with an empty reason, the HTTP status deliberately withheld from script. So
+/// the socket alone can only prove "something happened fast"; whether a server
+/// exists at all is a separate question that only a second request can answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginLiveness {
+    /// The origin answered an ordinary HTTP request (any status — even 404
+    /// proves a server is there). A pre-open socket failure against a live
+    /// origin is a genuine refusal.
+    Serving,
+    /// The probe got no answer: nothing is listening, or the host is gone.
+    Silent,
+    /// No probe ran (not applicable, or it could not be issued). Never claim
+    /// liveness we did not establish.
+    Unknown,
+}
+
+/// Which stage a failed `connect()` belongs to. Exists so the distinction the
+/// connector worked to observe — "refused" vs "no answer" — survives the trip
+/// to the UI instead of being flattened back into one message.
+///
+/// A refusal is only reported as [`FailureStage::Rejected`] when the origin is
+/// confirmed [`OriginLiveness::Serving`]; otherwise it degrades to
+/// `BeforeOpen`, because the copy for `Rejected` tells the operator their
+/// server is up and the problem is configuration — a claim that is worse than
+/// useless when nothing is running.
+#[must_use]
+pub const fn stage_for_connect_error(
+    err: &ConnectionError,
+    origin: OriginLiveness,
+) -> FailureStage {
+    match (err, origin) {
+        (ConnectionError::FailedBeforeOpen(_), OriginLiveness::Serving) => FailureStage::Rejected,
+        _ => FailureStage::BeforeOpen,
     }
 }
 
@@ -87,6 +139,7 @@ impl ConnectionFailure {
         match self {
             Self::Unreachable { .. } => "unreachable",
             Self::Timeout { .. } => "timeout",
+            Self::Rejected { .. } => "rejected",
             Self::AuthRequired => "auth_required",
             Self::Dropped { .. } => "dropped",
             Self::Unknown { .. } => "unknown",
@@ -171,6 +224,120 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_handshake_is_not_reported_as_unreachable() {
+        // The bug this variant exists for. A gateway that answers the upgrade
+        // with 403 (`origin not allowed`) / 426 / 503 is *running and
+        // reachable* — reporting it as `Unreachable` sends the operator to
+        // check DNS and firewalls while the actual answer is one config key.
+        let refused = classify(
+            FailureStage::Rejected,
+            Some("WebSocket closed before open: code=1006 reason="),
+            false,
+        );
+        assert!(
+            !matches!(refused, ConnectionFailure::Unreachable { .. }),
+            "a server that actively refused the upgrade must not read as unreachable"
+        );
+        assert!(
+            !matches!(refused, ConnectionFailure::Timeout { .. }),
+            "an immediate refusal must not read as a timeout"
+        );
+        assert_eq!(
+            refused,
+            ConnectionFailure::Rejected {
+                detail: "WebSocket closed before open: code=1006 reason=".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_refused_handshake_still_routes_auth_kicks_to_the_wall() {
+        // Rejection is classified *after* the auth-kick check, so a gateway
+        // that refuses the upgrade citing a dead credential still walls.
+        for reason in AUTH_KICK_REASONS {
+            assert_eq!(
+                classify(FailureStage::Rejected, Some(reason), false),
+                ConnectionFailure::AuthRequired
+            );
+        }
+    }
+
+    #[test]
+    fn rejection_keeps_retrying() {
+        // The browser cannot read the upgrade's status code, so we cannot tell
+        // a permanent 403 from a transient 503 (connection limit). Retrying is
+        // the conservative choice: this variant changes the *copy*, not the
+        // retry policy.
+        assert!(ConnectionFailure::Rejected {
+            detail: String::new()
+        }
+        .should_retry());
+    }
+
+    #[test]
+    fn connect_errors_map_to_the_stage_that_describes_them() {
+        // The mapping that was missing: a refusal and a silent socket are two
+        // different failures and must not collapse onto one stage.
+        assert_eq!(
+            stage_for_connect_error(
+                &ConnectionError::FailedBeforeOpen("code=1006".into()),
+                OriginLiveness::Serving
+            ),
+            FailureStage::Rejected
+        );
+        assert_eq!(
+            stage_for_connect_error(
+                &ConnectionError::ConnectFailed("WebSocket open timed out".into()),
+                OriginLiveness::Unknown
+            ),
+            FailureStage::BeforeOpen
+        );
+    }
+
+    #[test]
+    fn a_dead_port_is_unreachable_not_a_refusal() {
+        // The browser reports "TCP connection refused" and "HTTP 403 on the
+        // upgrade" identically: error + close(1006) with no reason. Only an
+        // independent probe of the origin separates them. If the origin serves
+        // nothing, the honest verdict is Unreachable — claiming "the server is
+        // running but refused you" would send the operator to edit
+        // allowed_origins when the real fix is to start the server.
+        assert_eq!(
+            stage_for_connect_error(
+                &ConnectionError::FailedBeforeOpen("WebSocket error before open".into()),
+                OriginLiveness::Silent
+            ),
+            FailureStage::BeforeOpen
+        );
+        assert_eq!(
+            classify(
+                stage_for_connect_error(
+                    &ConnectionError::FailedBeforeOpen("WebSocket error before open".into()),
+                    OriginLiveness::Silent
+                ),
+                Some("WebSocket error before open"),
+                false
+            ),
+            ConnectionFailure::Unreachable {
+                detail: "WebSocket error before open".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn an_unprobed_refusal_does_not_claim_the_server_is_running() {
+        // Fail safe: if the probe could not be run at all we must not assert
+        // liveness we never established.
+        assert_eq!(
+            stage_for_connect_error(
+                &ConnectionError::FailedBeforeOpen("x".into()),
+                OriginLiveness::Unknown
+            ),
+            FailureStage::BeforeOpen
+        );
+    }
+
+    #[test]
     fn auth_required_does_not_retry_others_do() {
         assert!(!ConnectionFailure::AuthRequired.should_retry());
         assert!(ConnectionFailure::Unreachable {
@@ -217,6 +384,13 @@ mod tests {
             }
             .i18n_key(),
             "unknown"
+        );
+        assert_eq!(
+            ConnectionFailure::Rejected {
+                detail: String::new()
+            }
+            .i18n_key(),
+            "rejected"
         );
     }
 }

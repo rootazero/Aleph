@@ -63,12 +63,6 @@ pub const RETRY_NOT_BEFORE_METADATA_KEY: &str = "retry_not_before";
 /// immediately, so the step's configured transient-failure protection
 /// (bounded retry + backoff) never applies to any operator-initiated rerun.
 ///
-/// Operator retry surfaces stamp the failed-attempt count *at retry time*
-/// here; [`fail_or_retry`] subtracts it, so each hard retry grants the full
-/// per-step `max_retries` budget to the fresh intervention. Absent key reads
-/// as `0` → byte-identical legacy behaviour.
-pub const RETRY_ATTEMPTS_BASE_METADATA_KEY: &str = "retry_attempts_base";
-
 /// Metadata key under which the epoch (seconds) of the most recent **manual
 /// retry** (operator/leader hard-reset via `team_task_control.retry`,
 /// `workflow_step_review.retry`, `teams.task.retry`, or
@@ -316,23 +310,10 @@ pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
     value
 }
 
-/// Read the operator-retry budget baseline from a task's `metadata`, if any.
-/// Tolerant like [`read_max_retries`]: a missing key or non-integer value
-/// reads as `None` (no baseline → the full lifetime count consumes budget).
-#[must_use]
-pub fn read_retry_attempts_base(metadata: &Value) -> Option<u32> {
-    metadata
-        .get(RETRY_ATTEMPTS_BASE_METADATA_KEY)
-        .and_then(Value::as_u64)
-        .and_then(|n| u32::try_from(n).ok())
-}
-
 /// Count the budget-consuming attempts in a task's run history: clean
 /// `Failed`/`Timeout` rows only. `Abandoned` (crash orphans) and `Running`
 /// rows are deliberately excluded — an interrupted attempt is not the task's
-/// fault. Single source of truth shared by the dispatcher's failure path and
-/// the operator retry surfaces that stamp
-/// [`RETRY_ATTEMPTS_BASE_METADATA_KEY`].
+/// fault. Single source of truth shared by the dispatcher's failure path.
 #[must_use]
 pub fn count_failed_attempts(runs: &[super::CoordTaskRun]) -> u32 {
     let n = runs
@@ -562,23 +543,6 @@ mod tests {
         // Anchor boundary is inclusive (a failure at exactly reset_at counts).
         assert_eq!(budget_failures_since(&runs, Some(150)), 1);
         assert_eq!(budget_failures_since(&runs, Some(151)), 0);
-    }
-
-    #[test]
-    fn retry_attempts_base_reads_tolerantly() {
-        assert_eq!(read_retry_attempts_base(&json!({})), None);
-        assert_eq!(
-            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: "3" })),
-            None
-        );
-        assert_eq!(
-            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: -1 })),
-            None
-        );
-        assert_eq!(
-            read_retry_attempts_base(&json!({ RETRY_ATTEMPTS_BASE_METADATA_KEY: 4 })),
-            Some(4)
-        );
     }
 
     #[test]

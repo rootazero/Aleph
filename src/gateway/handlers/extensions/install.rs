@@ -27,13 +27,6 @@ pub struct DisclosureParams {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ConfigureParams {
-    pub id: String,
-    #[serde(default)]
-    pub values: Map<String, Value>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct InstallParams {
     pub id: String,
     #[serde(default)]
@@ -167,26 +160,6 @@ pub async fn handle_disclosure(req: JsonRpcRequest, cache: Arc<CatalogCache>) ->
             "injection_findings": scan_text(&entry),
             "post_install": post_install,
         }),
-    )
-}
-
-/// extensions.configure — validate a submitted config against the spec.
-pub async fn handle_configure(req: JsonRpcRequest, cache: Arc<CatalogCache>) -> JsonRpcResponse {
-    let p: ConfigureParams = match parse_params(&req) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-    let Some(entry) = lookup_entry(&cache, &p.id).await else {
-        return JsonRpcResponse::error(req.id, INVALID_PARAMS, "unknown extension id");
-    };
-    let spec = match resolve_spec(&entry) {
-        Ok(s) => s,
-        Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
-    };
-    let missing = missing_required(&spec, &p.values);
-    JsonRpcResponse::success(
-        req.id,
-        json!({ "ok": missing.is_empty(), "missing": missing }),
     )
 }
 

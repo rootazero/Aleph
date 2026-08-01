@@ -8,6 +8,18 @@ use thiserror::Error;
 pub enum ConnectionError {
     #[error("Failed to connect: {0}")]
     ConnectFailed(String),
+    /// The socket fired `error`/`close` *before* reaching OPEN, as opposed to
+    /// going silent. Something reacted — a `403`/`426`/`503` on the upgrade, or
+    /// a TCP refusal because nothing is listening.
+    ///
+    /// This variant deliberately does **not** say which: browsers withhold the
+    /// upgrade's HTTP status from script and report both cases identically
+    /// (`error` + `close(1006)`, empty reason). Deciding between them needs an
+    /// independent probe of the origin and is the classifier's job — see
+    /// `failure::OriginLiveness`. Keep this message factual so it cannot
+    /// contradict the verdict rendered above it.
+    #[error("Connection failed before open: {0}")]
+    FailedBeforeOpen(String),
     #[error("Connection lost: {0}")]
     ConnectionLost(String),
     #[error("Send failed: {0}")]

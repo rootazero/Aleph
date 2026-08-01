@@ -90,12 +90,6 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_trace,
         memory_db
     );
-    register_handler!(
-        server,
-        "memory.appList",
-        memory_handlers::handle_app_list,
-        memory_db
-    );
     // Read-only per-tool usage introspection over ToolInvocation raw rows.
     register_handler!(
         server,

@@ -1077,10 +1077,10 @@ mod error_classification_tests {
     /// assertion cannot drift from the behaviour it claims to pin.
     ///
     /// This used to ask `providers::retry`'s own predicate, which matched
-    /// `RetryPolicy::retryable_status_codes` — a table production never
-    /// consulted. Every assertion below could therefore hold while the live path
-    /// did something else; the adapter comment about "the retry policy's
-    /// status-code match" pointed at the same dead path.
+    /// a status-code table production never consulted. Every assertion below
+    /// could therefore hold while the live path did something else; the
+    /// adapter comment about "the retry policy's status-code match" pointed
+    /// at the same dead path.
     fn is_retryable(e: &AlephError) -> bool {
         matches!(decide(e, 0, 2), Decision::RetrySame(_))
     }

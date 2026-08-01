@@ -121,30 +121,6 @@ pub async fn handle_hooks_list(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
-/// `hooks.registry` — the live registration inventory.
-///
-/// Snapshots the extension manager's executor (the same snapshot every
-/// fire-site takes), so the answer reflects the hooks that would run right
-/// now, including hot-reloaded ones. Returns an empty list rather than an
-/// error when no manager is registered: "no hooks" and "hooks subsystem not
-/// up" both mean nothing will fire, and a caller asking for an inventory
-/// shouldn't have to special-case boot ordering.
-pub async fn handle_hooks_registry(request: JsonRpcRequest) -> JsonRpcResponse {
-    let entries = match try_extension_manager() {
-        Some(manager) => manager.hook_executor_snapshot().await.inventory(),
-        None => Vec::new(),
-    };
-    let unreachable = entries.iter().filter(|e| !e.reachable).count();
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "total": entries.len(),
-            "unreachable": unreachable,
-            "hooks": entries,
-        }),
-    )
-}
-
 #[derive(Debug, Deserialize)]
 struct AddParams {
     event: String,

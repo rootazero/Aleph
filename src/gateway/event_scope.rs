@@ -27,7 +27,6 @@ impl EventScopeGuard {
     /// |--------|-------------------|
     /// | `pairing.` | admin, pairing |
     /// | `guest.` | admin, guest.manager |
-    /// | `exec.approval.` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
     /// | `surface.approval` | admin, exec.approver |
     #[must_use]
@@ -48,10 +47,6 @@ impl EventScopeGuard {
                 ),
                 (
                     "surface.approval".to_string(),
-                    vec!["admin".to_string(), "exec.approver".to_string()],
-                ),
-                (
-                    "exec.approval.".to_string(),
                     vec!["admin".to_string(), "exec.approver".to_string()],
                 ),
                 (

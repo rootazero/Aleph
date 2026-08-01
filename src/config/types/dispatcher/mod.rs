@@ -1,8 +1,8 @@
-//! Dispatcher configuration types
+//! Team dispatcher / broadcast / message-router configuration types.
 //!
-//! Contains Dispatcher Layer configuration:
-//! - `DispatcherConfigToml`: Routing and confirmation settings
-//! - `AgentConfigToml`: L3 Agent (multi-step planning) settings
+//! - `TeamDispatcherConfigToml`: `[team_dispatcher]`
+//! - `TeamBroadcastConfigToml`: `[team_broadcast]`
+//! - `TeamMessagesConfigToml`: `[team_messages]`
 
 mod core;
 

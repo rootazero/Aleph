@@ -526,13 +526,13 @@ mod tests {
         TeamMember {
             team_id: "t1".into(),
             agent_id: format!(
-                "acp:claude_code:/work/proj{}",
+                "acp:claude-code:/work/proj{}",
                 name.map(|n| format!(":{n}")).unwrap_or_default()
             ),
             role: "reviewer".into(),
             joined_at: 0,
             kind: TeamMemberKind::AcpSession,
-            acp_harness_id: Some("claude_code".into()),
+            acp_harness_id: Some("claude-code".into()),
             acp_cwd: Some("/work/proj".into()),
             acp_session_name: name.map(String::from),
         }
@@ -559,7 +559,7 @@ mod tests {
                 session_name,
                 ..
             } => {
-                assert_eq!(harness_id, "claude_code");
+                assert_eq!(harness_id, "claude-code");
                 assert_eq!(cwd, "/work/proj");
                 assert_eq!(session_name.as_deref(), Some("review-bot"));
             }

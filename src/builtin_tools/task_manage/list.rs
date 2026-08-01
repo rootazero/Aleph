@@ -22,9 +22,6 @@ pub struct TaskListArgs {
     /// Filter by status: pending, blocked, `in_progress`, completed, failed, cancelled
     #[serde(default)]
     pub status: Option<String>,
-    /// Filter by owner agent ID
-    #[serde(default)]
-    pub owner: Option<String>,
 }
 
 /// A single task entry in the list output.
@@ -125,7 +122,6 @@ impl AlephTool for TaskListTool {
                 .status
                 .as_deref()
                 .and_then(CoordTaskStatus::from_stored),
-            owner: args.owner,
         };
 
         let tasks = self.store.list_tasks(filter).await?;
