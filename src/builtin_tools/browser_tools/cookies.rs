@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::{CookieOp, SameSite};
 use crate::error::Result;
@@ -123,11 +124,25 @@ pub struct BrowserCookiesOutput {
 #[derive(Clone)]
 pub struct BrowserCookiesTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserCookiesTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate cookie writes behind the approval policy — `Set` / `Delete` /
+    /// `Clear` are the highest-impact browser mutation (a cookie value is a
+    /// credential by design), so they all classify as `BrowserCookiesWrite`
+    /// and route through the `Ask` default. `List` / `Get` stay read-only and
+    /// skip the gate. With no policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -140,6 +155,37 @@ impl AlephTool for BrowserCookiesTool {
     type Output = BrowserCookiesOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Approve cookie writes BEFORE building the backend so a denied write
+        // never even reaches a Chromium session. `List` / `Get` skip this gate.
+        if matches!(
+            args.action,
+            CookieAction::Set | CookieAction::Delete | CookieAction::Clear
+        ) {
+            let target = match args.action {
+                CookieAction::Set => format!(
+                    "{}={}",
+                    args.name.as_deref().unwrap_or(""),
+                    args.value.as_deref().unwrap_or("")
+                ),
+                CookieAction::Delete => format!("delete {}", args.name.as_deref().unwrap_or("")),
+                CookieAction::Clear => "clear all".to_string(),
+                _ => unreachable!(),
+            };
+            if let Some(message) = super::check_browser_approval(
+                self.approval_policy.as_ref(),
+                ActionType::BrowserCookiesWrite,
+                "cookies",
+                &target,
+            )
+            .await
+            {
+                return Ok(BrowserCookiesOutput {
+                    success: false,
+                    cookies: None,
+                    message: Some(message),
+                });
+            }
+        }
         let op = match args.to_op() {
             Ok(op) => op,
             Err(e) => {

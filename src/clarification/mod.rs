@@ -32,7 +32,13 @@
 
 pub mod session;
 
-pub use session::{ClarificationManager, PendingClarification, DEFAULT_CLARIFY_TIMEOUT};
+pub use session::{ClarificationManager, DEFAULT_CLARIFY_TIMEOUT};
+
+// `PendingClarification` is constructed by `ClarificationManager::list_pending`
+// and serialized as part of the gateway's clarification API response. It is
+// not part of the public Rust surface — Panel / TUI consume it via the JSON
+// gateway, not by importing the type — so it stays a private detail of the
+// `session` module.
 
 use serde::{Deserialize, Serialize};
 

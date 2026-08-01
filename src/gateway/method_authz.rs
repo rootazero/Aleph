@@ -49,6 +49,12 @@ const OPERATOR_TOOLS: &[&str] = &[
     // identity changes who the accountability record can attribute actions to;
     // reading it exposes every agent's activity. Neither is chat tier.
     "agent_identity",
+    // `hooks_manage` is a control-plane write — adding a shell / HTTP / agent
+    // hook fires arbitrary code or POSTs tool I/O to an arbitrary URL on the
+    // next lifecycle event. The `HooksManage` ActionType policy already covers
+    // the *content* of any added hook, but the chat-tier channel gate exists
+    // so a chat-tier run cannot add a hook in the first place.
+    "hooks_manage",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -84,6 +90,8 @@ mod tests {
         // Accountability: rotating a signing key changes who the record can
         // name; reading the ledger exposes every agent's activity.
         "agent_identity",
+        // Control-plane write: adding a hook fires code on future events.
+        "hooks_manage",
     ];
 
     #[test]
@@ -118,6 +126,7 @@ mod tests {
             "ask_user",
             "bash",
             "code_exec",
+            "select_model",
             // Read-only fleet discovery stays open — it names nodes, it cannot
             // drive them.
             "node_list",
@@ -127,5 +136,20 @@ mod tests {
                 "{t} must stay open to chat tier"
             );
         }
+    }
+
+    #[test]
+    fn config_tools_have_a_model_pick_branch() {
+        // `select_model` mutates session model state and persists it across
+        // turns (a non-trivial blast radius). Historically the channel gate
+        // had a special-case for `moa:` model picks only; any other model
+        // name was implicitly trusted. Tightening the policy requires an
+        // audit entry; this tripwire keeps the audit honest if the carve-out
+        // ever narrows back to "moa: only".
+        assert!(
+            !tool_requires_operator("select_model"),
+            "select_model currently stays open to chat tier; revisit if the \
+             blast-radius story changes"
+        );
     }
 }

@@ -24,6 +24,7 @@ pub enum EventEmitError {
 /// Confidence level for reasoning blocks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // only consumed by `StreamEvent::ReasoningBlock` — see F3 audit note
 pub enum ConfidenceLevel {
     High,
     Medium,
@@ -34,6 +35,7 @@ pub enum ConfidenceLevel {
 /// Semantic type of a reasoning step
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // only consumed by `StreamEvent::ReasoningBlock` — see F3 audit note
 pub enum ReasoningStepType {
     Observation,
     Analysis,
@@ -146,6 +148,11 @@ pub enum StreamEvent {
     },
 
     /// Agent is asking the user a question
+    #[allow(dead_code)] // emitted via `From<StreamEvent> for GatewayEventFrame` in
+    // `gateway/events/frame.rs`; the producer side currently routes through
+    // `bus.publish_frame` in `builtin_tools/ask_user.rs` instead of going
+    // through the emitter. Both legs are wire-equivalent; the emitter path is
+    // preferred for new call sites.
     AskUser {
         run_id: String,
         seq: u64,
@@ -160,6 +167,12 @@ pub enum StreamEvent {
     ///
     /// This is the enhanced version of the basic Reasoning event,
     /// providing semantic structure for better UI rendering.
+    ///
+    /// Currently no in-tree producer emits this variant; the constructor
+    /// `reasoning_block` / `reasoning_block_with_confidence` is exercised only
+    /// by the unit tests. The wire shape is kept because the TUI / CLI already
+    /// deserialize it (otherwise a future emitter would silently break them).
+    #[allow(dead_code)] // no production emit site yet — see F3 audit note
     ReasoningBlock {
         run_id: String,
         seq: u64,
@@ -180,6 +193,11 @@ pub enum StreamEvent {
     ///
     /// Emitted when the AI explicitly expresses uncertainty,
     /// allowing the UI to prompt for user guidance.
+    ///
+    /// Currently no in-tree producer emits this variant; the constructor
+    /// `uncertainty_signal` is exercised only by the unit tests. The wire
+    /// shape is kept because the CLI already deserializes it.
+    #[allow(dead_code)] // no production emit site yet — see F3 audit note
     UncertaintySignal {
         run_id: String,
         seq: u64,
@@ -220,6 +238,7 @@ pub enum StreamEvent {
 /// Suggested action for handling AI uncertainty
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // no production emit site yet — see F3 audit note
 pub enum UncertaintyAction {
     /// Proceed despite uncertainty
     ProceedWithCaution,
@@ -233,6 +252,7 @@ pub enum UncertaintyAction {
 
 impl UncertaintyAction {
     /// Get human-readable description
+    #[allow(dead_code)] // description() used by tests only — see F3 audit note
     #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
@@ -246,6 +266,7 @@ impl UncertaintyAction {
 
 impl StreamEvent {
     /// Create a new `ReasoningBlock` event
+    #[allow(dead_code)] // no production emit site yet — see F3 audit note
     pub fn reasoning_block(
         run_id: impl Into<String>,
         seq: u64,
@@ -266,6 +287,7 @@ impl StreamEvent {
     }
 
     /// Create a new `ReasoningBlock` event with confidence
+    #[allow(dead_code)] // no production emit site yet — see F3 audit note
     pub fn reasoning_block_with_confidence(
         run_id: impl Into<String>,
         seq: u64,
@@ -287,6 +309,7 @@ impl StreamEvent {
     }
 
     /// Create a new `UncertaintySignal` event
+    #[allow(dead_code)] // no production emit site yet — see F3 audit note
     pub fn uncertainty_signal(
         run_id: impl Into<String>,
         seq: u64,

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -27,11 +28,24 @@ pub struct BrowserPressKeyOutput {
 #[derive(Clone)]
 pub struct BrowserPressKeyTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserPressKeyTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate key presses behind the approval policy. `Allow` is the matching
+    /// default (a denied `browser_click` should not block a follow-up
+    /// `browser_press_key`). With no policy wired the tool behaves exactly as
+    /// before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -44,6 +58,19 @@ impl AlephTool for BrowserPressKeyTool {
     type Output = BrowserPressKeyOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserPressKey,
+            "press_key",
+            &args.key,
+        )
+        .await
+        {
+            return Ok(BrowserPressKeyOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.press_key(&tab_id, &args.key).await {
                 Ok(()) => Ok(BrowserPressKeyOutput {

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -31,11 +32,24 @@ pub struct BrowserOpenOutput {
 #[derive(Clone)]
 pub struct BrowserOpenTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserOpenTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate `browser_open` behind the same approval policy as
+    /// `browser_navigate` — opening a fresh tab is the same trust surface as
+    /// navigating an existing one, so a deny on a host must deny both. With
+    /// no policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -53,6 +67,23 @@ impl AlephTool for BrowserOpenTool {
                 success: false,
                 tab_id: None,
                 message: Some(format!("Blocked: {violation}")),
+            });
+        }
+
+        // Approval gate mirrors `browser_navigate`: a host the user has
+        // already denied should not be reachable via a fresh tab.
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserOpen,
+            "open",
+            &args.url,
+        )
+        .await
+        {
+            return Ok(BrowserOpenOutput {
+                success: false,
+                tab_id: None,
+                message: Some(message),
             });
         }
 

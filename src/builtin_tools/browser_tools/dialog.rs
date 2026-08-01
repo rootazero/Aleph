@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -43,11 +44,23 @@ pub struct BrowserDialogOutput {
 #[derive(Clone)]
 pub struct BrowserDialogTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserDialogTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate dialog dismissal / acceptance behind the approval policy. A `prompt`
+    /// dialog can submit text into the page; `Ask` is the matching default. With
+    /// no policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -75,6 +88,20 @@ impl AlephTool for BrowserDialogTool {
             DialogAction::Accept => "accept",
             DialogAction::Dismiss => "dismiss",
         };
+
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserDialog,
+            "dialog",
+            &format!("{action}{}", args.prompt_text.as_deref().unwrap_or("")),
+        )
+        .await
+        {
+            return Ok(BrowserDialogOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
                 match backend

@@ -20,6 +20,45 @@ pub enum ActionType {
     BrowserType,
     BrowserFill,
     BrowserEvaluate,
+    /// Open a fresh tab to a new URL — same trust surface as BrowserNavigate
+    /// (a denied target would just be reached via `browser_open` if we did not
+    /// gate it). Defaults to Ask because the user often wants to inspect the
+    /// page that opened.
+    BrowserOpen,
+    /// Change a `<select>` value — single click on a picker; same policy
+    /// surface as BrowserClick but typed so the prompt can read `select`
+    /// clearly in the audit log.
+    BrowserSelect,
+    /// Accept or dismiss a native browser dialog (alert/confirm/prompt/
+    /// beforeunload). Dismiss is benign; accept on a prompt can submit text
+    /// into the page so it inherits BrowserType-style scrutiny.
+    BrowserDialog,
+    /// Press a single keyboard key (no payload, just a key code). Defaults to
+    /// Allow because the user is normally the one driving it; tightening is
+    /// a per-policy choice.
+    BrowserPressKey,
+    /// Scroll the page. Reading-related motion only; default Allow.
+    BrowserScroll,
+    /// Hover over a target. Read-only observation in practice; default Allow.
+    BrowserHover,
+    /// Drag from one element to another. Behaviour-changing and frequently
+    /// abused for click spoofing on page coordinates; default Ask.
+    BrowserDrag,
+    /// Upload local files into a `<input type=file>` (or equivalent
+    /// `chooser`). Sends host data to an arbitrary URL the page hosts the
+    /// form on — privacy-sensitive, default Ask.
+    BrowserUpload,
+    /// Set / delete / clear cookies. A cookie value is a credential by
+    /// design (session id, auth token); writing them is the highest-impact
+    /// browser mutation, default Ask so a deny-by-default policy works.
+    BrowserCookiesWrite,
+    /// Edit / install / uninstall event hooks that fire arbitrary commands
+    /// or HTTP requests on lifecycle events. Hooks are a control-plane
+    /// write, hence operator-tier defaults already cover `hooks_manage` at
+    /// the channel gate — this ActionType closes the loop so the policy
+    /// engine can also gate it for any caller (even when channel tier is
+    /// not in play).
+    HooksManage,
     DesktopClick,
     DesktopType,
     DesktopKeyCombo,
@@ -47,6 +86,16 @@ impl fmt::Display for ActionType {
             Self::BrowserType => "browser type",
             Self::BrowserFill => "browser fill",
             Self::BrowserEvaluate => "browser evaluate",
+            Self::BrowserOpen => "browser open",
+            Self::BrowserSelect => "browser select",
+            Self::BrowserDialog => "browser dialog",
+            Self::BrowserPressKey => "browser press key",
+            Self::BrowserScroll => "browser scroll",
+            Self::BrowserHover => "browser hover",
+            Self::BrowserDrag => "browser drag",
+            Self::BrowserUpload => "browser upload",
+            Self::BrowserCookiesWrite => "browser cookies write",
+            Self::HooksManage => "hooks manage",
             Self::DesktopClick => "desktop click",
             Self::DesktopType => "desktop type",
             Self::DesktopKeyCombo => "desktop key combo",

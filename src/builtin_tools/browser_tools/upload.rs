@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
 use crate::error::{AlephError, Result};
@@ -35,11 +36,23 @@ pub struct BrowserUploadOutput {
 #[derive(Clone)]
 pub struct BrowserUploadTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserUploadTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate file uploads behind the approval policy — local files egressing to a
+    /// host the page chooses is privacy-sensitive. `Ask` is the matching default.
+    /// With no policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -61,6 +74,20 @@ impl AlephTool for BrowserUploadTool {
         let target = args.ref_id.as_ref().map(|rid| ActionTarget::Ref {
             ref_id: rid.clone(),
         });
+
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserUpload,
+            "upload",
+            &format!("{} file(s): {}", args.paths.len(), args.paths.join(", ")),
+        )
+        .await
+        {
+            return Ok(BrowserUploadOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.upload(&tab_id, target, &args.paths).await {
                 Ok(()) => Ok(BrowserUploadOutput {

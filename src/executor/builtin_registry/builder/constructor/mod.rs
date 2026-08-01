@@ -138,7 +138,8 @@ impl BuiltinToolRegistry {
         let self_manage_tool = SelfManageTool::default();
 
         // Hooks-manage tool (stateless: reads the process-global extension manager)
-        let hooks_manage_tool = crate::builtin_tools::HooksManageTool::new();
+        let hooks_manage_tool = crate::builtin_tools::HooksManageTool::new()
+            .with_approval_policy(Arc::clone(&approval_policy));
 
         // Self-config tool (identity files + config.toml access)
         let self_config_tool = {
@@ -474,7 +475,8 @@ impl BuiltinToolRegistry {
                 crate::browser::profile::BrowserSystemConfig::default(),
             ))
         });
-        let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager));
+        let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager))
@@ -489,24 +491,34 @@ impl BuiltinToolRegistry {
         let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
-        let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager));
+        let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
-        let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager));
+        let browser_press_key_tool =
+            BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
+                .with_approval_policy(Arc::clone(&approval_policy));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
-        let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager));
-        let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager));
+        let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
         let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager));
-        let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager));
-        let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager));
-        let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager));
+        let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
         let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager));
-        let browser_cookies_tool = BrowserCookiesTool::new(Arc::clone(&browser_profile_manager));
+        let browser_cookies_tool =
+            BrowserCookiesTool::new(Arc::clone(&browser_profile_manager))
+                .with_approval_policy(Arc::clone(&approval_policy));
         let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);

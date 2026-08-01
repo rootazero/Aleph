@@ -694,8 +694,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
             let reflector = Arc::new(MemoryReflector::new(reflector_assembler, prov, writer));
             tool_registry.set_memory_reflector(reflector);
+            // Startup-time guard: the `memory_reflect` tool silently returns
+            // an error string if its reflector is missing. Surfacing the
+            // wiring decision here (instead of only at first call) keeps a
+            // misconfigured deploy from looking like a model issue later.
+            if !daemon {
+                println!("  memory_reflect tool: MemoryReflector wired");
+            }
         } else if !daemon {
-            println!("  memory_reflect tool: MemoryReflector not wired (no embedder or provider)");
+            eprintln!(
+                "  memory_reflect tool: MemoryReflector NOT wired (no embedder or default provider). \
+                 Calls will return an error; configure an embedder + provider to enable it."
+            );
         }
 
         // Spec 8 Task 8: construct DefaultQueryFiler and inject into memory_reflect tool.
