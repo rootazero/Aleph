@@ -23,7 +23,6 @@
 //!                       (unified hooks)
 //! ```
 
-pub mod component_id;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
@@ -31,7 +30,6 @@ mod loader;
 pub mod marketplace;
 pub mod runtime;
 pub mod scope;
-pub mod sync_api;
 pub mod validation;
 
 pub mod capability;
@@ -51,7 +49,6 @@ mod template;
 mod types;
 pub mod watcher;
 
-pub use component_id::ComponentId;
 pub use error::*;
 pub use loader::PluginLoader;
 pub use manager_global::{
@@ -68,9 +65,6 @@ pub use config::{AlephConfig, ConfigManager};
 
 // Re-export marketplace types
 pub use marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
-
-// Re-export sync API
-pub use sync_api::SyncExtensionManager;
 
 // Re-export new plugin system types (Phase 1)
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};

@@ -51,16 +51,6 @@ impl GroupChatOrchestrator {
         self
     }
 
-    /// Returns a reference to the current configuration.
-    pub const fn config(&self) -> &GroupChatConfig {
-        &self.config
-    }
-
-    /// Returns a reference to the persona registry.
-    pub const fn persona_registry(&self) -> &PersonaRegistry {
-        &self.persona_registry
-    }
-
     /// Create a new group chat session.
     ///
     /// Returns both the session ID and a [`SharedSession`] handle so the caller
@@ -208,11 +198,6 @@ impl GroupChatOrchestrator {
         Some(handle)
     }
 
-    /// Returns a reference to the optional database.
-    pub const fn database(&self) -> Option<&Arc<StateDatabase>> {
-        self.db.as_ref()
-    }
-
     /// Returns the configured `max_rounds` value.
     pub fn max_rounds(&self) -> u32 {
         u32::try_from(self.config.max_rounds).unwrap_or_else(|_| {
@@ -234,12 +219,6 @@ impl GroupChatOrchestrator {
             .iter()
             .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
             .collect()
-    }
-
-    /// Reload configuration and persona definitions (e.g., after hot-reload).
-    pub fn reload_config(&mut self, config: GroupChatConfig, persona_configs: &[PersonaConfig]) {
-        self.config = config;
-        self.persona_registry.reload(persona_configs);
     }
 }
 
@@ -282,9 +261,7 @@ mod tests {
         let orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
         assert_eq!(orch.all_sessions().len(), 0);
-        assert_eq!(orch.config().max_personas_per_session, 4);
-        assert_eq!(orch.config().max_rounds, 3);
-        assert_eq!(orch.persona_registry().len(), 2);
+        assert_eq!(orch.max_rounds(), 3);
     }
 
     #[tokio::test]

@@ -1,47 +1,11 @@
-//! MCP Registrar — collect-then-batch capability registration for MCP plugins
+//! MCP Registrar — per-agent MCP server scope (P3 Stage I)
 //!
-//! MCP registration uses a two-phase pattern:
-//! - Phase 1 (async): Probe MCP server for capabilities, collect declarations
-//! - Phase 2 (sync): Acquire registry lock, batch-write all declarations
-//!
-//! This avoids holding `RwLockWriteGuard` across await points.
-
-use crate::extension::capability::CapabilityDeclaration;
-use crate::extension::manifest::PluginPermission;
-use crate::extension::registrar::api::CapabilityApi;
-use crate::extension::registry::PluginRegistry;
-use anyhow::Result;
-
-/// Registrar for MCP-based plugins using collect-then-batch pattern.
-pub struct McpRegistrar {
-    plugin_id: String,
-    permissions: Vec<PluginPermission>,
-}
-
-impl McpRegistrar {
-    #[must_use]
-    pub const fn new(plugin_id: String, permissions: Vec<PluginPermission>) -> Self {
-        Self {
-            plugin_id,
-            permissions,
-        }
-    }
-
-    /// Phase 2 (sync): Write collected capabilities into registry.
-    /// Lock should be held briefly — caller acquires it just before calling this.
-    pub fn batch_register(
-        &self,
-        caps: Vec<CapabilityDeclaration>,
-        registry: &mut PluginRegistry,
-    ) -> Result<()> {
-        let mut api =
-            CapabilityApi::new(registry, self.plugin_id.clone(), self.permissions.clone());
-        for cap in caps {
-            api.register_capability(cap)?;
-        }
-        Ok(())
-    }
-}
+//! Historical note: this file used to host a `McpRegistrar` struct for a
+//! two-phase `batch_register` write path. That API was superseded by
+//! `McpManager::add_transient_server` driven by
+//! `ExtensionManager::sync_mcp_plugin_servers`, so the struct has been
+//! removed; the per-agent `McpScope` machinery below is the only remaining
+//! production surface.
 
 // -- P3 Stage I — per-agent MCP scope ----------------------------------------
 

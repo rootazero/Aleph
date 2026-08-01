@@ -157,10 +157,10 @@ async fn counts_match_registered_guardrails() {
 /// `AlwaysBlock` guardrail fired while registry was on). No call should
 /// panic, deadlock, or return an inconsistent decision.
 ///
-/// This stands in for a `loom` model test — the repository's loom feature
-/// exists in `sync_primitives` but no `cfg(loom)` test infrastructure is
-/// wired into `cargo test` yet. A tokio hammer with high task count gives
-/// good practical coverage for a single-AtomicBool flag at minimal cost.
+/// This stands in for a `loom` model test. The repository's loom feature is
+/// wired into `sync_primitives`, but loom models only single-thread
+/// pseudo-random scheduling; a tokio hammer with high task count gives more
+/// practical coverage for a single-AtomicBool flag at minimal cost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_evaluate_vs_disable_all_is_consistent() {
     use crate::sync_primitives::{AtomicUsize, Ordering};

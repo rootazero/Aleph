@@ -1393,7 +1393,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             }
                         });
                 }
-                server.orchestrator = Some(orch);
+                server.orchestrator = Some(orch.clone());
+                {
+                    let flow_dir = match crate::discovery::aleph_home_dir() {
+                        Ok(home) => home.join("flows"),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "flow reload handler disabled: cannot resolve aleph home"
+                            );
+                            PathBuf::new()
+                        }
+                    };
+                    if !flow_dir.as_os_str().is_empty() {
+                        alephcore::gateway::handlers::flow_admin::register_flow_admin_handlers(
+                            server.handlers_mut(),
+                            orch,
+                            flow_dir,
+                        );
+                    }
+                }
                 if !args.daemon {
                     println!("Orchestrator: assembled (Phase 5)");
                 }
@@ -2406,8 +2425,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let snapshot = reg.default_provider();
                 let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
                     Arc::new(alephcore::providers::StaticDefault::new(snapshot));
+                // Pass the live registry through so per-persona `provider`
+                // overrides resolve via `executor.resolve_provider`. The trait
+                // object widens the concrete SingleProviderRegistry to the
+                // common ProviderRegistry surface that GroupChatExecutor
+                // already accepts.
+                let registry: Arc<dyn alephcore::thinker::ProviderRegistry> = reg;
                 Arc::new(
-                    GroupChatExecutor::new(handle).with_coordinator_visible(coordinator_visible),
+                    GroupChatExecutor::new(handle)
+                        .with_provider_registry(registry)
+                        .with_coordinator_visible(coordinator_visible),
                 )
             })
         } else {

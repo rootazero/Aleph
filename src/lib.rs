@@ -201,7 +201,6 @@ pub use crate::tool_metadata::{
 
 pub use crate::extension::{
     ExtensionConfig, ExtensionError, ExtensionManager, ExtensionResult, LoadSummary, PluginInfo,
-    SyncExtensionManager,
 };
 
 // =============================================================================
