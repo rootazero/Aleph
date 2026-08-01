@@ -28,12 +28,6 @@ impl Config {
         }
     }
 
-    /// Check if using new unified tools configuration
-    #[must_use]
-    pub const fn is_using_unified_tools(&self) -> bool {
-        self.unified_tools.is_some()
-    }
-
     // =============================================================================
     // Provider Management Methods
     // =============================================================================
@@ -87,24 +81,6 @@ impl Config {
                 )))
             }
         }
-    }
-
-    /// Get list of all enabled provider names
-    ///
-    /// Returns provider names in alphabetical order
-    ///
-    /// # Returns
-    /// * `Vec<String>` - List of enabled provider names
-    #[must_use]
-    pub fn get_enabled_providers(&self) -> Vec<String> {
-        let mut providers: Vec<String> = self
-            .providers
-            .iter()
-            .filter(|(_, cfg)| cfg.enabled)
-            .map(|(name, _)| name.clone())
-            .collect();
-        providers.sort();
-        providers
     }
 
     // =============================================================================
