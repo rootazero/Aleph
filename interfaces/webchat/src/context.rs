@@ -9,7 +9,10 @@ use leptos::task::spawn_local;
 use serde_json::Value;
 use shared_ui_logic::connection::connector::AlephConnector;
 use shared_ui_logic::connection::wasm::WasmConnector;
-use shared_ui_logic::connection::{classify, ConnectionError, ConnectionFailure, FailureStage};
+use shared_ui_logic::connection::{
+    classify, stage_for_connect_error, ConnectionError, ConnectionFailure, FailureStage,
+    OriginLiveness,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -426,6 +429,54 @@ fn derive_gateway_url() -> String {
     }
 }
 
+/// How long to wait for the liveness probe before giving up on it. Only ever
+/// paid on a failed connect, and only when the socket died before OPEN. A live
+/// origin answers in milliseconds and a dead one refuses immediately; this cap
+/// exists solely so a *hung* origin can't reintroduce a long stall.
+#[cfg(target_arch = "wasm32")]
+const ORIGIN_PROBE_TIMEOUT_MS: u32 = 3_000;
+
+/// Ask the page's own origin whether any HTTP server is still there.
+///
+/// The WebSocket cannot answer this: a refused TCP connect and a `403` on the
+/// upgrade both surface as `error` + `close(1006)` with no reason. Without
+/// this second question the Panel would tell someone whose server is simply
+/// not running that "the server is running but refused this connection".
+///
+/// Any HTTP response counts as alive — `fetch` only rejects on a network-level
+/// failure, so even a 404 proves something is listening.
+#[cfg(target_arch = "wasm32")]
+async fn probe_origin_liveness() -> OriginLiveness {
+    use wasm_bindgen_futures::JsFuture;
+
+    let Some(window) = web_sys::window() else {
+        return OriginLiveness::Unknown;
+    };
+    let Ok(origin) = window.location().origin() else {
+        return OriginLiveness::Unknown;
+    };
+    // Cache-bust: a cached 200 would happily "prove" a server that died.
+    let url = format!(
+        "{origin}/health?_aleph_probe={}",
+        js_sys::Date::now() as u64
+    );
+    let fetch = JsFuture::from(window.fetch_with_str(&url));
+
+    use futures::future::{select, Either};
+    match select(Box::pin(fetch), TimeoutFuture::new(ORIGIN_PROBE_TIMEOUT_MS)).await {
+        Either::Left((Ok(_), _)) => OriginLiveness::Serving,
+        Either::Left((Err(_), _)) => OriginLiveness::Silent,
+        // No answer in time. We did not establish liveness, so we must not
+        // claim it — but we also did not prove absence.
+        Either::Right(((), _)) => OriginLiveness::Unknown,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn probe_origin_liveness() -> OriginLiveness {
+    OriginLiveness::Unknown
+}
+
 /// Stable per-Panel identity for device-tier pairing (G2/G3). The `device_id`
 /// is a random handle generated once and kept in `localStorage`; the
 /// `device_name` is a friendly label derived from the user agent. Sent in the
@@ -572,6 +623,7 @@ impl DashboardState {
             ConnectionFailure::AuthRequired => "auth required".to_string(),
             ConnectionFailure::Unreachable { detail }
             | ConnectionFailure::Timeout { detail }
+            | ConnectionFailure::Rejected { detail }
             | ConnectionFailure::Dropped { detail }
             | ConnectionFailure::Unknown { detail } => detail.clone(),
         };
@@ -1076,6 +1128,7 @@ impl DashboardState {
                         let msg = match &f {
                             ConnectionFailure::Unreachable { detail }
                             | ConnectionFailure::Timeout { detail }
+                            | ConnectionFailure::Rejected { detail }
                             | ConnectionFailure::Dropped { detail }
                             | ConnectionFailure::Unknown { detail } => detail.clone(),
                             ConnectionFailure::AuthRequired => "auth required".to_string(),
@@ -1087,8 +1140,24 @@ impl DashboardState {
             }
             Err(e) => {
                 self.is_connected.set(false);
+                // Keep the connector's verdict: a peer that answered and
+                // refused is `Rejected` (config problem, server is up), a
+                // silent socket is `BeforeOpen`/`Unreachable`. Hardcoding
+                // BeforeOpen here is what made every 403 read as "timed out".
+                //
+                // The socket alone cannot tell a 403 from a dead port, so a
+                // refusal is corroborated by an independent probe of the
+                // origin before we dare tell the user their server is up.
+                // Only pay for it on that branch — a timeout already proved
+                // silence, and probing it would just add another wait.
+                let origin = if matches!(e, ConnectionError::FailedBeforeOpen(_)) {
+                    probe_origin_liveness().await
+                } else {
+                    OriginLiveness::Unknown
+                };
+                let stage = stage_for_connect_error(&e, origin);
                 let detail = e.to_string();
-                self.set_failure(classify(FailureStage::BeforeOpen, Some(&detail), false));
+                self.set_failure(classify(stage, Some(&detail), false));
                 Err(detail)
             }
         }

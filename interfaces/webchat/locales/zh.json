@@ -120,6 +120,8 @@
     "unreachable_body": "无法连接到服务器。请检查网络连接,并确认服务器地址和端口是否正确。",
     "timeout_title": "服务器无响应",
     "timeout_body": "已连上服务器但它没有回应,可能正在重启。请稍候重试。",
+    "rejected_title": "服务器拒绝了连接",
+    "rejected_body": "服务器正在运行,但拒绝了这次连接。如果你通过域名或反向代理访问,请把该来源加入服务端配置 [gateway] 的 allowed_origins,然后重启 aleph-server。确切原因见服务端日志。",
     "dropped_body": "连接中断,正在重连…",
     "lite_relocating": "服务器不可达,正在为你重新连接服务器…"
   },

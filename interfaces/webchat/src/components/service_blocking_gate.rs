@@ -111,6 +111,7 @@ pub fn ServiceBlockingGate() -> impl IntoView {
                                     shared_ui_logic::connection::ConnectionFailure::AuthRequired => String::new(),
                                     shared_ui_logic::connection::ConnectionFailure::Unreachable { detail }
                                     | shared_ui_logic::connection::ConnectionFailure::Timeout { detail }
+                                    | shared_ui_logic::connection::ConnectionFailure::Rejected { detail }
                                     | shared_ui_logic::connection::ConnectionFailure::Dropped { detail }
                                     | shared_ui_logic::connection::ConnectionFailure::Unknown { detail } => detail,
                                 }}

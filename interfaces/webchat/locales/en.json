@@ -120,6 +120,8 @@
     "unreachable_body": "Couldn't reach the server. Check your network connection, and confirm the server address and port are correct.",
     "timeout_title": "Server not responding",
     "timeout_body": "Connected to the server but it isn't responding — it may be restarting. Please retry shortly.",
+    "rejected_title": "Server refused the connection",
+    "rejected_body": "The server is running but refused this connection. If you reach it through a domain or reverse proxy, add that origin to allowed_origins under [gateway] in the server config and restart aleph-server. The server log records the exact reason.",
     "dropped_body": "Connection interrupted — reconnecting…",
     "lite_relocating": "Server unreachable — reconnecting you to the server…"
   },
