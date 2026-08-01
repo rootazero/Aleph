@@ -483,7 +483,7 @@ impl BuiltinToolRegistry {
         }
 
         // Sessions tools — always register metadata so LLM sees them.
-        // GatewayContext may be injected later via set_gateway_context().
+        // GatewayContext may be injected later via gateway_context_cell().
         // Execution checks OnceCell at call time.
         reg(
             tools,
