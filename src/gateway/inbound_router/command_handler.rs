@@ -184,12 +184,6 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "args": args,
             "source": "slash_command",
         }),
-        CommandContext::None => serde_json::json!({
-            "type": "direct_tool",
-            "tool_id": parsed.command_name,
-            "args": args,
-            "source": "slash_command",
-        }),
     };
     serde_json::to_string(&value).ok()
 }
