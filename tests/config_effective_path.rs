@@ -19,7 +19,11 @@ fn the_pinned_config_path_is_the_one_the_process_reads() {
     std::env::set_var("ALEPH_HOME", tmp.path());
 
     let pinned = tmp.path().join("deployment.toml");
-    fs::write(&pinned, "default_hotkey = \"Ctrl+Alt+Pinned\"\n").expect("write pinned config");
+    fs::write(
+        &pinned,
+        "[general]\ndefault_provider = \"pinned-prov\"\n",
+    )
+    .expect("write pinned config");
 
     // Nothing pinned yet: an ordinary `aleph-server` with no `--config` must
     // keep resolving to the default location.
@@ -44,7 +48,8 @@ fn the_pinned_config_path_is_the_one_the_process_reads() {
     // the Panel reported — and wrote — another.
     let loaded = Config::load().expect("load must follow the pin");
     assert_eq!(
-        loaded.default_hotkey, "Ctrl+Alt+Pinned",
+        loaded.general.default_provider.as_deref(),
+        Some("pinned-prov"),
         "Config::load() read some file other than the pinned one"
     );
 

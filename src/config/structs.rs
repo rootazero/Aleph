@@ -53,10 +53,6 @@ fn is_default_session(s: &crate::routing::config::SessionConfig) -> bool {
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
-    /// Legacy hotkey field (deprecated, use `trigger.replace_hotkey/append_hotkey` instead)
-    /// Kept for backward compatibility with old config files
-    #[serde(default = "crate::config::types::general::default_hotkey")]
-    pub default_hotkey: String,
     /// General settings
     #[serde(default)]
     pub general: GeneralConfig,
@@ -455,7 +451,6 @@ impl Default for Config {
     #[allow(deprecated)]
     fn default() -> Self {
         Self {
-            default_hotkey: crate::config::types::general::default_hotkey(), // Legacy field, kept for backward compatibility
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),

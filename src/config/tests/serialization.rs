@@ -6,15 +6,13 @@ use super::super::*;
 fn test_config_serialization() {
     let config = Config::default();
     let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains("Grave")); // default_hotkey
     assert!(json.contains("memory"));
 }
 
 #[test]
 fn test_config_deserialization() {
-    let json = r#"{"default_hotkey":"Grave"}"#;
+    let json = r#"{}"#;
     let config: Config = serde_json::from_str(json).unwrap();
-    assert_eq!(config.default_hotkey, "Grave");
     // memory field should use default (empty — no pre-filled providers)
     assert!(config.memory.embedding.active_provider_id.is_empty());
 }
@@ -74,8 +72,6 @@ fn test_behavior_config_serialization() {
 #[test]
 fn test_config_load_from_toml() {
     let toml_str = r##"
-default_hotkey = "Grave"
-
 [general]
 default_provider = "openai"
 
@@ -97,7 +93,6 @@ enabled = true
 "##;
 
     let config: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.default_hotkey, "Grave"); // Single ` key
     assert_eq!(config.general.default_provider, Some("openai".to_string()));
     assert!(config.providers.contains_key("openai"));
     assert_eq!(config.rules.len(), 1);
@@ -125,8 +120,10 @@ fn test_config_save_and_load() {
 
     // Load back
     let loaded = Config::load_from_file(path).unwrap();
-    assert_eq!(loaded.default_hotkey, config.default_hotkey);
     assert_eq!(
+        loaded.general.default_provider,
+        config.general.default_provider
+    );
         loaded.general.default_provider,
         config.general.default_provider
     );
@@ -181,7 +178,6 @@ fn test_config_toml_round_trip() {
     let deserialized: Config = toml::from_str(&toml_str).unwrap();
 
     // Verify all fields
-    assert_eq!(deserialized.default_hotkey, config.default_hotkey);
     assert_eq!(
         deserialized.behavior.as_ref().unwrap().output_mode,
         "instant"
@@ -336,22 +332,21 @@ fn test_atomic_write_overwrites_existing_file() {
     let path = temp_file.path();
 
     // Write first config
-    let config1 = Config {
-        default_hotkey: "Command+A".to_string(),
-        ..Config::default()
-    };
+    let mut config1 = Config::default();
+    config1.general.default_provider = Some("first-prov".to_string());
     config1.save_to_file(path).unwrap();
 
     // Overwrite with second config
-    let config2 = Config {
-        default_hotkey: "Command+B".to_string(),
-        ..Config::default()
-    };
+    let mut config2 = Config::default();
+    config2.general.default_provider = Some("second-prov".to_string());
     config2.save_to_file(path).unwrap();
 
     // Load and verify
     let loaded = Config::load_from_file(path).unwrap();
-    assert_eq!(loaded.default_hotkey, "Command+B");
+    assert_eq!(
+        loaded.general.default_provider.as_deref(),
+        Some("second-prov")
+    );
 }
 
 #[test]
