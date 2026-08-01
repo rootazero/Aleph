@@ -65,7 +65,6 @@ pub mod clarification;
 pub mod cli;
 pub mod cluster;
 
-mod clipboard;
 pub mod command;
 pub mod components;
 mod config;
@@ -261,7 +260,6 @@ pub use crate::providers::AiProvider;
 // Utility Exports
 // =============================================================================
 
-pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::metrics::StageTimer;
 pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 
