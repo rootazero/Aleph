@@ -1,63 +1,11 @@
 //! Conversion and utility methods for `UnifiedTool`
 //!
-//! Includes tool index generation, safety level inference, and prompt line
-//! formatting.
+//! Includes prompt line formatting.
 
 use super::UnifiedTool;
 use crate::tool_metadata::types::conflict::ToolSource;
-use crate::tool_metadata::types::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
 
 impl UnifiedTool {
-    // =========================================================================
-    // Tool Index Methods (Smart Tool Discovery)
-    // =========================================================================
-
-    /// Convert to lightweight index entry for smart discovery
-    ///
-    /// Creates a minimal representation suitable for LLM prompt injection.
-    /// The summary is truncated to 50 characters for token efficiency.
-    ///
-    /// # Arguments
-    ///
-    /// * `core_tools` - List of tool names that should be marked as core
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let tool = UnifiedTool::new(...);
-    /// let entry = tool.to_index_entry(&["search", "file_ops"]);
-    /// ```
-    #[must_use]
-    pub fn to_index_entry(&self, core_tools: &[&str]) -> ToolIndexEntry {
-        let category = ToolIndexCategory::from(&self.source);
-        let summary = truncate_string(&self.description, 50);
-
-        // Extract keywords from name and description
-        let mut keywords = Vec::new();
-
-        // Add name parts as keywords
-        for part in self.name.split([':', '_', '-']) {
-            if part.len() > 2 {
-                keywords.push(part.to_lowercase());
-            }
-        }
-
-        // Check if this is a core tool
-        let is_core = core_tools.contains(&self.name.as_str());
-
-        ToolIndexEntry {
-            name: self.name.clone(),
-            category: if is_core {
-                ToolIndexCategory::Core
-            } else {
-                category
-            },
-            summary,
-            keywords,
-            is_core,
-        }
-    }
-
     /// Format tool for LLM prompt inclusion
     ///
     /// Returns a markdown-formatted line for system prompt injection.

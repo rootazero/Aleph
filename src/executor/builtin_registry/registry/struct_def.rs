@@ -204,11 +204,6 @@ pub struct BuiltinToolRegistry {
     /// Session context handle for agent management tools
     pub(crate) session_context_handle:
         Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
-    /// Tool context handle for workspace-scoped output paths
-    pub(crate) tool_context_handle: Option<crate::tools::ToolContextHandle>,
-    /// Event bus for lifecycle event emission (held for future use; tools get their own clones)
-    #[allow(dead_code)]
-    pub(crate) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Extension manager for plugin tool execution
     pub(crate) extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
     /// ACP delegate tool (optional - requires `AcpAdapterManager`)

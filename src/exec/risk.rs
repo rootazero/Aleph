@@ -20,22 +20,10 @@ pub enum RiskLevel {
 }
 
 impl RiskLevel {
-    /// Check if this risk level requires user approval
-    #[must_use]
-    pub const fn requires_approval(&self) -> bool {
-        matches!(self, Self::Danger)
-    }
-
     /// Check if this risk level should be blocked
     #[must_use]
     pub const fn is_blocked(&self) -> bool {
         matches!(self, Self::Blocked)
-    }
-
-    /// Check if this risk level is safe for auto-execution
-    #[must_use]
-    pub const fn is_auto_safe(&self) -> bool {
-        matches!(self, Self::Safe | Self::Caution)
     }
 }
 
@@ -54,9 +42,5 @@ mod tests {
     fn risk_level_predicates() {
         assert!(RiskLevel::Blocked.is_blocked());
         assert!(!RiskLevel::Danger.is_blocked());
-        assert!(RiskLevel::Danger.requires_approval());
-        assert!(RiskLevel::Safe.is_auto_safe());
-        assert!(RiskLevel::Caution.is_auto_safe());
-        assert!(!RiskLevel::Danger.is_auto_safe());
     }
 }

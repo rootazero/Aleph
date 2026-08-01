@@ -18,8 +18,6 @@
 mod category;
 mod conflict;
 mod definition;
-mod index;
-mod result;
 mod safety;
 mod tool_info;
 mod unified;
@@ -31,11 +29,8 @@ mod unified;
 // Tool Category
 pub use category::ToolCategory;
 
-// Tool Definition and Structured Types
-pub use definition::{StructuredToolMeta, ToolDefinition, ToolDiff};
-
-// Tool Result
-pub use result::ToolResult;
+// Tool Definition
+pub use definition::ToolDefinition;
 
 // Tool Safety Level
 pub use safety::ToolSafetyLevel;
@@ -49,8 +44,5 @@ pub use unified::UnifiedTool;
 // Dispatch & Channel Types
 pub use unified::{ChannelType, DispatchMode};
 
-// Tool Index System
-pub use index::{ToolIndex, ToolIndexCategory, ToolIndexEntry};
-
 // Tool Info Types (for Gateway JSON-RPC)
-pub use tool_info::{ToolSourceType, UnifiedToolInfo};
+pub use tool_info::ToolSourceType;

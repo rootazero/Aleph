@@ -108,16 +108,6 @@ pub const RUNTIME_ONLY_ALIAS_TARGETS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Returns the discovery description for a runtime-only shorthand target, if it
-/// is one. Used by the catalog seeding pass in `tool_catalog_init`.
-#[must_use]
-pub fn runtime_only_target_description(name: &str) -> Option<&'static str> {
-    RUNTIME_ONLY_ALIAS_TARGETS
-        .iter()
-        .find(|(target, _)| *target == name)
-        .map(|(_, desc)| *desc)
-}
-
 /// Reverse lookup: the aliases pointing at `canonical` (empty if none).
 ///
 /// Used by the `ToolCatalog` builder to seed a tool's discoverable `aliases`
@@ -245,16 +235,5 @@ mod tests {
         assert!(!BUILTIN_TOOL_DEFINITIONS
             .iter()
             .any(|d| d.name == "session_set_topic"));
-    }
-
-    #[test]
-    fn runtime_only_description_lookup() {
-        assert_eq!(
-            runtime_only_target_description("video_generate"),
-            Some("Generate a short video from a text prompt")
-        );
-        // image_generate is in defs, not runtime-only.
-        assert!(runtime_only_target_description("image_generate").is_none());
-        assert!(runtime_only_target_description("nonexistent").is_none());
     }
 }

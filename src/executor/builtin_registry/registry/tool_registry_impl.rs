@@ -49,10 +49,6 @@ impl ToolRegistry for BuiltinToolRegistry {
         self.session_context_handle.clone()
     }
 
-    fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
-        self.tool_context_handle.clone()
-    }
-
     fn session_key_handle(&self) -> Option<Arc<RwLock<String>>> {
         self.memory_session_key_handle.clone()
     }

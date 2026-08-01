@@ -91,20 +91,6 @@ impl BuiltinToolRegistry {
             )
     }
 
-    /// Inject `GatewayContext` after construction (breaks circular dependency).
-    ///
-    /// `BuiltinToolRegistry` is created before `ExecutionAdapter` exists, but
-    /// `GatewayContext` needs `ExecutionAdapter`. This method allows deferred
-    /// injection once all components are ready, enabling session.list and
-    /// session.send tools.
-    ///
-    /// Takes `&self` (not `&mut self`) so it works through `Arc`.
-    pub fn set_gateway_context(&self, context: Arc<GatewayContext>) {
-        if self.gateway_context.set(context).is_ok() {
-            info!("GatewayContext injected — session.list and session.send now available");
-        }
-    }
-
     /// Get a handle to the `GatewayContext` `OnceCell` for deferred injection.
     ///
     /// Used by `agent_init` to inject `GatewayContext` after `ExecutionEngine` creation.
@@ -113,32 +99,10 @@ impl BuiltinToolRegistry {
         Arc::clone(&self.gateway_context)
     }
 
-    /// Inject `ChannelRegistry` after construction (deferred — channels are created after tools).
-    ///
-    /// Enables the `channel_pairing` tool for pairing code management.
-    /// Takes `&self` (not `&mut self`) so it works through `Arc`.
-    pub fn set_channel_registry(&self, registry: Arc<ChannelRegistry>) {
-        if self.channel_registry_cell.set(registry).is_ok() {
-            info!("ChannelRegistry injected — channel_pairing tool now available");
-        }
-    }
-
     /// Get a handle to the `ChannelRegistry` `OnceCell` for deferred injection.
     #[must_use]
     pub fn channel_registry_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>> {
         Arc::clone(&self.channel_registry_cell)
-    }
-
-    /// Inject the `ClarificationManager` after construction (deferred — the
-    /// manager is created alongside the channels). Enables the `ask_user` tool.
-    /// Takes `&self` so it works through `Arc`.
-    pub fn set_clarification_manager(
-        &self,
-        manager: Arc<crate::clarification::ClarificationManager>,
-    ) {
-        if self.clarification_manager_cell.set(manager).is_ok() {
-            info!("ClarificationManager injected — ask_user tool now available");
-        }
     }
 
     /// Get a handle to the `ClarificationManager` `OnceCell` for deferred injection.
@@ -161,18 +125,6 @@ impl BuiltinToolRegistry {
         if let Some(ref mut tool) = self.memory_reflect_tool {
             *tool = tool.clone().with_reflector(reflector);
             info!("MemoryReflector injected into memory_reflect tool");
-        }
-    }
-
-    /// Inject a `MemoryContextProvider` so the `remember` tool can resolve
-    /// the per-agent `CuratedMemoryStore` at call time.
-    ///
-    /// Takes `&self` (not `&mut self`) so it works through `Arc` — the MCP is
-    /// constructed after the registry has been wrapped in `Arc::new` in
-    /// `agent_init`.
-    pub fn set_memory_context_provider(&self, mcp: Arc<crate::thinker::MemoryContextProvider>) {
-        if self.memory_context_provider.set(mcp).is_ok() {
-            info!("MemoryContextProvider injected — `remember` tool now available");
         }
     }
 

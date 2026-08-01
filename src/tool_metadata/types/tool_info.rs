@@ -1,14 +1,9 @@
 //! Tool Info Types
 //!
 //! Simplified types for Gateway JSON-RPC serialization.
-//! These types use simple enums with separate ID fields for easy JSON encoding.
-//!
-//! Contains:
-//! - `ToolSourceType`: Simplified source enum for JSON serialization
-//! - `UnifiedToolInfo`: Flattened tool representation for API responses
+//! `ToolSourceType`: Simplified source enum for JSON serialization.
 
 use super::conflict::ToolSource;
-use super::unified::UnifiedTool;
 
 // =============================================================================
 // Tool Source Type
@@ -75,98 +70,6 @@ impl ToolSourceType {
 }
 
 // =============================================================================
-// Unified Tool Info
-// =============================================================================
-
-/// Unified tool representation for API responses
-///
-/// This is a flattened version of `UnifiedTool` for Gateway JSON-RPC.
-#[derive(Debug, Clone)]
-pub struct UnifiedToolInfo {
-    /// Unique identifier (e.g., "native:search")
-    pub id: String,
-    /// Command/tool name for invocation
-    pub name: String,
-    /// Human-readable display name
-    pub display_name: String,
-    /// Tool description
-    pub description: String,
-    /// Tool source type
-    pub source_type: ToolSourceType,
-    /// Source-specific ID (server for MCP, skill ID for Skill)
-    pub source_id: Option<String>,
-    /// JSON Schema string for input parameters
-    pub parameters_schema: Option<String>,
-    /// Whether tool is enabled
-    pub is_active: bool,
-    /// Whether requires user confirmation
-    pub requires_confirmation: bool,
-    /// Safety level label (`ReadOnly`, Reversible, Low Risk, High Risk)
-    pub safety_level: String,
-    /// Parent service name (for MCP sub-tools)
-    pub service_name: Option<String>,
-
-    // UI Metadata
-    /// SF Symbol icon name
-    pub icon: Option<String>,
-    /// Usage example
-    pub usage: Option<String>,
-    /// Localization key for i18n
-    pub localization_key: Option<String>,
-    /// Whether this is a system builtin command
-    pub is_builtin: bool,
-    /// Display sort order
-    pub sort_order: i32,
-    /// Whether has dynamic subtools
-    pub has_subtools: bool,
-}
-
-impl From<&UnifiedTool> for UnifiedToolInfo {
-    fn from(tool: &UnifiedTool) -> Self {
-        let (source_type, source_id) = match &tool.source {
-            ToolSource::Native => (ToolSourceType::Native, None),
-            ToolSource::Builtin => (ToolSourceType::Builtin, None),
-            ToolSource::Mcp { server } => (ToolSourceType::Mcp, Some(server.clone())),
-            ToolSource::Skill { id } => (ToolSourceType::Skill, Some(id.clone())),
-            ToolSource::Custom { rule_index } => {
-                (ToolSourceType::Custom, Some(rule_index.to_string()))
-            }
-            ToolSource::Plugin { plugin_id } => (ToolSourceType::Plugin, Some(plugin_id.clone())),
-        };
-
-        let parameters_schema = tool
-            .parameters_schema
-            .as_ref()
-            .and_then(|v| serde_json::to_string(v).ok());
-
-        Self {
-            id: tool.id.clone(),
-            name: tool.name.clone(),
-            display_name: tool.display_name.clone(),
-            description: tool.description.clone(),
-            source_type,
-            source_id,
-            parameters_schema,
-            is_active: tool.is_active,
-            requires_confirmation: tool.requires_confirmation,
-            safety_level: tool.safety_level.label().to_string(),
-            service_name: tool.service_name.clone(),
-            // UI metadata
-            icon: tool.icon.clone(),
-            usage: tool.usage.clone(),
-            localization_key: tool.localization_key.clone(),
-            is_builtin: tool.is_builtin,
-            sort_order: tool.sort_order,
-            has_subtools: tool.has_subtools,
-        }
-    }
-}
-
-impl From<UnifiedTool> for UnifiedToolInfo {
-    fn from(tool: UnifiedTool) -> Self {
-        Self::from(&tool)
-    }
-}
 
 // =============================================================================
 // Tests
@@ -221,43 +124,5 @@ mod tests {
         assert_eq!(ToolSourceType::Mcp.badge_label(), "MCP");
         assert_eq!(ToolSourceType::Skill.badge_label(), "Skill");
         assert_eq!(ToolSourceType::Custom.badge_label(), "Custom");
-    }
-
-    #[test]
-    fn test_unified_tool_info_from_unified_tool() {
-        let tool = UnifiedTool::new(
-            "native:search",
-            "search",
-            "Search the web",
-            ToolSource::Native,
-        )
-        .with_icon("magnifyingglass")
-        .with_usage("/search <query>");
-
-        let info = UnifiedToolInfo::from(&tool);
-
-        assert_eq!(info.id, "native:search");
-        assert_eq!(info.name, "search");
-        assert_eq!(info.source_type, ToolSourceType::Native);
-        assert!(info.source_id.is_none());
-        assert_eq!(info.icon, Some("magnifyingglass".to_string()));
-        assert_eq!(info.usage, Some("/search <query>".to_string()));
-    }
-
-    #[test]
-    fn test_unified_tool_info_mcp_source() {
-        let tool = UnifiedTool::new(
-            "mcp:github:pr_list",
-            "pr_list",
-            "List PRs",
-            ToolSource::Mcp {
-                server: "github".to_string(),
-            },
-        );
-
-        let info = UnifiedToolInfo::from(&tool);
-
-        assert_eq!(info.source_type, ToolSourceType::Mcp);
-        assert_eq!(info.source_id, Some("github".to_string()));
     }
 }

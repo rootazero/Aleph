@@ -1,36 +1,7 @@
 //! Discovery Module - Component Discovery System
 //!
-//! This module provides a unified discovery system for finding configuration files,
-//! skills, commands, agents, and plugins across multiple directories.
-//!
-//! # Directory Strategy
-//!
-//! **Read Paths (by priority, later overrides earlier):**
-//! - `~/.claude/skills/` - Claude Code compatible (read-only)
-//! - `~/.claude/commands/` - Claude Code compatible (read-only)
-//! - `~/.aleph/skills/` - Aleph native
-//! - `~/.aleph/commands/` - Aleph native
-//! - `~/.aleph/plugins/` - Aleph native
-//! - `./.claude/skills/` - Project-level Claude Code (read-only)
-//! - `./.claude/commands/` - Project-level Claude Code (read-only)
-//!
-//! **Write Paths:**
-//! - Always use `~/.aleph/` for writing
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use alephcore::discovery::{DiscoveryManager, DiscoveryConfig};
-//!
-//! let config = DiscoveryConfig::default();
-//! let manager = DiscoveryManager::new(config)?;
-//!
-//! // Discover all skills
-//! let skills = manager.discover_skills()?;
-//!
-//! // Find config files with upward traversal
-//! let configs = manager.find_config_files("aleph.jsonc")?;
-//! ```
+//! Unified discovery for configuration files, skills, commands, agents, and
+//! plugins across multiple directories.
 
 mod paths;
 mod scanner;
@@ -40,7 +11,7 @@ pub use paths::*;
 pub use scanner::*;
 pub use types::*;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Discovery errors
@@ -85,31 +56,10 @@ impl Default for DiscoveryConfig {
     }
 }
 
-impl DiscoveryConfig {
-    /// Create config with a specific working directory
-    pub fn with_working_dir(mut self, dir: impl AsRef<Path>) -> Self {
-        self.working_dir = dir.as_ref().to_path_buf();
-        self
-    }
-
-    /// Disable Claude Code directory scanning
-    #[must_use]
-    pub const fn without_claude_dirs(mut self) -> Self {
-        self.scan_claude_dirs = false;
-        self
-    }
-
-    /// Disable project-level directory scanning
-    #[must_use]
-    pub const fn without_project_dirs(mut self) -> Self {
-        self.scan_project_dirs = false;
-        self
-    }
-}
-
 /// Discovery Manager - main entry point for the discovery system
 #[derive(Debug)]
 pub struct DiscoveryManager {
+    #[allow(dead_code)]
     config: DiscoveryConfig,
     scanner: DirectoryScanner,
 }
@@ -121,19 +71,9 @@ impl DiscoveryManager {
         Ok(Self { config, scanner })
     }
 
-    /// Create with default configuration
-    pub fn with_defaults() -> DiscoveryResult<Self> {
-        Self::new(DiscoveryConfig::default())
-    }
-
     /// Get the Aleph home directory (~/.aleph/)
     pub fn aleph_home(&self) -> DiscoveryResult<PathBuf> {
         aleph_home_dir()
-    }
-
-    /// Get all directories to scan for components
-    pub fn get_scan_directories(&self) -> DiscoveryResult<Vec<ScanDirectory>> {
-        self.scanner.get_all_directories()
     }
 
     /// Find configuration files with upward traversal
@@ -159,14 +99,6 @@ impl DiscoveryManager {
         self.scanner.discover_component("agents")
     }
 
-    /// Discover all installed plugins (with manifest validation and monorepo support)
-    ///
-    /// Scans `~/.aleph/plugins/` for plugin manifests, including
-    /// one-level-deep monorepo layouts (e.g., cloned plugin repos).
-    pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_plugins()
-    }
-
     /// Discover plugins from `~/.aleph/plugins/` plus each supplied extra
     /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
     /// so project-local installs are discovered alongside the global ones.
@@ -176,24 +108,11 @@ impl DiscoveryManager {
     ) -> DiscoveryResult<Vec<DiscoveredPath>> {
         self.scanner.discover_plugins_with_extra(extra_parents)
     }
-
-    /// Get the git root directory if available
-    #[must_use]
-    pub fn git_root(&self) -> Option<&Path> {
-        self.scanner.git_root()
-    }
-
-    /// Get the working directory
-    #[must_use]
-    pub fn working_dir(&self) -> &Path {
-        &self.config.working_dir
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_discovery_config_default() {
@@ -201,23 +120,5 @@ mod tests {
         assert!(config.scan_claude_dirs);
         assert!(config.scan_project_dirs);
         assert_eq!(config.max_upward_depth, 10);
-    }
-
-    #[test]
-    fn test_discovery_config_builder() {
-        let temp = TempDir::new().unwrap();
-        let config = DiscoveryConfig::default()
-            .with_working_dir(temp.path())
-            .without_claude_dirs();
-
-        assert_eq!(config.working_dir, temp.path());
-        assert!(!config.scan_claude_dirs);
-    }
-
-    #[test]
-    fn test_discovery_config_without_project_dirs() {
-        let config = DiscoveryConfig::default().without_project_dirs();
-        assert!(!config.scan_project_dirs);
-        assert!(config.scan_claude_dirs);
     }
 }

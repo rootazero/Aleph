@@ -2,8 +2,7 @@
 //!
 //! Fluent builder API for constructing `UnifiedTool` instances with optional fields.
 
-use super::{ChannelType, DispatchMode, UnifiedTool};
-use crate::tool_metadata::types::definition::{Capability, StructuredToolMeta, ToolDiff};
+use super::{ChannelType, UnifiedTool};
 use crate::tool_metadata::types::safety::ToolSafetyLevel;
 use serde_json::Value;
 
@@ -62,10 +61,8 @@ impl UnifiedTool {
 
     /// Builder method: set safety level
     #[must_use]
-    pub fn with_safety_level(mut self, level: ToolSafetyLevel) -> Self {
+    pub const fn with_safety_level(mut self, level: ToolSafetyLevel) -> Self {
         self.safety_level = level;
-        // Sync requires_confirmation with safety level
-        self.requires_confirmation = level.requires_confirmation();
         self
     }
 
@@ -199,69 +196,13 @@ impl UnifiedTool {
     }
 
     // =========================================================================
-    // Dispatch & Visibility Builder Methods
+    // Visibility Builder Methods
     // =========================================================================
-
-    /// Builder method: set dispatch mode
-    #[must_use]
-    pub const fn with_dispatch_mode(mut self, mode: DispatchMode) -> Self {
-        self.dispatch_mode = mode;
-        self
-    }
 
     /// Builder method: set visible channels
     #[must_use]
     pub fn with_visible_channels(mut self, channels: Vec<ChannelType>) -> Self {
         self.visible_channels = channels;
-        self
-    }
-
-    // =========================================================================
-    // Structured Tool Description Builder Methods (for LLM tool selection)
-    // =========================================================================
-
-    /// Builder method: add a capability
-    ///
-    /// Capabilities describe what this tool can do precisely.
-    /// Multiple capabilities can be added for tools with diverse functions.
-    pub fn with_capability(mut self, capability: Capability) -> Self {
-        let meta = self
-            .structured_meta
-            .get_or_insert_with(StructuredToolMeta::default);
-        meta.capabilities.push(capability);
-        self
-    }
-
-    /// Builder method: add a not-suitable-for scenario
-    ///
-    /// Explicitly states when NOT to use this tool, helping prevent misuse.
-    pub fn with_not_suitable_for(mut self, scenario: impl Into<String>) -> Self {
-        let meta = self
-            .structured_meta
-            .get_or_insert_with(StructuredToolMeta::default);
-        meta.not_suitable_for.push(scenario.into());
-        self
-    }
-
-    /// Builder method: add a differentiation from another tool
-    ///
-    /// Helps LLM distinguish this tool from similar tools.
-    pub fn with_differentiation(mut self, diff: ToolDiff) -> Self {
-        let meta = self
-            .structured_meta
-            .get_or_insert_with(StructuredToolMeta::default);
-        meta.differentiation.push(diff);
-        self
-    }
-
-    /// Builder method: add a use-when scenario
-    ///
-    /// Describes typical use cases (positive examples) for this tool.
-    pub fn with_use_when(mut self, scenario: impl Into<String>) -> Self {
-        let meta = self
-            .structured_meta
-            .get_or_insert_with(StructuredToolMeta::default);
-        meta.use_when.push(scenario.into());
         self
     }
 }

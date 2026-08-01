@@ -17,40 +17,22 @@ pub enum DiscoverySource {
     Plugin,
 }
 
-impl DiscoverySource {
-    /// Whether this source is read-only (Claude Code directories)
-    #[must_use]
-    pub const fn is_read_only(&self) -> bool {
-        matches!(self, Self::ClaudeGlobal | Self::Project)
-    }
-}
-
-/// A directory to scan for components
+/// A directory to scan for components (scanner-internal).
 #[derive(Debug, Clone)]
-pub struct ScanDirectory {
-    /// Path to the directory
+pub(crate) struct ScanDirectory {
     pub path: PathBuf,
-    /// Source type
     pub source: DiscoverySource,
-    /// Priority (higher = later in merge order, takes precedence)
     pub priority: u32,
 }
 
 impl ScanDirectory {
-    /// Create a new scan directory
     #[must_use]
-    pub const fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
+    pub(crate) const fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         Self {
             path,
             source,
             priority,
         }
-    }
-
-    /// Check if the directory exists
-    #[must_use]
-    pub fn exists(&self) -> bool {
-        self.path.exists() && self.path.is_dir()
     }
 }
 
@@ -82,34 +64,5 @@ impl DiscoveredPath {
             name,
             priority,
         }
-    }
-
-    /// Create with explicit name
-    #[must_use]
-    pub const fn with_name(
-        path: PathBuf,
-        source: DiscoverySource,
-        priority: u32,
-        name: String,
-    ) -> Self {
-        Self {
-            path,
-            source,
-            name,
-            priority,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_discovery_source_read_only() {
-        assert!(!DiscoverySource::AlephGlobal.is_read_only());
-        assert!(DiscoverySource::ClaudeGlobal.is_read_only());
-        assert!(DiscoverySource::Project.is_read_only());
-        assert!(!DiscoverySource::Plugin.is_read_only());
     }
 }

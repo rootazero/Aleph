@@ -1160,8 +1160,6 @@ impl BuiltinToolRegistry {
             agent_switch_tool,
             agent_info_tool,
             session_context_handle,
-            tool_context_handle: config.tool_context.clone(),
-            event_bus: config.event_bus.clone(),
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,
             acp_switch_tool,

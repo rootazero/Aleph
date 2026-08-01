@@ -6,9 +6,9 @@
 //! wraps any `ToolRegistry` implementor as a `LoopTool`, which the gateway's
 //! `ScopedToolService` then exposes to the harness.
 //!
-//! The handle accessors (`workspace_handle`, `tool_context_handle`, …) let the
-//! execution engine hand workspace- and session-scoped context to tools
-//! without threading it through every call signature.
+//! The handle accessors (`workspace_handle`, …) let the execution engine hand
+//! workspace- and session-scoped context to tools without threading it
+//! through every call signature.
 
 use crate::sync_primitives::Arc;
 use serde_json::Value;
@@ -62,14 +62,6 @@ pub trait ToolRegistry: Send + Sync {
     fn session_context_handle(
         &self,
     ) -> Option<Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
-        None
-    }
-
-    /// Get the shared tool context handle for workspace-scoped output paths.
-    ///
-    /// The execution engine writes the active agent's `ToolContext` here so
-    /// tools that write output files use the correct workspace directory.
-    fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
         None
     }
 
