@@ -1074,7 +1074,7 @@ impl InboundMessageRouter {
                     &session_key,
                     index,
                     decision,
-                    ctx.message.sender_name.clone(),
+                    Some(ctx.message.sender_id.as_str().to_string()),
                     deny_reason,
                 ) {
                     SessionResolveOutcome::Resolved {
