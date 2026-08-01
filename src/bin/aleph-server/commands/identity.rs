@@ -53,7 +53,74 @@ fn ms(v: i64) -> String {
     )
 }
 
+/// Verify an exported chain with nothing but the file.
+///
+/// Split out and dispatched **before** [`open_ledger`] so it genuinely needs no
+/// database, no vault and no Aleph state — this is the form of the check that
+/// runs on the auditor's machine, and it would be worth very little if it
+/// quietly required the host it is checking.
+fn verify_exported_file(path: &str, pins: &[String]) -> Result<(), Box<dyn Error>> {
+    let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let doc: alephcore::identity::ChainExport =
+        serde_json::from_str(&body).map_err(|e| format!("{path} is not a chain export: {e}"))?;
+    let report = alephcore::identity::verify_export(&doc, pins)?;
+
+    println!("agent      {}", report.agent_id);
+    println!(
+        "records    {} (seq {}..{})",
+        report.records, report.first_seq, report.last_seq
+    );
+    println!(
+        "root key   {}",
+        report.root_fingerprint.as_deref().unwrap_or("(none)")
+    );
+    println!("head hash  {}", report.last_hash.as_deref().unwrap_or("-"));
+    println!("keys       {}", report.keys.join(", "));
+    match report.root_pinned {
+        Some(true) => println!("pin        OK — the chain opens under a pinned key"),
+        Some(false) => println!(
+            "pin        FAILED — the chain opens under {}, which is not pinned",
+            report.root_fingerprint.as_deref().unwrap_or("(nothing)")
+        ),
+        // Said out loud every time, because the reassuring half of this
+        // sentence is the half people remember.
+        None => println!(
+            "pin        none supplied — a clean result proves internal consistency only; \
+             whoever produced this file also chose the keys in it"
+        ),
+    }
+    if report.failed_appends > 0 {
+        println!(
+            "WARNING    {} record(s) were lost before they were ever written on the \
+             installation that produced this file. No chain check can see them.",
+            report.failed_appends
+        );
+    }
+    if report.faults.is_empty() {
+        println!("result     OK");
+    } else {
+        println!("result     FAULT");
+        for f in &report.faults {
+            println!("        {f:?}");
+        }
+    }
+    if !report.ok {
+        return Err("export verification failed".into());
+    }
+    Ok(())
+}
+
 pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Error>> {
+    // The one path that must not touch local state.
+    if let IdentityAction::Verify {
+        input: Some(ref path),
+        ref pin,
+        ..
+    } = action
+    {
+        return verify_exported_file(path, pin);
+    }
+
     let ledger = open_ledger()?;
 
     match action {
@@ -80,6 +147,19 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
                         .map_or("active".into(), |t| format!("revoked {}", ms(t)))
                 );
             }
+            // A chain whose identity row was deleted cannot appear in the
+            // listing above — that is precisely why deleting it is worth doing.
+            // Printing the names here keeps the table from being narrower than
+            // the evidence without pretending they are ordinary identities.
+            let orphans = ledger.orphan_chains()?;
+            if !orphans.is_empty() {
+                println!(
+                    "\nWARNING: {} chain(s) have records but no identity row — their anchor \
+                     is gone, so a truncated tail cannot be detected for them: {}",
+                    orphans.len(),
+                    orphans.join(", ")
+                );
+            }
         }
 
         IdentityAction::Ledger { agent, limit } => {
@@ -101,7 +181,25 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
             }
         }
 
-        IdentityAction::Verify { agent } => {
+        IdentityAction::Export { agent, out } => {
+            let doc = alephcore::identity::export_chain(&ledger, &agent)?;
+            let body = serde_json::to_string_pretty(&doc)?;
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, body).map_err(|e| format!("cannot write {path}: {e}"))?;
+                    let root = doc.records.first().map(|r| r.signer_fp.as_str());
+                    println!(
+                        "Wrote {} ({} records) to {path}",
+                        doc.agent_id,
+                        doc.records.len()
+                    );
+                    println!("Pin this root fingerprint off-box: {}", root.unwrap_or("-"));
+                }
+                None => println!("{body}"),
+            }
+        }
+
+        IdentityAction::Verify { agent, .. } => {
             let reports = match agent {
                 Some(a) => vec![ledger.verify(&a)?],
                 None => ledger.verify_all()?,

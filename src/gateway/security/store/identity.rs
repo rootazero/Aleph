@@ -304,6 +304,22 @@ impl SecurityStore {
         })
     }
 
+    /// Every agent id that has at least one ledger row.
+    ///
+    /// Verification enumerates the **union** of this and `agent_identities`,
+    /// never the identity table alone. An identity is a single mutable row; if
+    /// listing drove verification, deleting that one row would take the agent's
+    /// whole chain out of the verifier's field of view — the same structural
+    /// blindness the anchor exists to close for a truncated tail, moved one
+    /// table over.
+    pub fn ledger_agent_ids(&self) -> SqliteResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt =
+            conn.prepare("SELECT DISTINCT agent_id FROM agent_ledger ORDER BY agent_id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
     /// The whole chain in sequence order — the verification read.
     pub fn ledger_chain(&self, agent_id: &str) -> SqliteResult<Vec<LedgerRecord>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

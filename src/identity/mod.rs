@@ -11,7 +11,9 @@
 //!   to that agent's own hash-chained, signed chain ([`ledger`]), from the one
 //!   chokepoint every tool call already passes through
 //!   (`tools::scoped::dispatch`). [`verify`] then answers whether the chain is
-//!   intact.
+//!   intact, and [`export`] puts that answer within reach of someone who does
+//!   not trust this machine: a self-contained document, checked by the same
+//!   walk against a root fingerprint pinned off-box.
 //!
 //! ## Deliberate non-goals
 //!
@@ -34,6 +36,7 @@
 //! Full model: `docs/reference/AGENT_IDENTITY.md`.
 
 pub mod actor;
+pub mod export;
 pub mod hash;
 pub mod keystore;
 pub mod ledger;
@@ -42,6 +45,7 @@ pub mod schema;
 pub mod verify;
 
 pub use actor::{as_actor, current_actor};
+pub use export::{export_chain, verify_export, ChainExport, ExportError, ExportReport};
 pub use keystore::{AgentIdentityRow, AgentKeyRow, AgentKeystore, KeyError};
 pub use ledger::{global, install, record as record_action, AgentLedger};
 pub use record::{LedgerAction, LedgerOutcome, LedgerRecord, NewRecord};

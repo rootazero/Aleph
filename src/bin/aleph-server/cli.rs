@@ -386,10 +386,34 @@ pub enum IdentityAction {
         limit: i64,
     },
     /// Recompute a chain and check every signature. Exits non-zero on a fault.
+    ///
+    /// With `--input` this needs no database, no vault and no Aleph
+    /// installation at all — it checks an exported document on its own terms,
+    /// which is the only form of the check an auditor who does not trust the
+    /// host can run.
     Verify {
-        /// Only this agent (default: verify every agent)
+        /// Only this agent (default: verify every agent). Ignored with --input.
         #[arg(long)]
         agent: Option<String>,
+        /// Verify an exported chain file instead of the local database.
+        #[arg(long, value_name = "FILE")]
+        input: Option<String>,
+        /// Root fingerprint taken off-box, for use with --input. Repeatable.
+        /// Without one, a clean verdict proves internal consistency only —
+        /// whoever produced the document also chose the keys inside it.
+        #[arg(long, value_name = "FINGERPRINT")]
+        pin: Vec<String>,
+    },
+    /// Write one agent's whole chain, its public keys and its anchor to a
+    /// self-contained JSON document. Contains no private key and no tool
+    /// arguments.
+    Export {
+        /// Agent to export
+        #[arg(long)]
+        agent: String,
+        /// Write here instead of stdout
+        #[arg(long, value_name = "FILE")]
+        out: Option<String>,
     },
 }
 

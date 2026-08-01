@@ -28,14 +28,36 @@
 //! arithmetically valid. Without that check the guarantee degrades from "needs
 //! this agent's private key" to "needs some agent's private key", and every
 //! delegated role that signs its own work enlarges that set.
+//!
+//! A third hole, of the same family, was open until the chain was made to
+//! declare its own key history: `agent_identities` is one mutable row, and
+//! deleting it makes the next append **mint a fresh key and quietly continue
+//! the chain under it** — every link valid, every signature valid, verdict
+//! clean. [`ChainFault::UndeclaredSigner`] closes that by requiring every key a
+//! chain is signed with to be introduced *by the chain itself* (the opening
+//! `IdentityCreated`, or an `IdentityRotated` naming it). The check is
+//! **set membership, not adjacency**, deliberately: records are enqueued
+//! asynchronously, so an ordinary call issued just before a rotation can land
+//! *after* it and be signed by the incoming key. Requiring the rotation record
+//! to immediately precede the first row it covers would flag that race as
+//! tampering.
+//!
+//! ## One walk, two key sources
+//!
+//! [`walk_chain`] is the whole algorithm; [`SignerSource`] is the only thing
+//! that varies. The live path resolves keys from `security.db`
+//! ([`Keyring`]); [`export`](super::export) resolves them from the keys
+//! embedded in a portable document, so an exported chain is checked by
+//! **exactly the same code** off-box. A second copy of a security check is how
+//! the divergence between them gets shipped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
 use super::hash::{compute_hash, Preimage};
 use super::keystore::{AgentKeystore, KeyError};
-use super::record::LedgerRecord;
+use super::record::{LedgerAction, LedgerRecord};
 use crate::gateway::security::crypto::verify_signature;
 
 /// One thing wrong with a chain. Every variant names the sequence it concerns
@@ -52,6 +74,13 @@ pub enum ChainFault {
     /// The signing key is not in `agent_keys` — the row claims a signer this
     /// installation has never minted.
     UnknownSigner { seq: i64, fingerprint: String },
+    /// The row is signed by a key the **chain never introduces**: no opening
+    /// `IdentityCreated` and no `IdentityRotated` names it. The key may well be
+    /// this agent's — that is the point. Deleting the single mutable
+    /// `agent_identities` row makes the next append mint a new key and continue
+    /// the chain under it with every link and signature intact; only the
+    /// chain's own account of its key history reveals it.
+    UndeclaredSigner { seq: i64, fingerprint: String },
     /// The signing key exists but belongs to a **different agent**. Without
     /// this check, "forging a record needs *this* agent's private key" would
     /// really only mean "needs *some* agent's private key" — and every
@@ -73,6 +102,10 @@ pub enum ChainFault {
     AnchorMismatch { seq: i64 },
     /// The anchor remembers a chain that has no rows at all.
     ChainWiped { anchor_seq: i64 },
+    /// Records exist for an agent that has no `agent_identities` row: the
+    /// anchor — the only thing that can reveal a truncated tail — is gone, and
+    /// with it the agent's presence in every identity-driven listing.
+    IdentityMissing,
 }
 
 /// The outcome of verifying one agent's chain.
@@ -90,7 +123,7 @@ pub struct ChainReport {
 }
 
 /// What checking one row's signer found.
-enum Signer {
+pub(super) enum Signer {
     Valid,
     BadSignature,
     /// A key this installation minted — for somebody else.
@@ -101,6 +134,34 @@ enum Signer {
     Unknown,
 }
 
+/// Where [`walk_chain`] resolves the public key a row names.
+///
+/// Two implementations, one algorithm: [`Keyring`] answers from `security.db`,
+/// and [`ExportKeyring`](super::export::ExportKeyring) answers from the keys
+/// carried inside a portable export — which is what lets a chain be verified on
+/// a machine that has neither the database nor the daemon.
+pub(super) trait SignerSource {
+    /// Verify `signature` over `message` against the key `fingerprint` names,
+    /// and report whether that key was even this agent's to sign with.
+    fn check(
+        &mut self,
+        fingerprint: &str,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<Signer, KeyError>;
+}
+
+/// Check a signature against a resolved public key. The one place the
+/// primitive is called during verification, so "valid" means the same thing on
+/// both key sources.
+pub(super) fn check_against(public_key: &[u8], message: &[u8], signature: &[u8]) -> Signer {
+    if verify_signature(public_key, message, signature).is_ok() {
+        Signer::Valid
+    } else {
+        Signer::BadSignature
+    }
+}
+
 /// The keys a chain's rows may legitimately name, resolved once per
 /// verification instead of once per row.
 ///
@@ -109,7 +170,8 @@ enum Signer {
 /// does, and what this did) pays N locked database round trips to answer K
 /// distinct questions, and on a long chain that dominates the cost of
 /// verification by an order of magnitude over the signature checks themselves.
-struct Keyring {
+struct Keyring<'a> {
+    keys: &'a AgentKeystore,
     /// Every key this agent has ever held, loaded in one query.
     own: HashMap<String, Vec<u8>>,
     /// Fingerprints found outside `own`: their real owner, or `None` when this
@@ -118,9 +180,10 @@ struct Keyring {
     others: HashMap<String, Option<String>>,
 }
 
-impl Keyring {
-    fn load(keys: &AgentKeystore, agent_id: &str) -> Result<Self, KeyError> {
+impl<'a> Keyring<'a> {
+    fn load(keys: &'a AgentKeystore, agent_id: &str) -> Result<Self, KeyError> {
         Ok(Self {
+            keys,
             own: keys
                 .keys_of(agent_id)?
                 .into_iter()
@@ -129,30 +192,26 @@ impl Keyring {
             others: HashMap::new(),
         })
     }
+}
 
-    /// Verify `signature` over `message` against the key the row names, and
-    /// report whether that key was even this agent's to sign with.
-    ///
+impl SignerSource for Keyring<'_> {
     /// Retired keys count as the agent's own: records signed before a rotation
     /// must stay verifiable, which is the reason keys are never deleted.
     fn check(
         &mut self,
-        keys: &AgentKeystore,
         fingerprint: &str,
         message: &[u8],
         signature: &[u8],
     ) -> Result<Signer, KeyError> {
         if let Some(public_key) = self.own.get(fingerprint) {
-            return Ok(
-                if verify_signature(public_key, message, signature).is_ok() {
-                    Signer::Valid
-                } else {
-                    Signer::BadSignature
-                },
-            );
+            return Ok(check_against(public_key, message, signature));
         }
         if !self.others.contains_key(fingerprint) {
-            let owner = keys.store().get_agent_key(fingerprint)?.map(|k| k.agent_id);
+            let owner = self
+                .keys
+                .store()
+                .get_agent_key(fingerprint)?
+                .map(|k| k.agent_id);
             self.others.insert(fingerprint.to_string(), owner);
         }
         Ok(
@@ -166,48 +225,62 @@ impl Keyring {
     }
 }
 
-pub(super) fn preimage_of(r: &LedgerRecord) -> Preimage<'_> {
-    Preimage {
-        agent_id: &r.agent_id,
-        seq: r.seq,
-        at_ms: r.at_ms,
-        action: r.action,
-        outcome: r.outcome,
-        target: &r.target,
-        args_fp: r.args_fp.as_deref(),
-        detail: &r.detail,
-        signer_fp: &r.signer_fp,
-        prev_hash: r.prev_hash.as_deref(),
-    }
+/// The remembered head of a chain, held outside it.
+///
+/// Separating "how far the chain got" from the chain itself is the only thing
+/// that can reveal a truncated tail — a chain with its last rows removed is
+/// internally consistent. `None` means no anchor is available at all (the
+/// identity row is gone, or an export was produced without one), which is
+/// itself reported rather than treated as "nothing to compare against".
+#[derive(Clone, Copy)]
+pub(super) struct Anchor<'a> {
+    pub seq: i64,
+    pub hash: Option<&'a [u8]>,
 }
 
-/// Verify one agent's chain end to end.
+/// Every fingerprint the chain itself introduces: the key it opened under, plus
+/// every key a recorded rotation names.
 ///
-/// Reports **every** fault rather than stopping at the first: an operator
-/// deciding what happened needs the shape of the damage, not just its
-/// existence.
-pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport, KeyError> {
-    let identity = keys
-        .identity(agent_id)?
-        .ok_or_else(|| KeyError::UnknownAgent(agent_id.to_string()))?;
-    let rows = keys.store().ledger_chain(agent_id)?;
+/// The first row's signer counts as introduced whatever its sequence, so a
+/// chain whose genesis row was deleted reports that one fact
+/// ([`ChainFault::PrefixMissing`]) instead of an undeclared-signer fault per
+/// surviving row.
+fn declared_signers(rows: &[LedgerRecord]) -> HashSet<&str> {
+    let mut declared: HashSet<&str> = rows
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.action,
+                LedgerAction::IdentityCreated | LedgerAction::IdentityRotated
+            )
+        })
+        .map(|r| r.target.as_str())
+        .collect();
+    if let Some(first) = rows.first() {
+        declared.insert(first.signer_fp.as_str());
+    }
+    declared
+}
 
+/// Walk a chain end to end and report **every** fault: an operator deciding
+/// what happened needs the shape of the damage, not just its existence.
+///
+/// Shared by the live verifier and the offline export verifier — see the module
+/// doc. `rows` must be this agent's rows in ascending `seq` order.
+pub(super) fn walk_chain(
+    rows: &[LedgerRecord],
+    anchor: Option<Anchor<'_>>,
+    keys: &mut dyn SignerSource,
+) -> Result<Vec<ChainFault>, KeyError> {
     let mut faults = Vec::new();
 
     let Some(first) = rows.first() else {
-        if identity.head_seq > 0 {
+        if anchor.is_some_and(|a| a.seq > 0) {
             faults.push(ChainFault::ChainWiped {
-                anchor_seq: identity.head_seq,
+                anchor_seq: anchor.map_or(0, |a| a.seq),
             });
         }
-        return Ok(ChainReport {
-            agent_id: agent_id.to_string(),
-            ok: faults.is_empty(),
-            records: 0,
-            anchor_seq: identity.head_seq,
-            last_seq: 0,
-            faults,
-        });
+        return Ok(faults);
     };
 
     if first.seq != 1 {
@@ -218,11 +291,11 @@ pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport,
         faults.push(ChainFault::GenesisNotNull { seq: first.seq });
     }
 
-    let mut keyring = Keyring::load(keys, agent_id)?;
+    let declared = declared_signers(rows);
     let mut expected_seq = first.seq;
     let mut prev: Option<&[u8]> = None;
 
-    for r in &rows {
+    for r in rows {
         if r.seq != expected_seq {
             faults.push(ChainFault::SeqGap {
                 expected: expected_seq,
@@ -247,7 +320,7 @@ pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport,
         // Both are needed — either alone is forgeable by editing the other.
         // And the key must be one THIS agent holds: a valid signature from
         // another agent's key attests to nothing about this chain.
-        match keyring.check(keys, &r.signer_fp, &r.hash, &r.signature)? {
+        match keys.check(&r.signer_fp, &r.hash, &r.signature)? {
             Signer::Valid => {}
             Signer::BadSignature => faults.push(ChainFault::BadSignature { seq: r.seq }),
             Signer::Foreign { owner } => faults.push(ChainFault::ForeignSigner {
@@ -261,27 +334,82 @@ pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport,
             }),
         }
 
+        // …and the chain must say where that key came from. Ownership alone is
+        // satisfied by a key minted seconds ago to replace a deleted identity.
+        if !declared.contains(r.signer_fp.as_str()) {
+            faults.push(ChainFault::UndeclaredSigner {
+                seq: r.seq,
+                fingerprint: r.signer_fp.clone(),
+            });
+        }
+
         prev = Some(&r.hash);
     }
 
     let last = rows.last().unwrap_or(first);
-    if last.seq < identity.head_seq {
-        faults.push(ChainFault::TailTruncated {
-            anchor_seq: identity.head_seq,
-            last_seq: last.seq,
-        });
-    } else if last.seq == identity.head_seq
-        && identity.head_hash.as_deref() != Some(last.hash.as_slice())
-    {
-        faults.push(ChainFault::AnchorMismatch { seq: last.seq });
+    if let Some(anchor) = anchor {
+        if last.seq < anchor.seq {
+            faults.push(ChainFault::TailTruncated {
+                anchor_seq: anchor.seq,
+                last_seq: last.seq,
+            });
+        } else if last.seq == anchor.seq && anchor.hash != Some(last.hash.as_slice()) {
+            faults.push(ChainFault::AnchorMismatch { seq: last.seq });
+        }
     }
+
+    Ok(faults)
+}
+
+pub(super) fn preimage_of(r: &LedgerRecord) -> Preimage<'_> {
+    Preimage {
+        agent_id: &r.agent_id,
+        seq: r.seq,
+        at_ms: r.at_ms,
+        action: r.action,
+        outcome: r.outcome,
+        target: &r.target,
+        args_fp: r.args_fp.as_deref(),
+        detail: &r.detail,
+        signer_fp: &r.signer_fp,
+        prev_hash: r.prev_hash.as_deref(),
+    }
+}
+
+/// Verify one agent's chain end to end.
+///
+/// An agent with records but **no identity row** is verified rather than
+/// refused: the deleted row is reported as [`ChainFault::IdentityMissing`] and
+/// the walk proceeds without an anchor. Erroring out here — what this did —
+/// meant the one tamper that removes an agent from every listing also removed
+/// it from the verifier, which is the failure this module exists to make
+/// impossible. Only an agent with neither an identity nor a single record is
+/// genuinely unknown.
+pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport, KeyError> {
+    let identity = keys.identity(agent_id)?;
+    let rows = keys.store().ledger_chain(agent_id)?;
+    if identity.is_none() && rows.is_empty() {
+        return Err(KeyError::UnknownAgent(agent_id.to_string()));
+    }
+
+    let mut faults = Vec::new();
+    if identity.is_none() {
+        faults.push(ChainFault::IdentityMissing);
+    }
+    let anchor = identity.as_ref().map(|i| Anchor {
+        seq: i.head_seq,
+        hash: i.head_hash.as_deref(),
+    });
+
+    let mut keyring = Keyring::load(keys, agent_id)?;
+    faults.extend(walk_chain(&rows, anchor, &mut keyring)?);
 
     Ok(ChainReport {
         agent_id: agent_id.to_string(),
         ok: faults.is_empty(),
         records: rows.len(),
-        anchor_seq: identity.head_seq,
-        last_seq: last.seq,
+        anchor_seq: identity.map_or(0, |i| i.head_seq),
+        last_seq: rows.last().map_or(0, |r| r.seq),
         faults,
     })
 }
