@@ -29,45 +29,6 @@ impl SkillId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Return the plugin prefix (part before `:`) if present.
-    ///
-    /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
-    /// this returns the substring before the first colon.
-    #[must_use]
-    pub fn plugin_prefix(&self) -> Option<&str> {
-        self.0.split_once(':').map(|(prefix, _)| prefix)
-    }
-
-    /// Return the skill name (part after `:`, or the whole id if no prefix).
-    ///
-    /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
-    /// this returns the substring after the first colon.
-    #[must_use]
-    pub fn skill_name(&self) -> &str {
-        self.0
-            .split_once(':')
-            .map_or(self.0.as_str(), |(_, name)| name)
-    }
-
-    /// Check whether the ID follows the `plugin:skill_name` convention.
-    ///
-    /// Returns `true` when:
-    /// - There is no `:` and the string is non-empty (bare skill name).
-    /// - There is exactly one `:` and both prefix and name are non-empty.
-    #[must_use]
-    pub fn is_well_formed(&self) -> bool {
-        match self.0.split_once(':') {
-            None => !self.0.is_empty(),
-            Some((prefix, name)) => !prefix.is_empty() && !name.is_empty() && !name.contains(':'),
-        }
-    }
-
-    /// Check whether the ID is empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 impl fmt::Display for SkillId {
@@ -106,12 +67,6 @@ impl PluginId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Check whether the plugin ID is empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -482,18 +437,6 @@ impl SkillContent {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Check if the content is empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Check if the content is empty or contains only whitespace.
-    #[must_use]
-    pub fn is_blank(&self) -> bool {
-        self.0.trim().is_empty()
-    }
 }
 
 impl ValueObject for SkillContent {}
@@ -531,8 +474,6 @@ pub struct SkillManifest {
     id: SkillId,
     /// Human-readable name.
     name: String,
-    /// Optional plugin that owns this skill.
-    plugin: Option<PluginId>,
     /// Short description of what this skill does.
     description: String,
     /// The prompt/instruction content.
@@ -573,7 +514,6 @@ impl SkillManifest {
         Self {
             id: id.into(),
             name: name.into(),
-            plugin: None,
             description: description.into(),
             content: content.into(),
             scope: PromptScope::default(),
@@ -596,12 +536,6 @@ impl SkillManifest {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    /// Optional owning plugin.
-    #[must_use]
-    pub const fn plugin(&self) -> Option<&PluginId> {
-        self.plugin.as_ref()
     }
 
     /// Short description.
@@ -707,11 +641,6 @@ impl SkillManifest {
 
     // --- Mutators ---
 
-    /// Set the owning plugin.
-    pub fn set_plugin(&mut self, plugin: PluginId) {
-        self.plugin = Some(plugin);
-    }
-
     /// Set the prompt scope.
     pub fn set_scope(&mut self, scope: PromptScope) {
         self.scope = scope;
@@ -783,8 +712,6 @@ mod tests {
     fn test_skill_id_display() {
         let id = SkillId::new("git:commit");
         assert_eq!(format!("{}", id), "git:commit");
-        assert_eq!(id.plugin_prefix(), Some("git"));
-        assert_eq!(id.skill_name(), "commit");
     }
 
     #[test]
@@ -801,44 +728,6 @@ mod tests {
         let from_str: SkillId = "hello:world".into();
         let from_string: SkillId = String::from("hello:world").into();
         assert_eq!(from_str, from_string);
-
-        // No prefix
-        let bare = SkillId::new("standalone");
-        assert_eq!(bare.plugin_prefix(), None);
-        assert_eq!(bare.skill_name(), "standalone");
-    }
-
-    #[test]
-    fn test_skill_id_well_formed() {
-        assert!(SkillId::new("git:commit").is_well_formed());
-        assert!(SkillId::new("plugin:skill_name").is_well_formed());
-        assert!(SkillId::new("standalone").is_well_formed());
-
-        assert!(!SkillId::new("").is_well_formed());
-        assert!(!SkillId::new(":commit").is_well_formed());
-        assert!(!SkillId::new("git:").is_well_formed());
-        assert!(!SkillId::new(":").is_well_formed());
-        assert!(!SkillId::new("a:b:c").is_well_formed());
-        assert!(!SkillId::new(":a:b").is_well_formed());
-    }
-
-    #[test]
-    fn test_skill_id_edge_cases() {
-        let id = SkillId::new("a:b:c");
-        assert_eq!(id.plugin_prefix(), Some("a"));
-        assert_eq!(id.skill_name(), "b:c");
-
-        let id = SkillId::new(":foo");
-        assert_eq!(id.plugin_prefix(), Some(""));
-        assert_eq!(id.skill_name(), "foo");
-
-        let id = SkillId::new("foo:");
-        assert_eq!(id.plugin_prefix(), Some("foo"));
-        assert_eq!(id.skill_name(), "");
-
-        let id = SkillId::new("");
-        assert_eq!(id.plugin_prefix(), None);
-        assert_eq!(id.skill_name(), "");
     }
 
     #[test]
@@ -1003,8 +892,6 @@ mod tests {
         assert_eq!(manifest.name(), "Git Commit");
         assert_eq!(manifest.description(), "Helps write good commit messages");
         assert_eq!(manifest.content().as_str(), "You are a git expert.");
-        assert!(!manifest.content().is_empty());
-        assert_eq!(manifest.plugin(), None);
         assert_eq!(*manifest.scope(), PromptScope::System);
         assert_eq!(manifest.priority(), 1); // Bundled
 
@@ -1029,11 +916,9 @@ mod tests {
             ..Default::default()
         };
         manifest.set_eligibility(eligibility);
-        manifest.set_plugin(PluginId::new("docker"));
 
         assert_eq!(manifest.eligibility().os.as_ref().unwrap().len(), 2);
         assert_eq!(manifest.eligibility().required_bins[0], "docker");
-        assert_eq!(manifest.plugin().unwrap().as_str(), "docker");
     }
 
     #[test]
