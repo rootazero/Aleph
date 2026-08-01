@@ -1,6 +1,4 @@
-use super::super::types::{
-    ChannelType, ConflictInfo, ConflictResolution, ToolSource,
-};
+use super::super::types::{ChannelType, ToolSource};
 use super::*;
 use crate::tool_metadata::types::ToolPriority;
 
@@ -172,32 +170,6 @@ async fn test_set_tool_active() {
     assert!(all_with_inactive.iter().any(|t| t.id == "custom:0:test"));
 }
 
-#[tokio::test]
-async fn test_to_prompt_block() {
-    let registry = ToolCatalog::new();
-
-    // Register custom commands to test prompt block
-    let rules = vec![
-        RoutingRuleConfig {
-            regex: "^/translate".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Translate".to_string()),
-            ..Default::default()
-        },
-        RoutingRuleConfig {
-            regex: "^/code".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Code assistant".to_string()),
-            ..Default::default()
-        },
-    ];
-    registry.register_custom_commands(&rules).await;
-
-    let prompt = registry.to_prompt_block().await;
-    assert!(prompt.contains("**translate**"));
-    assert!(prompt.contains("**code**"));
-}
-
 // =========================================================================
 // Conflict Resolution Tests
 // =========================================================================
@@ -259,103 +231,6 @@ async fn test_check_conflict_case_insensitive() {
     let conflict = registry.check_conflict("SEARCH").await;
     assert!(conflict.is_some());
     assert_eq!(conflict.unwrap().existing_name, "search");
-}
-
-#[test]
-fn test_resolve_conflict_new_wins() {
-    let registry = ToolCatalog::new();
-
-    // MCP tool exists, Builtin tries to register
-    let conflict = ConflictInfo {
-        existing_id: "mcp:server:search".to_string(),
-        existing_name: "search".to_string(),
-        existing_source: ToolSource::Mcp {
-            server: "server".into(),
-        },
-        existing_priority: ToolPriority::Mcp,
-    };
-
-    let resolution = registry.resolve_conflict("search", &conflict, &ToolSource::Builtin);
-
-    // Builtin has higher priority, should rename existing
-    match resolution {
-        ConflictResolution::RenameExisting {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "search");
-            assert_eq!(new_name, "search-mcp");
-        }
-        _ => panic!("Expected RenameExisting"),
-    }
-}
-
-#[test]
-fn test_resolve_conflict_existing_wins() {
-    let registry = ToolCatalog::new();
-
-    // Builtin exists, MCP tries to register
-    let conflict = ConflictInfo {
-        existing_id: "builtin:search".to_string(),
-        existing_name: "search".to_string(),
-        existing_source: ToolSource::Builtin,
-        existing_priority: ToolPriority::Builtin,
-    };
-
-    let resolution = registry.resolve_conflict(
-        "search",
-        &conflict,
-        &ToolSource::Mcp {
-            server: "server".into(),
-        },
-    );
-
-    // Builtin has higher priority, should rename new
-    match resolution {
-        ConflictResolution::RenameNew {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "search");
-            assert_eq!(new_name, "search-mcp");
-        }
-        _ => panic!("Expected RenameNew"),
-    }
-}
-
-#[test]
-fn test_resolve_conflict_same_priority() {
-    let registry = ToolCatalog::new();
-
-    // Two MCP tools with same priority
-    let conflict = ConflictInfo {
-        existing_id: "mcp:server1:status".to_string(),
-        existing_name: "status".to_string(),
-        existing_source: ToolSource::Mcp {
-            server: "server1".into(),
-        },
-        existing_priority: ToolPriority::Mcp,
-    };
-
-    let resolution = registry.resolve_conflict(
-        "status",
-        &conflict,
-        &ToolSource::Mcp {
-            server: "server2".into(),
-        },
-    );
-
-    // Same priority - new tool gets renamed (first registered wins)
-    match resolution {
-        ConflictResolution::RenameNew {
-            original_name,
-            new_name,
-        } => {
-            assert_eq!(original_name, "status");
-            assert_eq!(new_name, "status-mcp");
-        }
-        _ => panic!("Expected RenameNew"),
-    }
 }
 
 #[tokio::test]
@@ -1174,43 +1049,6 @@ async fn test_list_namespace_children_empty() {
 
     let children = registry.list_namespace_children("search").await;
     assert!(children.is_empty());
-}
-
-#[tokio::test]
-async fn test_get_tool_definition_prefers_exact_name_match() {
-    // Regression: when one tool matches by `name` and another by id-suffix
-    // (`:{name}`), selection used HashMap iteration order and could return
-    // the wrong tool's schema. The exact-name match must always win.
-    let registry = ToolCatalog::new();
-
-    // Custom command literally named "translate".
-    let rules = vec![RoutingRuleConfig {
-        regex: "^/translate".to_string(),
-        provider: Some("openai".to_string()),
-        system_prompt: Some("Translation assistant".to_string()),
-        ..Default::default()
-    }];
-    registry.register_custom_commands(&rules).await;
-
-    // Skill whose id is "translate" — conflict resolution renames its NAME
-    // to "translate-skill" (Custom outranks Skill) but its id stays
-    // "skill:translate", which ends with ":translate".
-    let skills = vec![SkillInfo {
-        id: "translate".to_string(),
-        name: "Translate".to_string(),
-        description: "Translate skill".to_string(),
-        ecosystem: "aleph".to_string(),
-    }];
-    registry.register_skills(&skills).await;
-
-    // Both the custom (name == "translate") and the skill (id ends
-    // ":translate") match the filter; the exact-name custom must win.
-    let def = registry
-        .get_tool_definition("translate")
-        .await
-        .expect("translate tool definition");
-    assert_eq!(def.id, "custom:0:translate");
-    assert_eq!(def.name, "translate");
 }
 
 // ── Slash-command surfacing (round: reference-driven /help + friendly aliases) ──

@@ -124,9 +124,6 @@ fn test_config_save_and_load() {
         loaded.general.default_provider,
         config.general.default_provider
     );
-        loaded.general.default_provider,
-        config.general.default_provider
-    );
     assert!(loaded.providers.contains_key("openai"));
 }
 
@@ -328,13 +325,22 @@ fn test_atomic_write_overwrites_existing_file() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
 
-    // Write first config
+    // Write first config. The named default provider must exist in the map —
+    // `load_from_file` validates that (`config::validate`), so a fixture that
+    // names a phantom provider fails on load for a reason that has nothing to
+    // do with atomic overwriting.
     let mut config1 = Config::default();
+    config1
+        .providers
+        .insert("first-prov".to_string(), ProviderConfig::test_config("m1"));
     config1.general.default_provider = Some("first-prov".to_string());
     config1.save_to_file(path).unwrap();
 
     // Overwrite with second config
     let mut config2 = Config::default();
+    config2
+        .providers
+        .insert("second-prov".to_string(), ProviderConfig::test_config("m2"));
     config2.general.default_provider = Some("second-prov".to_string());
     config2.save_to_file(path).unwrap();
 
