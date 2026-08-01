@@ -34,7 +34,9 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 /// Action to perform on the hook system.
@@ -109,13 +111,26 @@ pub struct HooksManageOutput {
 }
 
 /// Hook management tool.
-#[derive(Debug, Default, Clone)]
-pub struct HooksManageTool;
+#[derive(Default, Clone)]
+pub struct HooksManageTool {
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+}
 
 impl HooksManageTool {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            approval_policy: None,
+        }
+    }
+
+    /// Gate `add` / `remove` behind the approval policy — installing a hook
+    /// fires arbitrary code (or POSTs tool I/O) on a future lifecycle event.
+    /// Read-only actions (`list` / `show_file` / `events`) stay open. With no
+    /// policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -153,6 +168,57 @@ impl AlephTool for HooksManageTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if matches!(args.action, HooksAction::Add | HooksAction::Remove) {
+            let target = match args.action {
+                HooksAction::Add => format!(
+                    "add event={} command={} url={} prompt={} agent={}",
+                    args.event.as_deref().unwrap_or(""),
+                    args.command.as_deref().unwrap_or(""),
+                    args.url.as_deref().unwrap_or(""),
+                    args.prompt.as_deref().unwrap_or(""),
+                    args.agent.as_deref().unwrap_or(""),
+                ),
+                HooksAction::Remove => format!(
+                    "remove event={} needle={}",
+                    args.event.as_deref().unwrap_or(""),
+                    args.command
+                        .as_deref()
+                        .or(args.url.as_deref())
+                        .or(args.prompt.as_deref())
+                        .or(args.agent.as_deref())
+                        .unwrap_or("")
+                ),
+                _ => unreachable!(),
+            };
+            if let Some(policy) = self.approval_policy.as_ref() {
+                let request = crate::approval::ActionRequest {
+                    action_type: ActionType::HooksManage,
+                    target: target.clone(),
+                    display_target: target,
+                    agent_id: crate::approval::audit_identity("hooks", "manage", "global")
+                        .0,
+                    context: format!("hooks_manage action={:?}", args.action),
+                    timestamp: chrono::Utc::now(),
+                };
+                match policy.check(&request).await {
+                    crate::approval::ApprovalDecision::Allow => {
+                        policy.record(&request, &crate::approval::ApprovalDecision::Allow).await;
+                    }
+                    crate::approval::ApprovalDecision::Deny { reason } => {
+                        let _ = reason;
+                        return Err(AlephError::tool(
+                            "Action denied by approval policy: hooks manage write refused",
+                        ));
+                    }
+                    crate::approval::ApprovalDecision::Ask { prompt } => {
+                        return Err(AlephError::tool(format!(
+                            "Approval required: {prompt} (run `aleph hooks test <fingerprint>` \
+                             to grant consent at the operator terminal instead)"
+                        )));
+                    }
+                }
+            }
+        }
         match args.action {
             HooksAction::List => list_registry(&args).await,
             HooksAction::ShowFile => show_file(),

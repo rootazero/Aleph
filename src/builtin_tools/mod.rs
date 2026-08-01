@@ -12,14 +12,15 @@
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
 //!
-//! # Tool Progress Callbacks
+//! # Tool Progress Notifications
 //!
-//! This module provides a global callback mechanism for monitoring tool execution.
-//! Use `set_tool_progress_handler` to receive notifications when tools start/complete.
-
-use crate::sync_primitives::{Arc, Mutex};
-use once_cell::sync::Lazy;
-use tracing::debug;
+//! `notify_tool_start` / `notify_tool_result` / `notify_tool_streaming_chunk`
+//! are kept as no-op stubs so the ~85 callers in this module still compile,
+//! but the `ToolProgressCallback` + `set_tool_progress_handler` machinery they
+//! would have fed has no live consumer in this tree — it was a leftover of an
+//! earlier "stream progress to UI" design that now flows through the gateway
+//! event bus instead. Replace these stubs with direct `event_bus.emit(...)`
+//! calls if a real consumer ever reappears.
 
 pub mod a2a_tools;
 pub mod acp_tools;
@@ -261,106 +262,23 @@ pub use voice_tools::{
 pub use web_fetch::{ExtractMode, Extractor, WebFetchArgs, WebFetchResult, WebFetchTool};
 
 // ============================================================================
-// Tool Progress Callback System
+// Tool Progress Notifications (no-op stubs)
 // ============================================================================
+//
+// The original `ToolProgressCallback` + `set_tool_progress_handler` machinery
+// had no live consumer anywhere in the tree — every `notify_tool_*` site was
+// a no-op fire and forget. Tool progress now flows through the gateway event
+// bus (`notify_tool_result` → `GatewayEventEmitter`), which is already wired
+// from `executor/builtin_registry/registry/tool_registry_impl.rs`. The stubs
+// below are kept so the ~85 existing `notify_tool_*` callers stay compile-
+// clean without churn; rip them out when the call sites are updated to
+// publish via the event bus directly.
 
-/// Callback trait for monitoring tool execution progress
-///
-/// Implement this trait to receive notifications when tools start and complete.
-/// This enables streaming progress updates to the UI during agent execution.
-pub trait ToolProgressCallback: Send + Sync {
-    /// Called when a tool starts execution
-    ///
-    /// # Arguments
-    /// * `tool_name` - Name of the tool being executed
-    /// * `args_summary` - Brief summary of the arguments (may be truncated for display)
-    fn on_tool_start(&self, tool_name: &str, args_summary: &str);
+/// Notify that a tool has started execution (legacy no-op).
+pub fn notify_tool_start(_tool_name: &str, _args_summary: &str) {}
 
-    /// Called when a tool completes execution
-    ///
-    /// # Arguments
-    /// * `tool_name` - Name of the tool that completed
-    /// * `result_summary` - Brief summary of the result (may be truncated for display)
-    /// * `success` - Whether the tool completed successfully
-    fn on_tool_result(&self, tool_name: &str, result_summary: &str, success: bool);
+/// Notify that a tool has completed execution (legacy no-op).
+pub fn notify_tool_result(_tool_name: &str, _result_summary: &str, _success: bool) {}
 
-    /// Called when a tool emits a streaming chunk (e.g., ACP delegation output).
-    /// Default no-op — existing implementations don't break.
-    fn on_tool_streaming_chunk(&self, tool_name: &str, chunk: &str) {
-        let _ = (tool_name, chunk);
-    }
-}
-
-/// Global storage for the tool progress callback
-static TOOL_PROGRESS_CALLBACK: Lazy<Mutex<Option<Arc<dyn ToolProgressCallback>>>> =
-    Lazy::new(|| Mutex::new(None));
-
-/// Set the global tool progress handler
-///
-/// Call this before executing agent operations to receive progress updates.
-/// Pass `None` to clear the handler after execution completes.
-///
-/// # Thread Safety
-/// This function is thread-safe. Only one handler can be active at a time.
-///
-/// # Example
-/// ```ignore
-/// let handler = Arc::new(MyHandler::new());
-/// set_tool_progress_handler(Some(handler));
-/// // ... execute agent operations ...
-/// set_tool_progress_handler(None); // Clear after done
-/// ```
-pub fn set_tool_progress_handler(handler: Option<Arc<dyn ToolProgressCallback>>) {
-    let mut callback = TOOL_PROGRESS_CALLBACK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *callback = handler;
-    debug!(
-        has_handler = callback.is_some(),
-        "Tool progress handler updated"
-    );
-}
-
-/// Notify that a tool has started execution
-///
-/// Called by tool implementations at the start of their `call` method.
-/// If no handler is set, this is a no-op.
-pub fn notify_tool_start(tool_name: &str, args_summary: &str) {
-    let callback = TOOL_PROGRESS_CALLBACK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(ref handler) = *callback {
-        handler.on_tool_start(tool_name, args_summary);
-    }
-}
-
-/// Notify that a tool has completed execution
-///
-/// Called by tool implementations at the end of their `call` method.
-/// If no handler is set, this is a no-op.
-pub fn notify_tool_result(tool_name: &str, result_summary: &str, success: bool) {
-    let callback = TOOL_PROGRESS_CALLBACK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(ref handler) = *callback {
-        handler.on_tool_result(tool_name, result_summary, success);
-    }
-}
-
-/// Notify that a tool has emitted a streaming chunk
-///
-/// Called by streaming tools (e.g., ACP delegate) to forward real-time output.
-/// If no handler is set, this is a no-op.
-pub fn notify_tool_streaming_chunk(tool_name: &str, chunk: &str) {
-    // Clone Arc under brief lock, then call handler outside lock.
-    // This is a hot streaming path — don't hold the global Mutex during the callback.
-    let handler = {
-        let callback = TOOL_PROGRESS_CALLBACK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        callback.as_ref().map(Arc::clone)
-    };
-    if let Some(ref h) = handler {
-        h.on_tool_streaming_chunk(tool_name, chunk);
-    }
-}
+/// Notify that a tool has emitted a streaming chunk (legacy no-op).
+pub fn notify_tool_streaming_chunk(_tool_name: &str, _chunk: &str) {}

@@ -157,11 +157,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     },
     // -- Multi-agent collaboration modes --
     ToolCategory {
-        id: "spawn",
-        name: "子 Agent 派发",
-        tools: &["subagent_spawn", "subagent_steer", "subagent_kill"],
-    },
-    ToolCategory {
         id: "delegate",
         name: "Agent 间通信",
         tools: &[

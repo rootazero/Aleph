@@ -309,8 +309,8 @@ mod tests {
                 secret: true,
             }],
         );
-        let cfg =
-            mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default()).unwrap();
+        let cfg = mcp_config_from_spec("x", "Y", &spec, &Default::default(), &Default::default())
+            .unwrap();
         assert!(cfg.headers.is_empty());
     }
 

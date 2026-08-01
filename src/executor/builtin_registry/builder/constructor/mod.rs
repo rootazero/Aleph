@@ -121,6 +121,19 @@ impl BuiltinToolRegistry {
             PdfGenerateTool::new()
         };
 
+        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
+        // `~/.aleph/approval-policy.json`; with no file present it falls back to
+        // a permissive default (desktop actions Allow, shell Deny), so wiring
+        // here is byte-identical to the previous unwired (allow-all) behavior
+        // until the user supplies a policy file. Shared by DesktopTool + PimTool
+        // and the sensitive browser tools (navigate/click/type/fill_form/
+        // evaluate + open/select/dialog/drag/hover/press_key/scroll/upload/
+        // cookies), whose `Browser*` action types the policy engine already
+        // models — previously advertised but never enforced. Also gates the
+        // `hooks_manage` control-plane write below.
+        let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
+            Arc::new(crate::approval::ConfigApprovalPolicy::load());
+
         // Skill list/read tools are constructed per dispatch in
         // `registry.rs` from the active project root (round 3) — no shared
         // field needed; see the `skill_list` / `skill_read` match arms.
@@ -138,7 +151,8 @@ impl BuiltinToolRegistry {
         let self_manage_tool = SelfManageTool::default();
 
         // Hooks-manage tool (stateless: reads the process-global extension manager)
-        let hooks_manage_tool = crate::builtin_tools::HooksManageTool::new();
+        let hooks_manage_tool = crate::builtin_tools::HooksManageTool::new()
+            .with_approval_policy(Arc::clone(&approval_policy));
 
         // Self-config tool (identity files + config.toml access)
         let self_config_tool = {
@@ -336,17 +350,6 @@ impl BuiltinToolRegistry {
             mp.add_provider(Box::new(crate::media::TextDocumentProvider));
             config.media_pipeline = Some(Arc::new(mp));
         }
-        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
-        // `~/.aleph/approval-policy.json`; with no file present it falls back to
-        // a permissive default (desktop actions Allow, shell Deny), so wiring
-        // here is byte-identical to the previous unwired (allow-all) behavior
-        // until the user supplies a policy file. Shared by DesktopTool + PimTool
-        // and the sensitive browser tools (navigate/click/type/fill_form/
-        // evaluate), whose `Browser*` action types the policy engine already
-        // models — previously advertised but never enforced.
-        let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
-            Arc::new(crate::approval::ConfigApprovalPolicy::load());
-
         // `[desktop] allow_global_pointer` — the one input-rail policy knob. Left
         // at its default (false), a coordinate action that names no target
         // process is refused instead of running on the global HID tap, which
@@ -474,7 +477,8 @@ impl BuiltinToolRegistry {
                 crate::browser::profile::BrowserSystemConfig::default(),
             ))
         });
-        let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager));
+        let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager))
@@ -489,24 +493,34 @@ impl BuiltinToolRegistry {
         let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
-        let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager));
+        let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
-        let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager));
+        let browser_press_key_tool =
+            BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
+                .with_approval_policy(Arc::clone(&approval_policy));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
-        let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager));
-        let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager));
+        let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_scroll_tool = BrowserScrollTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
         let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager));
-        let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager));
-        let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager));
-        let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager));
+        let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
         let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager));
-        let browser_cookies_tool = BrowserCookiesTool::new(Arc::clone(&browser_profile_manager));
+        let browser_cookies_tool =
+            BrowserCookiesTool::new(Arc::clone(&browser_profile_manager))
+                .with_approval_policy(Arc::clone(&approval_policy));
         let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);

@@ -112,23 +112,36 @@ pub fn set(session_key: &str, state: Option<VoiceTurnState>) {
             guard.remove(session_key);
         }
     }
-    // Hygiene: reap dead-session entries once the map is worth sweeping, then
-    // enforce the hard ceiling oldest-first. Both passes are no-ops for the
-    // steady-state sizes a voice deployment actually reaches.
-    if guard.len() > SWEEP_THRESHOLD {
-        let now = Instant::now();
-        guard.retain(|_, v| now.duration_since(v.recorded_at) < ENTRY_TTL);
-        while guard.len() > MAX_ENTRIES {
-            let oldest = guard
-                .iter()
-                .min_by_key(|(_, v)| v.recorded_at)
-                .map(|(k, _)| k.clone());
-            match oldest {
-                Some(k) => {
-                    guard.remove(&k);
-                }
-                None => break,
+    enforce_bounds(&mut guard, Instant::now());
+}
+
+/// Reap dead-session entries once the map is worth sweeping, then enforce the
+/// hard ceiling oldest-first. Both passes are no-ops for the steady-state sizes
+/// a voice deployment actually reaches.
+///
+/// Takes the map and `now` rather than reaching for the global registry and the
+/// clock, for two reasons. The map, so the bounds can be tested without
+/// mutating a table every other test in the binary shares — the eviction order
+/// is only deterministic if no one else is inserting. And `now`, so a test can
+/// express age by moving the judging instant *forward*: the other direction,
+/// `Instant::now() - age`, panics wherever the monotonic clock's origin is more
+/// recent than the offset, which is routine on a freshly booted CI VM (Windows
+/// counts `Instant` from system boot, so a six-hour-old instant may not exist).
+fn enforce_bounds(map: &mut HashMap<String, VoiceTurnState>, now: Instant) {
+    if map.len() <= SWEEP_THRESHOLD {
+        return;
+    }
+    map.retain(|_, v| now.saturating_duration_since(v.recorded_at) < ENTRY_TTL);
+    while map.len() > MAX_ENTRIES {
+        let oldest = map
+            .iter()
+            .min_by_key(|(_, v)| v.recorded_at)
+            .map(|(k, _)| k.clone());
+        match oldest {
+            Some(k) => {
+                map.remove(&k);
             }
+            None => break,
         }
     }
 }
@@ -142,18 +155,20 @@ pub fn get(session_key: &str) -> Option<VoiceTurnState> {
 }
 
 #[cfg(test)]
-fn set_with_age(session_key: &str, state: VoiceTurnState, age: Duration) {
-    let mut state = state;
-    state.recorded_at = Instant::now() - age;
-    lock().insert(session_key.to_string(), state);
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     fn on(transcribed: bool) -> Option<VoiceTurnState> {
         Some(VoiceTurnState::new(transcribed, None))
+    }
+
+    /// An entry stamped at `at`. Callers build `at` by adding to one base
+    /// instant — never by subtracting from `Instant::now()`, which can panic
+    /// (see [`enforce_bounds`]).
+    fn stamped(at: Instant) -> VoiceTurnState {
+        let mut state = VoiceTurnState::new(false, None);
+        state.recorded_at = at;
+        state
     }
 
     #[test]
@@ -205,50 +220,62 @@ mod tests {
         set("voice-session-a", None);
     }
 
+    /// Below the threshold the sweep must not run at all — a stale entry is a
+    /// few KB, and the pass is O(n) on every write.
+    #[test]
+    fn under_threshold_nothing_is_swept() {
+        let base = Instant::now();
+        let mut map = HashMap::new();
+        for i in 0..SWEEP_THRESHOLD {
+            map.insert(format!("stale-{i}"), stamped(base));
+        }
+        enforce_bounds(&mut map, base + ENTRY_TTL + Duration::from_secs(1));
+        assert_eq!(map.len(), SWEEP_THRESHOLD);
+    }
+
     #[test]
     fn stale_entries_are_swept_past_threshold() {
         // Fill past the sweep threshold with ancient entries plus one fresh
-        // one; the next `set` must reap the ancients and keep the fresh.
+        // one; the pass must reap the ancients and keep the fresh.
+        let base = Instant::now();
+        let mut map = HashMap::new();
         for i in 0..=SWEEP_THRESHOLD {
-            let key = format!("voice-sweep-stale-{i}");
-            set_with_age(
-                &key,
-                VoiceTurnState::new(false, None),
-                ENTRY_TTL + Duration::from_secs(1),
-            );
+            map.insert(format!("stale-{i}"), stamped(base));
         }
-        let fresh = "voice-sweep-fresh";
-        set(fresh, on(true));
-        // The `set(fresh, …)` call itself pushed len past the threshold and
-        // swept: every ancient entry is gone, the fresh one survives.
+        // "Ancient" = the judging instant sits one second past the TTL.
+        let now = base + ENTRY_TTL + Duration::from_secs(1);
+        map.insert("fresh".into(), stamped(now));
+
+        enforce_bounds(&mut map, now);
+
         for i in 0..=SWEEP_THRESHOLD {
-            assert!(get(&format!("voice-sweep-stale-{i}")).is_none());
+            assert!(!map.contains_key(&format!("stale-{i}")));
         }
-        assert!(get(fresh).is_some());
-        set(fresh, None);
+        assert!(map.contains_key("fresh"));
     }
 
     #[test]
     fn hard_cap_evicts_oldest_first() {
         // All entries under the TTL (the sweep cannot help): the hard ceiling
-        // must evict oldest-first. Ages start at 5h so no concurrently-running
-        // test's entry (this binary shares the process-global map) can be
-        // older and steal an eviction slot, making the order deterministic.
-        const BASE_AGE: Duration = Duration::from_secs(5 * 60 * 60);
+        // must evict oldest-first. Entry 0 is the oldest, each next one a
+        // second newer.
+        let base = Instant::now();
+        let mut map = HashMap::new();
         for i in 0..(MAX_ENTRIES + 2) {
-            let key = format!("voice-cap-{i:05}");
-            // Entry 0 is the oldest; all stay under ENTRY_TTL (6h).
-            let age = BASE_AGE - Duration::from_secs(i as u64);
-            set_with_age(&key, VoiceTurnState::new(false, None), age);
+            map.insert(
+                format!("cap-{i:05}"),
+                stamped(base + Duration::from_secs(i as u64)),
+            );
         }
-        // Trigger the hygiene path with one more ordinary write.
-        set("voice-cap-trigger", on(false));
-        // The two oldest are gone; the newest write survives.
-        assert!(get("voice-cap-00000").is_none());
-        assert!(get("voice-cap-00001").is_none());
-        assert!(get("voice-cap-trigger").is_some());
-        // Clean up the block so other tests see an empty map.
-        let mut guard = lock();
-        guard.retain(|k, _| !k.starts_with("voice-cap-"));
+        let newest = format!("cap-{:05}", MAX_ENTRIES + 1);
+
+        enforce_bounds(&mut map, base + Duration::from_secs(MAX_ENTRIES as u64 + 2));
+
+        // Exactly the two oldest went, and the ceiling is respected.
+        assert_eq!(map.len(), MAX_ENTRIES);
+        assert!(!map.contains_key("cap-00000"));
+        assert!(!map.contains_key("cap-00001"));
+        assert!(map.contains_key("cap-00002"));
+        assert!(map.contains_key(&newest));
     }
 }

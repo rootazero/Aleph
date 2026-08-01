@@ -143,6 +143,7 @@ mod tests {
         assert_eq!(policy.min_content_length, 100);
         assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
+        assert!(policy.enable_readability);
     }
 
     #[test]

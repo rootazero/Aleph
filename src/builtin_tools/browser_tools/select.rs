@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
 use crate::error::{AlephError, Result};
@@ -35,11 +36,24 @@ pub struct BrowserSelectOutput {
 #[derive(Clone)]
 pub struct BrowserSelectTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserSelectTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate dropdown selection behind the approval policy. The pick is page-
+    /// state-changing (and frequently page-navigating), so `Ask` is the
+    /// matching default. With no policy wired the tool behaves exactly as
+    /// before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -74,6 +88,20 @@ impl AlephTool for BrowserSelectTool {
                 "browser_select requires 'ref_id'",
             ));
         };
+
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserSelect,
+            "select",
+            &args.value,
+        )
+        .await
+        {
+            return Ok(BrowserSelectOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.select(&tab_id, target, &args.value).await {
@@ -198,6 +226,9 @@ mod tests {
         // degrades gracefully without a running browser.
         assert!(!result.success);
         let message = result.message.unwrap();
-        assert!(!message.contains("Blocked"), "clean value blocked: {message}");
+        assert!(
+            !message.contains("Blocked"),
+            "clean value blocked: {message}"
+        );
     }
 }

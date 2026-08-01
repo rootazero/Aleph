@@ -40,10 +40,6 @@ pub struct ProfileConfig {
     #[serde(default)]
     pub headless: Option<bool>,
 
-    /// UI indicator color for this profile.
-    #[serde(default)]
-    pub color: Option<String>,
-
     /// Proxy server URL (e.g. "<socks5://127.0.0.1:1080>").
     #[serde(default)]
     pub proxy: Option<String>,
@@ -94,7 +90,6 @@ impl Default for ProfileConfig {
         Self {
             browser: BrowserType::default(),
             headless: None,
-            color: None,
             proxy: None,
             user_data_dir: None,
             extra_args: Vec::new(),

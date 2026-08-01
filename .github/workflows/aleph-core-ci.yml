@@ -86,16 +86,40 @@ jobs:
       - name: Run sandbox tests
         run: cargo test -p alephcore --lib sandbox
 
-      # `--tests` runs every binary in tests/, rather than a hand-kept list of
-      # names. The list is what let 6 of the 132 targets run while the other 126
-      # silently did not: a new tests/ file joined CI only if someone remembered
-      # to name it here, and nothing failed when they forgot.
+      # `--test '*'` runs every binary in tests/, rather than a hand-kept list
+      # of names. The list is what let 6 of the 132 targets run while the other
+      # 126 silently did not: a new tests/ file joined CI only if someone
+      # remembered to name it here, and nothing failed when they forgot.
+      #
+      # It is `--test '*'` and not `--tests` for the same reason `[lib]` sets
+      # `bench = false`: `--tests` selects every target with `test = true`, and
+      # the lib defaults to true, so it also built *and re-ran* the whole
+      # ~14.6k-test lib harness that "Run tests" just finished — and rebuilt it
+      # from scratch, because `--features test-helpers` changes the feature set
+      # and therefore the fingerprint. That second harness build is what took
+      # the runner down ("runner has received a shutdown signal", exit 143) on
+      # Linux and Windows while the far larger macOS runner survived it.
+      # `--test '*'` selects exactly the 132 tests/ binaries and nothing else.
       #
       # `--features test-helpers` gates `providers::recording_mock`, which three
       # targets declare through `required-features`. Without it cargo *skips*
       # them rather than failing, which is the same silence in a second costume.
+      #
+      # `line-tables-only` is load-bearing, not tidiness. Without it `ld` dies
+      # linking these targets with `signal 7 [Bus error]`. That is *not* the
+      # disk running out, which is the obvious reading and the wrong one: the
+      # runner had 87 GB free at the time, and a step that freed a further
+      # 17 GB changed nothing. It is memory — ld mmaps its inputs, and on ELF
+      # the debuginfo sits inside each of the 132 binaries, making up most of
+      # their ~4.5 GB. Line tables are what a panic backtrace reads, so failures
+      # stay diagnosable.
+      #
+      # This also cannot be checked locally on macOS, where debuginfo stays out
+      # in .o/dSYM and the binaries barely change size (28.46 -> 28.41 MB).
       - name: Run integration tests
-        run: cargo test -p alephcore --features test-helpers --tests
+        env:
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
+        run: cargo test -p alephcore --features test-helpers --test '*'
 
   lint:
     name: Lint
@@ -194,13 +218,14 @@ jobs:
         # bench targets unoptimised: cheap, low-memory, and sufficient for a
         # build check.
         #
-        # `--benches` restricts the selection to the `[[bench]]` targets. Bare
-        # `cargo bench` *also* builds the lib as a test harness (the lib target
-        # defaults to `bench = true`), so it was compiling all ~14.6k
-        # `#[cfg(test)]` tests under the bench profile — the actual memory hog,
-        # and pure waste here since the Test jobs already build that harness.
-        # The log confirms it: the last thing it emitted before exit 143 was
-        # warnings from `src/config/tests/dispatcher.rs`.
+        # The lib is kept out of the selection by `bench = false` in its
+        # `[lib]` section, NOT by `--benches`: that flag selects every target
+        # with `bench = true`, which the lib defaults to. Without the manifest
+        # opt-out this step still compiled all ~14.6k `#[cfg(test)]` tests as a
+        # bench harness — the actual memory hog, and pure waste since the Test
+        # jobs already build that harness. The log said so plainly: the last
+        # thing it emitted before exit 143 was warnings from
+        # `src/config/tests/dispatcher.rs`, which is `#[cfg(test)]` code.
         env:
           CARGO_PROFILE_BENCH_OPT_LEVEL: "0"
           CARGO_PROFILE_BENCH_DEBUG: "0"

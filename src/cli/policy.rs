@@ -108,6 +108,7 @@ fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
 /// Test-friendly variant of `with_policy` that returns `Err` instead of
 /// calling `std::process::exit` on lock contention. Production callers
 /// should use `with_policy` which surfaces UX-friendly stderr messages.
+#[allow(dead_code)] // public test-only variant — see audit note F-cleanup
 pub fn try_with_policy<L, T>(
     policy: CommandPolicy,
     data_dir: &Path,

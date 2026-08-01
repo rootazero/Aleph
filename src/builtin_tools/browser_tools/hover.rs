@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
 use crate::error::{AlephError, Result};
@@ -35,11 +36,24 @@ pub struct BrowserHoverOutput {
 #[derive(Clone)]
 pub struct BrowserHoverTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserHoverTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate hovers behind the approval policy. Hover is read-only motion in
+    /// practice, but a deny on it from a chat-tier channel is the cheapest
+    /// read of the policy. `Allow` is the matching default. With no policy
+    /// wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -67,6 +81,20 @@ impl AlephTool for BrowserHoverTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let target = resolve_target(&args)?;
+
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserHover,
+            "hover",
+            &format!("{target:?}"),
+        )
+        .await
+        {
+            return Ok(BrowserHoverOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.hover(&tab_id, target).await {
                 Ok(()) => Ok(BrowserHoverOutput {

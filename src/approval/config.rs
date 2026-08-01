@@ -281,7 +281,15 @@ impl Default for ConfigApprovalPolicy {
     /// Sensible defaults:
     /// - Browser navigate/click/type → Allow
     /// - Browser evaluate → Ask
+    /// - Browser open → Ask (a denied `browser_navigate` target was reachable
+    ///   here; tighten by default so the SSRF/approval guard survives the
+    ///   `tools.invoke` switch)
+    /// - Browser scroll/hover/press_key → Allow (read-only motion)
+    /// - Browser select/drag/dialog/upload → Ask (page-state changing or
+    ///   file-egress)
+    /// - Browser cookies write → Ask (the value is a credential by design)
     /// - Desktop actions → Ask
+    /// - Hooks manage → Ask (control-plane write)
     fn default() -> Self {
         let mut defaults = HashMap::new();
         defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
@@ -289,6 +297,16 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
         defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserOpen, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserSelect, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserDialog, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserPressKey, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserScroll, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserHover, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserDrag, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserUpload, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Ask);

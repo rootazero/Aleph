@@ -139,9 +139,11 @@ mod tests {
         assert!(verify_landed_url(&guard, "1: about:blank", None)
             .await
             .is_ok());
-        assert!(verify_landed_url(&guard, "1: chrome://extensions", Some("1"))
-            .await
-            .is_ok());
+        assert!(
+            verify_landed_url(&guard, "1: chrome://extensions", Some("1"))
+                .await
+                .is_ok()
+        );
         // Empty / unparseable listing → nothing to check.
         assert!(verify_landed_url(&guard, "", None).await.is_ok());
         assert!(verify_landed_url(&guard, "noise", Some("1")).await.is_ok());

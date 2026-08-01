@@ -8,6 +8,12 @@
 //! Spec C scope covers secrets and agents (memory writes go through
 //! the existing `remember` tool).
 
+// `/v1/admin/agents` is intentionally NOT mounted: the three handlers
+// (`POST /`, `PATCH /{id}`, `DELETE /{id}`) had zero production callers —
+// `aleph agent create / update / delete` was never built, and `CommandPolicy`
+// cannot dispatch dynamic-path routes through `LockOrIpc`. The module is
+// retained so the next iteration re-mounts it as soon as the CLI surfaces
+// those commands; see `agents.rs` for the unused handlers.
 pub mod agents;
 pub mod secrets;
 
@@ -32,7 +38,6 @@ pub struct AdminApiState {
 pub fn router(state: AdminApiState) -> Router {
     Router::new()
         .nest("/secrets", secrets::router())
-        .nest("/agents", agents::router())
         .with_state(state.clone())
         .layer(from_fn_with_state(state, admin_auth_middleware))
 }

@@ -73,21 +73,15 @@ pub struct ScreenshotOpts {
     #[serde(default)]
     pub full_page: bool,
 
-    /// Image format ("png" or "jpeg").
+    /// Image format ("png" or "jpeg"). Consumed only by the Playwright
+    /// backend as a file-extension hint; the Chrome MCP backend always writes
+    /// PNG. Not exposed to the LLM via `browser_screenshot` Args.
     #[serde(default = "default_screenshot_format")]
     pub format: String,
-
-    /// Image quality (1-100, only applicable for jpeg).
-    #[serde(default = "default_screenshot_quality")]
-    pub quality: u8,
 }
 
 fn default_screenshot_format() -> String {
     "png".to_string()
-}
-
-const fn default_screenshot_quality() -> u8 {
-    80
 }
 
 impl Default for ScreenshotOpts {
@@ -95,7 +89,6 @@ impl Default for ScreenshotOpts {
         Self {
             full_page: false,
             format: default_screenshot_format(),
-            quality: default_screenshot_quality(),
         }
     }
 }
