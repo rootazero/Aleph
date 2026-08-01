@@ -38,15 +38,6 @@ pub struct StdioTransport {
 }
 
 impl StdioTransport {
-    /// Create a new transport wrapping a child process's stdin/stdout.
-    ///
-    /// Spawns a background tokio task that reads lines from stdout,
-    /// parses them as `AcpResponse`, and sends via an mpsc channel (capacity 256).
-    #[must_use]
-    pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
-        Self::with_handler(stdin, stdout, None)
-    }
-
     /// Like [`new`](Self::new) but wires an [`IncomingHandler`] so agent→client
     /// requests received mid-prompt are answered instead of dropped.
     #[must_use]
@@ -161,11 +152,6 @@ pub async fn write_value(stdin: &SharedStdin, value: &serde_json::Value) -> Resu
 }
 
 impl StdioTransport {
-    /// Receive the next parsed event from the reader channel.
-    pub async fn recv(&mut self) -> Option<Result<AcpResponse>> {
-        self.event_rx.recv().await
-    }
-
     fn protocol_err(err: &crate::acp::protocol::AcpError) -> crate::error::AlephError {
         crate::acp::protocol::AcpOperationError::with_remote(
             crate::acp::protocol::AcpErrorCode::ProtocolError { code: err.code },

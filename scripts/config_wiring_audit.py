@@ -45,11 +45,6 @@ NOT_A_SECTION = {
     "ModePreset",            # id-only mirror of `SessionMode` exposed to UI /
                              # CLI surfaces (same role as `TierPreset`); the live
                              # consumer is `SessionMode` itself.
-    "RetryPolicy",           # `[policies.retry]` section — deserialised into
-                             # `PoliciesConfig::retry`, business-side consumers
-                             # currently go through the per-channel
-                             # `SendRetryPolicy` path. Treated inert here until a
-                             # core-side consumer is added (R10).
 }
 
 # Policy sections declared but never consumed core-side.

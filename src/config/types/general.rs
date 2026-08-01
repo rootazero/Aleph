@@ -37,11 +37,6 @@ fn default_session_store_backend() -> String {
     "file".to_string()
 }
 
-/// Legacy default hotkey - kept for backward compatibility with old config files
-pub fn default_hotkey() -> String {
-    "Grave".to_string()
-}
-
 // =============================================================================
 // BehaviorConfig
 // =============================================================================

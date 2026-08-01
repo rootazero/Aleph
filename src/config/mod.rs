@@ -2,7 +2,6 @@
 //!
 //! This module provides the configuration system for Aleph, including:
 //! - `Config`: The main configuration struct with load/save/validate methods
-//! - `FullConfig`: Complete configuration for serialization
 //! - Type definitions in the `types` submodule
 //!
 //! Phase 1: Stub implementation with basic fields.
@@ -32,7 +31,7 @@ pub mod ui_hints;
 mod validate;
 
 // Re-export main types
-pub use structs::{ChannelInstanceConfig, Config, FullConfig, PluginMarketplaceEntry};
+pub use structs::{ChannelInstanceConfig, Config, PluginMarketplaceEntry};
 
 // Re-export patcher types
 pub use patcher::ConfigPatcher;

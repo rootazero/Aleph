@@ -566,7 +566,6 @@ impl GroupChatBroadcaster {
                 .list_tasks(CoordTaskFilter {
                     team_id: Some(team_id.clone()),
                     status: Some(CoordTaskStatus::WaitingReview),
-                    owner: Some(agent_id.clone()),
                 })
                 .await
                 .unwrap_or_default()
@@ -709,11 +708,10 @@ impl GroupChatBroadcaster {
         // the member's closing message.
         if let (Some(cs), false) = (&self.coord_task_store, is_leader) {
             let review_post: Vec<String> = cs
-                .list_tasks(CoordTaskFilter {
-                    team_id: Some(team_id.clone()),
-                    status: Some(CoordTaskStatus::WaitingReview),
-                    owner: Some(agent_id.clone()),
-                })
+.list_tasks(CoordTaskFilter {
+                team_id: Some(team_id.clone()),
+                status: Some(CoordTaskStatus::WaitingReview),
+            })
                 .await
                 .unwrap_or_default()
                 .into_iter()

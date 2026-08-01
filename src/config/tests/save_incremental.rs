@@ -13,8 +13,6 @@ fn test_save_incremental_preserves_other_sections() {
 
     // Create initial config with custom provider
     let initial_toml = r##"
-default_hotkey = "Grave"
-
 [general]
 default_provider = "my_provider"
 
@@ -105,8 +103,6 @@ fn test_save_incremental_nested_section() {
 
     // Initial config with search section but no pii
     let initial_toml = r#"
-default_hotkey = "Grave"
-
 [search]
 enabled = true
 default_provider = "tavily"

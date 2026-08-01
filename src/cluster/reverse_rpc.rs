@@ -36,7 +36,7 @@ impl PendingInvokes {
     /// Allocate a new reverse RPC id and register a waiter.
     /// Returns `(id, receiver)`: the caller places `id` in the outbound request
     /// frame and awaits `receiver`.
-    pub fn register(&self) -> (String, oneshot::Receiver<JsonRpcResponse>) {
+    pub(crate) fn register(&self) -> (String, oneshot::Receiver<JsonRpcResponse>) {
         // Relaxed: id uniqueness only; the Mutex insert below provides the
         // cross-thread ordering for the HashMap.
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
@@ -76,7 +76,7 @@ impl PendingInvokes {
 
     /// Drop a single waiter (used for timeout cleanup). Returns whether an entry
     /// was actually removed.
-    pub fn cancel(&self, id: &str) -> bool {
+    pub(crate) fn cancel(&self, id: &str) -> bool {
         self.waiters
             .lock()
             .unwrap_or_else(|e| e.into_inner())

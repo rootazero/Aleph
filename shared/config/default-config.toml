@@ -1,10 +1,6 @@
 # Aleph Configuration Example
 # Copy this file to ~/.config/aleph/config.toml and customize
 
-# Legacy hotkey field (deprecated - use [trigger] section below)
-# Kept for backward compatibility with old config files
-default_hotkey = "Grave"
-
 # ============================================================================
 # General Settings
 # ============================================================================

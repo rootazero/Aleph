@@ -384,9 +384,6 @@ pub enum ResolvedCommandContext {
     /// Custom routing rule
     #[serde(rename = "custom")]
     Custom { pattern: String },
-    /// Unknown / no context
-    #[serde(rename = "none")]
-    None,
 }
 
 impl From<CommandContext> for ResolvedCommandContext {
@@ -409,7 +406,6 @@ impl From<CommandContext> for ResolvedCommandContext {
                 display_name,
             },
             CommandContext::Custom { pattern, .. } => Self::Custom { pattern },
-            CommandContext::None => Self::None,
         }
     }
 }

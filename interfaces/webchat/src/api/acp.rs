@@ -62,13 +62,6 @@ impl AcpApi {
         serde_json::from_value(result).map_err(|e| format!("Failed to parse ACP harness list: {e}"))
     }
 
-    pub async fn get(state: &DashboardState, id: &str) -> Result<AcpHarnessInfo, String> {
-        let result = state
-            .rpc_call("acp.get", serde_json::json!({ "id": id }))
-            .await?;
-        serde_json::from_value(result).map_err(|e| format!("Failed to parse ACP harness: {e}"))
-    }
-
     pub async fn create(
         state: &DashboardState,
         id: &str,

@@ -262,22 +262,6 @@ pub(in crate::commands::start) fn register_channel_handlers(
         channel_registry,
         app_config
     );
-    // Durable-queue dead-letter forensics: inspect *which* proactive pushes were
-    // permanently lost, and redrive them back to the live queue once the
-    // transport recovers (R5/R8). `dead_letters` is read-only; redrive is
-    // duplicate-safe by construction.
-    register_handler!(
-        server,
-        "channels.dead_letters",
-        channel_handlers::handle_dead_letters,
-        channel_registry
-    );
-    register_handler!(
-        server,
-        "channels.redrive_dead_letters",
-        channel_handlers::handle_redrive_dead_letters,
-        channel_registry
-    );
 
     // ---- Discord Control Plane panel handlers ----
     register_handler!(

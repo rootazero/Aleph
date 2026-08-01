@@ -78,15 +78,6 @@ pub(in crate::commands::start) fn register_extensions_install_handlers(
             });
     }
     {
-        let cache = cache.clone();
-        server
-            .handlers_mut()
-            .register("extensions.configure", move |req| {
-                let cache = cache.clone();
-                async move { extensions::install::handle_configure(req, cache).await }
-            });
-    }
-    {
         server
             .handlers_mut()
             .register("extensions.install", move |req| {

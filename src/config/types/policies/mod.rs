@@ -21,16 +21,11 @@
 //!
 //! [policies.memory.compression]
 //! turn_threshold = 15
-//!
-//! [policies.retry]
-//! max_retries = 5
-//! initial_backoff_ms = 500
 //! ```
 
 pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
-pub mod retry;
 pub mod session_mode;
 pub mod tool_permissions;
 pub mod web_fetch;
@@ -40,7 +35,6 @@ pub use exec_tier::{
 };
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
-pub use retry::RetryPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use tool_permissions::ToolPermissionsConfig;
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
@@ -58,10 +52,6 @@ pub struct PoliciesConfig {
     /// Memory module policies (compression + retrieval)
     #[serde(default)]
     pub memory: MemoryPolicies,
-
-    /// Network retry policy
-    #[serde(default)]
-    pub retry: RetryPolicy,
 
     /// Web fetch policy
     #[serde(default)]
@@ -106,22 +96,13 @@ mod tests {
     fn test_empty_policies_uses_defaults() {
         let config: PoliciesConfig = toml::from_str("").unwrap();
 
-        // All should use defaults
-        assert_eq!(config.retry.max_retries, 3);
         assert_eq!(config.memory.compression.turn_threshold, 20);
         assert_eq!(config.metrics.warning_multiplier, 2.0);
     }
 
     #[test]
     fn test_partial_policies_config() {
-        let toml = r#"
-            [retry]
-            max_retries = 5
-        "#;
-        let config: PoliciesConfig = toml::from_str(toml).unwrap();
-
-        // Specified values
-        assert_eq!(config.retry.max_retries, 5);
+        let config: PoliciesConfig = toml::from_str("").unwrap();
 
         // Defaults for unspecified policies
         assert_eq!(config.memory.compression.turn_threshold, 20);
@@ -133,23 +114,17 @@ mod tests {
             [memory.compression]
             turn_threshold = 30
 
-            [retry]
-            max_retries = 10
-            initial_backoff_ms = 2000
-
             [web_fetch]
             max_content_length = 50000
             user_agent = "TestBot/1.0"
 
             [metrics]
-            target_hotkey_to_clipboard_ms = 30
             warning_multiplier = 3.0
         "#;
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Verify all specified values
         assert_eq!(config.memory.compression.turn_threshold, 30);
-        assert_eq!(config.retry.max_retries, 10);
         assert_eq!(config.web_fetch.max_content_length, 50000);
         assert_eq!(config.metrics.warning_multiplier, 3.0);
     }
@@ -160,7 +135,6 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: PoliciesConfig = toml::from_str(&toml_str).unwrap();
 
-        assert_eq!(config.retry.max_retries, parsed.retry.max_retries);
         assert_eq!(
             config.metrics.warning_multiplier,
             parsed.metrics.warning_multiplier
