@@ -2444,25 +2444,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let store = channel_pairing_store.clone();
         server
             .handlers_mut()
-            .register("channel.pairing.list", move |req| {
-                let store = store.clone();
-                async move { pairing_handlers::handle_list(req, store).await }
-            });
-
-        let store = channel_pairing_store.clone();
-        server
-            .handlers_mut()
             .register("channel.pairing.approve", move |req| {
                 let store = store.clone();
                 async move { pairing_handlers::handle_approve(req, store).await }
-            });
-
-        let store = channel_pairing_store.clone();
-        server
-            .handlers_mut()
-            .register("channel.pairing.reject", move |req| {
-                let store = store.clone();
-                async move { pairing_handlers::handle_reject(req, store).await }
             });
 
         let store = channel_pairing_store.clone();

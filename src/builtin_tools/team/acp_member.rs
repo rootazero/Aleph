@@ -26,7 +26,7 @@ pub enum TeamAcpMemberArgs {
     /// Attach an ACP harness session as a team member. Idempotent.
     Add {
         team_id: String,
-        /// Adapter id registered in `[acp.adapters]` — e.g. `claude_code`,
+        /// Adapter id registered in `[acp.adapters]` — e.g. `claude-code`,
         /// `codex`, `gemini_cli`.
         harness_id: String,
         /// Working directory the external CLI process should run in. Use an
@@ -118,10 +118,10 @@ impl AlephTool for TeamAcpMemberTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "team_acp_member(action='add', team_id='t1', harness_id='claude_code', cwd='/work/repo', role='code-reviewer')".into(),
+            "team_acp_member(action='add', team_id='t1', harness_id='claude-code', cwd='/work/repo', role='code-reviewer')".into(),
             "team_acp_member(action='add', team_id='t1', harness_id='codex', cwd='/work/repo', session_name='backend', role='backend-worker')".into(),
             "team_acp_member(action='list', team_id='t1')".into(),
-            "team_acp_member(action='remove', team_id='t1', agent_id='acp:claude_code:/work/repo')".into(),
+            "team_acp_member(action='remove', team_id='t1', agent_id='acp:claude-code:/work/repo')".into(),
         ])
     }
 
@@ -230,7 +230,7 @@ mod tests {
         let tool = TeamAcpMemberTool::new(Arc::clone(&store), "leader".to_string());
         tool.call(TeamAcpMemberArgs::Add {
             team_id: team_id.clone(),
-            harness_id: "claude_code".into(),
+            harness_id: "claude-code".into(),
             cwd: "/work/repo".into(),
             session_name: None,
             role: "reviewer".into(),
@@ -251,7 +251,7 @@ mod tests {
         };
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].kind, TeamMemberKind::AcpSession);
-        assert_eq!(members[0].acp_harness_id.as_deref(), Some("claude_code"));
+        assert_eq!(members[0].acp_harness_id.as_deref(), Some("claude-code"));
     }
 
     #[tokio::test]

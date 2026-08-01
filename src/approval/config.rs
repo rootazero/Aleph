@@ -376,6 +376,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
             action = ?request.action_type,
             target = %redact_target(&request.target),
             agent = %request.agent_id,
+            context = %request.context,
             decision = ?decision,
             "Approval decision recorded"
         );

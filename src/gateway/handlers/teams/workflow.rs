@@ -234,11 +234,6 @@ fn default_reviewer_kind() -> String {
     "user".to_string()
 }
 
-#[derive(Debug, Deserialize)]
-pub struct WorkflowRetryStepParams {
-    pub task_id: String,
-}
-
 fn parse_reviewer_kind(s: &str) -> Result<ReviewerKind, &'static str> {
     ReviewerKind::from_stored(s).ok_or("reviewer_kind must be one of: user, lead_agent, auto")
 }
@@ -369,61 +364,6 @@ pub async fn handle_workflow_reject_step(
             .await;
     }
     JsonRpcResponse::success(request.id, json!({ "status": "failed" }))
-}
-
-/// `teams.workflow.retry_step` — re-queue a failed / rejected step. Clears
-/// the lock + result fields and resets status to Pending so the
-/// dispatcher (or `team_delegate`) can re-run. Prior runs stay in history.
-pub async fn handle_workflow_retry_step(
-    request: JsonRpcRequest,
-    coord_store: Arc<dyn CoordTaskStore>,
-) -> JsonRpcResponse {
-    debug!("Handling teams.workflow.retry_step request");
-    let params: WorkflowRetryStepParams = match parse_params(&request) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
-    // Pre-fetch once: metadata basis for the budget re-arm stamp + the
-    // leftover lock holder for the release below. A missing/unreadable task
-    // skips the stamp and lets update_task surface the real error below.
-    let snapshot = coord_store.get_task(&params.task_id).await.ok().flatten();
-    // A deliberate re-queue re-arms the automatic retry budget: stamp the
-    // anchor onto the task's current metadata so only failures from here on
-    // count against max_retries (mirrors `workflow_step_review.retry`).
-    let metadata = snapshot.as_ref().map(|t| {
-        crate::agents::swarm::tasks::retry::with_retry_budget_reset_at(
-            t.metadata.clone(),
-            chrono::Utc::now().timestamp().max(0) as u64,
-        )
-    });
-    if let Err(e) = coord_store
-        .update_task(
-            &params.task_id,
-            CoordTaskUpdate {
-                status: Some(CoordTaskStatus::Pending),
-                result: Some(String::new()),
-                metadata,
-                ..Default::default()
-            },
-        )
-        .await
-    {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to reset task to pending: {e}"),
-        );
-    }
-    // Release any leftover claim with its ACTUAL holder — releasing with ""
-    // never clears a genuinely held lock (the store checks holder equality),
-    // which would leave the retried task Pending-but-unschedulable until
-    // release_stale_locks fires. Best-effort: failure is non-fatal.
-    if let Some(holder) = snapshot.as_ref().and_then(|t| t.locked_by.as_deref()) {
-        if let Err(e) = coord_store.release_lock(&params.task_id, holder).await {
-            tracing::warn!(task_id = %params.task_id, holder = %holder, error = %e, "workflow step retry: could not release leftover lock");
-        }
-    }
-    JsonRpcResponse::success(request.id, json!({ "status": "pending" }))
 }
 
 // =============================================================================

@@ -45,7 +45,7 @@ pub struct BuiltinToolConfig {
     pub media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
     /// Extension manager for plugin tool execution
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
-    /// ACP harness manager for delegate tools (`claude_code`, codex, `gemini_cli`, `acp_switch`)
+    /// ACP harness manager for delegate tools (`claude-code`, codex, `gemini_cli`, `acp_switch`)
     pub acp_manager: Option<Arc<AcpAdapterManager>>,
     /// A2A tool handle for the `a2a_delegate` / `a2a_agents` outbound tools.
     /// Filled by A2A subsystem init *after* the registry is built (late binding).

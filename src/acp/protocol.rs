@@ -283,64 +283,6 @@ impl AcpResponse {
         }
         None
     }
-
-    /// Extract thinking text from an `agent_thought_chunk` notification.
-    pub fn streaming_thought(&self) -> Option<String> {
-        if self.method.as_deref() != Some("session/update") {
-            return None;
-        }
-        let params = self.params.as_ref()?;
-        let update = params.get("update")?;
-        if update.get("sessionUpdate")?.as_str()? != "agent_thought_chunk" {
-            return None;
-        }
-        let content = update.get("content")?;
-        if content.get("type")?.as_str()? == "text" {
-            return content.get("text")?.as_str().map(String::from);
-        }
-        None
-    }
-
-    /// Extract tool call info from a `tool_call` or `tool_call_update` notification.
-    /// Returns (`tool_name`, status) if this is a tool-related notification.
-    #[must_use]
-    pub fn tool_call_info(&self) -> Option<(String, String)> {
-        if self.method.as_deref() != Some("session/update") {
-            return None;
-        }
-        let params = self.params.as_ref()?;
-        let update = params.get("update")?;
-        let session_update = update.get("sessionUpdate")?.as_str()?;
-        if session_update != "tool_call" && session_update != "tool_call_update" {
-            return None;
-        }
-        let name = update
-            .get("name")
-            .or_else(|| update.get("toolName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let status = update
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or(session_update)
-            .to_string();
-        Some((name, status))
-    }
-
-    /// Check if this notification signals that the agent's turn is complete.
-    #[must_use]
-    pub fn is_turn_complete(&self) -> bool {
-        if self.method.as_deref() != Some("session/update") {
-            return false;
-        }
-        self.params
-            .as_ref()
-            .and_then(|p| p.get("update"))
-            .and_then(|u| u.get("sessionUpdate"))
-            .and_then(|s| s.as_str())
-            == Some("turn_complete")
-    }
 }
 
 // =============================================================================
@@ -625,22 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_turn_complete() {
-        let notif = AcpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("session/update".to_string()),
-            params: Some(serde_json::json!({
-                "sessionId": "s1",
-                "update": {"sessionUpdate": "turn_complete"}
-            })),
-        };
-        assert!(notif.is_turn_complete());
-    }
-
-    #[test]
     fn test_acp_error_display() {
         let err = AcpError {
             code: -32600,
@@ -782,47 +708,6 @@ mod tests {
         let p = req.params.unwrap();
         assert_eq!(p["sessionId"], "sess-42");
         assert_eq!(p["cwd"], "/tmp");
-    }
-
-    #[test]
-    fn test_streaming_thought_extraction() {
-        let notif = AcpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("session/update".to_string()),
-            params: Some(serde_json::json!({
-                "sessionId": "s1",
-                "update": {
-                    "sessionUpdate": "agent_thought_chunk",
-                    "content": {"type": "text", "text": "thinking..."}
-                }
-            })),
-        };
-        assert_eq!(notif.streaming_thought(), Some("thinking...".to_string()));
-    }
-
-    #[test]
-    fn test_tool_call_info_extraction() {
-        let notif = AcpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("session/update".to_string()),
-            params: Some(serde_json::json!({
-                "sessionId": "s1",
-                "update": {
-                    "sessionUpdate": "tool_call",
-                    "name": "read_file",
-                    "status": "running"
-                }
-            })),
-        };
-        let (name, status) = notif.tool_call_info().unwrap();
-        assert_eq!(name, "read_file");
-        assert_eq!(status, "running");
     }
 
     #[test]

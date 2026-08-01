@@ -249,38 +249,6 @@ fn streaming_text_none_for_other_updates() {
     assert_eq!(resp.streaming_text(), None);
 }
 
-#[test]
-fn is_turn_complete_true() {
-    let resp = AcpResponse {
-        jsonrpc: "2.0".to_string(),
-        id: None,
-        result: None,
-        error: None,
-        method: Some("session/update".to_string()),
-        params: Some(serde_json::json!({
-            "sessionId": "s1",
-            "update": {"sessionUpdate": "turn_complete"}
-        })),
-    };
-    assert!(resp.is_turn_complete());
-}
-
-#[test]
-fn is_turn_complete_false_for_other() {
-    let resp = AcpResponse {
-        jsonrpc: "2.0".to_string(),
-        id: None,
-        result: None,
-        error: None,
-        method: Some("session/update".to_string()),
-        params: Some(serde_json::json!({
-            "sessionId": "s1",
-            "update": {"sessionUpdate": "agent_message_chunk"}
-        })),
-    };
-    assert!(!resp.is_turn_complete());
-}
-
 // =============================================================================
 // Protocol — AcpError
 // =============================================================================

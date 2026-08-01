@@ -650,7 +650,7 @@ fn split_provider_prefix(model: &str) -> Option<(&str, &str)> {
 
 /// Truncate a string for log output, appending "..." if truncated.
 #[must_use]
-pub fn truncate_for_log(s: &str, max_len: usize) -> String {
+fn truncate_for_log(s: &str, max_len: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max_len {
         s.to_string()
@@ -664,7 +664,7 @@ pub fn truncate_for_log(s: &str, max_len: usize) -> String {
 
 /// Format a `TranscriptOutcome` for log output.
 #[must_use]
-pub const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
+const fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     match outcome {
         TranscriptOutcome::Success => "success",
         TranscriptOutcome::Error(_) => "error",
@@ -706,7 +706,7 @@ fn cleanup_old_transcripts(base_dir: &std::path::Path) {
 
 /// Persist a subagent transcript to disk for future retrieval.
 /// Best-effort: errors are logged but not propagated.
-pub fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
+fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
     // Sanitize path components so a user/project-controlled agent id or
     // session id cannot traverse out of the transcript directory.
     let safe_session = session_id.replace(['/', '\\'], "_").replace("..", "_");
