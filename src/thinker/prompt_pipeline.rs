@@ -481,7 +481,8 @@ mod tests {
         // → 40 (was 41): HeartbeatLayer removed (§1.1 prune-the-prompt —
         // a pure progress-reporting how-to with `[step N/total]` template,
         // redundant with MultiStepConductLayer's narration guidance).
-        // GraphTopologyLayer retained (41 @1753 Dynamic — tells a governed
+        // GraphTopologyLayer retained (41 @1754 Dynamic, right after
+        // TimerLoopLayer @1753 — tells a governed
         // session its place in the loop-graph governance topology,
         // 2026-07-19).
         // → 36 (2026-07-26, Pi leanness round): four layers deleted because no
@@ -734,7 +735,8 @@ mod stability_tests {
         // (2026-07-17) — its eager resource/prompt index emitted single-prefix
         // ids that did not round-trip through the two-strip read path; discovery
         // converged on the on-demand mcp_list_resources/mcp_list_prompts tools.
-        // → 16: GraphTopologyLayer (@1753) — session-scoped governance
+        // → 16: GraphTopologyLayer (@1754, one slot after TimerLoopLayer
+        // @1753) — session-scoped governance
         // topology; deterministic bytes (graph rows only, no clocks), so the
         // Dynamic classification is about content ownership, not volatility.
         assert!(dynamic_names.contains(&"graph_topology"));

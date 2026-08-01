@@ -1070,11 +1070,30 @@ token_budget. \
                 // dream lessons-promote sweep already relies on it) so the model
                 // can answer "what goals are running?" from anywhere. Corrupt
                 // rows are skipped inside `list_all` (fail-safe).
-                let goals = self.store.list_all()?;
+                let mut goals = self.store.list_all()?;
+                // Scope, don't deny — the loop sibling does the same. Every
+                // other cross-session verb here is operator-gated, and
+                // `get(session=…)` reveals strictly less than this line does
+                // (which prints the session key and the objective text). A
+                // chat-tier caller keeps a true answer about its own session,
+                // plus an honest count so it never reads as "nothing running".
+                let hidden = if Self::caller_is_operator() {
+                    0
+                } else {
+                    let before = goals.len();
+                    goals.retain(|g| g.session_id == session);
+                    before - goals.len()
+                };
                 if goals.is_empty() {
                     return Ok(GoalOutput {
                         success: true,
-                        message: "No standing goals set in any session.".to_string(),
+                        message: match hidden {
+                            0 => "No standing goals set in any session.".to_string(),
+                            n => format!(
+                                "No standing goal in this session. {n} goal(s) in other \
+                                 sessions are not shown at this permission level."
+                            ),
+                        },
                     });
                 }
                 // Newest-updated first so the most relevant goals lead.
@@ -1084,6 +1103,11 @@ token_budget. \
                 for goal in &sorted {
                     message.push_str(&Self::render_list_line(goal, &session, now));
                     message.push('\n');
+                }
+                if hidden > 0 {
+                    message.push_str(&format!(
+                        "({hidden} goal(s) in other sessions are not shown at this permission level.)\n"
+                    ));
                 }
                 Ok(GoalOutput {
                     success: true,

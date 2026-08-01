@@ -8,9 +8,14 @@
 //! "no loop/goal in this session" — leaving an uncancellable background chain
 //! posting to the channel for up to its full tick cap.
 //!
-//! This is the single seam every epoch-bumping surface must call BEFORE the
-//! bump: the channel `/new` command (`inbound_router::command_handler`) and
-//! the Panel `sessions.new` RPC (`handlers::session::db_handlers::create`).
+//! This is the single seam every surface that retires a session must call
+//! BEFORE the bump: the channel `/new` command
+//! (`inbound_router::command_handler`), the Panel `sessions.new` RPC
+//! (`handlers::session::db_handlers::create`), and the `sessions.delete` RPC
+//! (`handlers::session::db_handlers::modify`) behind the Panel sidebar's
+//! delete and the CLI's `session delete` — deletion retires the key just as
+//! finally as an epoch bump, and the chains are keyed by the string, not by
+//! the transcript's existence.
 //! Mechanical state termination only — no reasoning (R10-safe, lives outside
 //! the harness).
 

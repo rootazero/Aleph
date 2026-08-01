@@ -18,10 +18,10 @@ use crate::loop_graph::LoopGraphStore;
 const ID: &str = "core/loop-graph";
 const DB_FILENAME: &str = "loop_graph.db";
 
-/// Agent scopes to lint. Doctor is a path-based offline check with no agent
-/// registry handle, so it lints the default scope only; other scopes are
-/// covered by their own audit loops via `loop_graph(status)`.
-const DEFAULT_AGENT: &str = "main";
+/// Agent scope to lint. Doctor is a path-based offline check with no agent
+/// registry handle; it reads the same single constant every other loop_graph
+/// reader does rather than re-spelling the literal.
+const DEFAULT_AGENT: &str = crate::routing::DEFAULT_AGENT_ID;
 
 pub struct LoopGraphCheck {
     data_dir: PathBuf,

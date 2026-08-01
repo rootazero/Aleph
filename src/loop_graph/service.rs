@@ -22,9 +22,12 @@ use crate::loop_graph::types::EdgeKind;
 use crate::sync_primitives::Mutex;
 use crate::tasks::cron::SharedCronService;
 
-/// v1 scopes the graph to the default agent; multi-agent scoping is an
-/// explicit open question in the design (§11.9) awaiting a real consumer.
-const DEFAULT_AGENT: &str = "main";
+/// The graph is scoped to the default agent. Every reader here — watcher
+/// pokes, the objective ACL, the prompt injection — plus the doctor lint and
+/// the `loop_graph` tool now name the SAME constant, so there is one answer to
+/// "which scope am I in". (There used to be four spellings, one of them a
+/// model-facing arg that no reader honored.)
+const DEFAULT_AGENT: &str = crate::routing::DEFAULT_AGENT_ID;
 
 /// Minimum interval between pokes of the SAME watcher — structural rate
 /// limit (not a judgment): a burst of goal settlements collapses into one

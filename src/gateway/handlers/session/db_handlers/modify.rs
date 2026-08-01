@@ -154,6 +154,22 @@ async fn handle_delete_db_inner(
                 }
             };
 
+            // Terminate the autonomous continuations FIRST — deleting the
+            // transcript does not stop the loop/goal chains keyed to it. They
+            // are process/DB state keyed by the session string, so without this
+            // the deleted conversation keeps ticking: each tick re-enters the
+            // post-run hook under a key whose session no longer exists, posting
+            // to the origin channel until its cap runs out. (An operator can
+            // still reach it with `loop(action='stop', session=…)`, but nothing
+            // should require that after the user deleted the conversation.)
+            //
+            // Canonical spelling, like `purge_session_artifacts` below: the
+            // registry and the goal store are keyed by `to_key_string()`.
+            crate::gateway::continuation_lifecycle::terminate_session_continuations(
+                &session_key.to_key_string(),
+                "sessions.delete",
+            );
+
             // Capture session tail BEFORE deletion so SessionEnd raw fires.
             if let Some(ref w) = writer {
                 if let Ok(history) = manager.get_history(&session_key, Some(64)).await {
@@ -622,6 +638,66 @@ mod tests {
             at: 0,
             synthetic: false,
         }
+    }
+
+    /// Deleting a conversation must also stop the autonomous chains keyed to
+    /// it. They are keyed by the session STRING, not by the transcript's
+    /// existence, so without this the deleted conversation keeps ticking —
+    /// posting to the origin channel until its cap runs out, against a session
+    /// the user removed. `terminate_session_continuations` is the single seam
+    /// for that; `/new` and `sessions.new` called it, `sessions.delete` did not.
+    #[tokio::test]
+    async fn delete_stops_the_sessions_timer_loop() {
+        use crate::looping::{Cadence, LoopState, LoopStatus};
+
+        let reg = crate::looping::global().unwrap_or_else(|| {
+            crate::looping::init_global(crate::sync_primitives::Arc::new(
+                crate::looping::LoopRegistry::default(),
+            ));
+            crate::looping::global().expect("registry installed")
+        });
+
+        let _events = crate::session::store::install_test_event_store();
+        let temp = tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("delete_loop.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::from_key_string("agent:looptest:main").unwrap();
+        manager.get_or_create(&key).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let session = key.to_key_string();
+        reg.put(LoopState::new(
+            &session,
+            "watch the deploy",
+            Cadence::Fixed {
+                interval_ms: 300_000,
+            },
+            0,
+        ));
+        assert_eq!(reg.get(&session).unwrap().status, LoopStatus::Active);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "sessions.delete".into(),
+            params: Some(json!({ "session_key": session })),
+            id: Some(json!(1)),
+        };
+        let response = handle_delete_db(request, store).await;
+        assert!(response.error.is_none(), "{:?}", response.error);
+
+        let after = reg.get(&session).expect("row still readable");
+        assert_eq!(
+            after.status,
+            LoopStatus::Stopped,
+            "the deleted session's loop must not keep ticking"
+        );
+        assert!(
+            after.stop_reason.unwrap().contains("sessions.delete"),
+            "the stop reason must name the surface that retired it"
+        );
     }
 
     /// Deleting a conversation must delete the conversation — not just the

@@ -89,6 +89,31 @@ where
         );
     }
 
+    // Second hard floor: continuation-driven tools (`loop` / `goal`). This
+    // handler returns before any post-run continuation hook, exactly like the
+    // L0 direct-tool fast path both slash surfaces already exclude them from
+    // (`is_continuation_driven_slash`, whose contract says "on ANY surface").
+    // Invoked here, `loop(action='start')` registers state whose first tick is
+    // never scheduled — and with no task-local session key in play the tool
+    // cannot even name the session it registered against. Fail closed with the
+    // reason; the same `ALEPH_GATEWAY_TOOLS_ALLOW` escape hatch applies.
+    if crate::gateway::execution_engine::is_continuation_driven_slash(&params.tool_name)
+        && !crate::security::dangerous_tools::gateway_surface_override(&params.tool_name)
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "tool '{}' is continuation-driven and denied on the gateway \
+                 tools.invoke surface: this surface returns before the post-run \
+                 hook, so the loop/goal would register but never be scheduled. \
+                 Drive it through the agent loop (set {} to override)",
+                params.tool_name,
+                crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
+            ),
+        );
+    }
+
     // Allowlist gate — applied only when caller supplied an agent registry.
     if let Some(ref agents) = agents {
         let resolved_id = params
@@ -252,6 +277,31 @@ mod tests {
             reg.last_call().is_none(),
             "registry must not be touched when the hard floor denies"
         );
+    }
+
+    /// `loop` and `goal` register long-running state whose FIRST tick is
+    /// claimed by the post-run continuation hook — which this surface returns
+    /// before ever reaching. Both slash surfaces already exclude them via
+    /// `is_continuation_driven_slash` ("on ANY surface"); this was the third
+    /// fast surface that never consulted it.
+    #[tokio::test]
+    async fn denies_continuation_driven_tools_on_gateway_surface() {
+        std::env::remove_var(crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV);
+        for tool in ["loop", "goal"] {
+            let reg = Arc::new(StubRegistry::new().with_ok(tool, json!({"ok": true})));
+            let params = json!({"tool_name": tool, "arguments": {"action": "status"}});
+            let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+            let resp = handle_invoke(req, reg.clone(), None).await;
+            assert!(!resp.is_success(), "{tool} must be denied");
+            assert!(
+                resp.error.unwrap().message.contains("continuation-driven"),
+                "{tool}: the reason must name the actual defect"
+            );
+            assert!(
+                reg.last_call().is_none(),
+                "{tool}: registry must not be touched"
+            );
+        }
     }
 
     /// `agent_delete` DECLARES `requires_confirmation`, and the loop answers
