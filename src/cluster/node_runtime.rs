@@ -84,7 +84,7 @@ pub struct BashNodeCommand {
 }
 
 impl BashNodeCommand {
-    pub const fn new(bash: BashExecTool, session: SessionKey) -> Self {
+    pub(crate) const fn new(bash: BashExecTool, session: SessionKey) -> Self {
         Self { bash, session }
     }
 }
