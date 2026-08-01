@@ -4,13 +4,13 @@
 
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml,
+    ExecutionConfig, FallbackProviderToml,
     FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml,
-    McpConfig, MediaConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
-    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, ProviderConfigEntry,
-    RoutingRuleConfig, SearchConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
-    SecretsConfig, ShellSecurityConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
-    StabilityToml, StopHookConfig, SubAgentConfig, TeamBroadcastConfigToml,
+    McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
+    PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig,
+    RoutingRuleConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
+    SecretsConfig, ShellSecurityConfig, SkillsConfig,
+    StabilityToml, StopHookConfig, TeamBroadcastConfigToml,
     TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
     UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
@@ -53,10 +53,6 @@ fn is_default_session(s: &crate::routing::config::SessionConfig) -> bool {
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
-    /// Legacy hotkey field (deprecated, use `trigger.replace_hotkey/append_hotkey` instead)
-    /// Kept for backward compatibility with old config files
-    #[serde(default = "crate::config::types::general::default_hotkey")]
-    pub default_hotkey: String,
     /// General settings
     #[serde(default)]
     pub general: GeneralConfig,
@@ -100,27 +96,6 @@ pub struct Config {
     /// from this config at boot.
     #[serde(default)]
     pub sandbox: crate::sandbox::SandboxConfig,
-    /// Smart conversation flow configuration
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub smart_flow: SmartFlowConfig,
-    /// Smart matching configuration (semantic detection system)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub smart_matching: SmartMatchingConfig,
-    /// Dispatcher Layer configuration (intelligent tool routing)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub dispatcher: DispatcherConfigToml,
     /// Agent task orchestration configuration (renamed from cowork)
     /// Supports both [agent] and [cowork] sections for backward compatibility
     #[serde(default, alias = "cowork")]
@@ -138,13 +113,6 @@ pub struct Config {
     /// Orchestrator configuration (Three-Layer Control architecture)
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
-    /// Sub-agent synchronization configuration
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub subagent: SubAgentConfig,
     /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
     /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
     /// shape the chain by endpoint tier (see `[route]`).
@@ -166,16 +134,6 @@ pub struct Config {
     /// Preset persona definitions for group chat
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub personas: Vec<PersonaConfig>,
-    /// Skill evolution configuration (Skill Compiler - Phase 10)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub evolution: EvolutionConfig,
-    /// Media understanding pipeline configuration
-    #[serde(default)]
-    pub media: MediaConfig,
     /// Privacy and PII filtering configuration
     #[serde(default)]
     pub privacy: PrivacyConfig,
@@ -397,65 +355,12 @@ impl Config {
 }
 
 // =============================================================================
-// FullConfig (UniFFI)
-// =============================================================================
-
-/// Full configuration exposed through `UniFFI`
-/// This wraps Config with a flattened provider list
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct FullConfig {
-    pub default_hotkey: String,
-    pub general: GeneralConfig,
-    pub memory: MemoryConfig,
-    pub providers: Vec<ProviderConfigEntry>,
-    pub rules: Vec<RoutingRuleConfig>,
-    #[serde(default)]
-    pub behavior: Option<BehaviorConfig>,
-    #[serde(default)]
-    pub search: Option<SearchConfig>,
-    #[serde(default)]
-    pub smart_matching: SmartMatchingConfig,
-    #[serde(default)]
-    pub skills: Option<SkillsConfig>,
-    #[serde(default)]
-    pub policies: PoliciesConfig,
-}
-
-impl From<Config> for FullConfig {
-    #[allow(deprecated)]
-    fn from(config: Config) -> Self {
-        let providers = config
-            .providers
-            .into_iter()
-            .map(|(name, config)| ProviderConfigEntry { name, config })
-            .collect();
-
-        let search = config.search.map(|s| s.into());
-
-        Self {
-            default_hotkey: config.default_hotkey,
-            general: config.general,
-            memory: config.memory,
-            providers,
-            rules: config.rules,
-            behavior: config.behavior,
-            search,
-            smart_matching: config.smart_matching,
-            skills: Some(config.skills),
-            policies: config.policies,
-        }
-    }
-}
-
-// =============================================================================
 // Config Default
 // =============================================================================
 
 impl Default for Config {
-    #[allow(deprecated)]
     fn default() -> Self {
         Self {
-            default_hotkey: crate::config::types::general::default_hotkey(), // Legacy field, kept for backward compatibility
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
@@ -470,23 +375,17 @@ impl Default for Config {
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
             tool_service: ToolServiceConfig::default(),
             sandbox: crate::sandbox::SandboxConfig::default(),
-            smart_flow: SmartFlowConfig::default(),
-            smart_matching: SmartMatchingConfig::default(),
-            dispatcher: DispatcherConfigToml::default(),
             agent: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             voice_local: VoiceSection::default(),
             orchestrator: OrchestratorConfig::default(),
-            subagent: SubAgentConfig::default(),
             route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             heartbeat: HeartbeatConfig::default(),
             tasks_reaper: ReaperConfig::default(),
             personas: Vec::new(),
-            evolution: EvolutionConfig::default(),
-            media: MediaConfig::default(),
             privacy: PrivacyConfig::default(),
             security: ShellSecurityConfig::default(),
             ssrf: crate::security::ssrf::SsrfPolicy::default(),

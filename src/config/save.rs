@@ -247,7 +247,7 @@ impl Config {
     /// # Example
     /// ```rust,ignore
     /// let mut config = Config::default();
-    /// config.default_hotkey = "Command+Shift+A".to_string();
+    /// config.general.default_provider = Some("openai".to_string());
     /// config.save()?;
     /// ```
     pub fn save(&self) -> Result<()> {

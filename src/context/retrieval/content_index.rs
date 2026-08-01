@@ -325,9 +325,9 @@ impl ContentIndex {
         self.len_sessions(&[session_id])
     }
 
-    /// [`Self::len`] over a set of session ids (see [`Self::search_sessions`]
-    /// for why a set: epoch-aware retrieval after a session split). An empty
-    /// set counts nothing.
+    /// Number of chunks indexed across the given session ids (see
+    /// [`Self::search_sessions`] for why a set: epoch-aware retrieval after a
+    /// session split). An empty set counts nothing.
     pub fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
         if session_ids.is_empty() {
             return Ok(0);
@@ -362,11 +362,6 @@ impl ContentIndex {
             out.push(row?);
         }
         Ok(out)
-    }
-
-    /// True iff `session_id` has no chunks indexed.
-    pub fn is_empty(&self, session_id: &str) -> Result<bool, IndexError> {
-        Ok(self.len(session_id)? == 0)
     }
 
     /// Drop every chunk owned by `session_id` from both FTS tables, leaving the
@@ -922,7 +917,7 @@ mod tests {
         let out = idx.index_text(SESS, "call_1", "bash", "   \n  \n").unwrap();
         assert_eq!(out.sections, 0);
         assert!(out.previews.is_empty());
-        assert!(idx.is_empty(SESS).unwrap());
+        assert!(idx.list_sessions().unwrap().is_empty());
     }
 
     #[test]
@@ -1261,8 +1256,8 @@ mod tests {
         assert!(b.is_empty(), "session B must not see A's output: {b:?}");
         // Each still finds its own.
         assert!(!idx.search("sess-a", "secretalpha", 5).unwrap().is_empty());
-        assert_eq!(idx.len("sess-a").unwrap(), 1);
-        assert_eq!(idx.len("sess-b").unwrap(), 1);
+        assert_eq!(idx.len_sessions(&["sess-a"]).unwrap(), 1);
+        assert_eq!(idx.len_sessions(&["sess-b"]).unwrap(), 1);
     }
 
     #[test]
@@ -1278,8 +1273,16 @@ mod tests {
 
         idx.clear("sess-a").unwrap();
 
-        assert!(idx.is_empty("sess-a").unwrap(), "A must be wiped");
-        assert_eq!(idx.len("sess-b").unwrap(), 1, "B must survive A's purge");
+        assert_eq!(
+            idx.len_sessions(&["sess-a"]).unwrap(),
+            0,
+            "A must be wiped"
+        );
+        assert_eq!(
+            idx.len_sessions(&["sess-b"]).unwrap(),
+            1,
+            "B must survive A's purge"
+        );
         assert!(!idx.search("sess-b", "beta payload", 5).unwrap().is_empty());
     }
 
@@ -1341,7 +1344,11 @@ mod tests {
             .unwrap();
         idx.index_text("sess-b", "bash", "bash", "beta unique_b\n")
             .unwrap();
-        assert_eq!(idx.len("sess-a").unwrap(), 1, "B's write must not evict A");
+        assert_eq!(
+            idx.len_sessions(&["sess-a"]).unwrap(),
+            1,
+            "B's write must not evict A"
+        );
         assert!(!idx.search("sess-a", "unique_a", 5).unwrap().is_empty());
     }
 
@@ -1375,7 +1382,7 @@ mod tests {
         let idx = ContentIndex::open(&db).expect("pre-scope index must not fail open");
         // Recreated empty — the legacy rows are gone, but the store is usable
         // and the offloaded blobs they pointed at are untouched on disk.
-        assert!(idx.is_empty(SESS).unwrap());
+        assert!(idx.list_sessions().unwrap().is_empty());
         idx.index_text(SESS, "call_2", "bash", "fresh body here\n")
             .unwrap();
         assert!(!idx.search(SESS, "fresh body", 5).unwrap().is_empty());

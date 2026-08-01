@@ -11,18 +11,17 @@
 use super::super::*;
 
 #[test]
-fn test_default_config_hotkey_and_memory() {
+fn test_default_config_memory() {
     let config = Config::default();
 
-    assert_eq!(config.default_hotkey, "Grave");
     assert!(config.memory.enabled);
 }
 
 #[test]
 fn test_new_config_matches_default() {
     assert_eq!(
-        Config::new().default_hotkey,
-        Config::default().default_hotkey
+        Config::new().general.default_provider,
+        Config::default().general.default_provider
     );
 }
 
@@ -71,9 +70,5 @@ default_provider = "openai"
     let config: Config = toml::from_str(toml_str).expect("Should parse");
 
     assert!(config.validate().is_ok());
-    assert_eq!(config.default_hotkey, "Grave");
     assert!(config.memory.enabled);
-    // The Gherkin also asserted `smart_flow.enabled` here. Dropped: that field
-    // is `#[deprecated]` as an inert section (see `reload_impact::INERT_SECTIONS`)
-    // — persisted but read by nothing, so pinning it tests a dead knob.
 }

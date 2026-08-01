@@ -64,13 +64,7 @@ const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 /// Mirrors the `⚠️ Legacy — parsed but inert` markers in the `/self` SKILL.md.
 /// Editing these is a no-op at runtime.
 const INERT_SECTIONS: &[&str] = &[
-    "smart_flow",
-    "smart_matching",
-    "dispatcher",
-    "subagent",
     "task_routing",
-    "evolution",
-    "media",
 ];
 
 impl ReloadImpact {
@@ -153,26 +147,13 @@ mod tests {
 
     #[test]
     fn legacy_sections_are_inert() {
-        for s in [
-            "smart_flow",
-            "smart_matching",
-            "dispatcher",
-            "subagent",
-            "task_routing",
-            "evolution",
-            "media",
-        ] {
+        for s in ["task_routing"] {
             assert_eq!(
                 ReloadImpact::classify(s),
                 ReloadImpact::Inert,
                 "expected '{s}' to be inert"
             );
         }
-        // Nested path under a legacy section still classifies inert.
-        assert_eq!(
-            ReloadImpact::classify("dispatcher.fallback_policy"),
-            ReloadImpact::Inert
-        );
     }
 
     #[test]
