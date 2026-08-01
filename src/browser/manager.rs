@@ -205,11 +205,14 @@ impl ProfileManager {
     /// protects live sessions.
     fn idle_existing_session_profiles(&self) -> Vec<String> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+        // One clock read for the whole sweep, so every profile is judged
+        // against the same instant.
+        let now = std::time::Instant::now();
         profiles
             .iter()
             .filter(|(name, p)| {
                 p.config.driver == BrowserDriver::ExistingSession
-                    && is_idle(p.last_activity, p.config.idle_timeout_secs)
+                    && is_idle(p.last_activity, now, p.config.idle_timeout_secs)
                     && self.chrome_mcp_driver.has_session(name)
             })
             .map(|(name, _)| name.clone())
@@ -357,10 +360,18 @@ impl ProfileManager {
     }
 }
 
-/// Whether `last_activity` is older than `timeout_secs`. Pure helper so the
-/// reaper's timeout filter is unit-testable without a live session.
-fn is_idle(last_activity: std::time::Instant, timeout_secs: u64) -> bool {
-    last_activity.elapsed().as_secs() > timeout_secs
+/// Whether `last_activity` is older than `timeout_secs` as of `now`. Pure
+/// helper so the reaper's timeout filter is unit-testable without a live
+/// session.
+///
+/// `now` is taken explicitly rather than read from the clock inside: it makes
+/// the helper a total function of its inputs, and lets a test express "long
+/// ago" by moving `now` *forward* instead of subtracting from `Instant::now()`.
+/// That subtraction panics wherever the monotonic clock's origin is more recent
+/// than the offset — routine on a freshly booted CI VM, where Windows counts
+/// `Instant` from system boot.
+fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_secs: u64) -> bool {
+    now.saturating_duration_since(last_activity).as_secs() > timeout_secs
 }
 
 #[cfg(test)]
@@ -417,11 +428,22 @@ mod tests {
 
     #[test]
     fn test_is_idle_timeout_filter() {
-        let now = std::time::Instant::now();
-        assert!(!is_idle(now, 1800));
-        assert!(is_idle(now - std::time::Duration::from_secs(1801), 1800));
+        // Age is expressed by advancing `now`, never by subtracting from
+        // `Instant::now()` — see `is_idle`'s note on the clock origin.
+        let touched = std::time::Instant::now();
+        assert!(!is_idle(touched, touched, 1800));
+        assert!(is_idle(
+            touched,
+            touched + std::time::Duration::from_secs(1801),
+            1800
+        ));
         // Boundary: elapsed must strictly exceed the timeout.
-        assert!(!is_idle(now, 0));
+        assert!(!is_idle(
+            touched,
+            touched + std::time::Duration::from_secs(1800),
+            1800
+        ));
+        assert!(!is_idle(touched, touched, 0));
     }
 
     #[test]

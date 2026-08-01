@@ -5,6 +5,172 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.7.31]
+
+Bigger again — 400 commits over ten days, 1,506 files, +115k/−56k. Three
+threads. First, **Linux becomes a first-class desktop target**: a full AT-SPI2
+accessibility layer, native EWMH window management, and a single source for
+session type, clipboard, and app launching — while Windows coordinates were made
+to mean exactly one thing and macOS stopped reporting success for things it
+cannot do. Second, **the model gets a way to hand over finished work**: a durable
+artifact store, an `artifact_publish` tool, a session HTML exporter, and a Panel
+right rail rebuilt around deliverables and attachments instead of a redundant
+tool inspector — alongside a per-agent Ed25519 identity with a signed operation
+ledger, a dual-era MCP client for the 2026-07-28 stateless protocol, and an
+end-to-end Aleph Hub install chain. Third, a **sustained correctness sweep**: a
+five-batch adversarial static review, a new severed-wire audit skill and its
+first pass over the tree, and the discovery that several finished features were
+never actually reachable in production.
+
+### Added
+
+- **Linux AT-SPI2 accessibility layer.** The four AX tools, set-of-marks, and the
+  password gate now work on Linux. The connection is shared (a fresh one costs a
+  measured 424 ms) but liveness-probed before reuse, since a zbus connection is
+  driven by the runtime that built it and silently hangs forever across runtimes.
+  Node reads are bounded by both a node cap and a wall-clock budget, because each
+  read is a D-Bus round trip into another process — and a hung application is the
+  headline reason a user reaches for the agent at all.
+- **Native Linux window management and desktop plumbing.** EWMH via `x11rb` plus
+  sway/Hyprland IPC replace the shell-out window layer; session type, clipboard,
+  and app launch each collapse to one source in `desktop/shared`. Every shell-out
+  that waits on a desktop service (`xclip`, `notify-send`, `swaymsg`, `hyprctl`,
+  `pactl`, `ffmpeg`) now carries a deadline.
+- **`artifact_publish` and the deliverables surface.** The model can publish a
+  finished work product as its own rendered document; deliverables pin to the top
+  of the Panel right rail and open in the system browser rather than downloading.
+  Inbound and outbound media are harvested into a durable artifact store, and the
+  whole session can be exported as a self-contained zero-`<script>` HTML page.
+- **Per-agent identity and a signed operation ledger.** Each agent gets an Ed25519
+  keypair; tool executions are recorded on a signed hash chain with delegated-role
+  chains, in-chain key lifecycle, and an offline `aleph-server identity` verifier.
+  Records that were never written are reported as `lost` rather than silently
+  passed.
+- **Dual-era MCP client.** The 2026-07-28 spec removes the `initialize` handshake,
+  protocol sessions, `ping`, and server-initiated requests. Era is probed once per
+  server and latched; sampling/elicitation/roots move to the MRTR retry flow, which
+  incidentally makes sampling work over HTTP for the first time.
+- **Aleph Hub install chain, wired end to end.** Catalog ingest validates entry
+  counts, duplicate ids, and the reserved `local:` namespace before anything
+  enters the cache; git checkouts are pinned and digest-verified before the first
+  write; `update_available` is backed by an install-provenance ledger; remote MCP
+  secrets travel as `headers` resolved at dial time.
+- **Dynamic webhook mount table.** Channel webhooks are admitted deterministically
+  at boot from a shared table owned solely by the channel registry, so
+  `channel.create` / `stop` / `delete` take effect without a restart.
+- **Panel memory vault, rebuilt.** Dual-track search, a card list with a
+  three-state shell, deep links, a pager with a page-size selector, a bulk-action
+  bar, markdown export, and an evidence chain that renders `notes_citing`.
+- **Loop and goal pause/resume.** Both autonomous continuation chains gained a
+  `Paused` state, an atomic transition primitive, and cross-session lifecycle
+  control — with the rule that cross-session operations may only *lower*
+  activity (stop/pause/clear), never arm.
+- **Voice as context.** The `[voice]` vocabulary list is dual-consumed — as ASR
+  bias and as a prompt-side misrecognition hint — and TTS gained provider
+  fallback plus a voice-catalog join point.
+- **`severed-wire-audit` skill.** Finds features where producer and consumer are
+  both complete but the registration, dispatch arm, or subscription between them
+  is missing — the class of defect dead-code lints structurally cannot see.
+
+### Fixed
+
+- **Windows desktop coordinates meant two different things.** A DPI-unaware
+  process reads virtualized `GetWindowRect` / `GetCursorPos` / UIA rectangles
+  while screenshots come from the display driver unscaled — a 1.5× mismatch
+  between where the model sees a button and where the click lands, on a default
+  150%-scaled laptop. Process DPI awareness is now latched at both entry points.
+  Absolute pointer moves no longer go through `enigo`, which normalizes against
+  the *primary* monitor and omits `MOUSEEVENTF_VIRTUALDESK` — every click aimed
+  at a secondary display was landing on the primary one. Window geometry now
+  compensates for the DWM extended frame, so `move` no longer drifts and `resize`
+  no longer shrinks by two borders per call.
+- **macOS reported success for three things it cannot do.** `NSEvent` global
+  monitors never fire in a daemon with no `NSApplication` — the Escape emergency
+  stop had been dead while every layer above it reported it armed; it now runs a
+  listen-only `CGEventTap` on its own `CFRunLoop`. `focus_window` polls and
+  reports honest failure instead of trusting `activate`'s `true`. Ten
+  `SUGGESTED_TIMEOUT_MS` constants had zero consumers, so every RPC used the 60 s
+  fallback — including the 3 s focus check on every batch of keystrokes.
+- **macOS bridge could be killed by a 2-pixel image.** Vision invoked the
+  completion handler and then threw, resuming a Swift continuation twice —
+  process suicide, which surfaced in tests as "helper stdout closed."
+- **Three private AX node budgets silently pruned the tree** at 10,000 / 4,000 /
+  1,500 nodes per platform; the model saw a truncated tree and concluded the
+  control did not exist. The budget is now protocol-level, and results
+  distinguish a truncated *list* from an unfinished *walk*.
+- **`key_button` bypassed the desktop input gate.** With `allow_global_pointer`
+  off, `key_combo` was refused while `key_button {press_action:"click"}` delivered
+  the same keystroke into the user's foreground window, and reported no
+  `delivery` field. Held inputs are now released on the rail they were pressed on.
+- **Manual `/compact` did nothing to the model's context.** It deleted rows from
+  the `messages` projection — which the prompt is not built from — and reported an
+  invented token saving while truly deleting the user's scroll history. It now
+  summarizes, checkpoints, and soft-retires a prefix of `session_events`, deleting
+  nothing and leaving FTS intact so compacted detail stays recallable.
+- **The busy-queue ticket was held for the entire agent run**, so a waiting
+  message never reached the front of the lane — which made `Steer` and `Interrupt`
+  structurally unreachable and silently degraded both to `Queue`. One root cause
+  with three faces: the `/stop` receipt also over-counted by one and the backlog
+  gauge counted an already-running message.
+- **Content-aware tool-output cleaning ran after flattening.** `Value::to_string()`
+  compacts a result to one line, so the log/search/diff/json reducers never fired
+  for any builtin tool, and the "inline the key error" digest displayed the JSON
+  envelope header instead of the compiler error. Cleaning is now field-level, at
+  ingress, before flattening.
+- **The environment envelope lied about the working directory.** The prompt layer
+  read `std::env::current_dir()` — the daemon's directory — so a single request
+  carried three contradictory paths and the model would issue `bash(working_dir=…)`
+  against a directory the sandbox then refused. All of `cwd`/`os`/`arch`/`shell`/
+  `git` now come only from `RuntimeContext`, partitioned by volatility so per-run
+  bytes stay out of the cacheable prefix.
+- **The model pick never reached the wire.** Judging "is this the primary slot" by
+  `tier == Unknown` discarded a pinned model on chained providers and made every
+  fallback dial with the primary provider's model id; the composer's model pill
+  reached the "switched to X" banner and nothing else. Route status now reports
+  the actual next dial order, and `Retry-After` is parsed in one place across both
+  formats.
+- **Provider health had a table nothing dialed from**, and the failover chain
+  described a topology it did not use.
+- **Command-policy bypasses on Windows.** The unconditional backslash fold turned
+  `\\?\C:\` into `\?C:`; encoded PowerShell payloads were a blind spot; and a
+  full-line rule gap stitched two unrelated statements into one unclosable false
+  positive. Matching now runs over both a POSIX-folded and a path-preserving view,
+  decodes `-EncodedCommand` before layering, and uses segment-scoped gaps.
+- **`--config` was honoured by one consumer out of nine.** Settings were written to
+  a file nothing read; the path is now pinned once in `main()`.
+- **Panel remote auth: `devices` is one table shared by Panel and cluster nodes**,
+  both self-reporting their `device_id` — claiming a row by id could mint an
+  operator credential invisible to the roster and unreachable by revoke or token
+  rotation. Namespace guards are now symmetric, per-device revoke is immediate,
+  pairing URLs are built server-side, and the login wall accepts pairing codes.
+- **A published deliverable was served as a download** — precisely defeating the
+  purpose of the tool — and the "new items" badge counted tool calls, a leftover
+  from the inspector era, so it lit for things the panel does not contain and
+  stayed dark for things it does.
+- **Standing goals could be resurrected by a stale tool snapshot.** Field commits
+  now carry a status CAS; crash recovery exempts every wait barrier, since a
+  timer-parked goal woken by the service would otherwise block forever; and
+  workspace is inherited across the three hook-less wake paths.
+- **Hook defects.** Injected context is bounded, a timeout leak is closed, consent
+  binds to script content, and `hooks_manage(only_unreachable=true)` reports all
+  three silent non-firing causes from the runtime inventory.
+- **CI was not running every integration test**, which had been masking real
+  defects; `-D warnings` propagation, a red fmt gate that prevented clippy from
+  ever running, and 19 tests that were never isolated from the developer's real
+  `~/.aleph` were all fixed. Chinese source comments were translated to English
+  across every module.
+- **Five batches of adversarial static review** across ~40 modules closed several
+  hundred findings — auth and lock defects across channels, WASM timeouts and SSRF
+  redirect handling in extensions, TOCTOU in the tool handler registry, blocking
+  I/O inside async, unbounded channels, silently discarded errors, and a
+  `set_config_patcher` no-op that shipped `self_config` and `moa` without a
+  patcher. The severed-wire pass cut dead abstractions across `a2a`, `acp`,
+  `agents`, `approval`, `arena`, `browser`, and `clawhub` rather than reconnecting
+  them.
+- **Tool argument names unified on `timeout_seconds`** (`bash_exec`, `code_exec`,
+  `code_check`, `task_create`, `team_delegate`, workflow steps, MoA advisors), with
+  serde aliases preserving the old spellings.
+
 ## [26.7.21]
 
 The largest release since the harness dissolution — 282 commits across three

@@ -420,7 +420,10 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
         let shrunk = fitted.resize_exact(w, h, image::imageops::FilterType::Triangle);
         let mut attempt = Vec::new();
         if shrunk
-            .write_to(&mut std::io::Cursor::new(&mut attempt), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut attempt),
+                image::ImageFormat::Png,
+            )
             .is_err()
         {
             break; // encode failure → fall through to the best attempt so far

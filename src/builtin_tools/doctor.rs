@@ -140,7 +140,10 @@ mod tests {
         // Any repair that only claimed success would have been re-flagged by
         // the engine's post-repair revalidation.
         assert!(
-            !out.report.findings.iter().any(|f| f.has_tag("post-repair-residual")),
+            !out.report
+                .findings
+                .iter()
+                .any(|f| f.has_tag("post-repair-residual")),
             "unexpected post-repair residual: {:?}",
             out.report.findings
         );

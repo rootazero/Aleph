@@ -204,6 +204,15 @@ mod tests {
         }
     }
 
+    /// `call` reconciles against the live backends, and that path reaches
+    /// `Config::load()`, which persists a default config when the file is
+    /// missing — a read that becomes a write in the developer's real `~/.aleph`.
+    /// Every test here must hold one of these for its whole body (the guard is a
+    /// non-reentrant mutex, so it cannot live inside `tool_with`).
+    fn isolated_home() -> crate::utils::paths::IsolatedAlephHome {
+        crate::utils::paths::IsolatedAlephHome::new()
+    }
+
     async fn tool_with(entries: Vec<ExtensionEntry>) -> HubCatalogSearchTool {
         let cache = CatalogCache::open_in_memory().unwrap();
         cache.upsert_many(&entries).await.unwrap();
@@ -215,6 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_returns_the_entry_id_install_needs() {
+        let _home = isolated_home();
         let tool = tool_with(vec![
             entry(
                 "aleph-hub:gh",
@@ -244,6 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn kind_filter_narrows_results() {
+        let _home = isolated_home();
         let tool = tool_with(vec![
             entry("aleph-hub:a", "Alpha", "", ExtensionKind::Mcp),
             entry("aleph-hub:b", "Beta", "", ExtensionKind::Skill),
@@ -263,6 +274,7 @@ mod tests {
     /// A capped result must say so, or the model reads 20-of-40 as "all of them".
     #[tokio::test]
     async fn limit_is_reported_not_silently_applied() {
+        let _home = isolated_home();
         let many: Vec<ExtensionEntry> = (0..5)
             .map(|i| {
                 entry(
@@ -290,6 +302,7 @@ mod tests {
     /// front that this install needs a user gesture.
     #[tokio::test]
     async fn git_dir_entries_report_needs_user_consent() {
+        let _home = isolated_home();
         let mut e = entry("aleph-hub:s", "Skill", "", ExtensionKind::Skill);
         e.install_spec = Some(InstallSpec::GitDir {
             git_url: "https://github.com/a/b".into(),
@@ -304,6 +317,7 @@ mod tests {
 
     #[tokio::test]
     async fn limit_zero_is_clamped_to_one_result() {
+        let _home = isolated_home();
         let tool = tool_with(vec![entry("aleph-hub:a", "Alpha", "", ExtensionKind::Mcp)]).await;
         let out = tool
             .call(HubCatalogSearchArgs {
