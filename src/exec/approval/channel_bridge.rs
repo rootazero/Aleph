@@ -7,7 +7,6 @@ use tokio::time::timeout;
 use crate::exec::decision::ExecApprovalRequest;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage};
-use crate::gateway::channel_approval::ApprovalAction;
 use crate::gateway::channel_registry::ChannelRegistry;
 
 const DELIVERY_TIMEOUT_SECS: u64 = 30;
@@ -297,35 +296,5 @@ impl ChannelApprovalBridge {
             registry: Arc::new(ChannelRegistry::new()),
             test_outcome_override: Some(ApprovalOutcome::Denied),
         }
-    }
-}
-
-impl From<ApprovalAction> for ApprovalDecisionType {
-    fn from(action: ApprovalAction) -> Self {
-        match action {
-            ApprovalAction::Approve => Self::AllowOnce,
-            ApprovalAction::Deny => Self::Deny,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_approval_action_to_decision_type() {
-        assert!(matches!(
-            ApprovalDecisionType::AllowOnce,
-            ApprovalDecisionType::AllowOnce
-        ));
-        assert!(matches!(
-            ApprovalAction::Approve.into(),
-            ApprovalDecisionType::AllowOnce
-        ));
-        assert!(matches!(
-            ApprovalAction::Deny.into(),
-            ApprovalDecisionType::Deny
-        ));
     }
 }
