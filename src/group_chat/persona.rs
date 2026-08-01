@@ -53,12 +53,12 @@ impl PersonaRegistry {
         self.presets.is_empty()
     }
 
-    /// Resolve a list of [`PersonaSource`] references into concrete [`Persona`] instances.
-    ///
-    /// - `Preset(id)` — looked up in the registry; returns [`GroupChatError::PersonaNotFound`]
-    ///   if the ID is not registered.
-    /// - `Inline(persona)` — used directly as-is.
-    pub fn resolve(&self, sources: &[PersonaSource]) -> Result<Vec<Persona>, GroupChatError> {
+/// Resolve a list of [`PersonaSource`] references into concrete [`Persona`] instances.
+///
+/// - `Preset(id)` — looked up in the registry; returns [`GroupChatError::PersonaNotFound`]
+///   if the ID is not registered.
+/// - `Inline(persona)` — used directly as-is.
+pub fn resolve(&self, sources: &[PersonaSource]) -> Result<Vec<Persona>, GroupChatError> {
         sources
             .iter()
             .map(|source| match source {
@@ -69,30 +69,6 @@ impl PersonaRegistry {
                 PersonaSource::Inline(persona) => Ok(persona.clone()),
             })
             .collect()
-    }
-
-    /// Clear the registry and rebuild from new configs (e.g., after hot-reload).
-    pub fn reload(&mut self, configs: &[PersonaConfig]) {
-        self.presets.clear();
-        for cfg in configs {
-            let persona = persona_from_config(cfg);
-            if self.presets.insert(cfg.id.clone(), persona).is_some() {
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    persona_id = %cfg.id,
-                    "duplicate persona ID in reload configuration, last definition wins"
-                );
-            }
-        }
-    }
-
-    /// Return all preset personas in the registry, sorted by ID for
-    /// deterministic output.
-    #[must_use]
-    pub fn list_presets(&self) -> Vec<&Persona> {
-        let mut presets: Vec<&Persona> = self.presets.values().collect();
-        presets.sort_by(|a, b| a.id.cmp(&b.id));
-        presets
     }
 }
 
@@ -235,47 +211,5 @@ mod tests {
         assert_eq!(resolved[0].id, "pm");
         assert_eq!(resolved[1].id, "reviewer");
         assert_eq!(resolved[2].id, "architect");
-    }
-
-    #[test]
-    fn test_reload() {
-        let configs = sample_persona_configs();
-        let mut registry = PersonaRegistry::from_configs(&configs);
-        assert_eq!(registry.len(), 2);
-        assert!(registry.get("architect").is_some());
-
-        // Reload with a different set
-        let new_configs = vec![PersonaConfig {
-            id: "designer".into(),
-            name: "设计师".into(),
-            system_prompt: "You are a designer".into(),
-            provider: None,
-            model: None,
-            thinking_level: None,
-        }];
-        registry.reload(&new_configs);
-
-        assert_eq!(registry.len(), 1);
-        assert!(
-            registry.get("architect").is_none(),
-            "old preset should be gone"
-        );
-        assert!(
-            registry.get("designer").is_some(),
-            "new preset should exist"
-        );
-    }
-
-    #[test]
-    fn test_list_presets() {
-        let configs = sample_persona_configs();
-        let registry = PersonaRegistry::from_configs(&configs);
-
-        let presets = registry.list_presets();
-        assert_eq!(presets.len(), 2);
-
-        // list_presets returns sorted by ID
-        let ids: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, vec!["architect", "pm"]);
     }
 }

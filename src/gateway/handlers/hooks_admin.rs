@@ -454,6 +454,37 @@ pub async fn handle_hooks_events(request: JsonRpcRequest) -> JsonRpcResponse {
     JsonRpcResponse::success(request.id, json!({ "events": events }))
 }
 
+/// Runtime hook view — every hook the running server has registered across
+/// all four layers (global / project / project-local / plugin-shipped),
+/// with the resolved `kind`, consent state, and a per-hook reachability
+/// verdict. This is the answer to "why doesn't my hook fire?"; the file
+/// view (`hooks.list`) structurally cannot, because three of the four
+/// layers never appear in `~/.aleph/hooks.json`.
+pub async fn handle_hooks_registry(request: JsonRpcRequest) -> JsonRpcResponse {
+    let mgr: &Arc<ExtensionManager> = match try_extension_manager() {
+        Some(m) => m,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                SERVICE_UNAVAILABLE,
+                "extension manager not initialised",
+            );
+        }
+    };
+    let hooks = mgr.hook_executor_snapshot().await.inventory();
+    let total = hooks.len();
+    let unreachable = hooks.iter().filter(|h| !h.reachable).count();
+    let hooks_value = serde_json::to_value(&hooks).unwrap_or(Value::Array(Vec::new()));
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "hooks": hooks_value,
+            "total": total,
+            "unreachable": unreachable,
+        }),
+    )
+}
+
 /// Cheap check: try to parse the event name via the same serde path that
 /// `user_settings` uses. Accepts both `snake_case` (`before_tool_call`) and
 /// `PascalCase` aliases (`PreToolUse`).

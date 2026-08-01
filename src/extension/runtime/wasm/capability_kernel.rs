@@ -24,12 +24,7 @@ pub enum CapabilityError {
     NotAllowed(String),
     RateLimited(String),
     ResourceExhausted(String),
-    LeakDetected(String),
     PathTraversal(String),
-    SecretNotFound(String),
-    ApprovalDenied(String),
-    ApprovalTimeout,
-    InternalError(String),
 }
 
 impl std::fmt::Display for CapabilityError {
@@ -39,12 +34,7 @@ impl std::fmt::Display for CapabilityError {
             Self::NotAllowed(msg) => write!(f, "Not allowed: {msg}"),
             Self::RateLimited(msg) => write!(f, "Rate limited: {msg}"),
             Self::ResourceExhausted(msg) => write!(f, "Resource exhausted: {msg}"),
-            Self::LeakDetected(msg) => write!(f, "Leak detected: {msg}"),
             Self::PathTraversal(msg) => write!(f, "Path traversal: {msg}"),
-            Self::SecretNotFound(msg) => write!(f, "Secret not found: {msg}"),
-            Self::ApprovalDenied(msg) => write!(f, "Approval denied: {msg}"),
-            Self::ApprovalTimeout => write!(f, "Approval timed out"),
-            Self::InternalError(msg) => write!(f, "Internal error: {msg}"),
         }
     }
 }
