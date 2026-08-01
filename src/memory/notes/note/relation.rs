@@ -9,7 +9,13 @@ use serde::{Deserialize, Serialize};
 /// A typed, directed edge from the containing note to `to`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Relation {
-    /// Target note path ("entity/bob") or raw wikilink target.
+    /// Target note path ("entity/bob"). On the ingest path `[P<n>]` page tokens
+    /// are rewritten to canonical paths (or the entry dropped) by
+    /// `RefTable::resolve_relations` before the relation is ever serialized.
+    ///
+    /// This is unvalidated model input, so `to_markdown` quotes it via
+    /// `yaml_scalar` — an unquoted `to: [[x/y]]` is a YAML flow sequence and
+    /// makes the entire note unparseable.
     pub to: String,
     /// Free-form `snake_case` relationship verb chosen by the LLM (no fixed
     /// taxonomy — R7 LLM sovereignty). E.g. "`works_at`", "colleague".

@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use self::trace::{StageTrace, TraceSink};
 use crate::config::types::memory::{ExpansionConfig, RetrievalScoringConfig};
 use crate::error::AlephError;
-use crate::memory::context::{MemoryFact, NoteType};
-use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
+use crate::memory::notes::search_result::NoteSearchResult;
+use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::rerank::{blend_scores, build_provider, RerankConfig, RerankProvider};
 use crate::memory::store::types::ScoredFact;
@@ -148,7 +148,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         &self,
         facts: Vec<ScoredFact>,
         now: i64,
-        reinforcement_counts: &HashMap<String, i64>,
+        reinforcement_counts: &HashMap<(String, String), i64>,
         sink: &mut TraceSink,
     ) -> Vec<ScoredFact> {
         if !self.scoring.is_active() || facts.len() < 2 {
@@ -176,7 +176,14 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             let t0 = Instant::now();
             let n = facts.len();
             for f in facts.iter_mut() {
-                let hits = reinforcement_counts.get(&f.fact.id).copied().unwrap_or(0);
+                // Keyed by (owner, path): in the project-scoped read union two
+                // namespaces can hold notes at the same relative path, and a
+                // bare-path map would let one namespace's heat leak into the
+                // other's ranking.
+                let hits = reinforcement_counts
+                    .get(&(f.fact.agent.clone(), f.fact.id.clone()))
+                    .copied()
+                    .unwrap_or(0);
                 f.score =
                     scoring::apply_reinforcement(f.score, hits, self.scoring.reinforcement_weight);
             }
@@ -265,6 +272,61 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         {
             tracing::debug!(error = %e, "failed to record recall signals (non-fatal)");
         }
+    }
+
+    /// Bucket `ranked` by the note's true owning namespace and record each
+    /// bucket under that owner.
+    ///
+    /// `recall_signals` rows are per-agent, and every consumer reads them under
+    /// a *specific* agent id: `NoteDecay`'s `access_weight` and the evolution
+    /// recall-evidence gate both run with the dream context's **scoped** id.
+    /// Filing a project note's hit under the base namespace therefore makes the
+    /// note look never-recalled to decay (early archival) while crediting a
+    /// base-namespace note that was never surfaced.
+    ///
+    /// `to_scored_fact(agent_id)` already stamped the true owner onto
+    /// `fact.agent` when the results were collected, so no new plumbing is
+    /// needed — just group by it.
+    async fn record_recall_by_owner(&self, query: &str, ranked: &[ScoredFact]) {
+        let mut by_owner: HashMap<&str, Vec<ScoredFact>> = HashMap::new();
+        for f in ranked {
+            by_owner
+                .entry(f.fact.agent.as_str())
+                .or_default()
+                .push(f.clone());
+        }
+        for (owner, bucket) in &by_owner {
+            self.record_recall(query, owner, bucket).await;
+        }
+    }
+
+    /// Reinforcement counts for a multi-owner candidate set, fetched per owning
+    /// namespace and merged. The single-owner `fetch_reinforcement_counts` reads
+    /// every path under one agent id, which returns zero for notes owned by any
+    /// other namespace in the scope union — i.e. exactly the project notes the
+    /// scoped read exists to surface.
+    ///
+    /// Keyed by `(owner, path)` because two namespaces can hold notes at the
+    /// same relative path; a bare-path map would collapse them.
+    async fn fetch_reinforcement_counts_by_owner(
+        &self,
+        facts: &[ScoredFact],
+    ) -> HashMap<(String, String), i64> {
+        let mut by_owner: HashMap<&str, Vec<ScoredFact>> = HashMap::new();
+        for f in facts {
+            by_owner
+                .entry(f.fact.agent.as_str())
+                .or_default()
+                .push(f.clone());
+        }
+        let mut merged: HashMap<(String, String), i64> = HashMap::new();
+        for (owner, bucket) in &by_owner {
+            let counts = self.fetch_reinforcement_counts(owner, bucket).await;
+            for (path, n) in counts {
+                merged.insert(((*owner).to_string(), path), n);
+            }
+        }
+        merged
     }
 
     /// Annotate surfaced notes with backlink counts + structural-strong
@@ -503,7 +565,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
         let ranked = self.apply_rerank(query, facts, sink).await;
-        let counts = self.fetch_reinforcement_counts(agent_id, &ranked).await;
+        let counts = self.fetch_reinforcement_counts_by_owner(&ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, sink);
         let before = ranked.len();
         let t0 = Instant::now();
@@ -515,7 +577,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             ranked.len(),
         );
         // Close the hot-floating loop: record the surfaced notes as recall hits.
-        self.record_recall(query, agent_id, &ranked).await;
+        self.record_recall_by_owner(query, &ranked).await;
         self.surface_relations(agent_id, &mut ranked).await;
         Ok(ranked)
     }
@@ -543,27 +605,56 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     }
 
     /// FTS-only search (no embedding required).
-    /// Note: FTS results don't carry scores natively — rank-based scores are assigned.
+    ///
+    /// Note: FTS results don't carry scores natively — rank-based scores are
+    /// assigned.
+    ///
+    /// Hits are hydrated with their note bodies via `get_notes_with_content`,
+    /// the same trait method the hybrid path uses. The FTS index rows carry only
+    /// metadata, so emitting them directly produced facts with `content == ""`:
+    /// the model received a recall block of titles with no substance, while
+    /// `text_retrieve_scored` still wrote a `recall_signals` row for each one —
+    /// durably teaching reinforcement that empty notes are hot. This is the
+    /// degraded path (no embedder configured, or a transient embed outage), so
+    /// it is exactly when recall fidelity matters most.
+    ///
+    /// A hit whose body cannot be loaded is skipped rather than emitted empty:
+    /// it contributes nothing to the prompt, so it must not earn a recall
+    /// signal either.
     pub async fn text_retrieve(
         &self,
         query: &str,
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
-        let entries = self
-            .indexer
-            .store()
-            .search_notes_fts(query, agent_id, limit)
-            .await?;
+        let store = self.indexer.store();
+        let entries = store.search_notes_fts(query, agent_id, limit).await?;
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // rust-doctor-disable-next-line excessive-clone
+        let paths: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+        let hydrated = store.get_notes_with_content(agent_id, &paths).await?;
+        let by_path: std::collections::HashMap<&str, &NoteSearchResult> =
+            hydrated.iter().map(|r| (r.path.as_str(), r)).collect();
 
         let total = entries.len() as f32;
-        Ok(entries
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                scored_fact_from_index_entry(entry, agent_id, 1.0 - (i as f32 / total.max(1.0)))
-            })
-            .collect())
+        let mut out = Vec::with_capacity(entries.len());
+        for (i, entry) in entries.iter().enumerate() {
+            let Some(result) = by_path.get(entry.path.as_str()) else {
+                tracing::debug!(
+                    path = %entry.path,
+                    "text_retrieve: FTS hit has no loadable body; skipping"
+                );
+                continue;
+            };
+            let mut fact = result.to_scored_fact(agent_id);
+            // FTS carries no native score; derive it from rank as before.
+            fact.score = 1.0 - (i as f32 / total.max(1.0));
+            out.push(fact);
+        }
+        Ok(out)
     }
 
     /// FTS-only recall tail shared by both `retrieve_inner` degradation branches
@@ -588,9 +679,9 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             0,
             results.len(),
         );
-        let counts = self.fetch_reinforcement_counts(agent_id, &results).await;
+        let counts = self.fetch_reinforcement_counts_by_owner(&results).await;
         let ranked = self.apply_scoring(results, now_unix(), &counts, sink);
-        self.record_recall(query, agent_id, &ranked).await;
+        self.record_recall_by_owner(query, &ranked).await;
         Ok(ranked)
     }
 
@@ -667,19 +758,20 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         });
         all_results.truncate(self.fetch_limit(limit));
 
-        // Close the hot-floating loop across the multi-agent ("smart recall")
-        // path too. Recall signals are per-agent, so this path records and reads
-        // reinforcement under the first workspace id as a representative label
-        // (notes owned by the other agents contribute no cross-agent
-        // reinforcement here — acceptable for the fuzzy smart-recall path).
-        let recall_agent = agent_ids.first().map_or("owner", String::as_str);
+        // Close the hot-floating loop across the multi-agent path too. Signals
+        // are filed per owning namespace (see `record_recall_by_owner`) — this
+        // is not only the opt-in "smart recall" path any more: `gather.rs`
+        // routes *all* project-scoped auto-recall through here, and
+        // `read_scope_ids` returns `[base, scoped]`, so labelling every hit with
+        // `agent_ids.first()` filed every project note's hit under the base
+        // namespace.
         let ranked = self
             .apply_rerank(query, all_results, &mut TraceSink::Off)
             .await;
-        let counts = self.fetch_reinforcement_counts(recall_agent, &ranked).await;
+        let counts = self.fetch_reinforcement_counts_by_owner(&ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, &mut TraceSink::Off);
         ranked.truncate(limit);
-        self.record_recall(query, recall_agent, &ranked).await;
+        self.record_recall_by_owner(query, &ranked).await;
         Ok(ranked)
     }
 
@@ -704,8 +796,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         all_results.truncate(limit);
-        let namespace = agent_ids.first().map_or("owner", String::as_str);
-        self.record_recall(query, namespace, &all_results).await;
+        self.record_recall_by_owner(query, &all_results).await;
         Ok(all_results)
     }
 
@@ -756,31 +847,10 @@ async fn discover_agent_ids(memory_dir: &std::path::Path) -> Vec<String> {
     agents
 }
 
-/// Build a `ScoredFact` from a lightweight `NoteIndexEntry`.
-///
-/// Content is not available in index entries — the `content` field is left empty.
-/// Callers that need full content should use the vector or hybrid search paths.
-fn scored_fact_from_index_entry(entry: &NoteIndexEntry, agent_id: &str, score: f32) -> ScoredFact {
-    let note_type = NoteType::from_str_or_other(&entry.category);
-    let mut fact = MemoryFact::new(
-        String::new(), // content not stored in index entries
-        note_type,
-        // rust-doctor-disable-next-line excessive-clone
-        entry.tags.clone(),
-    );
-    // rust-doctor-disable-next-line excessive-clone
-    fact.id = entry.path.clone();
-    fact.path = format!("note://{}", entry.path);
-    fact.agent = agent_id.to_string();
-    fact.created_at = entry.created_at;
-    fact.updated_at = entry.updated_at;
-    fact.is_valid = true;
-    ScoredFact { fact, score }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::context::{MemoryFact, NoteType};
     use crate::memory::store::SqliteMemoryBackend;
     use tempfile::tempdir;
 
