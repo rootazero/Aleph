@@ -114,10 +114,6 @@ pub const fn default_true() -> bool {
     true
 }
 
-pub const fn default_false() -> bool {
-    false
-}
-
 impl Default for PIIConfig {
     fn default() -> Self {
         Self {

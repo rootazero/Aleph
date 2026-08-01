@@ -1,0 +1,4 @@
+    Checking alephcore v26.7.21 (/home/zou/data/workspace/Aleph/.worktrees/seam-audit-batch-clicocon)
+src/config/types/search.rs:117:14: warning: function `default_false` is never used
+warning: `alephcore` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized] target(s) in 7m 54s
