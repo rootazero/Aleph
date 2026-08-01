@@ -4,13 +4,13 @@
 
 use crate::config::types::{
     AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml,
-    DispatcherConfigToml, EvolutionConfig, ExecutionConfig, FallbackProviderToml,
+    ExecutionConfig, FallbackProviderToml,
     FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig, GuardrailsToml,
-    McpConfig, MediaConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
+    McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
     PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig,
     RoutingRuleConfig, SearchConfigInternal, SecretMapping, SecretProviderConfig,
-    SecretsConfig, ShellSecurityConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
-    StabilityToml, StopHookConfig, SubAgentConfig, TeamBroadcastConfigToml,
+    SecretsConfig, ShellSecurityConfig, SkillsConfig,
+    StabilityToml, StopHookConfig, TeamBroadcastConfigToml,
     TeamDispatcherConfigToml, TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig,
     UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
@@ -96,27 +96,6 @@ pub struct Config {
     /// from this config at boot.
     #[serde(default)]
     pub sandbox: crate::sandbox::SandboxConfig,
-    /// Smart conversation flow configuration
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub smart_flow: SmartFlowConfig,
-    /// Smart matching configuration (semantic detection system)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub smart_matching: SmartMatchingConfig,
-    /// Dispatcher Layer configuration (intelligent tool routing)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub dispatcher: DispatcherConfigToml,
     /// Agent task orchestration configuration (renamed from cowork)
     /// Supports both [agent] and [cowork] sections for backward compatibility
     #[serde(default, alias = "cowork")]
@@ -134,13 +113,6 @@ pub struct Config {
     /// Orchestrator configuration (Three-Layer Control architecture)
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
-    /// Sub-agent synchronization configuration
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub subagent: SubAgentConfig,
     /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
     /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
     /// shape the chain by endpoint tier (see `[route]`).
@@ -162,16 +134,6 @@ pub struct Config {
     /// Preset persona definitions for group chat
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub personas: Vec<PersonaConfig>,
-    /// Skill evolution configuration (Skill Compiler - Phase 10)
-    #[serde(default)]
-    #[deprecated(
-        since = "2026.7.20",
-        note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"
-    )]
-    pub evolution: EvolutionConfig,
-    /// Media understanding pipeline configuration
-    #[serde(default)]
-    pub media: MediaConfig,
     /// Privacy and PII filtering configuration
     #[serde(default)]
     pub privacy: PrivacyConfig,
@@ -397,7 +359,6 @@ impl Config {
 // =============================================================================
 
 impl Default for Config {
-    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             general: GeneralConfig::default(),
@@ -414,23 +375,17 @@ impl Default for Config {
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
             tool_service: ToolServiceConfig::default(),
             sandbox: crate::sandbox::SandboxConfig::default(),
-            smart_flow: SmartFlowConfig::default(),
-            smart_matching: SmartMatchingConfig::default(),
-            dispatcher: DispatcherConfigToml::default(),
             agent: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             voice_local: VoiceSection::default(),
             orchestrator: OrchestratorConfig::default(),
-            subagent: SubAgentConfig::default(),
             route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             heartbeat: HeartbeatConfig::default(),
             tasks_reaper: ReaperConfig::default(),
             personas: Vec::new(),
-            evolution: EvolutionConfig::default(),
-            media: MediaConfig::default(),
             privacy: PrivacyConfig::default(),
             security: ShellSecurityConfig::default(),
             ssrf: crate::security::ssrf::SsrfPolicy::default(),

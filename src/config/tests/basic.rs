@@ -71,7 +71,4 @@ default_provider = "openai"
 
     assert!(config.validate().is_ok());
     assert!(config.memory.enabled);
-    // The Gherkin also asserted `smart_flow.enabled` here. Dropped: that field
-    // is `#[deprecated]` as an inert section (see `reload_impact::INERT_SECTIONS`)
-    // — persisted but read by nothing, so pinning it tests a dead knob.
 }

@@ -163,7 +163,7 @@ pub use crate::config::{
     types::voice_local::LOCAL_PROVIDER_TYPE,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
-    PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig, SmartFlowConfig,
+    PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig,
 };
 
 // Initialization

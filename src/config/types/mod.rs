@@ -8,27 +8,20 @@
 //! - `routing`: Routing rules (`RoutingRuleConfig`)
 //! - `memory`: Memory/RAG settings (`MemoryConfig`)
 //! - `search`: Search capability settings (`SearchConfigInternal`, `PIIConfig`)
-//! - `media`: Media pipeline settings (`MediaConfig`)
-//! - `smart_flow`: Intent detection and matching (`SmartFlowConfig`, `SmartMatchingConfig`)
 //! - `tools`: Native and MCP tools (`ToolsConfig`, `UnifiedToolsConfig`)
 //! - `skills`: Claude Agent Skills settings (`SkillsConfig`)
-//! - `dispatcher`: Dispatcher Layer settings (`DispatcherConfigToml`)
-//! - `agent`: Agent task orchestration settings (`AgentConfigToml`)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (`OrchestratorConfig`, `OrchestratorGuards`)
-//! - `evolution`: Skill compiler settings (`EvolutionConfig`, `SolidificationThresholds`)
 
 pub mod acp;
 pub mod agent;
 pub mod agents_def;
 pub mod desktop;
 pub mod dispatcher;
-pub mod evolution;
 pub mod execution;
 pub mod fetch;
 pub mod general;
 pub mod generation;
 pub mod group_chat;
-pub mod media;
 pub mod memory;
 pub mod moa;
 pub mod orchestrator;
@@ -47,9 +40,7 @@ pub mod secrets;
 pub mod security;
 pub mod serde_helpers;
 pub mod skills;
-pub mod smart_flow;
 pub mod stop_hooks;
-pub mod subagent;
 pub mod tools;
 pub mod voice_local;
 
@@ -59,13 +50,11 @@ pub use acp::*;
 pub use agent::*;
 pub use agents_def::*;
 pub use dispatcher::*;
-pub use evolution::*;
 pub use execution::*;
 pub use fetch::*;
 pub use general::*;
 pub use generation::*;
 pub use group_chat::*;
-pub use media::*;
 pub use memory::*;
 pub use moa::*;
 pub use orchestrator::*;
@@ -83,8 +72,6 @@ pub use search::*;
 pub use secrets::*;
 pub use security::*;
 pub use skills::*;
-pub use smart_flow::*;
 pub use stop_hooks::*;
-pub use subagent::*;
 pub use tools::*;
 pub use voice_local::*;
