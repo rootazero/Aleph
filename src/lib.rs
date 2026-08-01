@@ -66,7 +66,6 @@ pub mod cli;
 pub mod cluster;
 
 pub mod command;
-pub mod components;
 mod config;
 pub mod context;
 mod core;

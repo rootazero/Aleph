@@ -58,11 +58,6 @@ pub enum EventType {
     // AI response
     AiResponseGenerated,
 
-    // Part updates (for UI message flow rendering)
-    PartAdded,
-    PartUpdated,
-    PartRemoved,
-
     // Team events
     TeamCreated,
     TeamMemberAdded,
@@ -110,11 +105,6 @@ pub enum AlephEvent {
 
     // AI response events
     AiResponseGenerated(AiResponse),
-
-    // Part update events (for UI message flow rendering)
-    PartAdded(crate::components::PartUpdateData),
-    PartUpdated(crate::components::PartUpdateData),
-    PartRemoved(crate::components::PartUpdateData),
 
     // Team events
     TeamCreated {
@@ -181,9 +171,6 @@ impl AlephEvent {
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
             Self::SubAgentTreeUpdate(_) => EventType::SubAgentTreeUpdate,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
-            Self::PartAdded(_) => EventType::PartAdded,
-            Self::PartUpdated(_) => EventType::PartUpdated,
-            Self::PartRemoved(_) => EventType::PartRemoved,
             Self::TeamCreated { .. } => EventType::TeamCreated,
             Self::TeamMemberAdded { .. } => EventType::TeamMemberAdded,
             Self::TeamMemberRemoved { .. } => EventType::TeamMemberRemoved,
@@ -214,9 +201,6 @@ impl AlephEvent {
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
             Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
-            Self::PartAdded(_) => "PartAdded",
-            Self::PartUpdated(_) => "PartUpdated",
-            Self::PartRemoved(_) => "PartRemoved",
             Self::TeamCreated { .. } => "TeamCreated",
             Self::TeamMemberAdded { .. } => "TeamMemberAdded",
             Self::TeamMemberRemoved { .. } => "TeamMemberRemoved",
@@ -489,49 +473,6 @@ mod tests {
         let parsed: AlephEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.event_type(), EventType::ToolCallCompleted);
-    }
-
-    #[test]
-    fn test_part_event_types() {
-        use crate::components::{
-            PartEventType, PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus,
-        };
-
-        // Create a tool call part
-        let tool_call = SessionPart::ToolCall(ToolCallPart {
-            id: "call-1".to_string(),
-            tool_name: "search".to_string(),
-            input: serde_json::json!({"query": "test"}),
-            status: ToolCallStatus::Running,
-            output: None,
-            error: None,
-            started_at: 1000,
-            completed_at: None,
-        });
-
-        // Test PartAdded event
-        let added_data = PartUpdateData::added("session-1", &tool_call).unwrap();
-        let event = AlephEvent::PartAdded(added_data.clone());
-        assert_eq!(event.event_type(), EventType::PartAdded);
-        assert_eq!(event.name(), "PartAdded");
-        assert_eq!(added_data.event_type, PartEventType::Added);
-        assert_eq!(added_data.part_type, "tool_call");
-        assert_eq!(added_data.session_id, "session-1");
-
-        // Test PartUpdated event with delta
-        let delta_data =
-            PartUpdateData::text_delta("session-1", "response-1", "ai_response", "Hello, ");
-        let event = AlephEvent::PartUpdated(delta_data.clone());
-        assert_eq!(event.event_type(), EventType::PartUpdated);
-        assert_eq!(event.name(), "PartUpdated");
-        assert_eq!(delta_data.delta, Some("Hello, ".to_string()));
-
-        // Test PartRemoved event
-        let removed_data = PartUpdateData::removed("session-1", "call-1", "tool_call");
-        let event = AlephEvent::PartRemoved(removed_data.clone());
-        assert_eq!(event.event_type(), EventType::PartRemoved);
-        assert_eq!(event.name(), "PartRemoved");
-        assert_eq!(removed_data.event_type, PartEventType::Removed);
     }
 
     #[test]
