@@ -8,8 +8,6 @@
 pub const REQUIRE_CONFIRMATION: bool = true;
 /// Maximum number of tasks to run in parallel
 pub const MAX_PARALLELISM: usize = 4;
-/// Maximum number of retry attempts for failed tasks
-pub const MAX_TASK_RETRIES: u32 = 3;
 
 // Security boundary constants for file operations and code execution
 /// Maximum file size for file operations (100MB)
@@ -33,22 +31,6 @@ pub const DEFAULT_CODE_EXEC_RUNTIME: &str = "shell";
 /// Default environment variables to pass to executed code
 pub const DEFAULT_PASS_ENV: &[&str] = &["PATH", "HOME", "USER"];
 
-// Code execution output limits
-/// Maximum stdout capture size (10MB)
-pub const MAX_STDOUT_SIZE: usize = 10 * 1024 * 1024;
-/// Maximum stderr capture size (1MB)
-pub const MAX_STDERR_SIZE: usize = 1024 * 1024;
-
 // AI model defaults
 /// Default max tokens for AI model responses.
 pub const DEFAULT_MAX_TOKENS: u32 = 16384;
-
-// Retry defaults
-/// Default maximum retry attempts for operations
-pub const DEFAULT_MAX_RETRIES: u32 = 3;
-
-// Timeout defaults (in seconds)
-/// Default confirmation timeout (0 = no timeout, wait indefinitely)
-pub const DEFAULT_CONFIRMATION_TIMEOUT_SECS: u64 = 0;
-/// Default connection timeout
-pub const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;

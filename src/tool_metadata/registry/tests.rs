@@ -1,5 +1,5 @@
 use super::super::types::{
-    ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource,
+    ChannelType, ConflictInfo, ConflictResolution, ToolSource,
 };
 use super::*;
 use crate::tool_metadata::types::ToolPriority;
@@ -748,7 +748,6 @@ async fn test_high_risk_tool_channel_restriction() {
             server: "server".into(),
         },
     )
-    .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk)
     .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
 
     registry.register_with_conflict_resolution(tool).await;

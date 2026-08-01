@@ -14,8 +14,8 @@ pub use constants::*;
 
 pub mod aliases;
 pub use aliases::{
-    is_shorthand_alias, resolve_shorthand, runtime_only_target_description, shorthand_aliases_for,
-    RUNTIME_ONLY_ALIAS_TARGETS, SHORTHAND_ALIASES,
+    is_shorthand_alias, resolve_shorthand, shorthand_aliases_for, RUNTIME_ONLY_ALIAS_TARGETS,
+    SHORTHAND_ALIASES,
 };
 
 mod registry;
@@ -25,9 +25,8 @@ pub use registry::ResolvedCommand;
 pub use registry::ToolCatalog;
 pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 pub use types::{
-    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, StructuredToolMeta, ToolCategory,
-    ToolDefinition, ToolDiff, ToolIndex, ToolIndexCategory, ToolIndexEntry, ToolPriority,
-    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, ToolCategory, ToolDefinition,
+    ToolPriority, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool,
 };
 
 #[cfg(all(test, feature = "loom"))]

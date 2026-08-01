@@ -11,7 +11,6 @@ mod conversions;
 mod tests;
 
 use super::conflict::ToolSource;
-use super::definition::StructuredToolMeta;
 use super::safety::ToolSafetyLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -200,16 +199,6 @@ pub struct UnifiedTool {
     /// Channels that can see this command (empty = all channels)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_channels: Vec<ChannelType>,
-
-    // =========================================================================
-    // Structured Tool Description Fields (for LLM tool selection)
-    // =========================================================================
-    /// Structured metadata for enhanced tool descriptions
-    ///
-    /// Contains precise capability enumeration, differentiation from similar tools,
-    /// and usage guidance to help LLM make accurate tool selection decisions.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub structured_meta: Option<StructuredToolMeta>,
 }
 
 impl UnifiedTool {
@@ -257,18 +246,6 @@ impl UnifiedTool {
             // Dispatch & visibility defaults
             dispatch_mode: DispatchMode::default(),
             visible_channels: Vec::new(),
-            // Structured description defaults
-            structured_meta: None,
         }
-    }
-
-    /// Create a builtin tool with standard prefix
-    ///
-    /// Convenience constructor for system builtin commands.
-    /// ID is automatically prefixed with "builtin:".
-    pub fn builtin(name: impl Into<String>) -> Self {
-        let name = name.into();
-        let id = format!("builtin:{name}");
-        Self::new(id, name, "", ToolSource::Builtin).with_builtin(true)
     }
 }

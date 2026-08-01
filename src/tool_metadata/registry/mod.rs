@@ -4,7 +4,6 @@
 //! a single queryable registry.
 
 mod conflict;
-mod discovery;
 pub mod health;
 mod helpers;
 mod query;
@@ -18,9 +17,8 @@ use std::collections::HashMap;
 use crate::config::RoutingRuleConfig;
 use crate::skill::SkillInfo;
 
-use super::types::{ChannelType, ToolIndex, ToolIndexEntry, UnifiedTool};
+use super::types::ChannelType;
 use conflict::ConflictResolver;
-use discovery::ToolDiscovery;
 // Re-exports for external (integration test, gateway) consumers. The
 // in-crate paths use these via fully-qualified names, hence the lint
 // suppression.
@@ -70,8 +68,6 @@ pub struct ToolCatalog {
     query: ToolQuery,
     /// State manager for tool state operations
     state: ToolState,
-    /// Discovery handler for smart tool discovery
-    discovery: ToolDiscovery,
     /// Runtime health probe cache. Tools opt in via [`register_health_probe`].
     /// Consulted alongside `is_active` when emitting native tool schemas so
     /// the LLM never sees a tool whose dependencies are dead.
@@ -93,8 +89,7 @@ impl ToolCatalog {
             registrar: ToolRegistrar::new(Arc::clone(&tools)),
             conflict_resolver: ConflictResolver::new(Arc::clone(&tools)),
             query: ToolQuery::new(Arc::clone(&tools)),
-            state: ToolState::new(Arc::clone(&tools)),
-            discovery: ToolDiscovery::new(tools),
+            state: ToolState::new(tools),
             health: Arc::new(ToolHealthCache::new()),
         }
     }
@@ -116,12 +111,6 @@ impl ToolCatalog {
     /// model's native tool list as before.
     pub fn register_health_probe(&self, name: impl Into<String>, probe: Arc<dyn ToolHealthProbe>) {
         self.health.register_probe(name, probe);
-    }
-
-    /// Remove a previously registered health probe by name.
-    #[must_use]
-    pub fn unregister_health_probe(&self, name: &str) -> bool {
-        self.health.unregister_probe(name)
     }
 
     // =========================================================================
@@ -167,25 +156,6 @@ impl ToolCatalog {
     /// Check if a command name conflicts with an existing tool
     pub async fn check_conflict(&self, name: &str) -> Option<super::types::ConflictInfo> {
         self.conflict_resolver.check_conflict(name).await
-    }
-
-    /// Resolve a naming conflict between two tools
-    #[must_use]
-    pub fn resolve_conflict(
-        &self,
-        name: &str,
-        conflict: &super::types::ConflictInfo,
-        new_source: &super::types::ToolSource,
-    ) -> super::types::ConflictResolution {
-        self.conflict_resolver
-            .resolve_conflict(name, conflict, new_source)
-    }
-
-    /// Apply conflict resolution by renaming an existing tool
-    pub async fn rename_existing_tool(&self, existing_id: &str, new_name: &str) -> bool {
-        self.conflict_resolver
-            .rename_existing_tool(existing_id, new_name)
-            .await
     }
 
     /// Register a tool with automatic conflict resolution
@@ -332,58 +302,6 @@ impl ToolCatalog {
     /// Get active tool count
     pub async fn active_count(&self) -> usize {
         self.query.active_count().await
-    }
-
-    // =========================================================================
-    // Prompt Generation & Smart Discovery
-    // =========================================================================
-
-    /// Generate tool list for LLM prompt.
-    ///
-    /// Unhealthy tools (whose registered [`ToolHealthProbe`] reports a
-    /// non-expired Unhealthy result) are filtered out so the LLM never
-    /// sees them. Also kicks off detached background refreshes for any
-    /// tool whose probe cache entry is missing or stale.
-    pub async fn to_prompt_block(&self) -> String {
-        self.discovery.trigger_health_refresh(&self.health).await;
-        let snap = self.health.snapshot();
-        self.discovery.to_prompt_block(&snap).await
-    }
-
-    /// Generate lightweight tool index for smart discovery
-    pub async fn generate_tool_index(&self, core_tools: &[&str]) -> ToolIndex {
-        self.discovery.trigger_health_refresh(&self.health).await;
-        let snap = self.health.snapshot();
-        self.discovery.generate_tool_index(core_tools, &snap).await
-    }
-
-    /// Generate smart prompt with tool index + filtered full schemas.
-    ///
-    /// Tools whose registered health probe reports `Unhealthy` (and the
-    /// entry hasn't expired) are stripped from both the full-schema set
-    /// and the index. Callers that want to see disabled tools (for UI
-    /// or debugging) should consult [`Self::health`] directly.
-    pub async fn generate_smart_prompt(
-        &self,
-        core_tools: &[&str],
-        filtered_tools: &[&str],
-    ) -> (Vec<UnifiedTool>, String) {
-        self.discovery.trigger_health_refresh(&self.health).await;
-        let snap = self.health.snapshot();
-        self.discovery
-            .generate_smart_prompt(core_tools, filtered_tools, &snap)
-            .await
-    }
-
-    /// Get full tool definition by name
-    pub async fn get_tool_definition(&self, name: &str) -> Option<UnifiedTool> {
-        self.discovery.get_tool_definition(name).await
-    }
-
-    /// List tools by category for the `list_tools` meta tool
-    pub async fn list_tools_by_category(&self, category: Option<&str>) -> Vec<ToolIndexEntry> {
-        let snap = self.health.snapshot();
-        self.discovery.list_tools_by_category(category, &snap).await
     }
 }
 

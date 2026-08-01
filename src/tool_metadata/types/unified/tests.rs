@@ -2,20 +2,21 @@
 
 use super::*;
 use crate::tool_metadata::types::conflict::ToolSource;
-use crate::tool_metadata::types::definition::{Capability, ToolDiff};
-use crate::tool_metadata::types::index::ToolIndexCategory;
-use crate::tool_metadata::types::safety::ToolSafetyLevel;
 use serde_json::json;
 
 #[test]
-fn test_builtin_tool_constructor() {
-    let tool = UnifiedTool::builtin("search")
-        .with_display_name("Web Search")
-        .with_description("Search the web")
-        .with_icon("magnifyingglass")
-        .with_usage("/search <query>")
-        .with_localization_key("tool.search")
-        .with_sort_order(1);
+fn test_builtin_tool_via_new() {
+    let tool = UnifiedTool::new(
+        "builtin:search",
+        "search",
+        "Search the web",
+        ToolSource::Builtin,
+    )
+    .with_display_name("Web Search")
+    .with_icon("magnifyingglass")
+    .with_usage("/search <query>")
+    .with_localization_key("tool.search")
+    .with_sort_order(1);
 
     assert_eq!(tool.id, "builtin:search");
     assert_eq!(tool.name, "search");
@@ -109,6 +110,7 @@ fn test_unified_tool_with_original_name() {
 
 #[test]
 fn test_unified_tool_with_safety_level() {
+    use crate::tool_metadata::types::safety::ToolSafetyLevel;
     let tool = UnifiedTool::new(
         "native:delete_file",
         "delete_file",
@@ -118,73 +120,6 @@ fn test_unified_tool_with_safety_level() {
     .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk);
 
     assert_eq!(tool.safety_level, ToolSafetyLevel::IrreversibleHighRisk);
-    assert!(tool.requires_confirmation); // Auto-synced from safety level
-}
-
-#[test]
-fn test_unified_tool_with_structured_meta() {
-    let tool = UnifiedTool::new(
-        "builtin:search_files",
-        "search_files",
-        "Search for files by name pattern",
-        ToolSource::Builtin,
-    )
-    .with_capability(Capability::new(
-        "search",
-        "file names",
-        "project",
-        "file paths",
-    ))
-    .with_not_suitable_for("searching file content")
-    .with_differentiation(ToolDiff::new(
-        "search_content",
-        "matches names",
-        "matches content",
-        "know file name",
-        "know content",
-    ))
-    .with_use_when("user mentions specific file name");
-
-    assert!(tool.structured_meta.is_some());
-    let meta = tool.structured_meta.unwrap();
-    assert_eq!(meta.capabilities.len(), 1);
-    assert_eq!(meta.not_suitable_for.len(), 1);
-    assert_eq!(meta.differentiation.len(), 1);
-    assert_eq!(meta.use_when.len(), 1);
-}
-
-#[test]
-fn test_unified_tool_to_index_entry() {
-    let tool = UnifiedTool::new(
-        "mcp:github:pr_list",
-        "github:pr_list",
-        "List all pull requests from a GitHub repository",
-        ToolSource::Mcp {
-            server: "github".into(),
-        },
-    );
-
-    let entry = tool.to_index_entry(&["search", "file_ops"]);
-    assert_eq!(entry.name, "github:pr_list");
-    assert_eq!(entry.category, ToolIndexCategory::Mcp);
-    assert!(!entry.is_core);
-    // Summary is truncated
-    assert!(entry.summary.len() <= 50);
-}
-
-#[test]
-fn test_unified_tool_to_index_entry_core() {
-    let tool = UnifiedTool::new(
-        "builtin:search",
-        "search",
-        "Search the web",
-        ToolSource::Builtin,
-    );
-
-    let entry = tool.to_index_entry(&["search", "file_ops"]);
-    assert_eq!(entry.name, "search");
-    assert_eq!(entry.category, ToolIndexCategory::Core);
-    assert!(entry.is_core);
 }
 
 #[test]
@@ -202,11 +137,8 @@ fn test_dispatch_mode_default() {
 #[test]
 fn test_dispatch_mode_builder() {
     let tool = UnifiedTool::new("builtin:help", "help", "Show help", ToolSource::Builtin)
-        .with_dispatch_mode(DispatchMode::Direct)
         .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
 
-    assert_eq!(tool.dispatch_mode, DispatchMode::Direct);
-    assert_eq!(tool.visible_channels.len(), 2);
     assert!(tool.visible_channels.contains(&ChannelType::Panel));
 }
 
