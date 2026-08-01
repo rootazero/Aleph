@@ -32,21 +32,6 @@ pub struct WebFetchPolicy {
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
 
-    /// Whether to follow HTTP redirects
-    /// Default: true
-    #[serde(default = "default_follow_redirects")]
-    pub follow_redirects: bool,
-
-    /// Maximum number of redirects to follow
-    /// Default: 10
-    #[serde(default = "default_max_redirects")]
-    pub max_redirects: u64,
-
-    /// CSS selectors for content extraction in priority order
-    /// Default: ["article", "main", ".content", ".post-content", "#content", "body"]
-    #[serde(default = "default_content_selectors")]
-    pub content_selectors: Vec<String>,
-
     /// Whether to use Readability algorithm for content extraction
     /// When false, falls back to CSS selector-based extraction
     /// Default: true
@@ -65,9 +50,6 @@ impl Default for WebFetchPolicy {
             min_content_length: default_min_content_length(),
             user_agent: default_user_agent(),
             timeout_seconds: default_timeout_seconds(),
-            follow_redirects: default_follow_redirects(),
-            max_redirects: default_max_redirects(),
-            content_selectors: default_content_selectors(),
             enable_readability: default_enable_readability(),
             crawl4ai: Crawl4aiConfig::default(),
         }
@@ -90,27 +72,8 @@ const fn default_timeout_seconds() -> u64 {
     30
 }
 
-const fn default_follow_redirects() -> bool {
-    true
-}
-
-const fn default_max_redirects() -> u64 {
-    10
-}
-
 const fn default_enable_readability() -> bool {
     true
-}
-
-fn default_content_selectors() -> Vec<String> {
-    vec![
-        "article".to_string(),
-        "main".to_string(),
-        ".content".to_string(),
-        ".post-content".to_string(),
-        "#content".to_string(),
-        "body".to_string(),
-    ]
 }
 
 const fn default_crawl4ai_timeout() -> u64 {
@@ -180,15 +143,6 @@ mod tests {
         assert_eq!(policy.min_content_length, 100);
         assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
-        assert!(policy.follow_redirects);
-    }
-
-    #[test]
-    fn test_content_selectors() {
-        let policy = WebFetchPolicy::default();
-        assert!(policy.content_selectors.contains(&"article".to_string()));
-        assert!(policy.content_selectors.contains(&"main".to_string()));
-        assert!(policy.content_selectors.contains(&"body".to_string()));
     }
 
     #[test]
