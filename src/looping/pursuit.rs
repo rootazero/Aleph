@@ -34,6 +34,60 @@ pub fn should_fire(state: &LoopState, tokens_now: u64, now_ms: u64) -> bool {
     state.is_active() && !exhausted(state, tokens_now, now_ms)
 }
 
+/// Would a tick claimed now — waking at `wake_ms` — still be inside the
+/// wall-clock bound when it actually EXECUTES?
+///
+/// [`exhausted`] answers "may this loop be claimed", which is a different
+/// question: a claim happens at the end of a run, the tick runs one cadence
+/// later, and nothing in between re-reads the clock (`confirm_fire` matches
+/// the marker, not the deadline). Without this projection `timeout_minutes`
+/// bounds only when a tick may be *scheduled*, so `interval='2h',
+/// timeout_minutes=1` runs a full LLM turn 119 minutes past the limit the user
+/// set, and only the claim AFTER that reports the loop stopped.
+///
+/// The tradeoff is deliberate: the loop now stops at the last claim whose wake
+/// lands in-bounds — up to one interval EARLY rather than arbitrarily late.
+/// A safety cap is an upper bound, not an approximation.
+///
+/// `now_ms == 0` (clock unavailable) fails open, matching [`exhausted`].
+#[must_use]
+pub fn fires_out_of_bounds(state: &LoopState, wake_ms: u64, now_ms: u64) -> bool {
+    state
+        .deadline_ms
+        .is_some_and(|deadline| now_ms != 0 && wake_ms > deadline)
+}
+
+/// The delay a claim would use once the model-paced `next_wake` is consumed —
+/// i.e. the cadence's own default. `tick_delay_ms` answers "how long until the
+/// tick being claimed NOW"; this answers "and the one after that".
+const fn cadence_default_ms(state: &LoopState) -> u64 {
+    match state.cadence {
+        Cadence::Fixed { interval_ms } => interval_ms,
+        Cadence::ModelPaced { fallback_ms } => fallback_ms,
+    }
+}
+
+/// Is the tick being claimed now the last one the wall-clock bound permits?
+///
+/// The tick fires at `now + tick_delay_ms`; the claim that follows it would
+/// schedule one cadence later again, and [`fires_out_of_bounds`] will refuse
+/// that. So this tick gets the same wrap-up handoff the iteration cap already
+/// gets. It matters more here than there: `start` DROPS the default tick cap
+/// when a `timeout_minutes` is given ("a deadline is itself a bound"), so for
+/// deadline-bounded loops this is the only bound there is — and until now the
+/// only bound with no final turn to report from.
+#[must_use]
+pub fn is_final_deadline_tick(state: &LoopState, now_ms: u64) -> bool {
+    let Some(deadline) = state.deadline_ms else {
+        return false;
+    };
+    if now_ms == 0 {
+        return false; // clock unavailable — never claim finality
+    }
+    let this_wake = now_ms.saturating_add(tick_delay_ms(state, now_ms));
+    this_wake.saturating_add(cadence_default_ms(state)) > deadline
+}
+
 /// How long to wait before the next tick, in ms.
 #[must_use]
 pub fn tick_delay_ms(state: &LoopState, now_ms: u64) -> u64 {
@@ -59,12 +113,21 @@ pub fn tick_delay_ms(state: &LoopState, now_ms: u64) -> u64 {
 pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
     let n = state.iterations_used.saturating_add(1);
 
-    // This tick (number `n`) is the last one the iteration cap permits when
-    // `n >= max`: the hook will mark the loop exhausted before tick `n + 1`.
-    if state.max_iterations.is_some_and(|max| n >= max) {
+    // Last tick permitted by whichever bound binds first. Iteration cap: `n >=
+    // max`, the hook marks the loop exhausted before tick `n + 1`. Deadline:
+    // the claim after this one would schedule a wake past the limit and be
+    // refused. Either way this is the loop's only chance to hand off, so it
+    // replaces the remaining-quota clause rather than adding to it.
+    let capped = state.max_iterations.is_some_and(|max| n >= max);
+    if capped || is_final_deadline_tick(state, now_ms) {
+        let bound = if capped {
+            "iteration cap"
+        } else {
+            "time limit"
+        };
         return format!(
             "{prompt}\n\n[Timer loop — tick {n}. This is the LAST tick before the \
-             iteration cap; the loop will not fire again. Wrap up and report what \
+             {bound}; the loop will not fire again. Wrap up and report what \
              you found so the user can take over.]",
             prompt = state.prompt,
         );
@@ -289,10 +352,12 @@ mod tests {
 
     #[test]
     fn tick_prompt_surfaces_deadline_time_left() {
-        let l = fixed().with_deadline_ms(Some(310_000));
-        // now 10_000 → 300_000 ms == 5m left.
+        // 5m cadence, 25m of window left at now=10_000: this tick fires at 5m
+        // and another still fits, so the quota clause (not the wrap-up) applies.
+        let l = fixed().with_deadline_ms(Some(1_510_000));
         let p = tick_prompt(&l, 0, 10_000);
-        assert!(p.contains("~5m until the time limit"), "{p}");
+        assert!(p.contains("~25m until the time limit"), "{p}");
+        assert!(!p.contains("LAST tick"), "{p}");
     }
 
     #[test]
@@ -313,6 +378,45 @@ mod tests {
         assert!(!tick_prompt(&l, 0, 2_000).contains("token budget"), "inert");
         let uncaptured = fixed().with_token_budget(Some(5_000));
         assert!(!tick_prompt(&uncaptured, 2_500, 2_000).contains("token budget"));
+    }
+
+    #[test]
+    fn deadline_bounded_loop_gets_the_same_last_tick_handoff() {
+        // 5m cadence, deadline 8m out: this tick fires at 5m, the next would be
+        // at 10m and be refused — so this one must say so. Before the fix only
+        // iteration-capped loops got a wrap-up turn, and `start` drops the tick
+        // cap whenever a deadline is set, so this was the common case.
+        let l = fixed().with_deadline_ms(Some(480_000));
+        let p = tick_prompt(&l, 0, 1);
+        assert!(p.contains("LAST tick before the time limit"), "{p}");
+        assert!(p.contains("Wrap up"), "{p}");
+        // The quota clause is replaced, not duplicated.
+        assert!(!p.contains("until the time limit"), "{p}");
+    }
+
+    #[test]
+    fn a_mid_window_tick_still_gets_the_plain_quota_clause() {
+        // 5m cadence, 30m window: several ticks left, so no finality claim.
+        let l = fixed().with_deadline_ms(Some(1_800_000));
+        let p = tick_prompt(&l, 0, 1);
+        assert!(!p.contains("LAST tick"), "{p}");
+        assert!(p.contains("until the time limit"), "{p}");
+    }
+
+    #[test]
+    fn iteration_cap_still_wins_the_wording_when_both_bind() {
+        let l = fixed()
+            .with_max_iterations(Some(1))
+            .with_deadline_ms(Some(480_000));
+        let p = tick_prompt(&l, 0, 1);
+        assert!(p.contains("LAST tick before the iteration cap"), "{p}");
+    }
+
+    #[test]
+    fn clock_unavailable_never_claims_a_final_tick() {
+        let l = fixed().with_deadline_ms(Some(480_000));
+        assert!(!is_final_deadline_tick(&l, 0));
+        assert!(!tick_prompt(&l, 0, 0).contains("LAST tick"));
     }
 
     #[test]

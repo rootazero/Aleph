@@ -111,17 +111,19 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_approval_requires_permission() {
+    fn test_approval_events_require_permission() {
         let guard = EventScopeGuard::default_rules();
 
-        // No permissions — denied.
-        assert!(!guard.can_receive("exec.approval.pending", &[]));
+        // Events publish under `approval.*`; `exec.approval.*` is the JSON-RPC
+        // METHOD namespace and never reaches `can_receive`, which is why that
+        // rule was dropped as dead (`be14b0b76`). Assert the live prefix.
+        assert!(!guard.can_receive("approval.pending", &[]));
+        assert!(guard.can_receive("approval.pending", &["exec.approver".to_string()]));
+        assert!(guard.can_receive("approval.result", &["admin".to_string()]));
 
-        // "exec.approver" — allowed.
-        assert!(guard.can_receive("exec.approval.pending", &["exec.approver".to_string()]));
-
-        // "admin" — allowed.
-        assert!(guard.can_receive("exec.approval.result", &["admin".to_string()]));
+        // The dropped namespace is unguarded — stated so a reader does not
+        // mistake its absence for a hole: nothing publishes on it.
+        assert!(guard.can_receive("exec.approval.pending", &[]));
     }
 
     #[test]

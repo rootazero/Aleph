@@ -12,22 +12,6 @@ use crate::{define_groups, define_hints};
 /// Returns a `ConfigUiHints` instance containing all default groups and field hints.
 ///
 /// # Example
-///
-/// ```ignore
-/// use alephcore::config::ui_hints::build_ui_hints;
-///
-/// let hints = build_ui_hints();
-///
-/// // Get hint for a specific field
-/// if let Some(hint) = hints.get_hint("general.language") {
-///     println!("Label: {:?}", hint.label);
-/// }
-///
-/// // Get hint using wildcard matching
-/// if let Some(hint) = hints.get_hint("providers.openai.api_key") {
-///     assert!(hint.sensitive);
-/// }
-/// ```
 pub fn build_ui_hints() -> ConfigUiHints {
     ConfigUiHints {
         groups: build_groups(),
@@ -384,110 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn test_wildcard_provider_hints() {
-        let hints = build_ui_hints();
-
-        // Test wildcard matching for providers
-        let hint = hints.get_hint("providers.openai.api_key");
-        assert!(hint.is_some());
-        assert!(hint.unwrap().sensitive);
-
-        let hint2 = hints.get_hint("providers.claude.model");
-        assert!(hint2.is_some());
-        assert_eq!(hint2.unwrap().group, Some("providers".to_string()));
-    }
-
-    #[test]
-    fn test_provider_specific_override() {
-        let hints = build_ui_hints();
-
-        // OpenAI model should have specific hint
-        let openai_hint = hints.get_hint("providers.openai.model");
-        assert!(openai_hint.is_some());
-        assert_eq!(openai_hint.unwrap().label, Some("OpenAI Model".to_string()));
-
-        // Unknown provider should fall back to wildcard
-        let unknown_hint = hints.get_hint("providers.unknown.model");
-        assert!(unknown_hint.is_some());
-        assert_eq!(unknown_hint.unwrap().label, Some("Model".to_string()));
-    }
-
-    #[test]
-    fn test_group_ordering() {
-        let hints = build_ui_hints();
-        let sorted = hints.sorted_groups();
-
-        // Verify ordering
-        let orders: Vec<i32> = sorted.iter().map(|(_, m)| m.order).collect();
-        let mut sorted_orders = orders.clone();
-        sorted_orders.sort();
-        assert_eq!(orders, sorted_orders);
-
-        // General should come first
-        assert_eq!(sorted[0].0, "general");
-    }
-
-    #[test]
-    fn test_sensitive_fields() {
-        let hints = build_ui_hints();
-
-        // API keys should be sensitive
-        assert!(
-            hints
-                .get_hint("providers.openai.api_key")
-                .unwrap()
-                .sensitive
-        );
-        assert!(hints.get_hint("channels.telegram.token").unwrap().sensitive);
-        assert!(hints.get_hint("channels.discord.token").unwrap().sensitive);
-
-        // Regular fields should not be sensitive
-        assert!(!hints.get_hint("general.language").unwrap().sensitive);
-    }
-
-    #[test]
-    fn test_advanced_fields() {
-        let hints = build_ui_hints();
-
-        // Base URL should be advanced
-        assert!(
-            hints
-                .get_hint("providers.openai.base_url")
-                .unwrap()
-                .advanced
-        );
-
-        // MCP should be advanced
-        assert!(hints.get_hint("mcp.enabled").unwrap().advanced);
-
-        // Language should not be advanced
-        assert!(!hints.get_hint("general.language").unwrap().advanced);
-    }
-
-    #[test]
     fn test_all_groups_have_order() {
         let hints = build_ui_hints();
         for (id, meta) in &hints.groups {
             assert!(meta.order > 0, "Group {} should have a positive order", id);
         }
-    }
-
-    #[test]
-    fn test_channel_hints() {
-        let hints = build_ui_hints();
-
-        // Telegram token
-        let telegram = hints.get_hint("channels.telegram.token");
-        assert!(telegram.is_some());
-        assert!(telegram.unwrap().sensitive);
-
-        // Discord token
-        let discord = hints.get_hint("channels.discord.token");
-        assert!(discord.is_some());
-        assert!(discord.unwrap().sensitive);
-
-        // Wildcard enabled
-        let enabled = hints.get_hint("channels.webchat.enabled");
-        assert!(enabled.is_some());
     }
 }

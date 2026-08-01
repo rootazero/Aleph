@@ -387,7 +387,7 @@ mod tests {
         config.profiles.insert(
             "work".into(),
             ProfileConfig {
-                color: Some("#FF0000".into()),
+                headless: Some(true),
                 ..Default::default()
             },
         );
@@ -462,7 +462,6 @@ mod tests {
         let user_config = manager.get_config("user").unwrap();
         assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
         assert_eq!(user_config.browser, BrowserType::Chrome);
-        assert_eq!(user_config.color.as_deref(), Some("#00AA00"));
     }
 
     #[test]
@@ -473,13 +472,13 @@ mod tests {
             ProfileConfig {
                 browser: BrowserType::Chrome,
                 driver: BrowserDriver::ExistingSession,
-                color: Some("#FF0000".into()),
+                headless: Some(false),
                 ..Default::default()
             },
         );
         let manager = ProfileManager::new(config);
         let user_config = manager.get_config("user").unwrap();
-        assert_eq!(user_config.color.as_deref(), Some("#FF0000"));
+        assert_eq!(user_config.headless, Some(false));
     }
 
     #[test]

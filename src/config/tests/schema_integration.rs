@@ -80,58 +80,35 @@ fn test_ui_hints_coverage() {
         "Should have 'advanced' group"
     );
 
-    // Check critical fields have hints
-    assert!(
-        hints.get_hint("general.default_provider").is_some(),
-        "Should have hint for general.default_provider"
-    );
-    assert!(
-        hints.get_hint("providers.openai.api_key").is_some(),
-        "Should have hint for providers.openai.api_key (via wildcard)"
-    );
-    assert!(
-        hints.get_hint("memory.enabled").is_some(),
-        "Should have hint for memory.enabled"
-    );
+    // Check critical fields have hints. Keys are literal, including the
+    // wildcard form — the `get_hint` resolver these used to go through was cut
+    // as test-only (`6e63cabe2`); the hints themselves are still the contract.
+    for key in [
+        "general.default_provider",
+        "providers.*.api_key",
+        "memory.enabled",
+    ] {
+        assert!(hints.fields.contains_key(key), "Should have hint for {key}");
+    }
 }
 
 #[test]
 fn test_sensitive_fields_marked() {
     let hints = build_ui_hints();
 
-    // Check API keys are marked as sensitive
-    let openai_api_key_hint = hints
-        .get_hint("providers.openai.api_key")
-        .expect("Should have openai api_key hint");
-    assert!(
-        openai_api_key_hint.sensitive,
-        "OpenAI API key should be sensitive"
-    );
-
-    let claude_api_key_hint = hints
-        .get_hint("providers.claude.api_key")
-        .expect("Should have claude api_key hint");
-    assert!(
-        claude_api_key_hint.sensitive,
-        "Claude API key should be sensitive"
-    );
-
-    // Check channel tokens are marked as sensitive
-    let telegram_token_hint = hints
-        .get_hint("channels.telegram.token")
-        .expect("Should have telegram token hint");
-    assert!(
-        telegram_token_hint.sensitive,
-        "Telegram token should be sensitive"
-    );
-
-    let discord_token_hint = hints
-        .get_hint("channels.discord.token")
-        .expect("Should have discord token hint");
-    assert!(
-        discord_token_hint.sensitive,
-        "Discord token should be sensitive"
-    );
+    // Credentials must never render as plain text. Asserted against the hint
+    // map directly (the `get_hint` wildcard resolver was cut as test-only).
+    for key in [
+        "providers.*.api_key",
+        "channels.telegram.token",
+        "channels.discord.token",
+    ] {
+        let hint = hints
+            .fields
+            .get(key)
+            .unwrap_or_else(|| panic!("Should have hint for {key}"));
+        assert!(hint.sensitive, "{key} should be sensitive");
+    }
 }
 
 #[test]
