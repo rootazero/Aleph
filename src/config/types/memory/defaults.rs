@@ -60,14 +60,6 @@ pub const fn default_dreaming_max_duration_seconds() -> u32 {
     600
 }
 
-pub const fn default_weekly_enabled() -> bool {
-    true
-}
-
-pub const fn default_weekly_interval_days() -> u32 {
-    7
-}
-
 pub const fn default_drift_max_pairs_per_run() -> usize {
     20
 }

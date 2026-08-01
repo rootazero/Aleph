@@ -128,7 +128,7 @@ Both lists over-fetch `limit * 2` to give RRF enough signal for the final top-k 
 
 Between `hybrid_search_notes` and the cross-encoder rerank, `retrieve()` runs
 `note_retrieval::expansion::graph_expand`. For the top `max_seeds` direct hits it
-looks up each seed's strongest 4-signal related peers (`NoteStore::related_peers`,
+looks up each seed's strongest 5-signal related peers (`NoteStore::related_peers`,
 materialized per dream cycle in `notes_graph_related`), dedups them against the
 direct hits, hydrates their content (`NoteStore::get_notes_with_content`), and
 adds them to the candidate pool with a propagated score

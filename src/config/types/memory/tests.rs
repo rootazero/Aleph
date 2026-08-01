@@ -50,8 +50,6 @@ mod tests {
     #[test]
     fn dreaming_config_defaults_include_new_fields() {
         let config = DreamingConfig::default();
-        assert!(config.weekly_enabled);
-        assert_eq!(config.weekly_interval_days, 7);
         assert_eq!(config.drift_max_pairs_per_run, 20);
         assert_eq!(config.synthesis_min_cluster_size, 3);
         assert_eq!(config.synthesis_max_insights, 10);
@@ -141,24 +139,5 @@ mod tests {
         assert_eq!(cfg.curated.memory_char_limit, 2_200);
         assert_eq!(cfg.curated.user_char_limit, 1_375);
         assert!((cfg.curated.legacy_warn_threshold - 0.95).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dreaming_config_accessors_match_fields() {
-        let config = DreamingConfig::default();
-        assert_eq!(config.weekly_enabled(), config.weekly_enabled);
-        assert_eq!(config.weekly_interval_days(), config.weekly_interval_days);
-        assert_eq!(
-            config.drift_max_pairs_per_run(),
-            config.drift_max_pairs_per_run
-        );
-        assert_eq!(
-            config.synthesis_min_cluster_size(),
-            config.synthesis_min_cluster_size
-        );
-        assert_eq!(
-            config.synthesis_max_insights(),
-            config.synthesis_max_insights
-        );
     }
 }
