@@ -4,7 +4,7 @@
 //! Run with: `just test-loom`
 
 use loom::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use loom::sync::{Arc, Mutex, RwLock};
+use loom::sync::{Arc, RwLock};
 use loom::thread;
 
 /// Verify singleton initialization via compare_exchange — exactly one thread wins.
