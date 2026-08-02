@@ -387,7 +387,6 @@ mod tests {
         config.profiles.insert(
             "work".into(),
             ProfileConfig {
-                color: Some("#FF0000".into()),
                 ..Default::default()
             },
         );
@@ -462,24 +461,29 @@ mod tests {
         let user_config = manager.get_config("user").unwrap();
         assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
         assert_eq!(user_config.browser, BrowserType::Chrome);
-        assert_eq!(user_config.color.as_deref(), Some("#00AA00"));
     }
 
     #[test]
     fn test_explicit_user_profile_not_overridden() {
+        // An explicitly-configured "user" profile must survive the
+        // auto-injection pass verbatim. This used `color` as its distinguishing
+        // marker until that field was cut in 3757bb4f8; `idle_timeout_secs`
+        // carries the same proof (default is 1800, so 999 can only come from
+        // the explicit config).
         let mut config = BrowserSystemConfig::default();
         config.profiles.insert(
             "user".into(),
             ProfileConfig {
                 browser: BrowserType::Chrome,
                 driver: BrowserDriver::ExistingSession,
-                color: Some("#FF0000".into()),
+                idle_timeout_secs: 999,
                 ..Default::default()
             },
         );
         let manager = ProfileManager::new(config);
         let user_config = manager.get_config("user").unwrap();
-        assert_eq!(user_config.color.as_deref(), Some("#FF0000"));
+        assert_eq!(user_config.idle_timeout_secs, 999);
+        assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
     }
 
     #[test]

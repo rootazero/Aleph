@@ -369,10 +369,6 @@ pub struct DreamingConfig {
     pub window_end_local: String,
     #[serde(default = "default_dreaming_max_duration")]
     pub max_duration_seconds: u32,
-    #[serde(default = "default_weekly_enabled")]
-    pub weekly_enabled: bool,
-    #[serde(default = "default_weekly_interval_days")]
-    pub weekly_interval_days: u32,
     #[serde(default = "default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
     #[serde(default = "default_synthesis_min_cluster_size")]
@@ -395,12 +391,6 @@ fn default_dreaming_window_end() -> String {
 }
 const fn default_dreaming_max_duration() -> u32 {
     600
-}
-const fn default_weekly_enabled() -> bool {
-    true
-}
-const fn default_weekly_interval_days() -> u32 {
-    7
 }
 const fn default_drift_max_pairs_per_run() -> usize {
     20

@@ -207,7 +207,6 @@ mod tests {
         let config = ProfileConfig::default();
         assert_eq!(config.browser, BrowserType::Chromium);
         assert_eq!(config.headless, None);
-        assert!(config.color.is_none());
         assert!(config.proxy.is_none());
         assert!(config.user_data_dir.is_none());
         assert!(config.extra_args.is_empty());
@@ -244,7 +243,6 @@ args = ["./mcp-server.js"]
         let work = config.profiles.get("work").unwrap();
         assert_eq!(work.browser, BrowserType::Chrome);
         assert_eq!(work.headless, Some(true));
-        assert_eq!(work.color.as_deref(), Some("#ff0000"));
         assert_eq!(work.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
         assert_eq!(work.extra_args, vec!["--disable-gpu"]);
         assert_eq!(work.idle_timeout_secs, 3600);
@@ -399,7 +397,6 @@ args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
         let user = config.profiles.get("user").unwrap();
         assert_eq!(user.browser, BrowserType::Chrome);
         assert_eq!(user.driver, BrowserDriver::ExistingSession);
-        assert_eq!(user.color.as_deref(), Some("#00AA00"));
         assert_eq!(config.chrome_mcp.command, "npx");
     }
 }

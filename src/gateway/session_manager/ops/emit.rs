@@ -123,10 +123,15 @@ pub(crate) fn emit_session_end_raw(
         //      follow-on `await_ready`, which then saw an empty registry and
         //      no-op'd the gate (`rt.spawn` returns before the task is polled).
         //   2. Insert race — the flush runs in the TAIL of the raw-insert task
-        //      below, AFTER this session's SessionEnd digest row is committed, so
-        //      `compress_to_notes` drains a batch that INCLUDES that digest
-        //      instead of racing it (previously the two were unordered spawns and
-        //      the freshest signal was usually excluded).
+        //      below, AFTER this session's SessionEnd digest row is committed,
+        //      so the digest is already queued when the drain starts (previously
+        //      the two were unordered spawns and the freshest signal was usually
+        //      excluded). Ordering alone is NOT sufficient: one
+        //      `compress_to_notes` call takes the 50 OLDEST rows, while the
+        //      digest is the newest, so `flush_agent_memory` loops until the
+        //      backlog stops shrinking. Do not collapse that loop back to a
+        //      single call — it silently reinstates the bug this ordering
+        //      exists to fix.
         // Fire-and-forget — best-effort consolidation, never gates close_session.
         let flush = crate::thinker::memory_context_provider::session_end_compression().map(|cs| {
             let reg = crate::memory::flush::global_registry();

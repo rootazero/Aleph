@@ -97,18 +97,9 @@ async fn test_list_tasks_with_filter() {
         .unwrap();
     assert_eq!(by_team.len(), 2);
 
-    // Filter by owner
-    let by_owner = store
-        .list_tasks(CoordTaskFilter {
-            owner: Some("agent-1".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(by_owner.len(), 2);
-    assert!(by_owner
-        .iter()
-        .all(|t| t.owner.as_deref() == Some("agent-1")));
+    // (Owner filtering was removed from `CoordTaskFilter` in 503bd9993 — the
+    // field had no production consumer. `CoordTask.owner` itself still exists
+    // and is asserted elsewhere; only the filter arm is gone.)
 
     // No filter
     let all = store.list_tasks(CoordTaskFilter::default()).await.unwrap();

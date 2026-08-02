@@ -8,6 +8,16 @@
 //! Task 4 will modify the assemble() call to pass FactSourceFilter::Any as a
 //! 5th argument.  The snapshot MUST still match after that change — that's the
 //! regression guard.
+//!
+//! Intentional baseline movement, 2026-08-01: `session_recent.tokens_budget`
+//! 1500 → 512. The skeleton fallback path used to pack the *static*
+//! `FallbackSkeleton` figures (~8200 tokens total) regardless of the caller's
+//! runtime headroom, so `AssemblyBudget.total_tokens` was advisory on what is
+//! 100% of traffic when no rerank provider is configured. It now applies the
+//! same 70% cap as the LLM path: 4000 × 0.7 = 2800 across all slots, so
+//! session_recent scales to 1500 × (2800/8200) = 512. `tokens_used` is
+//! unchanged at 9 — no content is dropped; only the *declared* budget became
+//! honest. See FEATURE_LOCATOR §2.5③.
 
 use std::path::Path;
 
@@ -71,7 +81,6 @@ impl EmbeddingProvider for ZeroEmbedder {
 fn force_fallback_cfg() -> AssemblerConfig {
     AssemblerConfig {
         enabled: true,
-        total_budget_tokens: 4000,
         candidate_pool_limit: 20,
         rerank_timeout_ms: 200,
         rerank_model: None,

@@ -442,18 +442,8 @@ impl CompressionService {
                         // gets retried on a later tick instead of being
                         // discarded forever. Past the window even ingestable
                         // rows are marked, to bound the queue.
-                        let mut consumed: Vec<String> = Vec::with_capacity(group.len());
-                        if report.is_empty() {
-                            const RETRY_GRACE_SECS: i64 = 6 * 3600;
-                            let now = chrono::Utc::now().timestamp();
-                            let mut deferred = 0usize;
-                            for r in &group {
-                                if now - r.created_at < RETRY_GRACE_SECS {
-                                    deferred += 1;
-                                } else {
-                                    consumed.push(r.id.clone());
-                                }
-                            }
+                        let consumed: Vec<String> = if report.is_empty() {
+                            let (consumed, deferred) = partition_by_retry_grace(&group);
                             if deferred > 0 {
                                 tracing::info!(
                                     group = %group_key,
@@ -462,9 +452,10 @@ impl CompressionService {
                                      ingestable rows for retry (within grace window)"
                                 );
                             }
+                            consumed
                         } else {
-                            consumed.extend(group.iter().map(|r| r.id.clone()));
-                        }
+                            group.iter().map(|r| r.id.clone()).collect()
+                        };
 
                         if !consumed.is_empty() {
                             match self.database.mark_raw_as_processed(&consumed).await {
@@ -486,25 +477,39 @@ impl CompressionService {
                     }
                     Err(e) => {
                         tracing::warn!(group = %group_key, "compound ingest failed: {e}");
-                        // SessionEnd groups are still marked processed even
-                        // when the compound plan failed — ProfileSynthesizer
-                        // (above) already consumed them. Other groups stay
-                        // unprocessed and retry next tick; groups are
-                        // independent, so keep draining the rest.
-                        let is_session_end = group.first().is_some_and(|r| {
-                            matches!(&r.source, RawMemorySource::SessionEnd { .. })
-                        });
-                        if is_session_end {
+                        // Same retry policy as the empty-report arm above: a
+                        // transient failure defers, only aged rows are given up
+                        // on. Groups are independent, so keep draining the rest.
+                        //
+                        // This arm used to special-case SessionEnd and mark it
+                        // processed immediately, justified by "ProfileSynthesizer
+                        // already consumed them". That premise does not hold: the
+                        // synthesizer is rate-limited (30 min by default), only
+                        // merges USER.md rather than producing the knowledge note
+                        // the ingest would have, is dispatched fire-and-forget,
+                        // and — decisively — shares the same provider as the
+                        // ingestor, so in the very outage that produces this
+                        // `Err` it fails too (warn-only). The result was that one
+                        // transient provider blip permanently destroyed the
+                        // highest-value row in the queue, and `ingest_group_key`
+                        // buckets SessionEnd by reason, so it took every
+                        // same-reason digest in the drain with it.
+                        let (consumed, deferred) = partition_by_retry_grace(&group);
+                        if deferred > 0 {
                             tracing::info!(
-                                "compound ingest failed on SessionEnd group; \
-                                 marking processed (ProfileSynthesizer already fired)"
+                                group = %group_key,
+                                deferred,
+                                "compound ingest failed; deferring rows for retry \
+                                 (within grace window)"
                             );
-                            let ids: Vec<String> = group.iter().map(|r| r.id.clone()).collect();
-                            match self.database.mark_raw_as_processed(&ids).await {
+                        }
+                        if !consumed.is_empty() {
+                            match self.database.mark_raw_as_processed(&consumed).await {
                                 Ok(n) => memories_processed += n as u32,
                                 Err(e) => tracing::warn!(
                                     error = %e,
-                                    "Failed to mark SessionEnd raws as processed"
+                                    group = %group_key,
+                                    "Failed to mark aged raw memories as processed"
                                 ),
                             }
                         }
@@ -652,9 +657,43 @@ impl CompressionService {
     }
 
     /// Get current configuration
+    /// The backing store, so a caller that must *drain* (rather than sip) can
+    /// observe the remaining backlog between batches. See
+    /// [`crate::memory::flush::flush_agent_memory`].
+    pub const fn store(&self) -> &MemoryBackend {
+        &self.database
+    }
+
     pub const fn get_config(&self) -> &CompressionConfig {
         &self.config
     }
+}
+
+/// How long a raw row that failed to ingest stays eligible for retry before it
+/// is given up on to bound the queue.
+const RETRY_GRACE_SECS: i64 = 6 * 3600;
+
+/// Split a group into `(give_up_on, still_retryable_count)` by age.
+///
+/// The single retry policy shared by both non-success arms of the ingest match:
+/// a plan that produced no notes, and a plan that failed outright. Keeping one
+/// implementation is the point — the two arms drifted apart once already, and
+/// the divergent arm silently destroyed session digests on transient provider
+/// errors.
+fn partition_by_retry_grace(
+    group: &[crate::memory::store::raw_memory::RawMemory],
+) -> (Vec<String>, usize) {
+    let now = chrono::Utc::now().timestamp();
+    let mut consumed = Vec::with_capacity(group.len());
+    let mut deferred = 0usize;
+    for r in group {
+        if now - r.created_at < RETRY_GRACE_SECS {
+            deferred += 1;
+        } else {
+            consumed.push(r.id.clone());
+        }
+    }
+    (consumed, deferred)
 }
 
 /// Grouping key for one `compress_to_notes` drain: rows whose sources map to
@@ -945,6 +984,50 @@ mod tests {
             database.count_unprocessed("default").await.unwrap(),
             0,
             "aged ingestable rows must be marked processed once past the grace window"
+        );
+    }
+
+    /// A transient ingest FAILURE must follow the same stop-the-bleed policy as
+    /// an empty plan. This arm used to special-case SessionEnd and mark it
+    /// processed immediately — so one provider blip permanently destroyed the
+    /// session digest, the single highest-value row in the queue. The
+    /// justification ("`ProfileSynthesizer` already consumed them") was false:
+    /// it shares the same provider, so it fails in the very same outage.
+    #[tokio::test]
+    async fn compress_to_notes_defers_session_end_when_ingest_fails() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+
+        struct FailingIngestor;
+        #[async_trait::async_trait]
+        impl CompoundIngestor for FailingIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                Err(AlephError::other("provider unavailable"))
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let service = service.with_compound_ingestor(Arc::new(FailingIngestor));
+
+        let fresh = RawMemory::new(
+            "session digest worth keeping".to_string(),
+            RawMemorySource::SessionEnd {
+                reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+            },
+        );
+        database.insert_raw_memory(&fresh).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            1,
+            "a transient ingest failure must leave the SessionEnd digest \
+             retryable, not consume it"
         );
     }
 

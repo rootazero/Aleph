@@ -6,7 +6,6 @@
 mod agents_integration;
 mod basic;
 mod channels;
-mod dispatcher;
 mod migration;
 mod save_incremental;
 mod schema_integration;

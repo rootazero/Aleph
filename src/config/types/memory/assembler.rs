@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct AssemblerConfig {
     #[serde(default = "super::defaults::default_assembler_enabled")]
     pub enabled: bool,
-    #[serde(default = "super::defaults::default_total_budget")]
-    pub total_budget_tokens: u32,
     #[serde(default = "super::defaults::default_pool_limit")]
     pub candidate_pool_limit: usize,
     #[serde(default = "super::defaults::default_rerank_timeout")]
@@ -55,7 +53,6 @@ impl Default for AssemblerConfig {
     fn default() -> Self {
         Self {
             enabled: super::defaults::default_assembler_enabled(),
-            total_budget_tokens: super::defaults::default_total_budget(),
             candidate_pool_limit: super::defaults::default_pool_limit(),
             rerank_timeout_ms: super::defaults::default_rerank_timeout(),
             rerank_model: None,
