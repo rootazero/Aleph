@@ -108,11 +108,6 @@ impl LoopRegistry {
             .cloned()
     }
 
-    /// Drop the loop for a session.
-    pub fn remove(&self, session_id: &str) {
-        self.lock().remove(session_id);
-    }
-
     /// Snapshot every loop across ALL sessions, any status. Backs
     /// `loop(action='list')`: a loop started on one channel is invisible to
     /// `status`, which keys by the current session — the same cross-session gap
@@ -170,8 +165,16 @@ impl LoopRegistry {
         if !legal {
             return TransitionOutcome::Refused { current: from };
         }
-        let next = live
-            .clone()
+        // Leaving Active retires a tick that is still asleep — it never ran, so
+        // give its claim back (see `refund_iteration`). A tick already
+        // executing has cleared the marker itself, so nothing is refunded then.
+        let retires_unrun_tick = from == LoopStatus::Active && live.pending_tick_wake_ms.is_some();
+        let base = if retires_unrun_tick {
+            live.clone().refund_iteration()
+        } else {
+            live.clone()
+        };
+        let next = base
             .with_status(to)
             .with_stop_reason(if to == LoopStatus::Active {
                 None
@@ -266,10 +269,30 @@ impl LoopRegistry {
                 return TickDecision::Idle;
             }
         }
-        if pursuit::should_fire(&state, tokens_now, now_ms) {
-            let delay_ms = pursuit::tick_delay_ms(&state, now_ms);
+        // Project the wake BEFORE stamping anything: the tick claimed here
+        // executes one cadence from now, and a wall-clock deadline bounds when
+        // the loop may still ACT, not merely when it may still be scheduled.
+        let delay_ms = pursuit::tick_delay_ms(&state, now_ms);
+        let wake_ms = now_ms.saturating_add(delay_ms);
+        let out_of_bounds = pursuit::fires_out_of_bounds(&state, wake_ms, now_ms);
+        // `is_active()` was established above, so `should_fire` here is exactly
+        // `!exhausted` — these two arms are total and every exit persists
+        // `state`, which is what keeps a just-seeded token baseline.
+        if pursuit::exhausted(&state, tokens_now, now_ms) || out_of_bounds {
+            // Ask the shared note-picker as of the moment that actually bound
+            // us: at `now_ms` a projected overrun has not happened yet, so it
+            // would fall through to the iteration-cap wording.
+            let bound_at = if out_of_bounds { wake_ms } else { now_ms };
+            let note = pursuit::stop_reason_note(&state, tokens_now, bound_at);
+            map.insert(
+                session_id.to_string(),
+                state
+                    .with_status(LoopStatus::Stopped)
+                    .with_stop_reason(Some(note.clone())),
+            );
+            TickDecision::Exhausted { note }
+        } else {
             let prompt = pursuit::tick_prompt(&state, tokens_now, now_ms);
-            let wake_ms = now_ms.saturating_add(delay_ms);
             // Bump BEFORE the tick runs so caps hold even if it crashes; clear
             // the consumed model-paced wake so a model that forgot to re-set
             // `next_wake` falls back to the cadence default instead of
@@ -286,17 +309,6 @@ impl LoopRegistry {
                 wake_ms,
                 prompt,
             }
-        } else if pursuit::exhausted(&state, tokens_now, now_ms) {
-            let note = pursuit::stop_reason_note(&state, tokens_now, now_ms);
-            map.insert(
-                session_id.to_string(),
-                state
-                    .with_status(LoopStatus::Stopped)
-                    .with_stop_reason(Some(note.clone())),
-            );
-            TickDecision::Exhausted { note }
-        } else {
-            TickDecision::Idle
         }
     }
 
@@ -319,9 +331,15 @@ impl LoopRegistry {
         match map.get(session_id) {
             Some(s) if s.is_active() && s.pending_tick_wake_ms.is_none() => {
                 // Deadline may have passed while the collision played out;
-                // token budget is claim-side only (no live counter here).
-                if pursuit::exhausted(s, 0, now_ms) {
-                    let note = pursuit::stop_reason_note(s, 0, now_ms);
+                // token budget is claim-side only (no live counter here). The
+                // retry wake is projected for the same reason `try_claim_tick`
+                // projects its own: re-arming into a wake past the deadline
+                // would run a full turn out of bounds.
+                let wake = now_ms.saturating_add(BUSY_RETRY_DELAY_MS);
+                let out_of_bounds = pursuit::fires_out_of_bounds(s, wake, now_ms);
+                if pursuit::exhausted(s, 0, now_ms) || out_of_bounds {
+                    let bound_at = if out_of_bounds { wake } else { now_ms };
+                    let note = pursuit::stop_reason_note(s, 0, bound_at);
                     let stopped = s
                         .clone()
                         .with_status(LoopStatus::Stopped)
@@ -329,7 +347,6 @@ impl LoopRegistry {
                     map.insert(session_id.to_string(), stopped);
                     return RearmDecision::Exhausted { note };
                 }
-                let wake = now_ms.saturating_add(BUSY_RETRY_DELAY_MS);
                 let rearmed = s.clone().with_pending_tick(Some(wake));
                 map.insert(session_id.to_string(), rearmed);
                 RearmDecision::Retry {
@@ -385,6 +402,15 @@ impl LoopRegistry {
                 };
                 let (status, stop_reason) = (live.status, live.stop_reason.clone());
                 let session = next.session_id.clone();
+                // A reschedule discards a still-sleeping tick the same way
+                // `transition` does, so it owes the same refund. `next` carries
+                // the tool's snapshot of `iterations_used`, which is not
+                // concurrently mutated during a user turn.
+                let next = if reschedule && live.pending_tick_wake_ms.is_some() {
+                    next.refund_iteration()
+                } else {
+                    next
+                };
                 map.insert(
                     session,
                     next.with_status(status)
@@ -433,12 +459,6 @@ pub fn global() -> Option<Arc<LoopRegistry>> {
     GLOBAL.get().cloned()
 }
 
-/// Test-only override.
-#[cfg(test)]
-pub fn set_global_for_test(registry: Arc<LoopRegistry>) {
-    let _ = GLOBAL.set(registry);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,11 +485,172 @@ mod tests {
     }
 
     #[test]
-    fn remove_deletes_state() {
+    fn claim_refuses_a_tick_whose_wake_would_land_past_the_deadline() {
+        // `interval='2h', timeout_minutes=1`: no tick can run in-bounds, and
+        // the deadline is the ONLY bound (start drops the default tick cap
+        // when a deadline is present). Before the projection this claimed a
+        // tick that executed 119 minutes past the user's limit.
+        let reg = LoopRegistry::default();
+        reg.put(
+            LoopState::new(
+                "a",
+                "p",
+                Cadence::Fixed {
+                    interval_ms: 7_200_000,
+                },
+                0,
+            )
+            .with_deadline_ms(Some(60_000)),
+        );
+        match reg.try_claim_tick("a", None, 1_000) {
+            TickDecision::Exhausted { note } => {
+                assert!(note.contains("time limit"), "{note}");
+            }
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+        assert_eq!(reg.get("a").unwrap().status, LoopStatus::Stopped);
+        assert!(
+            reg.get("a").unwrap().pending_tick_wake_ms.is_none(),
+            "a refused claim must not leave a pending marker"
+        );
+    }
+
+    #[test]
+    fn claim_still_fires_when_the_wake_lands_inside_the_deadline() {
+        // Guard against over-refusal: 10m cadence, 25m window → the wake at
+        // 10m is in-bounds and must fire.
+        let reg = LoopRegistry::default();
+        reg.put(
+            LoopState::new(
+                "a",
+                "p",
+                Cadence::Fixed {
+                    interval_ms: 600_000,
+                },
+                0,
+            )
+            .with_deadline_ms(Some(1_500_000)),
+        );
+        assert!(matches!(
+            reg.try_claim_tick("a", None, 0),
+            TickDecision::Fire { .. }
+        ));
+        // …and the claim at 20m, whose wake would be 30m, refuses.
+        let reg2 = LoopRegistry::default();
+        reg2.put(
+            LoopState::new(
+                "a",
+                "p",
+                Cadence::Fixed {
+                    interval_ms: 600_000,
+                },
+                0,
+            )
+            .with_deadline_ms(Some(1_500_000)),
+        );
+        assert!(matches!(
+            reg2.try_claim_tick("a", None, 1_200_000),
+            TickDecision::Exhausted { .. }
+        ));
+    }
+
+    #[test]
+    fn clock_unavailable_still_fails_open_on_the_projection() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_deadline_ms(Some(60_000)));
+        assert!(
+            matches!(reg.try_claim_tick("a", None, 0), TickDecision::Fire { .. }),
+            "now_ms == 0 means clock unavailable — never trip on it"
+        );
+    }
+
+    #[test]
+    fn token_budget_still_outranks_the_deadline_projection_in_the_note() {
+        // Both bind at once: the note must name the token budget, matching
+        // `stop_reason_note`'s documented priority order.
+        let reg = LoopRegistry::default();
+        reg.put(
+            LoopState::new(
+                "a",
+                "p",
+                Cadence::Fixed {
+                    interval_ms: 7_200_000,
+                },
+                0,
+            )
+            .with_deadline_ms(Some(60_000))
+            .with_token_budget(Some(100))
+            .with_baseline(1_000),
+        );
+        match reg.try_claim_tick("a", Some(5_000), 1_000) {
+            TickDecision::Exhausted { note } => assert!(note.contains("token budget"), "{note}"),
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rearm_refuses_a_retry_whose_wake_crosses_the_deadline() {
+        let reg = LoopRegistry::default();
+        // Deadline 10s away; the busy retry is +30s, so it lands out of bounds.
+        reg.put(st("a").with_deadline_ms(Some(11_000)));
+        match reg.rearm_after_busy("a", 1_000) {
+            RearmDecision::Exhausted { note } => assert!(note.contains("time limit"), "{note}"),
+            other => panic!("expected Exhausted, got {other:?}"),
+        }
+        assert_eq!(reg.get("a").unwrap().status, LoopStatus::Stopped);
+        // A deadline comfortably past the retry still re-arms.
+        let reg2 = LoopRegistry::default();
+        reg2.put(st("b").with_deadline_ms(Some(600_000)));
+        assert!(matches!(
+            reg2.rearm_after_busy("b", 1_000),
+            RearmDecision::Retry { .. }
+        ));
+    }
+
+    #[test]
+    fn superseding_a_sleeping_tick_refunds_its_claim() {
+        // Claim bumps to 1 and stamps a pending marker; pausing retires that
+        // tick before it ever ran, so the count must go back to 0. Without the
+        // refund, five re-paces of a max_iterations=5 loop reported "5/5" and
+        // stopped at the cap having executed nothing.
         let reg = LoopRegistry::default();
         reg.put(st("a"));
-        reg.remove("a");
-        assert!(reg.get("a").is_none());
+        assert!(matches!(
+            reg.try_claim_tick("a", None, 1_000),
+            TickDecision::Fire { .. }
+        ));
+        assert_eq!(reg.get("a").unwrap().iterations_used, 1);
+        reg.transition("a", LoopStatus::Paused, Some("held".into()));
+        assert_eq!(
+            reg.get("a").unwrap().iterations_used,
+            0,
+            "a tick that never ran must not consume the cap"
+        );
+
+        // A reschedule discards the sleeping tick the same way.
+        let reg2 = LoopRegistry::default();
+        reg2.put(st("b"));
+        assert!(matches!(
+            reg2.try_claim_tick("b", None, 1_000),
+            TickDecision::Fire { .. }
+        ));
+        let snapshot = reg2.get("b").unwrap();
+        assert!(reg2.commit_field_update(snapshot, true));
+        assert_eq!(reg2.get("b").unwrap().iterations_used, 0);
+    }
+
+    #[test]
+    fn a_tick_that_actually_fired_keeps_its_claim() {
+        // Once `confirm_fire` clears the marker the tick IS running; stopping
+        // mid-flight must not hand its budget back.
+        let reg = LoopRegistry::default();
+        reg.put(st("a"));
+        let TickDecision::Fire { wake_ms, .. } = reg.try_claim_tick("a", None, 1_000) else {
+            panic!("expected Fire");
+        };
+        assert!(reg.confirm_fire("a", wake_ms));
+        reg.transition("a", LoopStatus::Stopped, Some("done".into()));
+        assert_eq!(reg.get("a").unwrap().iterations_used, 1);
     }
 
     #[test]

@@ -125,7 +125,7 @@ impl ConflictResolver {
         }
     }
 
-/// Register a tool with automatic conflict resolution
+    /// Register a tool with automatic conflict resolution
     ///
     /// This is the preferred way to register tools in flat namespace mode.
     /// It automatically handles name conflicts according to priority rules.

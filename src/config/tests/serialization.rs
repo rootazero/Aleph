@@ -325,13 +325,25 @@ fn test_atomic_write_overwrites_existing_file() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
 
-    // Write first config
+    // `save_to_file` validates that `default_provider` names a provider that
+    // actually exists, so each config must register its own. This test predates
+    // that validation rule and never caught up, because the whole `config::tests`
+    // module failed to compile (a `mod dispatcher;` for a deleted file, plus a
+    // duplicated assert fragment in this file) — so it had not run in a long time.
     let mut config1 = Config::default();
+    config1.providers.insert(
+        "first-prov".to_string(),
+        ProviderConfig::test_config("gpt-4o"),
+    );
     config1.general.default_provider = Some("first-prov".to_string());
     config1.save_to_file(path).unwrap();
 
     // Overwrite with second config
     let mut config2 = Config::default();
+    config2.providers.insert(
+        "second-prov".to_string(),
+        ProviderConfig::test_config("gpt-4o"),
+    );
     config2.general.default_provider = Some("second-prov".to_string());
     config2.save_to_file(path).unwrap();
 

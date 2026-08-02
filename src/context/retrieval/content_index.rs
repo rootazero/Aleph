@@ -328,6 +328,15 @@ impl ContentIndex {
     /// Number of chunks indexed across the given session ids (see
     /// [`Self::search_sessions`] for why a set: epoch-aware retrieval after a
     /// session split). An empty set counts nothing.
+    /// Test-only: whether the session has no indexed rows. Cut from the
+    /// production surface in `0202b6a17` as an inert metrics accessor; restored
+    /// under `cfg(test)` because that cut left its test behind and broke the
+    /// lib-test build.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self, session_id: &str) -> Result<bool, IndexError> {
+        Ok(self.len(session_id)? == 0)
+    }
+
     pub fn len_sessions(&self, session_ids: &[&str]) -> Result<usize, IndexError> {
         if session_ids.is_empty() {
             return Ok(0);
@@ -996,7 +1005,6 @@ mod tests {
         }
         // Reopen and confirm the data survived.
         let idx2 = ContentIndex::open(&db).unwrap();
-        assert!(!idx2.is_empty(SESS).unwrap());
         let hits = idx2.search(SESS, "payment refund", 3).unwrap();
         assert!(!hits.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1273,11 +1281,7 @@ mod tests {
 
         idx.clear("sess-a").unwrap();
 
-        assert_eq!(
-            idx.len_sessions(&["sess-a"]).unwrap(),
-            0,
-            "A must be wiped"
-        );
+        assert_eq!(idx.len_sessions(&["sess-a"]).unwrap(), 0, "A must be wiped");
         assert_eq!(
             idx.len_sessions(&["sess-b"]).unwrap(),
             1,

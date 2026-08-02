@@ -100,8 +100,20 @@ pub fn is_denied_on_gateway_surface(tool_name: &str) -> bool {
     if !is_dangerous_tool(tool_name) && !is_confirmation_gated(tool_name) {
         return false;
     }
+    !gateway_surface_override(tool_name)
+}
+
+/// Has the operator explicitly re-permitted `tool_name` on the gateway
+/// `tools.invoke` surface via [`GATEWAY_TOOLS_ALLOW_ENV`]?
+///
+/// The single parser for that env var, shared by every hard floor this
+/// surface applies — the dangerous/confirmation floor above and the
+/// continuation-driven floor in `handlers::tools_invoke` — so a test harness
+/// only ever has to learn one escape hatch.
+#[must_use]
+pub fn gateway_surface_override(tool_name: &str) -> bool {
     let allow = std::env::var(GATEWAY_TOOLS_ALLOW_ENV).unwrap_or_default();
-    !allow
+    allow
         .split(',')
         .map(str::trim)
         .any(|allowed| !allowed.is_empty() && allowed == tool_name)

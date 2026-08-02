@@ -13,10 +13,6 @@ pub struct DreamingConfig {
     pub window_end_local: String,
     #[serde(default = "super::defaults::default_dreaming_max_duration_seconds")]
     pub max_duration_seconds: u32,
-    #[serde(default = "super::defaults::default_weekly_enabled")]
-    pub weekly_enabled: bool,
-    #[serde(default = "super::defaults::default_weekly_interval_days")]
-    pub weekly_interval_days: u32,
     #[serde(default = "super::defaults::default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
     #[serde(default = "super::defaults::default_synthesis_min_cluster_size")]
@@ -57,8 +53,6 @@ impl Default for DreamingConfig {
             window_start_local: super::defaults::default_dreaming_window_start(),
             window_end_local: super::defaults::default_dreaming_window_end(),
             max_duration_seconds: super::defaults::default_dreaming_max_duration_seconds(),
-            weekly_enabled: super::defaults::default_weekly_enabled(),
-            weekly_interval_days: super::defaults::default_weekly_interval_days(),
             drift_max_pairs_per_run: super::defaults::default_drift_max_pairs_per_run(),
             synthesis_min_cluster_size: super::defaults::default_synthesis_min_cluster_size(),
             synthesis_max_insights: super::defaults::default_synthesis_max_insights(),
@@ -71,29 +65,6 @@ impl Default for DreamingConfig {
             feedback_lookback: super::defaults::default_feedback_lookback(),
             model: None,
         }
-    }
-}
-
-impl DreamingConfig {
-    #[must_use]
-    pub const fn weekly_enabled(&self) -> bool {
-        self.weekly_enabled
-    }
-    #[must_use]
-    pub const fn weekly_interval_days(&self) -> u32 {
-        self.weekly_interval_days
-    }
-    #[must_use]
-    pub const fn drift_max_pairs_per_run(&self) -> usize {
-        self.drift_max_pairs_per_run
-    }
-    #[must_use]
-    pub const fn synthesis_min_cluster_size(&self) -> usize {
-        self.synthesis_min_cluster_size
-    }
-    #[must_use]
-    pub const fn synthesis_max_insights(&self) -> usize {
-        self.synthesis_max_insights
     }
 }
 

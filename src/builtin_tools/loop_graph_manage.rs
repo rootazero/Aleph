@@ -102,10 +102,6 @@ pub struct LoopGraphArgs {
     /// which adversarial angle) — appended to the watch template
     #[serde(default)]
     pub prompt: Option<String>,
-
-    /// Agent scope (default "main")
-    #[serde(default)]
-    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,7 +316,14 @@ impl AlephTool for LoopGraphTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let agent_id = args.agent_id.clone().unwrap_or_else(|| "main".to_string());
+        // The graph is scoped to the default agent, full stop. `agent_id` used
+        // to be a model-facing arg, but every READ path hardcodes "main" —
+        // `service.rs` (watcher pokes / objective ACL / prompt injection) and
+        // the doctor lint — so a graph registered elsewhere enforced nothing
+        // while `pair` still promised the poke. Withdrawn rather than left as a
+        // knob for a consumer that does not exist (P6). The store column stays;
+        // wiring real scoping means teaching the readers, not re-adding an arg.
+        let agent_id = crate::routing::DEFAULT_AGENT_ID.to_string();
         let origin = args.origin.unwrap_or(Origin::Llm);
 
         match args.action {
@@ -462,20 +465,35 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::EnableAudit => {
+                // Idempotency BEFORE the external dependency: "it is already
+                // installed" is the accurate answer and stays accurate whether
+                // or not a cron handle happens to be attached. Checking cron
+                // first reported "cron service unavailable" for a graph whose
+                // real problem was that it already had an auditor.
+                //
+                // One audit loop per agent scope. The guard keys on a LIVE
+                // audit node, not on "any audits edge exists": `delete_node`
+                // deliberately leaves edges dangling as audit signals, so
+                // following this error's own advice (`drop_node`) used to make
+                // the audit loop permanently un-reinstallable — and any
+                // hand-wired `audits` edge (a first-class verb) blocked the
+                // installer while naming an unrelated node.
+                let edges = self.store.list_edges(&agent_id)?;
+                let nodes = self.store.list_nodes(&agent_id)?;
+                let live = edges.iter().find(|e| {
+                    e.kind == EdgeKind::Audits && nodes.iter().any(|n| n.id == e.from_id)
+                });
+                if let Some(existing) = live {
+                    return Err(AlephError::tool(format!(
+                        "审计环已存在（{}）。如需重装：先 drop_node 它，再 gc 清掉它留下的悬空 audits 边。",
+                        existing.from_id
+                    )));
+                }
                 let Some(cron) = &self.cron else {
                     return Err(AlephError::tool(
                         "loop_graph enable_audit: cron service unavailable",
                     ));
                 };
-                // One audit loop per agent scope: an existing node with an
-                // outgoing `audits` edge means it is already installed.
-                let edges = self.store.list_edges(&agent_id)?;
-                if let Some(existing) = edges.iter().find(|e| e.kind == EdgeKind::Audits) {
-                    return Err(AlephError::tool(format!(
-                        "审计环已存在（{}）。如需重装先 drop_node 它。",
-                        existing.from_id
-                    )));
-                }
                 let expr = args
                     .cron_expr
                     .unwrap_or_else(|| AUDIT_DEFAULT_CRON_EXPR.to_string());
@@ -645,7 +663,6 @@ mod tests {
             note: None,
             cron_expr: None,
             prompt: None,
-            agent_id: None,
         }
     }
 
@@ -756,6 +773,52 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("cron service unavailable"));
+    }
+
+    #[tokio::test]
+    async fn enable_audit_is_blocked_by_a_live_auditor_but_not_by_a_dangling_edge() {
+        let (_d, t) = tool();
+        for (id, kind) in [
+            ("cron:aud", NodeKind::LoopCron),
+            ("daemon:dreaming", NodeKind::Daemon),
+        ] {
+            let mut a = args(LoopGraphAction::Node);
+            a.id = Some(id.into());
+            a.kind = Some(kind);
+            a.label = Some(id.into());
+            t.call(a).await.unwrap();
+        }
+        let mut link = args(LoopGraphAction::Link);
+        link.from_id = Some("cron:aud".into());
+        link.to_id = Some("daemon:dreaming".into());
+        link.edge = Some(EdgeKind::Audits);
+        t.call(link).await.unwrap();
+
+        // A LIVE auditor blocks reinstall — that part is intended.
+        let err = t
+            .call(args(LoopGraphAction::EnableAudit))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("审计环已存在"), "{err}");
+        assert!(err.contains("gc"), "the remedy must name gc too: {err}");
+
+        // Follow the error's own advice: drop_node leaves the edge dangling by
+        // design. The guard used to key on "any audits edge", so this made the
+        // audit loop permanently un-reinstallable. Now it gets past the guard
+        // and fails only on the absent cron service.
+        let mut drop = args(LoopGraphAction::DropNode);
+        drop.id = Some("cron:aud".into());
+        t.call(drop).await.unwrap();
+        let err = t
+            .call(args(LoopGraphAction::EnableAudit))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cron service unavailable"),
+            "a dangling audits edge must not block reinstall: {err}"
+        );
     }
 
     #[tokio::test]

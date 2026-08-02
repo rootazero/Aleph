@@ -61,9 +61,13 @@ impl LoopGraphStore {
     /// Open an existing DB read-only (doctor/lint path). Errors if missing —
     /// callers treat "no file" as "no graph yet", not a fault.
     pub fn open_readonly(path: &Path) -> Result<Self> {
-        let conn =
-            rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(|e| AlephError::other(format!("loop_graph store open_readonly: {e}")))?;
+        // Same project helper the writer uses, not a hand-rolled
+        // `open_with_flags`: it sets `busy_timeout=5000`, without which the
+        // doctor lint returns `SQLITE_BUSY` the instant it lands mid-write
+        // (`enable_audit` wires N edges in a loop) and reports a healthy graph
+        // as "Graph DB unreadable".
+        let conn = crate::utils::sqlite_open::open_sqlite_readonly(path)
+            .map_err(|e| AlephError::other(format!("loop_graph store open_readonly: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -78,6 +82,16 @@ impl LoopGraphStore {
     /// root, §7.3 of the design): a `root:` node whose origin is not `human`
     /// is rejected at the store level — every root reference is forced to
     /// carry the "a human set this" attestation.
+    ///
+    /// `origin` is write-once, like `created_at_ms`: an upsert never rewrites
+    /// it. It is the provenance the audit template is told to check, and the
+    /// model supplies it verbatim (`args.origin.unwrap_or(Origin::Llm)`), so
+    /// letting a later upsert flip a human-attested row to `llm` (or the
+    /// reverse) erased the only record there was — `updated_at_ms` moves, but
+    /// nothing says what changed. Changing provenance now requires an explicit
+    /// delete + recreate, which is the documented escape hatch and does leave a
+    /// trace. This is NOT a defence against a hostile model; that is the Auto-
+    /// tier approval card's job for `root:`/`frozen:` ids.
     pub fn upsert_node(&self, node: &GraphNode) -> Result<()> {
         if node.kind == NodeKind::Root && node.origin != Origin::Human {
             return Err(AlephError::other(
@@ -95,7 +109,6 @@ impl LoopGraphStore {
                      label = excluded.label,
                      body = excluded.body,
                      cadence = excluded.cadence,
-                     origin = excluded.origin,
                      updated_at_ms = excluded.updated_at_ms",
                 rusqlite::params![
                     node.agent_id,
@@ -165,7 +178,29 @@ impl LoopGraphStore {
 
     /// Insert or update an edge. Both endpoints must exist at creation time
     /// (catches typos); dangling only ever arises from later node deletion.
+    ///
+    /// Structural invariant (the held-out-watcher rule): a governance edge may
+    /// not point at its own source. `lint_naked_loops` asks only "does some
+    /// `watches`/`audits` edge END here", so `x -[watches]-> x` satisfies it —
+    /// one `link` call from the very optimizer this layer exists to watch, and
+    /// the graph's ONLY self-certification detector goes silent while `lint`,
+    /// `doctor core/loop-graph` and the weekly audit template all report a
+    /// sound topology. The rule is enforced here rather than in the tool so
+    /// every writer inherits it.
     pub fn upsert_edge(&self, edge: &GraphEdge) -> Result<()> {
+        if edge.from_id == edge.to_id
+            && matches!(
+                edge.kind,
+                EdgeKind::Watches | EdgeKind::Audits | EdgeKind::OwnsReference
+            )
+        {
+            return Err(AlephError::other(format!(
+                "loop_graph invariant: '{}' cannot {} itself — the watcher must be a \
+                 held-out loop, or the check certifies nothing",
+                edge.from_id,
+                edge.kind.as_str()
+            )));
+        }
         let conn = self.lock();
         for endpoint in [&edge.from_id, &edge.to_id] {
             let exists: bool = conn
@@ -187,8 +222,7 @@ impl LoopGraphStore {
                  (agent_id, from_id, to_id, kind, note, origin, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(agent_id, from_id, to_id, kind) DO UPDATE SET
-                 note = excluded.note,
-                 origin = excluded.origin",
+                 note = excluded.note",
             rusqlite::params![
                 edge.agent_id,
                 edge.from_id,
@@ -371,15 +405,31 @@ fn lint_dangling_edges(
     findings
 }
 
+/// Flag optimization loops nobody watches.
+///
+/// A self `watches`/`audits` edge does NOT count as being watched. New ones
+/// are rejected by `upsert_edge`; discounting them here keeps any legacy row
+/// from silencing the check.
+///
+/// Deliberately NOT exempted: a node that merely HAS an outgoing `audits`
+/// edge. That would make the exemption edge-grantable — `daemon:dreaming` could
+/// audit anything and permanently excuse itself from the one check that says
+/// nobody is watching it, which is the same hole as the self-edge above. The
+/// only exemptions are by KIND (`Anchor`/`Frozen`/`Root`), which no edge write
+/// can forge. The audit loop `enable_audit` installs therefore does name itself
+/// until a human grounds it (`root:<slug> -[watches]-> cron:<audit>`), which is
+/// the documented 三层封顶 and clears the finding with no code.
 fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
     let mut findings = Vec::new();
     for n in nodes {
         if !n.kind.is_optimization_loop() {
             continue;
         }
-        let watched = edges
-            .iter()
-            .any(|e| e.to_id == n.id && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits));
+        let watched = edges.iter().any(|e| {
+            e.to_id == n.id
+                && e.from_id != n.id
+                && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
+        });
         if !watched {
             findings.push(format!(
                 "裸奔优化环: {}（'{}'）没有任何 watches/audits 入边",
@@ -390,8 +440,17 @@ fn lint_naked_loops(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<String> {
     findings
 }
 
-/// Walk each governor upward through incoming `owns_reference` edges; bounded
-/// by node count so a cycle cannot loop forever.
+/// Does every governor's `owns_reference` chain reach a human root?
+///
+/// The invariant GRAPH_LAYER.md states is "SOME upward path terminates at a
+/// root", so the walk explores ALL incoming `owns_reference` edges, not just
+/// the first one `list_edges` happens to order first. With two owners — say
+/// `root:aleph` and `cron:orphan` both owning `cron:gov` — the old single-path
+/// walk deterministically picked the lexicographically smaller `from_id`, hit
+/// the dead end, and reported a correctly-anchored graph as unanchored: a
+/// permanent doctor Warning the auditor cannot reconcile against a graph that
+/// plainly shows the root edge. The `visited` set also makes cycle detection
+/// exact, replacing the `steps < nodes.len()` bound.
 fn lint_governance_chain(
     nodes: &[GraphNode],
     edges: &[GraphEdge],
@@ -407,24 +466,24 @@ fn lint_governance_chain(
         })
         .collect();
     for g in governors {
-        let mut current = g.id.as_str();
-        let mut steps = 0;
-        let terminated_at_root = loop {
+        let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut frontier = vec![g.id.as_str()];
+        let mut terminated_at_root = false;
+        while let Some(current) = frontier.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
             if by_id.get(current).is_some_and(|n| n.kind == NodeKind::Root) {
-                break true;
+                terminated_at_root = true;
+                break;
             }
-            let owner = edges
-                .iter()
-                .find(|e| e.to_id == current && e.kind == EdgeKind::OwnsReference)
-                .map(|e| e.from_id.as_str());
-            match owner {
-                Some(o) if steps < nodes.len() => {
-                    current = o;
-                    steps += 1;
-                }
-                _ => break false,
-            }
-        };
+            frontier.extend(
+                edges
+                    .iter()
+                    .filter(|e| e.to_id == current && e.kind == EdgeKind::OwnsReference)
+                    .map(|e| e.from_id.as_str()),
+            );
+        }
         if !terminated_at_root {
             findings.push(format!(
                 "治理链未锚定: {} 拥有他环参照，但其向上的 owns_reference 链不汇于任何 root 节点（或成环）",
@@ -568,6 +627,198 @@ mod tests {
             .unwrap();
         s.upsert_edge(&e).unwrap();
         assert_eq!(s.list_edges("main").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn governance_self_edge_is_rejected_and_never_counts_as_watched() {
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        assert!(
+            s.lint("main")
+                .unwrap()
+                .iter()
+                .any(|f| f.contains("裸奔优化环")),
+            "baseline: an unwatched optimizer must be flagged"
+        );
+
+        // The self-certification move: watch/audit/own-reference yourself.
+        for kind in [EdgeKind::Watches, EdgeKind::Audits, EdgeKind::OwnsReference] {
+            let err = s
+                .upsert_edge(&GraphEdge::new(
+                    "main",
+                    "daemon:dreaming",
+                    "daemon:dreaming",
+                    kind,
+                    Origin::Llm,
+                ))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("held-out"), "{kind:?}: {err}");
+        }
+        assert!(
+            s.lint("main")
+                .unwrap()
+                .iter()
+                .any(|f| f.contains("裸奔优化环")),
+            "the naked-loop finding must survive every self-edge attempt"
+        );
+
+        // Belt and braces for any legacy row that predates the store guard:
+        // the lint predicate itself discounts self-edges.
+        let self_edge = GraphEdge::new(
+            "main",
+            "daemon:dreaming",
+            "daemon:dreaming",
+            EdgeKind::Watches,
+            Origin::Llm,
+        );
+        assert!(
+            lint_naked_loops(
+                &[node("daemon:dreaming", NodeKind::Daemon, Origin::Llm)],
+                &[self_edge]
+            )
+            .iter()
+            .any(|f| f.contains("裸奔优化环")),
+            "a stored self-edge must not read as 'watched'"
+        );
+    }
+
+    #[test]
+    fn auditing_something_does_not_exempt_you_from_being_watched() {
+        // Exemption must never be edge-grantable: an optimizer that adds one
+        // `audits` edge would otherwise excuse itself from the only check that
+        // says nobody is watching it. Grounding by a human root DOES clear it.
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        s.upsert_node(&node("cron:audit", NodeKind::LoopCron, Origin::Llm))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:audit",
+            "daemon:dreaming",
+            EdgeKind::Audits,
+            Origin::Llm,
+        ))
+        .unwrap();
+
+        let lint = s.lint("main").unwrap();
+        assert!(
+            lint.iter().any(|f| f.contains("cron:audit")),
+            "an ungrounded auditor is still a naked loop: {lint:?}"
+        );
+        assert!(
+            !lint.iter().any(|f| f.contains("daemon:dreaming")),
+            "the audited loop IS covered: {lint:?}"
+        );
+
+        s.upsert_node(&node("root:aleph", NodeKind::Root, Origin::Human))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "root:aleph",
+            "cron:audit",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+        assert!(
+            !s.lint("main")
+                .unwrap()
+                .iter()
+                .any(|f| f.contains("裸奔优化环")),
+            "human grounding is the documented resolution and needs no code"
+        );
+    }
+
+    #[test]
+    fn governance_chain_is_anchored_if_any_upward_path_reaches_a_root() {
+        // Two owners, only one of which reaches the root. The old single-path
+        // walk took whichever `from_id` sorted first and reported a correctly
+        // anchored graph as unanchored — a permanent doctor Warning the audit
+        // loop could not reconcile against a graph plainly showing the edge.
+        let (_d, s) = store();
+        for (id, kind, origin) in [
+            ("root:aleph", NodeKind::Root, Origin::Human),
+            ("cron:gov", NodeKind::LoopCron, Origin::Llm),
+            ("cron:orphan", NodeKind::LoopCron, Origin::Llm),
+            ("goal:g1", NodeKind::LoopGoal, Origin::Llm),
+        ] {
+            s.upsert_node(&node(id, kind, origin)).unwrap();
+        }
+        for (from, to) in [
+            ("root:aleph", "cron:gov"),
+            ("cron:orphan", "cron:gov"),
+            ("cron:gov", "goal:g1"),
+        ] {
+            s.upsert_edge(&GraphEdge::new(
+                "main",
+                from,
+                to,
+                EdgeKind::OwnsReference,
+                Origin::Llm,
+            ))
+            .unwrap();
+        }
+
+        let lint = s.lint("main").unwrap();
+        assert!(
+            !lint
+                .iter()
+                .any(|f| f.contains("治理链未锚定") && f.contains("cron:gov")),
+            "cron:gov IS owned by root:aleph via the second in-edge: {lint:?}"
+        );
+        assert!(
+            lint.iter()
+                .any(|f| f.contains("治理链未锚定") && f.contains("cron:orphan")),
+            "cron:orphan really is unanchored and must still be named: {lint:?}"
+        );
+
+        // A cycle with no root still terminates and IS reported.
+        let (_d2, s2) = store();
+        for id in ["cron:a", "cron:b"] {
+            s2.upsert_node(&node(id, NodeKind::LoopCron, Origin::Llm))
+                .unwrap();
+        }
+        for (from, to) in [("cron:a", "cron:b"), ("cron:b", "cron:a")] {
+            s2.upsert_edge(&GraphEdge::new(
+                "main",
+                from,
+                to,
+                EdgeKind::OwnsReference,
+                Origin::Llm,
+            ))
+            .unwrap();
+        }
+        assert!(
+            s2.lint("main")
+                .unwrap()
+                .iter()
+                .any(|f| f.contains("治理链未锚定")),
+            "a cycle reaches no root"
+        );
+    }
+
+    #[test]
+    fn provenance_is_write_once() {
+        // `origin` is what the audit template is told to check, and the model
+        // supplies it verbatim — an in-place rewrite would erase the only
+        // record there was.
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Human))
+            .unwrap();
+        s.upsert_node(
+            &node("daemon:dreaming", NodeKind::Daemon, Origin::Llm).with_body("re-registered"),
+        )
+        .unwrap();
+        let got = s.get_node("main", "daemon:dreaming").unwrap().unwrap();
+        assert_eq!(got.origin, Origin::Human, "provenance must survive upsert");
+        assert_eq!(
+            got.body.as_deref(),
+            Some("re-registered"),
+            "body still updates"
+        );
     }
 
     #[test]

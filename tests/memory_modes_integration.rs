@@ -65,7 +65,6 @@ impl EmbeddingProvider for NoopEmbeddingProvider {
 fn test_assembler_config() -> AssemblerConfig {
     AssemblerConfig {
         enabled: true,
-        total_budget_tokens: 4000,
         candidate_pool_limit: 20,
         rerank_timeout_ms: 200,
         rerank_model: None,

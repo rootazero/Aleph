@@ -417,9 +417,16 @@ Related: [[Rust Learning]] [[Dev Environment]]
                     rel_type: "works_at".to_string(),
                     confidence: 0.9,
                 },
+                // Both fields are unvalidated model input, so the fixture uses
+                // the hostile forms the model actually emits: a wikilink target
+                // (the form it sees everywhere else in the note API) and a verb
+                // carrying a `:`. Unquoted, `to: [[plan/old-roadmap]]` parses as
+                // a nested flow sequence and `from_markdown` fails on the WHOLE
+                // frontmatter — bricking the note permanently, since every dream
+                // stage swallows that error with `.ok()?` / `continue`.
                 Relation {
-                    to: "entity/bob".to_string(),
-                    rel_type: "colleague".to_string(),
+                    to: "[[plan/old-roadmap]]".to_string(),
+                    rel_type: "supersedes:v2".to_string(),
                     confidence: 0.7,
                 },
             ],
@@ -427,7 +434,7 @@ Related: [[Rust Learning]] [[Dev Environment]]
         };
         let md = note.to_markdown();
         assert!(md.contains("relations:"));
-        assert!(md.contains("type: works_at"));
+        assert!(md.contains("works_at"));
         let parsed = KnowledgeNote::from_markdown("alice", &md).unwrap();
         assert_eq!(parsed.relations, note.relations);
     }

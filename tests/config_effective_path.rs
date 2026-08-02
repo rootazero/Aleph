@@ -19,9 +19,18 @@ fn the_pinned_config_path_is_the_one_the_process_reads() {
     std::env::set_var("ALEPH_HOME", tmp.path());
 
     let pinned = tmp.path().join("deployment.toml");
+    // The named default provider has to exist in the map: `Config::load` runs
+    // `config::validate`, so a fixture naming a phantom provider fails on load
+    // for a reason that has nothing to do with *which file* was read — which is
+    // the only thing this test is about.
     fs::write(
         &pinned,
-        "[general]\ndefault_provider = \"pinned-prov\"\n",
+        r#"[general]
+default_provider = "pinned-prov"
+
+[providers.pinned-prov]
+model = "m"
+"#,
     )
     .expect("write pinned config");
 

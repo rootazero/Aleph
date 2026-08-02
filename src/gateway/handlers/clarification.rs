@@ -17,8 +17,8 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 use super::HandlerRegistry;
-use crate::clarification::ClarificationManager;
 use crate::clarification::session::PendingClarification;
+use crate::clarification::ClarificationManager;
 
 /// Parameters for clarification.resolve
 #[derive(Debug, Deserialize)]

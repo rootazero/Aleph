@@ -430,6 +430,32 @@ tier — never quoting the stored content back verbatim, and treating the
 tool's success response as terminal (no repeated writes, no re-echo into
 another memory tool). This replaces the earlier "silent logging" design.
 
+## 18. Gap analysis vs hermes-agent / evolver / EverOS (2026-08-01)
+
+Recorded so the comparison is not redone. Reference trees: `hermes-agent`
+(Python, memory outsourced to pluggable providers — Honcho / mem0 / hindsight /
+a local "holographic" store), `evolver` (JS, GEP memory graph + recall
+verification + conversation distillation), `EverOS` (Python, and the closest
+architectural sibling: markdown is the source of truth, SQLite + a vector index
+are derived and rebuildable — the same shape as Aleph).
+
+| Capability | hermes-agent | evolver | EverOS | Aleph today | Verdict |
+|---|---|---|---|---|---|
+| What is worth remembering | prompt-only policy | regex `_PREF_PATTERNS` auto-extract | LLM boundary detection | LLM compound-ingest plan | **Aleph leads.** Never port the regex extractors — R7, and `signal_detector.rs` was deleted for exactly this |
+| Frontmatter escaping | n/a (flat text) | n/a (JSONL) | YAML, writer-owned | `yaml_scalar` on every scalar | **Fixed 2026-08-01** — `relations:` bypassed it |
+| Degraded (FTS-only) recall fidelity | FTS5 + rerank, always with content | — | BM25 survives without embeddings, rows intact | hydrated via `get_notes_with_content` | **Fixed 2026-08-01** — Aleph returned empty bodies |
+| Recall-signal attribution | per-provider store | `run_id` join key | `(app, project, owner)` on every row | per owning namespace | **Fixed 2026-08-01** — EverOS led here |
+| Injection budget enforced | `_truncate_to_budget` per block | 800-char hard ceiling | n/a | 70% cap on both paths | **Fixed 2026-08-01** — both refs led here |
+| Batch drain / backlog | single FIFO worker, drains fully | queue cap 256, drops oldest | `claim_pending_batch` + orphan sweep, loops | loops until backlog stops shrinking | **Fixed 2026-08-01** |
+| Failed-batch retry | retry-once-then-drop | backoff `[5s,15s,60s]` | 2-level budget + `retryable` classification | 6h grace window, both arms | **Fixed 2026-08-01** — Aleph's own `Ok` arm was already right; the `Err` arm had regressed from it |
+| Always-on rule floor under budget | — | — | — | pinned `relevance: 1.0`, sorted first | **Aleph-original**, was half-wired; fixed |
+| Recall→usefulness feedback | — | `recallVerifier` roundtrip probe | — | `recall_signals` → reinforcement + 5th relevance signal | **Aleph already has the equivalent** |
+| Durable sync work queue | — | — | `md_change_state` (status/lsn/claim/orphan sweep) | `raw_memories.is_processed` | **Deliberately not doing** — R3/P6, a large subsystem for a property an anti-join already gives |
+| Epoch / env-change invalidation | — | `checkEpochBoundary` | — | wall-clock decay only | **Deliberately not doing** — R10, no consumer |
+| Deterministic claim state machine | — | — | — | LLM-driven Strengthen/Supersede | **Deliberately not doing** — R7 |
+| Recall credit weighted by channel/outcome | — | `stable_no_error → inert` | — | all channels equal | **Deferred** — genuinely attractive (breaks the circular "retrieved ⇒ proven" loop in `evidence::recall_support`) and R7/R10-legal, but no confirmed defect. Wants its own change with its own evidence |
+| Memory index drift doctor check | — | `recallVerifier` | `verify_business_schemas` | none in `src/diagnostics/checks/` | **Deferred** — real gap, R7/R10-clean, but no confirmed defect. If done: do **not** port evolver's content-hash recompute — Aleph notes are user-editable markdown, so hash mismatch is normal; only presence/count drift is meaningful |
+
 ## Panel 呈现面与 RPC 形状
 
 The desktop Panel's Memory Vault tab (`interfaces/webchat/src/platform/wide/views/memory/`, see [FEATURE_LOCATOR.md §6.7](FEATURE_LOCATOR.md)) is a pure-I/O consumer (R4) of five gateway RPCs. Each one now has exactly **one shape** — the 2026-07-26 refactor's core fix was that `memory.search` used to also answer queries with note rows, which the desktop view rendered into the Raw table (wrong data, undeletable rows, no error surfaced).

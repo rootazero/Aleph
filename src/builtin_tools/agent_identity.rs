@@ -29,6 +29,11 @@ use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord, NewRecord};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+/// Where `export` writes. A fixed directory with a derived filename, never a
+/// caller-supplied path: the tool gains no filesystem reach it did not already
+/// have, and there is no traversal to get wrong.
+const EXPORT_DIR: &str = "exports";
+
 /// Records returned by `ledger` / `show` when the caller names no limit.
 const DEFAULT_LIMIT: i64 = 20;
 /// Hard ceiling so one call cannot pull an entire chain into the context
@@ -37,10 +42,11 @@ const MAX_LIMIT: i64 = 200;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AgentIdentityArgs {
-    /// One of: "list", "show", "keygen", "rotate", "revoke", "ledger", "verify".
+    /// One of: "list", "show", "keygen", "rotate", "revoke", "ledger",
+    /// "verify", "export".
     pub action: String,
-    /// Agent id. Required for "show", "keygen", "rotate" and "revoke";
-    /// optional for "ledger" and "verify" (omit to span every agent).
+    /// Agent id. Required for "show", "keygen", "rotate", "revoke" and
+    /// "export"; optional for "ledger" and "verify" (omit to span every agent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     /// Max records to return for "ledger" / "show". Default 20, capped at 200.
@@ -82,6 +88,16 @@ impl AgentIdentityTool {
     fn limit_of(args: &AgentIdentityArgs) -> i64 {
         args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
     }
+
+    /// A filename component that cannot escape [`EXPORT_DIR`]. Agent ids are
+    /// well-behaved in practice; this makes that a property of the code rather
+    /// than of the practice.
+    fn file_slug(agent: &str) -> String {
+        agent
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    }
 }
 
 /// Epoch millis rendered for a human, alongside the raw value.
@@ -98,9 +114,11 @@ fn identity_json(row: &AgentIdentityRow) -> Value {
         "fingerprint": row.active_fingerprint,
         "created_at": at(row.created_at),
         "revoked_at": row.revoked_at.map(at),
-        // How far this agent's chain has advanced. Compared against the stored
-        // rows by `verify` — a mismatch is the truncation signal.
-        "records": row.head_seq,
+        // How far this agent's chain has advanced, per the ANCHOR — not a count
+        // of rows on disk. `verify` compares the two, and a mismatch is the
+        // truncation signal, so calling this "records" (as it was) invited the
+        // one reading that erases the distinction the anchor exists to draw.
+        "chain_head": row.head_seq,
     })
 }
 
@@ -132,10 +150,11 @@ Every agent holds its own Ed25519 keypair. Every mutating tool call, every refus
 - {"action": "keygen", "agent": "main"} — mint the key if the agent does not have one yet (agents get one automatically on first recorded action).
 - {"action": "rotate", "agent": "main"} — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
 - {"action": "revoke", "agent": "main"} — stop the agent signing. Its chain stays readable and verifiable. `rotate` brings a revoked agent back.
+- {"action": "export", "agent": "main"} — write the agent's whole chain, its public keys and its anchor to one self-contained JSON file, and report the path. Contains no private key and no tool arguments. Hand it to an auditor: `aleph-server identity verify --input <path> --pin <root_fingerprint>` checks it on a machine with no Aleph, no database and no daemon.
 
 Rotation and revocation are themselves appended to the affected agent's chain, so key history cannot be quietly rewritten by editing the database. A delegated sub-agent holds its own key and signs its own work; it is a separate agent here, not a line on its parent's chain.
 
-What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. Export the public fingerprints and check an exported chain elsewhere if you need a proof that does not trust this host.
+What a clean verify does and does not prove: it proves no stored record was edited, reordered, deleted, re-signed under an undeclared key, or forged without the agent's private key. It does not defend against someone who controls the whole machine — key vault and database sit on the same disk. That is what `export` plus a pinned root fingerprint is for: pin the root once, off this host, and every later export is bound to the same lineage. Without a pin an export proves internal consistency only.
 
 Arguments are never stored; each record carries a fingerprint of them, plus a secret-redacted one-line summary."#;
 
@@ -149,9 +168,17 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
         match args.action.as_str() {
             "list" => {
                 let rows = keys.list().map_err(|e| AlephError::tool(e.to_string()))?;
+                // Chains whose identity row is gone are absent from `rows` by
+                // construction — that is what makes deleting one row an attack.
+                // Naming them here keeps the listing from being quietly
+                // narrower than the evidence.
+                let orphans = ledger
+                    .orphan_chains()
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
                 Ok(json!({
                     "action": "list",
                     "agents": rows.iter().map(identity_json).collect::<Vec<_>>(),
+                    "orphan_chains": orphans,
                     "failed_appends": ledger.lost(),
                 }))
             }
@@ -160,24 +187,33 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 let agent = Self::agent_of(&args, "show")?;
                 let identity = keys
                     .identity(&agent)
-                    .map_err(|e| AlephError::tool(e.to_string()))?
-                    .ok_or_else(|| {
-                        AlephError::tool(format!("agent '{agent}' has no identity yet"))
-                    })?;
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
                 let all_keys = keys
                     .keys_of(&agent)
                     .map_err(|e| AlephError::tool(e.to_string()))?;
                 let recent = ledger
                     .recent(Some(&agent), Self::limit_of(&args))
                     .map_err(|e| AlephError::tool(e.to_string()))?;
+                // An agent with records but no identity row is shown, not
+                // refused. Refusing (what this did) meant the one tamper that
+                // removes an agent from every listing also made the surface
+                // that could reveal it answer "no identity yet" — reading, to
+                // an operator, as "nothing to see".
+                if identity.is_none() && recent.is_empty() {
+                    return Err(AlephError::tool(format!(
+                        "agent '{agent}' has no identity and no records"
+                    )));
+                }
+                let active = identity.as_ref().map(|i| i.active_fingerprint.as_str());
                 Ok(json!({
                     "action": "show",
-                    "identity": identity_json(&identity),
+                    "identity": identity.as_ref().map(identity_json),
+                    "identity_row_missing": identity.is_none(),
                     "keys": all_keys.iter().map(|k| json!({
                         "fingerprint": k.fingerprint,
                         "created_at": at(k.created_at),
                         "retired_at": k.retired_at.map(at),
-                        "active": k.fingerprint == identity.active_fingerprint,
+                        "active": Some(k.fingerprint.as_str()) == active,
                     })).collect::<Vec<_>>(),
                     "recent": recent.iter().map(record_json).collect::<Vec<_>>(),
                 }))
@@ -297,9 +333,58 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 }))
             }
 
+            "export" => {
+                let agent = Self::agent_of(&args, "export")?;
+                let doc = crate::identity::export_chain(&ledger, &agent)
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
+                // Verified here, with the document's own keys, before it is
+                // handed over: an export that does not verify at the moment it
+                // is produced is the single most useful thing to learn early.
+                let report = crate::identity::verify_export(&doc, &[])
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
+
+                // Written to a file rather than returned inline: a chain is
+                // unbounded, and the document exists to be handed to someone,
+                // not to be read by the model. Returning it would spend the
+                // context window on bytes nobody in this conversation reads.
+                let dir = crate::utils::paths::get_data_dir()
+                    .map_err(|e| AlephError::tool(format!("cannot locate the data dir: {e}")))?
+                    .join(EXPORT_DIR);
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    AlephError::tool(format!("cannot create {}: {e}", dir.display()))
+                })?;
+                let path = dir.join(format!(
+                    "agent-chain-{}-{}.json",
+                    Self::file_slug(&agent),
+                    report.last_seq
+                ));
+                let body = serde_json::to_string_pretty(&doc)
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
+                std::fs::write(&path, body).map_err(|e| {
+                    AlephError::tool(format!("cannot write {}: {e}", path.display()))
+                })?;
+
+                Ok(json!({
+                    "action": "export",
+                    "agent": agent,
+                    "path": path.display().to_string(),
+                    "records": report.records,
+                    "last_seq": report.last_seq,
+                    "verifies_now": report.ok,
+                    "faults": report.faults,
+                    // The two values to pin off-box. Everything the export can
+                    // prove to a third party rests on these having been taken
+                    // from somewhere other than this machine.
+                    "root_fingerprint": report.root_fingerprint,
+                    "head_hash": report.last_hash,
+                    "failed_appends": report.failed_appends,
+                    "verify_with": "aleph-server identity verify --input <path> --pin <root_fingerprint>",
+                }))
+            }
+
             other => Err(AlephError::tool(format!(
-                "action must be one of list, show, keygen, rotate, revoke, ledger, verify — \
-                 got '{other}'"
+                "action must be one of list, show, keygen, rotate, revoke, ledger, verify, \
+                 export — got '{other}'"
             ))),
         }
     }
