@@ -31,7 +31,7 @@
 | 组件 | 位置 | 说明 |
 |---|---|---|
 | 类型（6 词闭集边） | `src/loop_graph/types.rs` | `NodeKind`(loop_goal/loop_cron/loop_heartbeat/daemon/**team**/anchor/frozen/root)、`EdgeKind`(watches/owns_reference/arbitrates/audits/anchored_by/feeds)、`Origin`(human/llm，provenance 一等) |
-| 存储 | `src/loop_graph/store.rs` | 两表（graph_nodes/graph_edges，agent_id 作用域，PK 复合）；读写两侧都走 `utils::sqlite_open`（写 `open_sqlite_safe` / 读 `open_sqlite_readonly`，后者的 `busy_timeout` 让 doctor 不会把并发写误报成「Graph DB unreadable」）；**三条 store 级不变量**：root origin=human、**治理边禁自环**（`watches`/`audits`/`owns_reference` 的 `from_id != to_id`——否则一次 `link` 就能让 `lint_naked_loops` 对该环永久静默，即本层要检测的测量衰减本身）、**`origin` 写一次不再被 upsert 改写**（provenance 是审计模板要查的东西）；无 FK 级联（悬空边=审计信号，显式 `gc` 才清）；**`body`/`cadence` 省略即保留（`COALESCE`）**——工具侧两者都是 `#[serde(default)] Option<String>`，全量覆盖会让「改个 label 重登记一次 `root:`」把人写的根参照原文写成 NULL，而两个读者都只在 `Some(body)` 时渲染 root 行，于是那一行从此后每一个被治理会话的 prompt 里静默消失（要清空传 `""`）；**存在性只问 `node_ids_present`（直读 `id` 列）**——`row_to_node` 对未知 enum 文本 fail-soft 跳过是给读者防卡死的，拿它当 `gc` 的 DELETE 判据会把「读不懂」当成「不存在」，不可逆删掉一个仍然存在的节点的所有边（两个 enum 都 `#[non_exhaustive]`，降级运行就是触发条件），`lint_dangling_edges` 共用同一份；`lint()` 纯结构检查（悬空/裸奔优化环/治理链未锚定 root（**全路径 BFS**，多 owner 时只要有一条路汇于 root 即算锚定）/快环拥有慢环参照） |
+| 存储 | `src/loop_graph/store.rs` | 两表（graph_nodes/graph_edges，agent_id 作用域，PK 复合）；读写两侧都走 `utils::sqlite_open`（写 `open_sqlite_safe` / 读 `open_sqlite_readonly`，后者的 `busy_timeout` 让 doctor 不会把并发写误报成「Graph DB unreadable」）；**三条 store 级不变量**：root origin=human、**治理边禁自环**（`watches`/`audits`/`owns_reference` 的 `from_id != to_id`——否则一次 `link` 就能让 `lint_naked_loops` 对该环永久静默，即本层要检测的测量衰减本身）、**`origin` 写一次不再被 upsert 改写**（provenance 是审计模板要查的东西）；**`note` 与 `body`/`cadence` 同为 `COALESCE`**（省略即保留——re-`link` 一条已有边不得把人写的理据 NULL 掉，清空传 `""`）；无 FK 级联（悬空边=审计信号，显式 `gc` 才清）；**`body`/`cadence` 省略即保留（`COALESCE`）**——工具侧两者都是 `#[serde(default)] Option<String>`，全量覆盖会让「改个 label 重登记一次 `root:`」把人写的根参照原文写成 NULL，而两个读者都只在 `Some(body)` 时渲染 root 行，于是那一行从此后每一个被治理会话的 prompt 里静默消失（要清空传 `""`）；**存在性只问 `node_ids_present`（直读 `id` 列）**——`row_to_node` 对未知 enum 文本 fail-soft 跳过是给读者防卡死的，拿它当 `gc` 的 DELETE 判据会把「读不懂」当成「不存在」，不可逆删掉一个仍然存在的节点的所有边（两个 enum 都 `#[non_exhaustive]`，降级运行就是触发条件），`lint_dangling_edges` 共用同一份；`lint()` 纯结构检查（悬空/裸奔优化环/**伪造的看守覆盖**/治理链未锚定 root（**全路径 BFS**，多 owner 时只要有一条路汇于 root 即算锚定）/快环拥有慢环参照）。**`lint_forged_coverage`（2026-08-03）**：round 9 让豁免在长度 1 上不可伪造（`from_id != n.id`，写入期也拒），长度 2 仍免费——两次 `link` 就让优化环与它的审计员互看、双双静默，正是本层要检测的测量衰减本身。判据是**向上走 `watches`/`audits` 是否绕回自己且环上没有任何 `Root`/`Frozen`/`Anchor`**（这三种 kind 环自己给不了）。刻意窄：**只打环，不打「尚未锚定的线性链」**——后者的顶点已经作为裸奔环报了一次，逐节点复述同一个根因只会淹掉真发现 |
 | 模板（智慧在此，R9） | `src/loop_graph/templates.rs` | `AUDIT_TEMPLATE`（七步审计）/`WATCH_TEMPLATE_HEADER`+`_FOOTER`（看守）。**仅此两类**——原 `STEWARD_TEMPLATE`/`ARBITRATION_TEMPLATE` 零消费者已 CUT（2026-07-24，R10 YAGNI）：steward/arbitration 的教义活在 `loop-governance` skill，此类环按需用 `cron_manage` 手建（仲裁刻意是事件非常驻服务，勿建安装器） |
 | 触发与会话服务 | `src/loop_graph/service.rs` | `notify_goal_settled`（胜利宣称时刻戳看守 cron，60s 去抖；**返回「有没有真 poke」**——一次性章必须等 poke 确认后才算花掉，否则「cron handle 没挂 / `run_job` 报错 / 看守不是 `cron:`」三条出路都会让这次完成**永远**等不到评审，因为 Complete goal 的 `completed_at_ms` 此后不再变）、`watcher_is_pokeable`（**只有 `cron:` 看守能被即时唤醒**——poke 就是 `CronService::run_job`；手接的 `heartbeat:`/`daemon:` 看守照样满足 `lint_naked_loops`、照样渲染成「有人看着」，图看起来健全而评审要等它自己的节奏，故 `link` 在写入那一刻就说明，唯一还来得及纠正的时刻）、`governing_owner`（objective ACL 查询，**返回 `Result`**——读不到图必须拒绝写入而不是放行：把 store 错误折成 `None` 等于一次 `SQLITE_BUSY` 就关掉 §6.2 写保护，无错误无日志）、`render_session_topology`（prompt 注入渲染，**确定性字节**） |
 | 工具（R8 面） | `src/builtin_tools/loop_graph_manage.rs` | `loop_graph`(action: node/drop_node/link/unlink/list/status/gc/enable_audit/pair)；anchor 强制 body 声明 truth∈{exit_code,numeric,line_count}；status 做 live join（goal store/cron jobs 实时状态，永不缓存观测）；**无 `agent_id` 参数**——图恒作用于 `routing::DEFAULT_AGENT_ID`（旧的模型可传旋钮是只写的：`service.rs` 与 doctor 的每个读路径都硬编码 "main"，非 main 作用域的图零 watcher poke / 零 ACL / 零 prompt 注入，而 `pair` 仍承诺 poke，2026-08-01 撤回）；`enable_audit` 的「已存在」闸判的是**活的审计环**——判据是节点 body == `templates::AUDIT_NODE_BODY`（与写入点同一常量），**不是**「存在某条 `audits` 边」：`Audits` 是一等动词（审计环→任意节点），手接一条 `cron:ratchet -[audits]-> frozen:budget` 是被鼓励的用法，用边当判据会让装过这种边的图**永远装不上审计环**，而报错还教用户去 `drop_node` 一个无关节点（照做就毁掉自己的治理边）；同理照它自己的提示 `drop_node` 之后留下的悬空边也不该挡住重装。`status` 的 live join **区分「名册读了但没这条」与「名册读不到」**——一次 `list_jobs` 失败曾让每个 cron 节点都被打上「⚠ target missing」，而审计模板正是拿这行进点名步骤，一次瞬时错误就能对着一图健康的环制造审计发现 |
@@ -64,6 +64,25 @@
 ## 7. NOT-build（长期有效，摘录）
 
 Graph RAG/多跳图检索（记忆检索议题）；Neo4j 等图数据库（红线）；LangGraph 控制流图；图健康分（图自身不可被 Goodhart）；判决 schema 解析器/裁决执行器；确定性冲突检测器；自动生成看守；指标时序库/图内观测缓存（=报表对报表）；元审计环；FK 级联与自动 gc；champion-challenger 晋升管线（待自调策略消费者）；`src/harness/` 任何行。完整清单见 spec §10。
+
+### 参考项目对照（LangGraph · Gap Analysis，2026-08-03）
+
+**改 `src/workflow/` 或本层前先看这张表，不必重做对比。**
+
+先厘清一件事：**LangGraph 对标的不是本层**。本层是「改进环之图」（谁看守谁，慢变、可审计）；LangGraph 是**单次执行内的控制流图**，Aleph 里对应的是 `src/workflow/` 的声明式 DAG（`WorkflowDef` → `compile.rs::materialize` → `coord_tasks` → `TeamDispatcher`）。两者不可互换，下表逐项判的是 workflow 层。
+
+| LangGraph 机制 | Aleph 对应 | 处置 |
+|---|---|---|
+| Durable execution / checkpointer（每 super-step 存快照） | `coord_tasks` + `coord_task_runs` 落 SQLite；`Blocked`/`Unsatisfiable` 读时派生，调度器无内存态 | **SKIP（已有且更彻底）**：没有"内存态需要快照"这回事 |
+| Pending writes（失败节点的成功兄弟不重跑） | 每 step 一行，失败只重跑自己 | **SKIP（已有，粒度更细）** |
+| Human-in-the-loop `interrupt()` | `WorkflowStepKind::Clarify`（park→投递→router 认领，pending/delivered 两态章 + 重投 janitor） | **SKIP（已有，且多了投递可靠性状态机）** |
+| 容错重启 | `tasks/retry.rs` 有界重试 + 指数退避 + jitter + recovery context 续做 | **SKIP（Aleph 更强）** |
+| Time-travel / fork（回到任意检查点重放、分叉） | 无（只有逐 step retry） | **SKIP（YAGNI）**：`workflow(action='run')` 重跑一次即可；fork 的消费者不存在 |
+| **Conditional edges / router** | 无（`depends_on` 静态 DAG，`topo_order` 硬拒环） | **DECIDE（人来定，勿自行开工）**：缺口属实，但**不是红线可清的**——spec §10 item 3 「LangGraph 式控制流图…把认知编进图结构 = fat harness，违 R10」是**通则**，并未把 `src/workflow/` 列为豁免地。今天可用的替代：`workflow_step_review{action:'skip'}` 手动剪枝（`Skipped` 已满足下游依赖） |
+| **运行时宽度扇出/扇入** | coord_task 的依赖集**在 INSERT 时冻结**（`crud.rs` 是唯一写者，无 `add_dependency`）；节点内可用 `subagent{batch_tasks, synthesize}` 做模型定宽的菱形 | **DEFER**：要一个 append-only `add_dependency`（`dag::check_no_cycle_sync` 守 + 目标离开 Pending/Blocked 即拒）。有真实用例再做 |
+| **过期传播**（重跑上游使下游失效） | ~~无~~ → **已连线**：`workflow_step_review{retry}` 对已结算步骤返回 `now_stale`（`get_dependents` 的第一个消费者） | **DONE（2026-08-03，报告不代劳——是否重做归 LLM 判断，R7）** |
+| 声明式路径要求锚点 | ~~`require_grounding` 只有 `task_create` 能设~~ → **已连线**：`WorkflowStepDef.require_grounding` | **DONE（2026-08-03）** |
+| 子图嵌套（sub-workflow） | 无（`WorkflowStepKind` 只有 `Agent|Clarify`；运行时 `run` 另铸 run_id，status/cancel/settle 看不见子 run） | **DEFER**：正解是 `materialize` **编译期**展开（前缀化子 step id、重接边），不是运行时嵌套。等真有共享形状再做 |
 
 ### 参考项目对照（codex Multi-agent V2 · Gap Analysis，2026-08-02）
 

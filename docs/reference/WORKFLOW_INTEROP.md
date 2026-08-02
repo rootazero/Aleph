@@ -74,11 +74,37 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
 | `opts.{label,model,phase,schema,isolation,agentType,effort}` | ↔ 无损(经内嵌块 + bare 路径) | 存 manifest,不入 `WorkflowDef`;其中 `model`/`effort` 在 `run` 时盖任务元数据成为**可执行覆盖**(见上);`effort` 亦渲染为 bare-scan 可还原的 `effort: "…"` |
-| `opts.{review,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据 |
+| `opts.{review,requireGrounding,timeoutSecs,maxRetries}`(bare literal) | ↔ 无损(bare 路径亦对称) | **可执行核心**:进 `WorkflowDef`,materialize 盖任务元数据。`requireGrounding`(2026-08-03)让声明式路径也能要求复审**碰一次现实**——`workflow_step_review.approve` 缺 `grounding` 即 bounce,证据词表与 loop_graph 锚点同一套(exit_code/numeric/line_count) |
 | `const NAME_SCHEMA = { … }` + `schema: NAME_SCHEMA` | → 导入解析 | 工程格式把 schema hoist 成顶层 `const` 再按名引用;裸扫描经 `interop/consts.rs` 的**有界数据字面量归一化器**解析 hoisted const(及 inline schema),把 JS-lax 写法(裸键 / 单引号 / 尾逗号)归一为 JSON;遇任何表达式值(标识符 / 函数调用 / 模板串 / 计算键)整个 schema **弃权**并记 `dropped`(R3:非 JS 引擎,只认纯数据) |
 | `agent(buildPrompt(u))` / `agent(promptVar)` 动态 prompt | → 计数入 `dropped` | 非字面量 prompt 不可静态导入(R7/R10);裸扫描计数并报 "N agent()/clarify() call(s) with dynamic prompts not imported",全动态时空步骤错误也带计数 |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
+
+## ⚠️ 保真度的三个前提（2026-08-03 补，此前只有前两条是真的）
+
+上表说的"无损"依赖三件事，其中两件曾经不成立：
+
+1. **`save` 不得剥掉 extras**。`WorkflowManifest::from_def` 按定义清空 `whenToUse`/`phases` 与每步的
+   `model`/`effort`/`label`/`phase`/`schema`/`isolation`/`agentType`，而 `store::save` 是纯 replace ——
+   所以 `import(save=true)` → `describe` → 改一行 → `save` 会**销毁 per-step 的 model / effort**，
+   而这两个是**可执行**的（`run` 读它们盖 `WORKFLOW_MODEL_KEY`/`WORKFLOW_EFFORT_KEY`）。更糟的是
+   import 自己的 `dropped` 提示就是在教用户这么做（"先 edit + save 把 agent 换成真实成员"）。
+   现 `save` 走**读-改-写**：`WorkflowManifest::with_core_from(&def)` 按 step id 保留 extras。
+   **推论**：任何新增的"只承载核心"的写入面，都要问一句「它会不会覆盖掉核心表达不了的东西」。
+2. **裸路径必须先剥注释**。`scan_events` / `strip_string_literals` / `collect_consts` 三个扫描器
+   原本只认引号：`// don't forget…` 里的撇号开出幽灵字符串，吞掉其后整份文件（用户看到的是
+   "no agent() calls found"）；`// await agent('old pass')` 则被当成活步骤导入。现 `blank_comments`
+   一趟前置（字符串感知、保留换行）。注意顺序：它只在裸路径跑，因为 `@aleph-workflow` 内嵌头
+   本身就是块注释，`extract_embedded` 必须先拿到机会。
+3. **`meta` 从解析出来的对象读，不要 grep 原文**。`scan_meta_field` 原本在整份原文里找第一个
+   `"<field>:"`，于是工程格式自己的惯例（schema const 提到 meta 之前）会让 `name:` 落到 schema
+   属性上、整个 import 被拒；反向是 schema 里的 `description:` 冒名顶替。现优先读
+   `collect_consts` 已解析的 `meta`，仅当它不是纯数据字面量时才回落旧扫描。
+
+另两条边界订正：`WorkflowManifestStep` 现接受 `timeout_seconds` / `max_retries` / `require_grounding`
+别名（`describe` 返回的 `definition` 直接喂回 `import` 是文档明许的入口，此前会**无声**丢掉这几个
+可执行字段）；带引号的 opts 键不再让整个 opts 对象弃权（那会连 `review` 安全门一起丢），
+`timeoutSecs: 0` 也不再被裸路径静默改写成"用全局默认"——由共享 `validate()` 出唯一那句错误。
 
 ## 无损往返机制
 
@@ -139,3 +165,13 @@ workflow(action='import', source='<.mjs / .workflow.js 或 manifest JSON>', save
 - CLI `aleph workflow export/import`。
 - Panel UI。
 - 完整 JS-子集解析器(R3 拒绝;裸文件覆盖面以 `dropped[]` 透明界定)。
+- **`meta.phases` 的 `detail`/`model` 在 header-stripped 往返中丢失**(2026-08-03 已知,未修)——
+  export 渲染完整 phase 计划,而裸导入只从 body 的 `phase()` 标记与逐 agent `phase:` opt 重建
+  (`WorkflowPhase{title, detail: "", model: None}`),且完全未被引用的 phase 条目整条消失。
+  两者都是 interchange-only 字段,不影响执行;正解是从已解析的 `meta` 常量里读 phases
+  (与上文第 3 条同一手法),留待有真实消费者时一并做。
+- **裸路径的 DAG 重建会造出并不存在的扇入边**(2026-08-03 已知,未修)——export 只把拓扑
+  **层**编码成 `await parallel([...])`,不编码单条边;import 反过来让每一步依赖**整个**前一层。
+  `a→{b,c}, b→d`(c 是 d 不消费的旁支)重新导入后 d 也等 c。对称的菱形(现有回归测试用的那种)
+  不受影响。正解是让 export 自描述(把 step id 与真实 `dependsOn` 渲染成 bare opts,与 `review`
+  /`timeoutSecs` 已有的做法一致),同时能顺带修掉 step id 重新编号——是个格式变更,值得独立一轮。
