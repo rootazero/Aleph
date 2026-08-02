@@ -76,13 +76,17 @@ where
     // `requires_confirmation`. Production agents reach both through the agent
     // loop, which does have the gates. Re-enable a specific tool via the
     // `ALEPH_GATEWAY_TOOLS_ALLOW` env var.
-    if crate::security::dangerous_tools::is_denied_on_gateway_surface(&params.tool_name) {
+    if crate::security::dangerous_tools::is_denied_on_gateway_surface(
+        &params.tool_name,
+        &params.arguments,
+    ) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             format!(
                 "tool '{}' is denied on the gateway tools.invoke surface \
-                 (dangerous or confirmation-gated; set {} to override)",
+                 (dangerous, confirmation-gated, or an argument-level approval \
+                 this surface cannot raise; set {} to override)",
                 params.tool_name,
                 crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
             ),

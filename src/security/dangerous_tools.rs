@@ -92,12 +92,28 @@ pub fn is_confirmation_gated(tool_name: &str) -> bool {
     crate::tools::adapters::registry_adapter::CONFIRMATION_REQUIRED_TOOLS.contains(&tool_name)
 }
 
-/// Decide whether `tool_name` must be denied on the gateway `tools.invoke`
-/// RPC surface. A tool is denied iff it is [`is_dangerous_tool`] or
-/// [`is_confirmation_gated`], AND not explicitly re-permitted via
-/// [`GATEWAY_TOOLS_ALLOW_ENV`].
-pub fn is_denied_on_gateway_surface(tool_name: &str) -> bool {
-    if !is_dangerous_tool(tool_name) && !is_confirmation_gated(tool_name) {
+/// Decide whether this call must be denied on a surface with **no approval
+/// transport** (the gateway `tools.invoke` RPC, heartbeat probes).
+///
+/// Denied iff [`is_dangerous_tool`], [`is_confirmation_gated`], or the exec
+/// tier would have raised an **argument-level** card for these exact
+/// arguments — AND not explicitly re-permitted via [`GATEWAY_TOOLS_ALLOW_ENV`].
+///
+/// The third disjunct reads `ExecTier::Auto::asks_for_arguments` rather than
+/// re-listing anything, so it is the *same* predicate the agent loop enforces
+/// and the two cannot drift. It exists because a name-only floor cannot see
+/// the class of tools whose danger lives in one argument: `file_ops` was
+/// papered over by adding the whole tool to [`DANGEROUS_TOOLS`], but
+/// `loop_graph` — the only other tool with an argument-level rule — was never
+/// given the same treatment, so a single unauthenticated-shaped `tools.invoke`
+/// could rewrite the human `root:` reference that this daemon injects verbatim
+/// into every governed session's system prompt. Arguments in, and the whole
+/// class is covered at once, including any future rule.
+pub fn is_denied_on_gateway_surface(tool_name: &str, args: &serde_json::Value) -> bool {
+    let asks_at_argument_level = crate::config::types::policies::exec_tier::ExecTier::Auto
+        .asks_for_arguments(tool_name, args);
+    if !is_dangerous_tool(tool_name) && !is_confirmation_gated(tool_name) && !asks_at_argument_level
+    {
         return false;
     }
     !gateway_surface_override(tool_name)
@@ -123,8 +139,12 @@ pub fn gateway_surface_override(tool_name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::sync_primitives::Mutex;
+    use serde_json::json;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A call with no arguments — exercises the name-only half of the floor.
+    const NO_ARGS: serde_json::Value = serde_json::Value::Null;
 
     #[test]
     fn flags_rce_and_mutation_and_control_plane() {
@@ -181,8 +201,8 @@ mod tests {
     fn gateway_surface_denies_dangerous_without_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
-        assert!(is_denied_on_gateway_surface("bash"));
-        assert!(!is_denied_on_gateway_surface("file_read"));
+        assert!(is_denied_on_gateway_surface("bash", &NO_ARGS));
+        assert!(!is_denied_on_gateway_surface("file_read", &NO_ARGS));
     }
 
     /// `file_ops` gates its destructive ops (delete/move) at the ARGUMENT level
@@ -194,7 +214,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
         assert!(is_dangerous_tool("file_ops"));
-        assert!(is_denied_on_gateway_surface("file_ops"));
+        assert!(is_denied_on_gateway_surface("file_ops", &NO_ARGS));
     }
 
     /// `tools.invoke` dispatches straight off the raw registry: it has no
@@ -210,7 +230,7 @@ mod tests {
                 "{t} declares requires_confirmation"
             );
             assert!(
-                is_denied_on_gateway_surface(t),
+                is_denied_on_gateway_surface(t, &NO_ARGS),
                 "{t} needs an approval card and this surface cannot raise one"
             );
         }
@@ -219,15 +239,62 @@ mod tests {
         assert!(!is_dangerous_tool("team_disband"));
     }
 
+    /// The argument-level half of the floor, on the tool that has no
+    /// name-level entry to fall back on.
+    ///
+    /// `loop_graph` is deliberately absent from `DANGEROUS_TOOLS` (it is not in
+    /// `BUILTIN_TOOL_DEFINITIONS`, so `every_entry_names_a_real_tool` would
+    /// reject the entry) — the deny has to come from reading the arguments.
+    /// A `root:` write is the case that matters: its `body` is re-injected
+    /// verbatim into every governed session's system prompt, and this surface
+    /// cannot raise the card the exec tier would have raised.
+    #[test]
+    fn gateway_surface_denies_argument_level_asks_it_cannot_card() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
+
+        assert!(
+            !is_dangerous_tool("loop_graph") && !is_confirmation_gated("loop_graph"),
+            "this test is only meaningful while loop_graph has no name-level entry"
+        );
+
+        for protected in ["root:aleph", "frozen:budget-ratchet"] {
+            assert!(
+                is_denied_on_gateway_surface(
+                    "loop_graph",
+                    &json!({"action": "node", "kind": "root", "id": protected,
+                            "label": "x", "origin": "human", "body": "forged"}),
+                ),
+                "a write to {protected} must not run on a surface with no approval transport"
+            );
+        }
+        // Same tool, ordinary node / read action: still permitted. A blanket
+        // name deny would have taken these with it.
+        assert!(!is_denied_on_gateway_surface(
+            "loop_graph",
+            &json!({"action": "status"})
+        ));
+        assert!(!is_denied_on_gateway_surface(
+            "loop_graph",
+            &json!({"action": "node", "kind": "daemon", "id": "daemon:dreaming", "label": "x"})
+        ));
+        // And the pre-existing argument-level rule is covered by the same
+        // disjunct, independently of `file_ops`' name-level entry.
+        assert!(is_denied_on_gateway_surface(
+            "file_ops",
+            &json!({"operation": "delete", "path": "/tmp/x"})
+        ));
+    }
+
     #[test]
     fn gateway_surface_respects_explicit_allow() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, "file_write, vault_store");
-        assert!(!is_denied_on_gateway_surface("file_write"));
+        assert!(!is_denied_on_gateway_surface("file_write", &NO_ARGS));
         // The escape hatch covers the confirm-gated class too (E2E `tools call`).
-        assert!(!is_denied_on_gateway_surface("vault_store"));
-        assert!(is_denied_on_gateway_surface("bash"));
-        assert!(is_denied_on_gateway_surface("agent_delete"));
+        assert!(!is_denied_on_gateway_surface("vault_store", &NO_ARGS));
+        assert!(is_denied_on_gateway_surface("bash", &NO_ARGS));
+        assert!(is_denied_on_gateway_surface("agent_delete", &NO_ARGS));
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
     }
 }

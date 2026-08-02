@@ -26,6 +26,7 @@
 
 use crate::sync_primitives::Arc;
 
+use crate::builtin_tools::note_manage::NoteManageTool;
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
@@ -35,7 +36,6 @@ use crate::builtin_tools::{
     PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool, SearchTool,
     SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
-use crate::builtin_tools::note_manage::NoteManageTool;
 use crate::tools::AlephToolDyn;
 
 use super::BuiltinToolConfig;
@@ -329,7 +329,14 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "governance_metrics",
-        description: "Read-only governance reality probe for the loop-governance audit ring: recent user-correction count and dreaming activity (by pipeline_type) from the memory DB, in-core. Replaces the old sqlite3 ~/.aleph/data probes.",
+        // Points at the const, not a paraphrase of it: a literal here SHADOWS
+        // `GovernanceMetricsTool::DESCRIPTION` (agent_init only appends
+        // registry tools whose name this catalog does not already carry), and
+        // the sentence being shadowed is the one that decides whether an audit
+        // verdict is right — "synthesis_sum is 0 on every consolidate run by
+        // design". The audit template was carrying a second copy of it purely
+        // because this destination was dark.
+        description: <crate::builtin_tools::governance_metrics::GovernanceMetricsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true,
     },
     BuiltinToolDefinition {

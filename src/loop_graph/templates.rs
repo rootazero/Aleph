@@ -11,7 +11,7 @@ pub const AUDIT_TEMPLATE: &str = r#"你是「循环治理·审计环」——独
 
 七步执行：
 1)【取拓扑】首先调用 loop_graph(action="status") 获取治理图全景：节点、边、结构 lint 发现（悬空边/裸奔优化环/治理链未锚定）。lint 发现直接进入第 5 步的点名清单。
-2)【锚点取证·真实执行，不信报表】取证默认派独立审计员：subagent(agent_type="loop-auditor", task="<探针清单：每个探针取哪个测量值，要求只返回测量值>")——它以全新上下文执行探针，防「与被审计者共读同一套记忆互证正确」；你只接收测量值并裁决。图很小（≤2 个锚点）时可自行执行。取证一律 in-core 只读工具，不再 shell sqlite——`~/.aleph/data` 在每会话工作区沙箱之外，bash 读不到（会被拒 "cwd outside workspace root"）。图外的三个常备锚点：① governance_metrics(window_days=7) → 一次拿到近7天用户真实纠正数（corrections）与 dreaming 近7天按 pipeline_type 的分布（每桶含 runs / synthesis_sum / consolidated_sum / woven_sum / archived_sum / feedback_distilled_sum）。注意 synthesis_sum 在 consolidate 夜里恒为 0（NoteSynthesis 只在较罕见的 synthesize 管线里跑），故健康的每夜 consolidate 也显示 synthesis_sum=0——判断「做梦是否仍在产出」要读其余计数与 runs，别只看 synthesis_sum；② cron_manage(action="list") → 每个 job 的 state.run_count 与 last_run_status（run_count=0=剧场循环，last_run_status 显示连续失败=点名；cron 运行计数以此为准）。图中每个 anchor 节点：按其 body 声明的 {probe, truth} 取值——优先用工具；仅当 probe 显式声明 bash 且目标落在会话工作区内时才 bash（只读，exit_code / numeric / line_count）。
+2)【锚点取证·真实执行，不信报表】取证默认派独立审计员：subagent(agent_type="loop-auditor", task="<探针清单：每个探针取哪个测量值，要求只返回测量值>")——它以全新上下文执行探针，防「与被审计者共读同一套记忆互证正确」；你只接收测量值并裁决。图很小（≤2 个锚点）时可自行执行。取证一律 in-core 只读工具，不再 shell sqlite——`~/.aleph/data` 在每会话工作区沙箱之外，bash 读不到（会被拒 "cwd outside workspace root"）。图外的三个常备锚点：① governance_metrics(window_days=7) → 一次拿到近7天用户真实纠正数（corrections）与 dreaming 近7天按 pipeline_type 的分布（每桶含 runs / synthesis_sum / consolidated_sum / woven_sum / archived_sum / feedback_distilled_sum；各计数怎么读见该工具自己的说明）；② cron_manage(action="list") → 每个 job 的 state.run_count 与 last_run_status（run_count=0=剧场循环，last_run_status 显示连续失败=点名；cron 运行计数以此为准）。图中每个 anchor 节点：按其 body 声明的 {probe, truth} 取值——优先用工具；仅当 probe 显式声明 bash 且目标落在会话工作区内时才 bash（只读，exit_code / numeric / line_count）。
 3)【对账】各环的自我报告（status 渲染里的 live 状态、lessons、上一份 graph-audit 裁决）vs 锚点新鲜取证——把「报表对报表」变成「报表对现实」。特别核对：dreaming 的 feedback_distilled_sum（纠正→反馈规则的蒸馏产出）与用户纠正数 corrections 是否同时在涨（都在涨=记忆蒸馏可能在优化脱离用户真实需要的指标——Goodhart 偏航信号；反之 corrections 涨而 feedback_distilled_sum 恒 0=纠正根本没被蒸馏进反馈规则，看守环失职）；各环声明的 cadence 与其锚指标的信号周期是否匹配（快环挂慢信号只会学到噪声）。
 4)【验尸探针与冻结节点】每个 watches 看守（heartbeat 探针/看守 cron）：最近是否成功运行、还在测原来那个对象吗（表改名/文件迁移=传感器漂移）？每个 frozen 节点：按其 body 里的执法点指针核验规则未被松动（如 git diff 查棘轮文件、读 config 查硬底线）。失败/从未运行/被松动=点名。
 5)【点名】run 记录为空的环（剧场循环）、连续失败的环、lint 报告的裸奔优化环与悬空边、root 节点被机器路径改写的迹象（updated_at 异动而无人类操作记录）、loop_graph status 中 root 根参照节缺失或 body 被改写（根参照以图中 root 节点为准——它是模型实际引用的那份；其人供给源 ~/.aleph/soul.md 在沙箱外，不经文件取证）。
@@ -22,6 +22,19 @@ pub const AUDIT_TEMPLATE: &str = r#"你是「循环治理·审计环」——独
 
 /// Default schedule for the audit loop: Monday 10:00 (6-field cron expr).
 pub const AUDIT_DEFAULT_CRON_EXPR: &str = "0 0 10 * * MON";
+
+/// Body stamped on the node `enable_audit` installs — and the marker its
+/// idempotency guard keys on.
+///
+/// It has to be a real marker rather than "does any `audits` edge exist":
+/// `Audits` is a first-class verb any loop may use (`x -[audits]-> frozen:y`
+/// is a documented, encouraged hand-wiring), and keying the installer on the
+/// verb made one unrelated hand-wired edge refuse `enable_audit` **forever**
+/// while telling the operator to `drop_node` a node that has nothing to do
+/// with the audit ring. Single-sourced with the writer so the two cannot
+/// drift.
+pub const AUDIT_NODE_BODY: &str =
+    "唯一职责：验证其他环的测量仍触到现实。模板见 loop_graph::templates::AUDIT_TEMPLATE";
 
 /// Default schedule for a paired watcher: daily 09:30.
 pub const WATCH_DEFAULT_CRON_EXPR: &str = "0 30 9 * * *";

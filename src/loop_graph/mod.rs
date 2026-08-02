@@ -24,6 +24,7 @@ pub mod templates;
 pub mod types;
 
 pub use store::LoopGraphStore;
+pub use templates::AUDIT_NODE_BODY;
 pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
 
 use crate::sync_primitives::Arc;

@@ -174,19 +174,34 @@ impl LoopGraphTool {
         }
 
         // One cron list_jobs call, keyed by job id, for live joins.
-        let cron_by_id: std::collections::HashMap<String, serde_json::Value> = match &self.cron {
-            Some(svc) => {
-                let service = svc.lock().await;
-                match service.list_jobs().await {
-                    Ok(jobs) => jobs
-                        .into_iter()
-                        .filter_map(|j| serde_json::to_value(&j).ok().map(|v| (j.id.clone(), v)))
-                        .collect(),
-                    Err(_) => std::collections::HashMap::new(),
+        //
+        // `None` means "the roster was read and this job is not in it".
+        // A failed read must NOT collapse into that: an empty map plus
+        // `self.cron.is_some()` printed "⚠ target missing（cron job 已消失）"
+        // against EVERY cron node at once, and the audit template feeds
+        // exactly that line into its 点名 step — one transient error would
+        // manufacture audit findings against a graph of healthy loops.
+        let cron_by_id: Option<std::collections::HashMap<String, serde_json::Value>> =
+            match &self.cron {
+                Some(svc) => {
+                    let service = svc.lock().await;
+                    match service.list_jobs().await {
+                        Ok(jobs) => Some(
+                            jobs.into_iter()
+                                .filter_map(|j| {
+                                    serde_json::to_value(&j).ok().map(|v| (j.id.clone(), v))
+                                })
+                                .collect(),
+                        ),
+                        Err(e) => {
+                            tracing::warn!(error = %e,
+                                "loop_graph status: cron roster unreadable; live joins skipped");
+                            None
+                        }
+                    }
                 }
-            }
-            None => std::collections::HashMap::new(),
-        };
+                None => None,
+            };
         let goal_store = crate::goal::global();
 
         let mut out = String::new();
@@ -219,8 +234,8 @@ impl LoopGraphTool {
                 }
                 NodeKind::LoopCron => {
                     let job_id = n.id.trim_start_matches("cron:");
-                    match cron_by_id.get(job_id) {
-                        Some(v) => {
+                    match cron_by_id.as_ref().map(|m| m.get(job_id)) {
+                        Some(Some(v)) => {
                             let state = &v["state"];
                             out.push_str(&format!(
                                 "\n    live: enabled={} runs={} last={} consecutive_errors={}",
@@ -230,9 +245,11 @@ impl LoopGraphTool {
                                 state["consecutive_errors"]
                             ));
                         }
-                        None if self.cron.is_some() => {
+                        // Roster read, job absent — a real finding.
+                        Some(None) => {
                             out.push_str("\n    live: ⚠ target missing（cron job 已消失）");
                         }
+                        // Roster unavailable — say nothing rather than accuse.
                         None => {}
                     }
                 }
@@ -462,22 +479,25 @@ impl AlephTool for LoopGraphTool {
                 // first reported "cron service unavailable" for a graph whose
                 // real problem was that it already had an auditor.
                 //
-                // One audit loop per agent scope. The guard keys on a LIVE
-                // audit node, not on "any audits edge exists": `delete_node`
-                // deliberately leaves edges dangling as audit signals, so
-                // following this error's own advice (`drop_node`) used to make
-                // the audit loop permanently un-reinstallable — and any
-                // hand-wired `audits` edge (a first-class verb) blocked the
-                // installer while naming an unrelated node.
-                let edges = self.store.list_edges(&agent_id)?;
+                // One audit loop per agent scope. The guard keys on a live
+                // audit LOOP — a node still carrying `AUDIT_NODE_BODY`, the
+                // marker this action stamps — not on "any `audits` edge
+                // exists". Two failures the weaker predicate caused:
+                // `delete_node` deliberately leaves edges dangling as audit
+                // signals, so following this error's own advice (`drop_node`)
+                // made the loop permanently un-reinstallable; and any
+                // hand-wired `audits` edge (a first-class verb, e.g.
+                // `cron:ratchet -[audits]-> frozen:budget`) blocked the
+                // installer while naming a node that has nothing to do with
+                // the audit ring.
                 let nodes = self.store.list_nodes(&agent_id)?;
-                let live = edges.iter().find(|e| {
-                    e.kind == EdgeKind::Audits && nodes.iter().any(|n| n.id == e.from_id)
-                });
+                let live = nodes
+                    .iter()
+                    .find(|n| n.body.as_deref() == Some(crate::loop_graph::AUDIT_NODE_BODY));
                 if let Some(existing) = live {
                     return Err(AlephError::tool(format!(
                         "审计环已存在（{}）。如需重装：先 drop_node 它，再 gc 清掉它留下的悬空 audits 边。",
-                        existing.from_id
+                        existing.id
                     )));
                 }
                 let Some(cron) = &self.cron else {
@@ -517,7 +537,7 @@ impl AlephTool for LoopGraphTool {
                     origin,
                 )
                 .with_cadence("weekly")
-                .with_body("唯一职责：验证其他环的测量仍触到现实。模板见 loop_graph::templates::AUDIT_TEMPLATE");
+                .with_body(crate::loop_graph::AUDIT_NODE_BODY);
                 self.store.upsert_node(&node)?;
 
                 let targets: Vec<GraphNode> = self
@@ -766,11 +786,22 @@ mod tests {
         assert!(err.to_string().contains("cron service unavailable"));
     }
 
+    /// The installer's idempotency guard keys on a live audit **loop** — a node
+    /// carrying [`crate::loop_graph::AUDIT_NODE_BODY`] — not on "some `audits`
+    /// edge exists".
+    ///
+    /// `Audits` is a first-class verb (`types.rs`: "audit loop → any node"),
+    /// and hand-wiring `cron:ratchet -[audits]-> frozen:budget` is documented
+    /// and encouraged. Keying on the verb meant one such edge refused
+    /// `enable_audit` forever while telling the operator to `drop_node` a node
+    /// with nothing to do with the audit ring — advice that destroys their own
+    /// governance edge. Both halves are asserted here: a hand-wired edge does
+    /// NOT block, a real installed audit loop DOES.
     #[tokio::test]
-    async fn enable_audit_is_blocked_by_a_live_auditor_but_not_by_a_dangling_edge() {
+    async fn enable_audit_is_blocked_only_by_a_real_audit_loop() {
         let (_d, t) = tool();
         for (id, kind) in [
-            ("cron:aud", NodeKind::LoopCron),
+            ("cron:ratchet", NodeKind::LoopCron),
             ("daemon:dreaming", NodeKind::Daemon),
         ] {
             let mut a = args(LoopGraphAction::Node);
@@ -780,24 +811,44 @@ mod tests {
             t.call(a).await.unwrap();
         }
         let mut link = args(LoopGraphAction::Link);
-        link.from_id = Some("cron:aud".into());
+        link.from_id = Some("cron:ratchet".into());
         link.to_id = Some("daemon:dreaming".into());
         link.edge = Some(EdgeKind::Audits);
         t.call(link).await.unwrap();
 
-        // A LIVE auditor blocks reinstall — that part is intended.
+        // Hand-wired `audits` edge from an ordinary loop: must NOT block. The
+        // call gets past the guard and fails only on the absent cron service
+        // (this harness attaches none).
+        let err = t
+            .call(args(LoopGraphAction::EnableAudit))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cron service unavailable"),
+            "a hand-wired audits edge must not block the installer: {err}"
+        );
+
+        // Now stand up a node that really IS the audit loop (the marker the
+        // installer stamps) — that one blocks, and names itself.
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("cron:aud".into());
+        a.kind = Some(NodeKind::LoopCron);
+        a.label = Some("循环治理·审计环".into());
+        a.body = Some(crate::loop_graph::AUDIT_NODE_BODY.to_string());
+        t.call(a).await.unwrap();
+
         let err = t
             .call(args(LoopGraphAction::EnableAudit))
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("审计环已存在"), "{err}");
+        assert!(err.contains("cron:aud"), "must name the auditor: {err}");
         assert!(err.contains("gc"), "the remedy must name gc too: {err}");
 
-        // Follow the error's own advice: drop_node leaves the edge dangling by
-        // design. The guard used to key on "any audits edge", so this made the
-        // audit loop permanently un-reinstallable. Now it gets past the guard
-        // and fails only on the absent cron service.
+        // Follow the error's own advice: `drop_node` leaves the edge dangling
+        // by design, so reinstall must still be possible afterwards.
         let mut drop = args(LoopGraphAction::DropNode);
         drop.id = Some("cron:aud".into());
         t.call(drop).await.unwrap();

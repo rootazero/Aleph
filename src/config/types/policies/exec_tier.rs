@@ -259,11 +259,30 @@ pub fn effective_permission(
 /// `destructiveHint` — free coverage of destructive MCP tools) plus a small
 /// curated set of builtin families whose name *is* their contract, because
 /// Aleph itself defines them.
-/// A `loop_graph` call that writes to (or unlinks from) a `root:` or
-/// `frozen:` node — including `pair`, which writes the same `watches` edge
-/// onto its `to_id` that `link` would. Read actions (`list`/`status`/`gc`…)
-/// and writes to ordinary loop/anchor nodes never match — the gate is exactly
-/// the graph's ground layer, nothing wider.
+/// A `loop_graph` call that **names** a `root:` or `frozen:` node in its
+/// arguments and writes — including `pair`, which writes the same `watches`
+/// edge onto its `to_id` that `link` would. Writes to ordinary loop/anchor
+/// nodes never match: the gate is exactly the graph's ground layer.
+///
+/// Two write actions are deliberately OUT of scope, because the mechanism is
+/// argument-level and neither call carries a protected id to match on:
+/// - `enable_audit` fans `audits` edges onto every frozen node it finds. Those
+///   edges are purely additive governance — they never touch a frozen rule's
+///   `body`, and an audit ring that cannot see the frozen rules is the failure
+///   this layer exists to prevent.
+/// - `gc` deletes only structurally dead rows (an endpoint that no longer
+///   exists), which the audit template is explicitly licensed to clear.
+///
+/// Both remain operator-only on channels (`method_authz::OPERATOR_TOOLS`).
+/// Do NOT "fix" the scope by having this pure config predicate read the store
+/// to discover whether the graph happens to contain a frozen node — that is a
+/// layering cost for an additive write. If it ever needs closing, close it in
+/// the tool (an explicit `confirm` argument), not here.
+///
+/// Whatever this predicate answers is also the argument-level floor on
+/// surfaces that cannot raise a card at all
+/// (`dangerous_tools::is_denied_on_gateway_surface` reads it directly), so
+/// widening it here silently narrows those surfaces too.
 fn loop_graph_touches_protected(input: &Value) -> bool {
     let is_write = input
         .get("action")

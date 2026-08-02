@@ -55,6 +55,16 @@ const OPERATOR_TOOLS: &[&str] = &[
     // the *content* of any added hook, but the chat-tier channel gate exists
     // so a chat-tier run cannot add a hook in the first place.
     "hooks_manage",
+    // The governance graph's only write path. Two reasons it sits with
+    // `hooks_manage` rather than with the read-only self-management tools:
+    // `enable_audit` / `pair` create cron jobs (the capability `cron_manage`
+    // is listed for), and a `root:` node's body is re-injected verbatim into
+    // every governed session's system prompt on every turn — a persistent
+    // prompt-injection surface. The Auto-tier argument card
+    // (`ExecTier::asks_for_arguments`) is the only other thing standing in
+    // front of it, and on a channel the human it asks IS the chat-tier
+    // participant making the request.
+    "loop_graph",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an

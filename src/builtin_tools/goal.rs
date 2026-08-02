@@ -623,6 +623,22 @@ fn validate_gate_command(cmd: &str) -> Result<()> {
     )))
 }
 
+/// Who owns this session's objective via an `owns_reference` edge — refusing
+/// the write rather than granting it when the graph cannot be read.
+///
+/// The ACL's whole job is to stop a governed loop rewriting its own reference,
+/// so "I could not find out" must land on the deny side. Previously a locked /
+/// busy `loop_graph.db` collapsed to `None` and the write went through
+/// silently; an ungoverned install still costs nothing, because "subsystem
+/// never booted" stays `Ok(None)`.
+fn governing_owner_or_refuse(session: &str) -> Result<Option<String>> {
+    crate::loop_graph::service::governing_owner(session).map_err(|e| {
+        AlephError::tool(format!(
+            "无法读取治理图（{e}）——拒绝改动一个可能被治理的 objective。请稍后重试。"
+        ))
+    })
+}
+
 #[async_trait]
 impl AlephTool for GoalTool {
     const NAME: &'static str = "goal";
@@ -701,7 +717,7 @@ token_budget. \
                 // reference; structural field ownership, not judgment (R7-clean,
                 // same class as the exec-tier metadata rules).
                 if self.store.get(&session)?.is_some() {
-                    if let Some(owner) = crate::loop_graph::service::governing_owner(&session) {
+                    if let Some(owner) = governing_owner_or_refuse(&session)? {
                         return Err(AlephError::tool(format!(
                             "此会话的 goal objective 由 {owner} 治理（owns_reference edge）。\
                              变更理由请写成提案 note（note_manage，tag: reference-proposal），\
@@ -991,7 +1007,17 @@ token_budget. \
                     if matches!(goal.status, GoalStatus::Complete) {
                         match self.store.try_claim_settle_notify(&goal) {
                             Ok(true) => {
-                                crate::loop_graph::service::notify_goal_settled(&session).await;
+                                // Hand the one-shot claim back when nothing was
+                                // actually poked — otherwise this completion's
+                                // review is retired permanently (the stamp for a
+                                // still-Complete goal never moves again).
+                                if !crate::loop_graph::service::notify_goal_settled(&session).await
+                                {
+                                    if let Err(e) = self.store.release_settle_notify(&goal) {
+                                        info!(session = %session, error = %e,
+                                            "goal: settle-notify release failed (ignored)");
+                                    }
+                                }
                             }
                             Ok(false) => {}
                             Err(e) => info!(session = %session, error = %e,
@@ -1016,7 +1042,7 @@ token_budget. \
                 // owns_reference write-protection: clearing a governed goal
                 // deletes the very reference the governing loop owns.
                 if existed.is_some() {
-                    if let Some(owner) = crate::loop_graph::service::governing_owner(&session) {
+                    if let Some(owner) = governing_owner_or_refuse(&session)? {
                         return Err(AlephError::tool(format!(
                             "此会话的 goal 由 {owner} 治理（owns_reference edge），clear 会删除\
                              被治理的参照。请写提案 note（tag: reference-proposal）交治理环裁决，\

@@ -92,6 +92,19 @@ impl LoopGraphStore {
     /// delete + recreate, which is the documented escape hatch and does leave a
     /// trace. This is NOT a defence against a hostile model; that is the Auto-
     /// tier approval card's job for `root:`/`frozen:` ids.
+    ///
+    /// `body` and `cadence` are **omission-preserving** (`COALESCE`), and for
+    /// the same reason `origin` is write-once. The only writer builds its row
+    /// with `#[serde(default)] Option<String>` args, so "the model re-registered
+    /// this node to fix the label" arrived here as `body = None` and a plain
+    /// `SET body = excluded.body` wrote SQL NULL over it. On a `root:` node that
+    /// silently erased **the human reference text itself** — the one thing in
+    /// this store no machine is allowed to supply — and both readers render a
+    /// root only `if let Some(body)`, so the line vanished from every governed
+    /// session's prompt with nothing logged. The same stroke wiped `cadence`,
+    /// the sole input to `lint_cadence_mismatch`, silently retiring that lint
+    /// for the node. Clearing a field is still expressible: pass `""` (an empty
+    /// string is not NULL, so `COALESCE` takes it).
     pub fn upsert_node(&self, node: &GraphNode) -> Result<()> {
         if node.kind == NodeKind::Root && node.origin != Origin::Human {
             return Err(AlephError::other(
@@ -103,12 +116,12 @@ impl LoopGraphStore {
             .execute(
                 "INSERT INTO graph_nodes
                      (agent_id, id, kind, label, body, cadence, origin, created_at_ms, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(agent_id, id) DO UPDATE SET
                      kind = excluded.kind,
                      label = excluded.label,
-                     body = excluded.body,
-                     cadence = excluded.cadence,
+                     body = COALESCE(excluded.body, body),
+                     cadence = COALESCE(excluded.cadence, cadence),
                      updated_at_ms = excluded.updated_at_ms",
                 rusqlite::params![
                     node.agent_id,
@@ -118,6 +131,7 @@ impl LoopGraphStore {
                     node.body,
                     node.cadence,
                     node.origin.as_str(),
+                    node.created_at_ms,
                     node.updated_at_ms,
                 ],
             )
@@ -277,22 +291,17 @@ impl LoopGraphStore {
 
     /// Remove dangling edges (endpoint node gone). Explicit only — never
     /// automatic. Returns human-readable descriptions of what was removed.
+    ///
+    /// "Gone" is decided by [`node_ids_present`] — raw `id` text, not a parsed
+    /// row. `row_to_node` fail-softs an unknown `kind`/`origin` to `Ok(None)`
+    /// so one odd row cannot wedge a reader, but feeding that skip into a
+    /// DELETE predicate turns "I could not read this node" into "this node
+    /// does not exist" and irreversibly deletes every edge touching it. Both
+    /// enums are `#[non_exhaustive]`, i.e. the vocabulary is expected to grow,
+    /// so a downgrade after a new kind ships is the realistic trigger.
     pub fn gc(&self, agent_id: &str) -> Result<Vec<String>> {
         let conn = self.lock();
-        let mut stmt = conn
-            .prepare(
-                "SELECT agent_id, id, kind, label, body, cadence, origin,
-                        created_at_ms, updated_at_ms
-                 FROM graph_nodes WHERE agent_id = ?1",
-            )
-            .map_err(|e| AlephError::other(format!("loop_graph gc nodes prepare: {e}")))?;
-        let rows = stmt
-            .query_map(rusqlite::params![agent_id], row_to_node)
-            .map_err(|e| AlephError::other(format!("loop_graph gc nodes query: {e}")))?;
-        let ids: std::collections::HashSet<String> = rows
-            .filter_map(|r| r.ok().and_then(|n| n.map(|n| n.id)))
-            .collect();
-        drop(stmt);
+        let ids = node_ids_present(&conn, agent_id, "gc")?;
 
         let mut stmt = conn
             .prepare(
@@ -373,8 +382,13 @@ impl LoopGraphStore {
 
         let by_id: std::collections::HashMap<&str, &GraphNode> =
             nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        // Existence is asked of the raw id column, not of `by_id`: a row that
+        // is present but unparseable must not be reported as "节点已消失"
+        // (same reasoning as `gc`). The parsed map still answers every
+        // question that needs the node's fields.
+        let present = node_ids_present(&conn, agent_id, "lint")?;
 
-        let mut findings = lint_dangling_edges(&edges, &by_id);
+        let mut findings = lint_dangling_edges(&edges, &present);
         findings.extend(lint_naked_loops(&nodes, &edges));
         findings.extend(lint_governance_chain(&nodes, &edges, &by_id));
         findings.extend(lint_cadence_mismatch(&edges, &by_id));
@@ -382,15 +396,37 @@ impl LoopGraphStore {
     }
 }
 
+/// Ids of every node row that EXISTS, read straight from the `id` column.
+///
+/// Deliberately does not go through `row_to_node`: presence is a question
+/// about the row, not about whether this build understands its enum text.
+fn node_ids_present(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    ctx: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM graph_nodes WHERE agent_id = ?1")
+        .map_err(|e| AlephError::other(format!("loop_graph {ctx} node ids prepare: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params![agent_id], |r| r.get::<_, String>(0))
+        .map_err(|e| AlephError::other(format!("loop_graph {ctx} node ids query: {e}")))?;
+    let mut out = std::collections::HashSet::new();
+    for r in rows {
+        out.insert(r.map_err(|e| AlephError::other(format!("loop_graph {ctx} node id: {e}")))?);
+    }
+    Ok(out)
+}
+
 fn lint_dangling_edges(
     edges: &[GraphEdge],
-    by_id: &std::collections::HashMap<&str, &GraphNode>,
+    present: &std::collections::HashSet<String>,
 ) -> Vec<String> {
     let mut findings = Vec::new();
     for e in edges {
         let missing: Vec<&str> = [e.from_id.as_str(), e.to_id.as_str()]
             .into_iter()
-            .filter(|id| !by_id.contains_key(id))
+            .filter(|id| !present.contains(*id))
             .collect();
         if !missing.is_empty() {
             findings.push(format!(
@@ -818,6 +854,102 @@ mod tests {
             got.body.as_deref(),
             Some("re-registered"),
             "body still updates"
+        );
+    }
+
+    /// A re-registration that omits `body` must not erase it.
+    ///
+    /// The only writer builds its row from `#[serde(default)] Option<String>`
+    /// args, so "fix the label on `root:aleph`" arrived as `body = None` and a
+    /// plain `SET body = excluded.body` wrote NULL over the **human reference
+    /// text** — the one thing in this store no machine may supply. Asserted at
+    /// the consumer that actually matters: the rendered session topology, which
+    /// emits a root line only `if let Some(body)`, so the erasure showed up as
+    /// a line silently missing from every governed session's prompt.
+    #[test]
+    fn label_only_reregistration_keeps_the_human_root_reference() {
+        let (_d, s) = store();
+        s.upsert_node(
+            &node("root:aleph", NodeKind::Root, Origin::Human).with_body("对用户真实有用"),
+        )
+        .unwrap();
+        s.upsert_node(&node("goal:sess-1", NodeKind::LoopGoal, Origin::Llm))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "root:aleph",
+            "goal:sess-1",
+            EdgeKind::OwnsReference,
+            Origin::Human,
+        ))
+        .unwrap();
+
+        // Re-register with a new label and NOTHING else — body/cadence omitted.
+        let mut relabel = node("root:aleph", NodeKind::Root, Origin::Human);
+        relabel.label = "根参照（改名）".into();
+        s.upsert_node(&relabel).unwrap();
+
+        let rendered = crate::loop_graph::service::render_session_topology_in(&s, "sess-1")
+            .expect("governed session renders");
+        assert!(
+            rendered.contains("对用户真实有用"),
+            "the human root reference must survive a label-only upsert: {rendered}"
+        );
+
+        // Clearing is still expressible — an empty string is not NULL.
+        s.upsert_node(&node("root:aleph", NodeKind::Root, Origin::Human).with_body(""))
+            .unwrap();
+        assert_eq!(
+            s.get_node("main", "root:aleph").unwrap().unwrap().body,
+            Some(String::new()),
+            "an explicit empty body still clears"
+        );
+    }
+
+    /// A node row this build cannot PARSE is still a node row that EXISTS.
+    ///
+    /// `row_to_node` fail-softs unknown enum text to `Ok(None)` so one odd row
+    /// cannot wedge a reader — but feeding that skip into `gc`'s DELETE
+    /// predicate turned "I could not read this node" into "this node is gone"
+    /// and irreversibly deleted every edge touching it. `NodeKind` is
+    /// `#[non_exhaustive]`, so a downgrade after a new kind ships is the
+    /// realistic trigger.
+    #[test]
+    fn gc_and_lint_treat_an_unparseable_node_row_as_present() {
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        s.upsert_node(&node("cron:watch", NodeKind::LoopCron, Origin::Llm))
+            .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:watch",
+            "daemon:dreaming",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+
+        // Simulate a row written by a newer build.
+        s.lock()
+            .execute(
+                "UPDATE graph_nodes SET kind = 'loop_future' WHERE id = 'daemon:dreaming'",
+                [],
+            )
+            .unwrap();
+
+        assert!(
+            s.gc("main").unwrap().is_empty(),
+            "gc must not delete edges into a node it merely failed to parse"
+        );
+        assert_eq!(
+            s.list_edges("main").unwrap().len(),
+            1,
+            "the edge must survive"
+        );
+        assert!(
+            !s.lint("main").unwrap().iter().any(|f| f.contains("悬空边")),
+            "lint must not report a present-but-unparseable node as vanished"
         );
     }
 

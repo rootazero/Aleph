@@ -457,21 +457,38 @@ impl GoalStore {
     /// Stale rows for cleared goals are harmless: the next completion's
     /// stamp always differs.
     pub fn try_claim_settle_notify(&self, goal: &Goal) -> Result<bool> {
-        let stamp = format!(
-            "{}@{}",
-            goal.id,
-            goal.completed_at_ms.unwrap_or(goal.updated_at_ms)
-        );
         let changed = self
             .lock()
             .execute(
                 "INSERT INTO settle_notified (session_id, stamp) VALUES (?1, ?2)
                  ON CONFLICT(session_id) DO UPDATE SET stamp = excluded.stamp
                  WHERE stamp != excluded.stamp",
-                rusqlite::params![goal.session_id, stamp],
+                rusqlite::params![goal.session_id, settle_stamp(goal)],
             )
             .map_err(|e| AlephError::other(format!("goal settle-notify claim: {e}")))?;
         Ok(changed > 0)
+    }
+
+    /// Give back a claim from [`Self::try_claim_settle_notify`] that turned out
+    /// not to have poked anything.
+    ///
+    /// The claim is one-shot and the stamp for a still-`Complete` goal never
+    /// moves, so spending it on a poke that did not happen (no cron handle
+    /// attached yet, `run_job` refused, watcher not pokeable) retired the
+    /// victory claim **permanently** for that completion — the paired watcher
+    /// never reviewed it, and the inner 60s debounce rollback bought nothing
+    /// because no second notification for that stamp could ever occur. Scoped
+    /// to our own stamp so a newer completion's claim is never erased; the next
+    /// observation of the same terminal row then re-claims and retries.
+    pub fn release_settle_notify(&self, goal: &Goal) -> Result<bool> {
+        let deleted = self
+            .lock()
+            .execute(
+                "DELETE FROM settle_notified WHERE session_id = ?1 AND stamp = ?2",
+                rusqlite::params![goal.session_id, settle_stamp(goal)],
+            )
+            .map_err(|e| AlephError::other(format!("goal settle-notify release: {e}")))?;
+        Ok(deleted > 0)
     }
 
     /// Claim a continuation for a goal an objective gate just reopened (the caller
@@ -861,6 +878,17 @@ impl GoalStore {
         }
         Ok(goals)
     }
+}
+
+/// The settle-notify stamp: the instant this goal transitioned INTO `Complete`
+/// (legacy rows fall back to `updated_at_ms`). Single-sourced so claim and
+/// release can never derive different keys for the same completion.
+fn settle_stamp(goal: &Goal) -> String {
+    format!(
+        "{}@{}",
+        goal.id,
+        goal.completed_at_ms.unwrap_or(goal.updated_at_ms)
+    )
 }
 
 #[cfg(test)]
@@ -1603,6 +1631,42 @@ mod tests {
         // A different session's goal is independent.
         let other = pursuing("s2", 5).with_status(GoalStatus::Complete, 1_000);
         assert!(store.try_claim_settle_notify(&other).unwrap());
+    }
+
+    /// A claim spent on a poke that did not happen must be recoverable.
+    ///
+    /// The claim is one-shot and a still-`Complete` goal's stamp never moves
+    /// again, so without a release the victory review is retired **forever**
+    /// for that completion — no cron handle at boot, or a `run_job` that
+    /// refused, and the paired watcher simply never looked. Release is scoped
+    /// to our own stamp so a newer completion's claim is never erased.
+    #[test]
+    fn releasing_an_unpoked_settle_claim_allows_exactly_one_retry() {
+        let (store, _d) = temp_store();
+        let done = pursuing("s", 5).with_status(GoalStatus::Complete, 1_000);
+
+        assert!(store.try_claim_settle_notify(&done).unwrap());
+        assert!(!store.try_claim_settle_notify(&done).unwrap());
+
+        assert!(store.release_settle_notify(&done).unwrap());
+        assert!(
+            store.try_claim_settle_notify(&done).unwrap(),
+            "the same completion must be claimable again after a released claim"
+        );
+        assert!(!store.try_claim_settle_notify(&done).unwrap());
+
+        // Releasing a stamp we no longer hold is a no-op: a newer completion
+        // has already taken the row and must keep its claim.
+        let redone = done
+            .clone()
+            .with_status(GoalStatus::Active, 2_000)
+            .with_status(GoalStatus::Complete, 3_000);
+        assert!(store.try_claim_settle_notify(&redone).unwrap());
+        assert!(
+            !store.release_settle_notify(&done).unwrap(),
+            "an older stamp must not release the newer completion's claim"
+        );
+        assert!(!store.try_claim_settle_notify(&redone).unwrap());
     }
 
     /// Regression (W1 review): a post-completion field edit (lesson/note

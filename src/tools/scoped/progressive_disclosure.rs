@@ -348,6 +348,31 @@ mod tests {
         }
     }
 
+    /// The one sentence that decides whether a governance audit verdict is
+    /// right must reach the model, and the only surface that proves that is
+    /// the registered catalog — the same shadowing trap [`D4_SHIPPING_ENTRIES`]
+    /// guards, one tool over.
+    ///
+    /// `synthesis_sum` is 0 on every `consolidate` run *by design*. An auditor
+    /// that does not know this reads a perfectly healthy nightly distillation
+    /// as "dreaming stopped producing" and files a `stale` verdict against it.
+    /// Asserting on `GovernanceMetricsTool::DESCRIPTION` instead would stay
+    /// green through exactly the regression this exists to catch (a
+    /// hand-written catalog literal silently shadows the const).
+    #[test]
+    fn governance_metrics_ships_its_synthesis_sum_caveat_to_the_model() {
+        let entry = registered_defs()
+            .into_iter()
+            .find(|d| d.name == "governance_metrics")
+            .expect("governance_metrics is a registered builtin");
+        assert!(
+            entry.description.contains("`synthesis_sum` is 0"),
+            "governance_metrics' registered description lost the synthesis_sum caveat — \
+             the audit ring now reads a healthy consolidate as a dead one: {:?}",
+            entry.description
+        );
+    }
+
     #[test]
     fn collapsing_shrinks_serialized_tools_by_half() {
         // 20 fat tools (schema-heavy) + 2 core.

@@ -146,7 +146,18 @@ pub(super) async fn post_run(
                 // each turn re-fires a full watcher cron LLM run, with only
                 // the 60s debounce as damper.
                 match store.try_claim_settle_notify(&peek) {
-                    Ok(true) => crate::loop_graph::service::notify_goal_settled(&session).await,
+                    // The claim is one-shot and this goal's stamp never moves
+                    // again, so a claim spent on a poke that did not happen
+                    // retires the review for good. Give it back and let the
+                    // next Idle round retry.
+                    Ok(true) => {
+                        if !crate::loop_graph::service::notify_goal_settled(&session).await {
+                            if let Err(e) = store.release_settle_notify(&peek) {
+                                warn!(error = %e, session = %session,
+                                    "goal pursuit: settle-notify release failed");
+                            }
+                        }
+                    }
                     Ok(false) => {}
                     Err(e) => warn!(error = %e, session = %session,
                         "goal pursuit: settle-notify claim failed; watcher poke skipped"),
@@ -297,13 +308,18 @@ async fn arbitrate_gate(
                 info!(session = %session,
                     "goal pursuit: objective gate passed, goal verified complete");
                 clear_goal_welded_strategy(session);
-                // The CAS above already makes this once-only; stamp the
-                // settle-notify marker as well so the Idle arm cannot re-poke
-                // this same completion if the global gate is later removed
-                // from config (gateless_terminal_complete then holds for the
-                // stale row). Best-effort: the commit is the authority here.
-                let _ = store.try_claim_settle_notify(&confirmed);
-                crate::loop_graph::service::notify_goal_settled(session).await;
+                // `commit_gate_pass` — not the settle-notify CAS — is what
+                // makes THIS site once-only; the marker below is stamped so
+                // the Idle arm cannot re-poke the same completion if the
+                // global gate is later removed from config
+                // (`gateless_terminal_complete` then holds for the stale row).
+                // Best-effort: the commit is the authority here. If nothing was
+                // actually poked, drop the marker again so that fallback path
+                // still has a retry available.
+                let stamped = store.try_claim_settle_notify(&confirmed).unwrap_or(false);
+                if !crate::loop_graph::service::notify_goal_settled(session).await && stamped {
+                    let _ = store.release_settle_notify(&confirmed);
+                }
             }
             Ok(false) => info!(session = %session,
                 "goal pursuit: goal changed while the gate ran; discarding the gate pass"),

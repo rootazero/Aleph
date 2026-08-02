@@ -97,25 +97,38 @@ fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) ->
 
 /// Poke every cron watcher paired (via `watches`) to `node_id`. Best-effort
 /// and bounded: no graph / no store / no cron handle / no watchers → no-op.
-async fn notify_node_settled(node_id: &str) {
+///
+/// Returns whether the caller's one-shot settle claim was *earned*: `true`
+/// when there was nothing to poke (no graph, no watchers — the claim costs
+/// nothing and re-asking every turn would be pure noise) or when at least one
+/// watcher was actually poked. `false` says "watchers exist and none of them
+/// ran", which is the only case where holding the claim would retire the
+/// victory review for good — the caller releases it so the next observation of
+/// the same terminal row retries.
+async fn notify_node_settled(node_id: &str) -> bool {
     let Some(store) = crate::loop_graph::global() else {
-        return;
+        return true;
     };
     let watcher_jobs = watcher_jobs_for(&store, node_id);
     if watcher_jobs.is_empty() {
-        return;
+        return true;
     }
     let Some(cron) = CRON_TRIGGER.get() else {
         info!(node = %node_id, "loop_graph: watchers paired but no cron trigger handle");
-        return;
+        return false;
     };
+    // A watcher held off by the 60s debounce counts as poked: the run it was
+    // debounced against is the review this settle wanted.
+    let mut any_poked = false;
     for job_id in watcher_jobs {
         if !debounce_pass(&job_id) {
+            any_poked = true;
             continue;
         }
         let service = cron.lock().await;
         match service.run_job(&job_id).await {
             Ok(()) => {
+                any_poked = true;
                 info!(node = %node_id, watcher = %job_id,
                     "loop_graph: victory claim — watcher cron poked");
             }
@@ -126,6 +139,7 @@ async fn notify_node_settled(node_id: &str) {
             }
         }
     }
+    any_poked
 }
 
 /// Goal victory-claim entry. Call sites (all guarded by the store's
@@ -133,38 +147,50 @@ async fn notify_node_settled(node_id: &str) {
 /// complete and gate-pass commit moments, plus the goal tool's Passive
 /// `Complete` arm (`builtin_tools/goal.rs` — Passive goals never reach the
 /// continuation hook).
-pub async fn notify_goal_settled(session: &str) {
-    notify_node_settled(&format!("goal:{session}")).await;
+///
+/// Returns `false` when watchers exist but none could be poked — the caller
+/// holding a one-shot claim must give it back (`release_settle_notify`), or
+/// this completion is never reviewed.
+pub async fn notify_goal_settled(session: &str) -> bool {
+    notify_node_settled(&format!("goal:{session}")).await
 }
 
 /// Team victory-claim entry — a disband is the team's "we're done" moment.
-/// Call site: `team_disband` success path.
-pub async fn notify_team_settled(team_id: &str) {
-    notify_node_settled(&format!("team:{team_id}")).await;
+/// Call site: `team_disband` success path. No one-shot claim guards this one
+/// (a disband happens once), so the return is informational.
+pub async fn notify_team_settled(team_id: &str) -> bool {
+    notify_node_settled(&format!("team:{team_id}")).await
 }
 
 /// The id of the loop owning `goal:<session>`'s reference via an
 /// `owns_reference` edge, if any. Pure lookup for the objective ACL.
-#[must_use]
-pub fn governing_owner(session: &str) -> Option<String> {
-    let store = crate::loop_graph::global()?;
+///
+/// `Ok(None)` means "genuinely ungoverned" — including the legitimate case
+/// where the loop-graph subsystem never booted. `Err` means the question could
+/// not be answered, and callers **must not** read that as permission: this is
+/// an ACL, and collapsing a locked/busy DB into `None` turned the §6.2 write
+/// protection off for exactly the call that hit the error, with no log line
+/// and no trace. That fail-OPEN shape has already cost this repo once on the
+/// goal subsystem itself.
+pub fn governing_owner(session: &str) -> crate::error::Result<Option<String>> {
+    let Some(store) = crate::loop_graph::global() else {
+        return Ok(None);
+    };
     governing_owner_in(&store, session)
 }
 
 /// Store-taking form of [`governing_owner`] (unit-testable without the
 /// process global).
-#[must_use]
 pub fn governing_owner_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
-) -> Option<String> {
+) -> crate::error::Result<Option<String>> {
     let node_id = format!("goal:{session}");
-    store
-        .list_edges(DEFAULT_AGENT)
-        .ok()?
+    Ok(store
+        .list_edges(DEFAULT_AGENT)?
         .into_iter()
         .find(|e| e.kind == EdgeKind::OwnsReference && e.to_id == node_id)
-        .map(|e| e.from_id)
+        .map(|e| e.from_id))
 }
 
 /// Deterministic topology context for a governed session's prompt. `None`
@@ -347,11 +373,15 @@ mod tests {
         let (_dir, store) = seeded_store();
 
         assert_eq!(
-            governing_owner_in(&store, "sess-1").as_deref(),
+            governing_owner_in(&store, "sess-1").unwrap().as_deref(),
             Some("cron:steward"),
             "owns_reference edge must surface the owner"
         );
-        assert_eq!(governing_owner_in(&store, "sess-2"), None);
+        assert_eq!(
+            governing_owner_in(&store, "sess-2").unwrap(),
+            None,
+            "no owns_reference edge ⇒ genuinely ungoverned, not an error"
+        );
 
         let rendered =
             render_session_topology_in(&store, "sess-1").expect("governed session renders");
