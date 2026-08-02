@@ -45,6 +45,33 @@ pub const fn should_flush_on_turn_boundary(queue_len: usize, is_busy: bool) -> b
     is_busy && queue_len > 0
 }
 
+/// Reduce the previous observation of "was a run active" to the `was_busy`
+/// [`should_auto_drain_on_settle`] should see, given that the composer watches
+/// the *foreground* conversation and a tab swap re-projects it onto a different
+/// one.
+///
+/// Two failures come out of ignoring the swap. Reading the previous
+/// observation across it fabricates a busy → idle edge — leave a busy
+/// conversation, open an idle one, and the newly-opened conversation's queue
+/// fires on arrival, having settled nothing. And a conversation whose run
+/// settles while it is in the background gets no edge at all, because both
+/// drain triggers live in the single foreground component: its queue is
+/// stranded until something else happens to it.
+///
+/// Treating a switch as "was busy" fixes both: there is no fabricated edge
+/// (arriving at a *busy* conversation still yields no drain, since `is_busy`
+/// is true), and arriving at an idle conversation that still has queued
+/// prompts is read as the settle it missed.
+#[must_use]
+pub const fn was_busy_across_switch(prev_busy: Option<bool>, same_conversation: bool) -> bool {
+    match prev_busy {
+        Some(busy) if same_conversation => busy,
+        // No comparable previous observation: first run, or it described
+        // another conversation.
+        _ => true,
+    }
+}
+
 /// Decide whether a bare `ArrowUp` in the composer should recall the newest
 /// queued prompt instead of moving the caret.
 ///
@@ -132,6 +159,37 @@ mod tests {
     fn an_empty_recall_leaves_the_draft_untouched() {
         assert_eq!(merge_recalled_draft("  ", "draft"), "draft");
         assert_eq!(merge_recalled_draft("", ""), "");
+    }
+
+    #[test]
+    fn a_tab_swap_does_not_fabricate_a_settle() {
+        // Left a busy conversation, opened a busy one: no edge either way.
+        let was_busy = was_busy_across_switch(Some(true), false);
+        assert!(!should_auto_drain_on_settle(was_busy, true, 2, false));
+    }
+
+    #[test]
+    fn opening_a_conversation_that_settled_in_the_background_drains_it() {
+        // Its run finished while another tab was in front, so no edge was ever
+        // observed for it. Arriving to find it idle with ghosts IS that edge.
+        let was_busy = was_busy_across_switch(Some(false), false);
+        assert!(should_auto_drain_on_settle(was_busy, false, 1, false));
+    }
+
+    #[test]
+    fn a_stop_on_the_conversation_still_suppresses_the_drain_on_arrival() {
+        let was_busy = was_busy_across_switch(Some(false), false);
+        assert!(!should_auto_drain_on_settle(was_busy, false, 1, true));
+    }
+
+    #[test]
+    fn staying_on_one_conversation_reads_its_own_previous_observation() {
+        assert!(was_busy_across_switch(Some(true), true));
+        assert!(!was_busy_across_switch(Some(false), true));
+        // Steady idle on one conversation must not drain — that is the case
+        // `should_auto_drain_on_settle` rejects via `!was_busy`.
+        let was_busy = was_busy_across_switch(Some(false), true);
+        assert!(!should_auto_drain_on_settle(was_busy, false, 2, false));
     }
 
     #[test]

@@ -493,6 +493,15 @@ pub struct ChatState {
     /// channel that could be produced with nothing draining it.
     /// Both composers bind their textarea straight to this signal.
     pub draft: RwSignal<String>,
+    /// One-shot: an explicit Stop must suppress exactly one queue auto-drain,
+    /// or cancelling a turn would flip busy → idle and immediately re-fire the
+    /// queued prompt (the "Stop button does nothing" trap).
+    ///
+    /// Lives here rather than in the composer because the queue it gates is
+    /// per-conversation while the composer is a single foreground component:
+    /// pressing Stop in one conversation used to consume the suppression owed
+    /// to whichever conversation the user switched to next.
+    pub stop_suppresses_next_drain: RwSignal<bool>,
     /// Latest context-window occupancy, set on each `run_complete` and read by
     /// the composer's [`super::context_gauge::ContextGauge`]. `None` until the
     /// first run reports usage. Ephemeral (excluded from [`SessionSnapshot`]);
@@ -629,6 +638,7 @@ impl ChatState {
             pending_attachments: RwSignal::new(Vec::new()),
             is_dragging_files: RwSignal::new(false),
             draft: RwSignal::new(String::new()),
+            stop_suppresses_next_drain: RwSignal::new(false),
             context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
@@ -1304,6 +1314,7 @@ impl ChatState {
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
         self.draft.set(String::new());
+        self.stop_suppresses_next_drain.set(false);
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
@@ -1325,6 +1336,7 @@ impl ChatState {
         self.send_error.set(None);
         self.prompt_queue.set(Vec::new());
         self.draft.set(String::new());
+        self.stop_suppresses_next_drain.set(false);
         self.team_id.set(None);
         self.team_members.set(Vec::new());
         // Clear the task strip too. Leaving it behind meant switching from
@@ -1363,6 +1375,7 @@ impl ChatState {
             pending_attachments: self.pending_attachments.get_untracked(),
             prompt_queue: self.prompt_queue.get_untracked(),
             draft: self.draft.get_untracked(),
+            stop_suppresses_next_drain: self.stop_suppresses_next_drain.get_untracked(),
             active_project_root: self.active_project_root.get_untracked(),
             active_project_name: self.active_project_name.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
@@ -1389,6 +1402,8 @@ impl ChatState {
         self.pending_attachments.set(snap.pending_attachments);
         self.prompt_queue.set(snap.prompt_queue);
         self.draft.set(snap.draft);
+        self.stop_suppresses_next_drain
+            .set(snap.stop_suppresses_next_drain);
         self.active_project_root.set(snap.active_project_root);
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
@@ -1439,6 +1454,8 @@ pub struct SessionSnapshot {
     /// The unsent composer text, so a tab swap carries it with the queue and
     /// the attachment tray instead of stranding it on the wrong conversation.
     pub draft: String,
+    /// Whether an explicit Stop is still owed one suppressed auto-drain.
+    pub stop_suppresses_next_drain: bool,
     pub active_project_root: Option<String>,
     pub active_project_name: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
@@ -2130,6 +2147,30 @@ mod queue_tests {
         let texts: Vec<_> = drained.iter().map(|p| p.text.clone()).collect();
         assert_eq!(texts, vec!["a", "b"]);
         assert!(chat.prompt_queue.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn a_stop_suppression_swaps_with_the_conversation_that_earned_it() {
+        // Pressing Stop in one conversation must not spend the suppression owed
+        // to whichever conversation the user opens next — the queue it gates is
+        // per-conversation, so the flag has to travel with it.
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.enqueue_prompt(prompt("stopped conversation's queue", 0));
+        chat.stop_suppresses_next_drain.set(true);
+        let stopped = chat.capture_snapshot();
+
+        // Open a different conversation: it owes no suppression.
+        chat.restore_from(SessionSnapshot::default());
+        assert!(
+            !chat.stop_suppresses_next_drain.get_untracked(),
+            "a fresh conversation must not inherit another one's Stop"
+        );
+
+        // Back to the one that was stopped: its suppression is still armed.
+        chat.restore_from(stopped);
+        assert!(chat.stop_suppresses_next_drain.get_untracked());
     }
 
     #[test]

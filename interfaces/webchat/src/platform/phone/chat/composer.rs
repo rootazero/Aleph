@@ -31,7 +31,9 @@ pub fn PhoneComposer() -> impl IntoView {
     let input_text = chat.draft;
     let is_sending = RwSignal::new(false);
     // Set by Stop to suppress exactly one auto-drain (B6 — Stop keeps ghosts).
-    let user_interrupted = RwSignal::new(false);
+    // On ChatState, not local: the queue it gates is per-conversation, so the
+    // suppression has to swap with the conversation the way the queue does.
+    let user_interrupted = chat.stop_suppresses_next_drain;
 
     // True while a run is in flight → the composer shows Queue/Force/Stop.
     let running = move || {

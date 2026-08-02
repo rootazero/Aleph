@@ -21,7 +21,7 @@ use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::components::team_task_strip::TeamTaskStrip;
 use crate::context::DashboardState;
 use crate::i18n::{t_string, use_i18n};
-use crate::state::sessions::SessionMap;
+use crate::state::sessions::{ConvId, SessionMap};
 use attachments::{read_file_list_into, AttachmentPreviewBar};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -34,6 +34,7 @@ use shared_ui_logic::safety::{
 };
 use shared_ui_logic::state::{
     should_auto_drain_on_settle, should_flush_on_turn_boundary, should_recall_on_bare_arrow_up,
+    was_busy_across_switch,
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -68,8 +69,11 @@ pub(super) fn InputArea() -> impl IntoView {
     let is_sending = RwSignal::new(false);
     // One-shot flag: set when the user presses Stop, consumed by the queue
     // drain Effect so an explicit interrupt suppresses exactly one auto-drain
-    // (mirrors hermes-agent's `shouldAutoDrainOnSettle`).
-    let user_interrupted = RwSignal::new(false);
+    // (mirrors hermes-agent's `shouldAutoDrainOnSettle`). Kept on ChatState —
+    // the queue it gates is per-conversation, and while this was a composer
+    // signal a Stop in one conversation consumed the suppression owed to
+    // whichever one the user opened next.
+    let user_interrupted = chat.stop_suppresses_next_drain;
     // Attachments live on ChatState so the chat-surface drop zone (G5)
     // can share the same list as the paperclip input.
     let attachments = chat.pending_attachments;
@@ -599,11 +603,24 @@ pub(super) fn InputArea() -> impl IntoView {
     // cancelling a turn doesn't immediately re-fire the queued prompt. The
     // decision itself is the pure `should_auto_drain_on_settle` (host-tested
     // in `shared_ui_logic::state`); this Effect only owns the side effects.
+    //
+    // The edge is tracked per conversation. The composer reads the *foreground*
+    // ChatState, which a tab swap re-projects onto a different conversation, so
+    // a plain `prev_busy` turned "left a busy conversation, opened an idle one"
+    // into a fabricated busy->idle edge and fired the newly-opened
+    // conversation's queue on arrival. Remembering which conversation the
+    // previous observation belonged to removes the fabricated edge — and makes
+    // switching back the moment a conversation whose run settled while
+    // backgrounded finally drains, which nothing else does: both drain triggers
+    // live in this one foreground component.
     {
-        Effect::new(move |prev_busy: Option<bool>| {
+        Effect::new(move |prev: Option<(Option<ConvId>, bool)>| {
+            let conv = sessions.active_conv();
             let is_busy = chat.active_run_id.get().is_some();
-            let was_busy = prev_busy.unwrap_or(false);
             let queue_len = chat.prompt_queue.get_untracked().len();
+            let switched = prev.is_some_and(|(prev_conv, _)| prev_conv != conv);
+            let was_busy =
+                was_busy_across_switch(prev.map(|(_, busy)| busy), prev.is_some() && !switched);
             if should_auto_drain_on_settle(
                 was_busy,
                 is_busy,
@@ -613,10 +630,10 @@ pub(super) fn InputArea() -> impl IntoView {
                 flush_queue();
             }
             // Reset the one-shot interrupt flag once we've crossed the edge.
-            if was_busy && !is_busy {
+            if was_busy && !is_busy && !switched {
                 user_interrupted.set(false);
             }
-            is_busy
+            (conv, is_busy)
         });
     }
 
