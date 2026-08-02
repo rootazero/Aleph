@@ -155,16 +155,11 @@ impl std::error::Error for JsonRpcError {}
 
 /// Standard JSON-RPC error codes
 pub(crate) mod error_codes {
-    /// Parse error - Invalid JSON
-    pub const PARSE_ERROR: i32 = -32700;
     /// Invalid Request - Not a valid JSON-RPC request
     pub const INVALID_REQUEST: i32 = -32600;
     /// Method not found
+    #[cfg(test)]
     pub const METHOD_NOT_FOUND: i32 = -32601;
-    /// Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
-    /// Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
 }
 
 /// Thread-safe request ID generator
