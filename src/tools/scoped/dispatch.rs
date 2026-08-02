@@ -1090,7 +1090,7 @@ impl ScopedToolService {
         // Compress first: hands JSON to the per-tool summarizer that
         // already exists in `tool_output::compressor`. The text we feed
         // into Layer 2 reflects what the LLM will ultimately see.
-        let raw = match &out.value {
+        let mut raw = match &out.value {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
@@ -1123,17 +1123,37 @@ impl ScopedToolService {
                         Value::String(s) => s.clone(),
                         other => other.to_string(),
                     };
-                    for r in &reductions {
-                        tracing::debug!(
-                            tool = name,
-                            field = %r.field,
-                            method = ?r.method,
-                            tokens_before = r.tokens_before,
-                            tokens_after = r.tokens_after,
-                            "ingress hygiene reduced a tool-result field"
-                        );
+                    // Hygiene's own "never grow" guard measures each field
+                    // against the RAW value it walked, which is not the string
+                    // it is about to displace. For the DevTools family the
+                    // compressor has already cut the output hard, so a
+                    // reduction that is a genuine 30% win over the raw field
+                    // can still be several times larger than `compressed` —
+                    // and swapping it in made an over-budget result bigger.
+                    // Compare against what we would otherwise send.
+                    let before =
+                        crate::context::budget::pressure::estimate_tokens_smart(&model_facing);
+                    let after = crate::context::budget::pressure::estimate_tokens_smart(&flattened);
+                    if after < before {
+                        for r in &reductions {
+                            tracing::debug!(
+                                tool = name,
+                                field = %r.field,
+                                method = ?r.method,
+                                tokens_before = r.tokens_before,
+                                tokens_after = r.tokens_after,
+                                "ingress hygiene reduced a tool-result field"
+                            );
+                        }
+                        model_facing = flattened;
+                        // The offloaded blob is the model's only way back to the
+                        // detail that was dropped, so it has to be the untouched
+                        // original — `compressed` is itself a lossy cut (a
+                        // head/tail byte slice for `compress_generic`), and
+                        // persisting it made the reduction irreversible while
+                        // still calling the file "Full output".
+                        reduced_from = Some(std::mem::take(&mut raw));
                     }
-                    reduced_from = Some(std::mem::replace(&mut model_facing, flattened));
                 }
             }
         }

@@ -61,6 +61,7 @@ const LOGIN_TOOL: &str = "mcp_login";
 /// in `BUILTIN_TOOL_DEFINITIONS`, so a rename here would otherwise orphan five
 /// allowlist entries with nothing to fail. `LOGIN_TOOL` is deliberately absent
 /// — an OAuth login is not a read.
+#[cfg(test)]
 pub(crate) const CAPABILITY_READ_BUILTIN_NAMES: &[&str] = &[
     RESOURCE_TOOL,
     RESOURCE_LIST_TOOL,
