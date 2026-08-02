@@ -53,12 +53,12 @@ impl PersonaRegistry {
         self.presets.is_empty()
     }
 
-/// Resolve a list of [`PersonaSource`] references into concrete [`Persona`] instances.
-///
-/// - `Preset(id)` — looked up in the registry; returns [`GroupChatError::PersonaNotFound`]
-///   if the ID is not registered.
-/// - `Inline(persona)` — used directly as-is.
-pub fn resolve(&self, sources: &[PersonaSource]) -> Result<Vec<Persona>, GroupChatError> {
+    /// Resolve a list of [`PersonaSource`] references into concrete [`Persona`] instances.
+    ///
+    /// - `Preset(id)` — looked up in the registry; returns [`GroupChatError::PersonaNotFound`]
+    ///   if the ID is not registered.
+    /// - `Inline(persona)` — used directly as-is.
+    pub fn resolve(&self, sources: &[PersonaSource]) -> Result<Vec<Persona>, GroupChatError> {
         sources
             .iter()
             .map(|source| match source {

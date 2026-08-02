@@ -560,9 +560,7 @@ impl Config {
         // `max_personas_per_session = 0` would silently disable every session).
         if let Err(e) = self.group_chat.validate() {
             error!(error = %e, "Group-chat config validation failed");
-            return Err(AlephError::invalid_config(format!(
-                "group_chat.{e}"
-            )));
+            return Err(AlephError::invalid_config(format!("group_chat.{e}")));
         }
         for (idx, persona) in self.personas.iter().enumerate() {
             if let Err(e) = persona.validate() {

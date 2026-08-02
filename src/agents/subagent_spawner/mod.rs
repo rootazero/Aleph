@@ -450,8 +450,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .context_budget_config
             .as_ref()
             .map(|cfg| {
-                let (_, per_turn) =
-                    crate::tools::turn_budget::budget_for_window(cfg.token_budget);
+                let (_, per_turn) = crate::tools::turn_budget::budget_for_window(cfg.token_budget);
                 Arc::new(crate::tools::turn_budget::TurnResultBudget::new(per_turn))
             })
             .or_else(crate::tools::turn_budget::global_turn_result_budget);

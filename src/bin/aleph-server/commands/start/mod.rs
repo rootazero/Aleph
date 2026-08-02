@@ -2426,8 +2426,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let handle: Arc<dyn alephcore::providers::DefaultProviderHandle> =
                     Arc::new(alephcore::providers::StaticDefault::new(snapshot));
                 Arc::new(
-                    GroupChatExecutor::new(handle)
-                        .with_coordinator_visible(coordinator_visible),
+                    GroupChatExecutor::new(handle).with_coordinator_visible(coordinator_visible),
                 )
             })
         } else {

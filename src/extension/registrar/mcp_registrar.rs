@@ -321,8 +321,7 @@ async fn spawn_inline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::capability::*;
-    use crate::extension::registry::{ServiceRegistration, ToolRegistration};
+    use crate::extension::registry::ToolRegistration;
     use crate::extension::types::{PluginKind, PluginOrigin, PluginRecord};
 
     fn make_registry_with_plugin(plugin_id: &str) -> PluginRegistry {
@@ -337,75 +336,11 @@ mod tests {
         registry
     }
 
-    #[test]
-    fn test_batch_register_tools() {
-        let mut registry = make_registry_with_plugin("test-mcp");
-
-        let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        let caps = vec![CapabilityDeclaration::Tool(ToolRegistration {
-            name: "mcp-tool".into(),
-            description: "A tool from MCP".into(),
-            parameters: serde_json::json!({}),
-            handler: "mcp_handler".into(),
-            plugin_id: "test-mcp".into(),
-        })];
-
-        registrar.batch_register(caps, &mut registry).unwrap();
-        assert!(registry.get_tool("mcp-tool").is_some());
-    }
-
-    #[test]
-    fn test_batch_register_multiple_tools() {
-        let mut registry = make_registry_with_plugin("test-mcp");
-
-        let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        let caps = vec![
-            CapabilityDeclaration::Tool(ToolRegistration {
-                name: "tool-a".into(),
-                description: "Tool A".into(),
-                parameters: serde_json::json!({}),
-                handler: "handle_a".into(),
-                plugin_id: "test-mcp".into(),
-            }),
-            CapabilityDeclaration::Tool(ToolRegistration {
-                name: "tool-b".into(),
-                description: "Tool B".into(),
-                parameters: serde_json::json!({}),
-                handler: "handle_b".into(),
-                plugin_id: "test-mcp".into(),
-            }),
-        ];
-
-        registrar.batch_register(caps, &mut registry).unwrap();
-        assert!(registry.get_tool("tool-a").is_some());
-        assert!(registry.get_tool("tool-b").is_some());
-    }
-
-    #[test]
-    fn test_batch_register_permission_check_service() {
-        let mut registry = make_registry_with_plugin("test-mcp");
-
-        // No Background permission → Service registration should fail
-        let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        let caps = vec![CapabilityDeclaration::Service(ServiceRegistration {
-            id: "test-service".into(),
-            name: "Test Service".into(),
-            start_handler: "start".into(),
-            stop_handler: "stop".into(),
-            plugin_id: "test-mcp".into(),
-            auto_start: true,
-        })];
-
-        assert!(registrar.batch_register(caps, &mut registry).is_err());
-    }
-
-    #[test]
-    fn test_batch_register_empty_caps() {
-        let mut registry = make_registry_with_plugin("test-mcp");
-        let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        // Empty capability list should succeed with no changes
-        assert!(registrar.batch_register(vec![], &mut registry).is_ok());
-    }
+    // The four `test_batch_register_*` tests that stood here exercised
+    // `McpRegistrar::batch_register`, removed with the struct itself (see the
+    // module header). They were left behind, and `cargo check` does not compile
+    // `#[cfg(test)]` code, so the lib test target simply stopped building and
+    // nothing said so.
 
     #[test]
     fn mcp_scope_error_displays_name_conflict() {

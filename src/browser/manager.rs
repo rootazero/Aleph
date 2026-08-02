@@ -387,7 +387,7 @@ mod tests {
         config.profiles.insert(
             "work".into(),
             ProfileConfig {
-            headless: Some(true),
+                headless: Some(true),
                 ..Default::default()
             },
         );
@@ -477,7 +477,7 @@ mod tests {
             ProfileConfig {
                 browser: BrowserType::Chrome,
                 driver: BrowserDriver::ExistingSession,
-            idle_timeout_secs: 999,
+                idle_timeout_secs: 999,
                 ..Default::default()
             },
         );

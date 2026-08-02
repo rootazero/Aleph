@@ -6,8 +6,7 @@ use tracing::{error, info};
 use crate::gateway::channel::{InboundMessage, OutboundMessage};
 use crate::gateway::handlers::group_chat::SharedOrchestrator;
 use crate::group_chat::{
-    DefaultGroupChatCommandParser, GroupChatExecutor, GroupChatRequest,
-    GroupChatStatus,
+    DefaultGroupChatCommandParser, GroupChatExecutor, GroupChatRequest, GroupChatStatus,
 };
 
 use super::types::RoutingError;
