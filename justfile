@@ -216,8 +216,18 @@ check-dist:
 # ─── Testing ───
 
 # Quick check: core compiles
+#
+# `--all-targets` is not tidiness. Without it cargo does not compile
+# `#[cfg(test)]` code, so this recipe — the documented dev-loop entry point —
+# stays green while the lib test target is broken. That is not hypothetical:
+# four tests for a deliberately-removed struct sat on main doing exactly that,
+# and nothing said so until the CI test job spent 25 minutes finding out.
+# It also covers tests/ and benches/. Checking the lib test target takes
+# ~11.5 GB in one rustc, so on a 16 GB box the default parallelism gets it
+# OOM-killed; add `-j1` if your machine is that tight (CI pins it for exactly
+# this reason).
 check:
-    cargo check -p alephcore
+    cargo check -p alephcore --all-targets
 
 # Quick check: desktop crate compiles
 check-desktop:

@@ -201,6 +201,34 @@ jobs:
       - name: Clippy
         run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 
+      # Neither step above compiles `#[cfg(test)]` code — `cargo check` does not,
+      # and `cargo clippy` without `--all-targets` does not either. That hole is
+      # how four tests for a deliberately-removed struct sat on main breaking the
+      # lib test target: this whole job stayed green, and the Test job only said
+      # so ~25 min in. Closing it here puts the answer in the fast leg.
+      #
+      # `--all-targets` rather than `--tests`, so benches/ are covered too.
+      # Checking is metadata-only, so this costs a fraction of the Test job,
+      # which has to link 134 binaries to learn the same thing.
+      #
+      # `-j1` is pinned, and the reason is one measured number: checking the lib
+      # test target takes ~11.5 GB in a *single* rustc. This runner has 16 GB, so
+      # there is no room for a second large target beside it. On a 16 GB Linux
+      # box that is exactly what happens — OOM-killed at the `-j4` a 4-core
+      # runner picks by default, and again at `-j2` when anything else was
+      # running. `-j2` survived only with the box otherwise idle (13.0 GB system
+      # peak, 6m31s with deps warm). A runner usually is idle — but a SIGKILL is
+      # not a diagnostic, and a guard that dies looking like infra flake is worse
+      # than no guard, so it should not have to bet on that.
+      #
+      # Linux only, deliberately: test code behind `#[cfg(windows)]` or
+      # `#[cfg(target_os = "macos")]` stays uncovered here. Turning it on for the
+      # other two wants the same memory measurement on those runners, and a Linux
+      # box cannot supply it.
+      - name: Check test code compiles
+        if: runner.os == 'Linux'
+        run: cargo check -p alephcore --all-targets -j1
+
   # The Swift half of the desktop bridge had no CI at all: `just bridge-test`
   # exercises the wire format (golden fixtures against the committed schema.json),
   # the codec, the router, the AX locator scoring and the click-ladder ranking —
