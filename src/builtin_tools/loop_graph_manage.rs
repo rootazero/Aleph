@@ -410,8 +410,26 @@ impl AlephTool for LoopGraphTool {
                 let mut edge = GraphEdge::new(&agent_id, &from_id, &to_id, kind, origin);
                 edge.note = args.note;
                 self.store.upsert_edge(&edge)?;
+                // Say so when the edge that was just built cannot carry the
+                // one thing a `watches` edge is chiefly for. A non-`cron:`
+                // watcher satisfies `lint_naked_loops` and renders in the
+                // prompt exactly like a real one, so the graph LOOKS sound
+                // while victory claims go unreviewed until the watcher's own
+                // cadence comes round. The model has no way to know that from
+                // the graph itself — it learns it here or not at all.
+                let unpokeable = kind == EdgeKind::Watches
+                    && !crate::loop_graph::service::watcher_is_pokeable(&from_id);
                 Ok(LoopGraphOutput {
-                    message: format!("边已建立: {from_id} -[{}]-> {to_id}", kind.as_str()),
+                    message: format!(
+                        "边已建立: {from_id} -[{}]-> {to_id}{}",
+                        kind.as_str(),
+                        if unpokeable {
+                            "。注意：只有 cron: 看守能被胜利宣称即时唤醒，\
+                             本看守只会按它自己的节奏跑（要即时评审就用 action='pair'）。"
+                        } else {
+                            ""
+                        }
+                    ),
                     nodes: None,
                     edges: None,
                     rendered: None,

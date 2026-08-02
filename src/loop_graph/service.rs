@@ -72,6 +72,20 @@ fn debounce_rollback(watcher_job_id: &str) {
         .remove(watcher_job_id);
 }
 
+/// Can a watcher with this id be poked on a victory claim?
+///
+/// Only `cron:` watchers can: the poke is `CronService::run_job`, and nothing
+/// else in the graph's vocabulary has a "run it now" handle. A watcher of any
+/// other kind still satisfies `lint_naked_loops` and still renders in the
+/// prompt as watching its target — it simply never gets the immediate review,
+/// only whatever cadence it has of its own. `pair` always builds a `cron:`
+/// watcher, so this is reachable only through a hand-wired `link`, which is
+/// why that action says so at write time. One predicate, both readers.
+#[must_use]
+pub fn watcher_is_pokeable(watcher_id: &str) -> bool {
+    watcher_id.starts_with("cron:")
+}
+
 /// Cron job ids of every `watches` watcher pointed at `node_id`. Pure lookup
 /// (unit-testable); empty on store errors.
 fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) -> Vec<String> {
@@ -85,7 +99,7 @@ fn watcher_jobs_for(store: &crate::loop_graph::LoopGraphStore, node_id: &str) ->
                     e.from_id.strip_prefix("cron:").map(|s| s.to_string()).or_else(|| {
                         warn!(
                             watcher = %e.from_id,
-                            "loop_graph: watcher id does not have 'cron:' prefix — skipping poke"
+                            "loop_graph: watcher cannot be poked (not a cron loop) — cadence only"
                         );
                         None
                     })
@@ -366,6 +380,20 @@ mod tests {
             "owns_reference edge is not a watcher"
         );
         assert!(watcher_jobs_for(&store, "team:nonexistent").is_empty());
+    }
+
+    /// The "watched" the lint sees and the "watched" a victory claim can reach
+    /// are not the same set — and the narrower one has no other way to be
+    /// discovered, so `link` tells the model at write time.
+    #[test]
+    fn only_cron_watchers_can_be_poked() {
+        assert!(watcher_is_pokeable("cron:daily-counter-metric"));
+        for id in ["heartbeat:probe-1", "daemon:dreaming", "team:crew"] {
+            assert!(
+                !watcher_is_pokeable(id),
+                "{id} has no run-it-now handle, so it only ever runs on its own cadence"
+            );
+        }
     }
 
     #[test]
